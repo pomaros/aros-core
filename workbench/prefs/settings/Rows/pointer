@@ -1,0 +1,7 @@
+group input
+order 20
+class PointerEditor.mcc
+name Pointer
+description The mouse pointer images
+keywords mouse cursor pointer busy
+level average

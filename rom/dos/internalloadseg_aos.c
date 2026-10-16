@@ -205,6 +205,16 @@ BPTR InternalLoadSeg_AOS(BPTR fh,
      */
     hunksize = lcount * 4 + sizeof(ULONG) + sizeof(BPTR);
     hunkptr = ilsAllocVec(hunksize, req | MEMF_31BIT);
+#if __WORDSIZE > 32
+    /* Hosts with no 32-bit-addressable memory at all (e.g. 64-bit hosted with a
+     * high RAM map) cannot satisfy MEMF_31BIT ever. Fall back to plain memory so
+     * the file still loads and the seglist is registered: execution is diverted
+     * at the entry boundaries (a hunk seglist never runs as native code), and
+     * the seglist-aware data consumers detect an above-4GB seglist and decline.
+     * Relocations below then hold truncated values; nothing may interpret them. */
+    if (!hunkptr)
+      hunkptr = ilsAllocVec(hunksize, req);
+#endif
     if (!hunkptr)
       ERROR(ERROR_NO_FREE_STORE);
     hunktab[i] = MKBADDR(hunkptr);
@@ -574,7 +584,39 @@ done:
 
     last_p = firsthunk;
 
-    register_hunk(fh, firsthunk, NULL, DOSBase);
+    {
+      APTR  image = NULL;
+      ULONG imagesize = 0;
+#if __WORDSIZE > 32
+      /* Stash the raw source file with the registration: on hosts with no
+       * 32-bit-addressable memory the seglist payload above is not
+       * interpretable (truncated relocations), so the 68k execution router
+       * re-loads the program from these bytes. Best-effort: a seekless
+       * funcarray or a huge file just skips the stash (the router then
+       * declines and the launch fails cleanly). */
+      if (DOSBase)
+      {
+        LONG fsz;
+        ilsSeek(fh, 0, OFFSET_END);
+        fsz = ilsSeek(fh, 0, OFFSET_BEGINNING);
+        if (fsz > 0 && fsz <= (16 << 20))
+        {
+          image = AllocVec((ULONG)fsz, MEMF_PUBLIC);
+          if (image)
+          {
+            if (ilsRead(fh, image, fsz) == fsz)
+              imagesize = (ULONG)fsz;
+            else
+            {
+              FreeVec(image);
+              image = NULL;
+            }
+          }
+        }
+      }
+#endif
+      register_hunk(fh, firsthunk, NULL, DOSBase, image, imagesize);
+    }
 
     ilsFreeVec(hunktab);
     hunktab = NULL;

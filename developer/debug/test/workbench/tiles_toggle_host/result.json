@@ -1,0 +1,13 @@
+{
+  "result": "PASS",
+  "production_exit": 0,
+  "regression_control_exit": -6,
+  "scope": "Actual extracted service functions + real parser; host queue/ENV mocks, no guest claim",
+  "source_sha256": {
+    "workbench/system/Tiles/main.c": "4335501c9306f226fac47737fa22c821260c24f84473c10b53674e6220da2028",
+    "workbench/system/Tiles/tiles_config.c": "e8e511f2f8fb4e53e09b1f948befbb6f91b2bec7fc5d661432a8313bd03c6b46",
+    "workbench/system/Tiles/tiles_config.h": "6da567f9376c24fa045de87c61e609d326dbf5ce6cd85b1a6d051193f7a94061",
+    "developer/debug/test/workbench/tiles_toggle_host/fixture.c": "a6ead61104527a38328ca3e82c0ff78338686bb01adbd8dd1053b65e3070582e",
+    "developer/debug/test/workbench/tiles_toggle_host/run.py": "6a168f12612c7067502c4020c14be2c3ef1ce19fc6287b7d37b52e3fb07f2e15"
+  }
+}

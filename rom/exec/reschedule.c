@@ -1,5 +1,7 @@
-/*
+/* SPDX-License-Identifier: APL-1.1
     Copyright (C) 1995-2017, The AROS Development Team. All rights reserved.
+
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>
 
     Desc: Enforce task rescheduling
 */
@@ -55,6 +57,10 @@
 
     BOOL switchpending = FLAG_SCHEDSWITCH_ISSET;
 
+    /* An explicit yield gives up the remaining quantum as well as asking
+     * for scheduling attention. Otherwise the scheduler keeps this task
+     * running when the ready head has the same priority. */
+    FLAG_SCHEDQUANTUM_SET;
     FLAG_SCHEDSWITCH_SET;       /* Set scheduling attention */
 
     if (TDNESTCOUNT_GET < 0)                 /* If task switching enabled */

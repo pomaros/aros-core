@@ -1,6 +1,7 @@
 /*
     Copyright (C) 2004-2026, The AROS Development Team. All rights reserved.
 */
+#include "tile_transaction.h"
 
 #define ZCC_QUIET
 
@@ -25,6 +26,7 @@
 #include <proto/utility.h>
 
 #include <proto/dos.h>
+#include <dos/dostags.h>
 
 #include <proto/icon.h>
 
@@ -105,6 +107,7 @@ struct Wanderer_DATA
                                         *wd_AboutWindow;
 
     struct MUI_InputHandlerNode         wd_TimerIHN;
+    ULONG                              wd_TimerTicks;
     struct MsgPort                      *wd_CommandPort;
     struct MUI_InputHandlerNode         wd_CommandIHN;
     struct MsgPort                      *wd_NotifyPort;
@@ -681,6 +684,13 @@ D(bug("[Wanderer] %s: ICONWINDOW_ACTION_OPEN: offset = %d, buf = %s\n", __func__
         struct Process                  *wandererCopyProcess;
         struct IconList_Drop_Event      *dropevent = (struct IconList_Drop_Event *)msg->drop;
 
+        if (dropevent->drop_Tile) {
+            if (!TileDropStart(dropevent->drop_Tile)) DisplayBeep(NULL);
+            FreeVec(dropevent->drop_Tile);
+            FreeMem(dropevent,sizeof(*dropevent));
+            return;
+        }
+
         dropevent->drop_Mode = (ULONG)XGET(prefs, MUIA_IconWindow_IconDropMode);
         {
             wandererCopyProcess = CreateNewProcTags(
@@ -1017,6 +1027,10 @@ enum
     MEN_WANDERER_QUIT,
     MEN_WANDERER_SHUTDOWN,
 
+    MEN_TOOLS_CLOCK,
+    MEN_TOOLS_MULTIVIEW,
+    MEN_TOOLS_MORE,
+
     MEN_WINDOW_NEW_DRAWER,
     MEN_WINDOW_OPEN_PARENT,
     MEN_WINDOW_CLOSE,
@@ -1121,6 +1135,26 @@ void wanderer_menufunc_wanderer_shell(STRPTR *cd_ptr)
     CurrentDir(olddir);
     UnLock(cd);
 }
+///
+
+///wanderer_menufunc_tool_*()  -- launch a Utilities tool from the Tools menu
+/* The shipped Utilities have no .info icons, so OpenWorkbenchObject() can't
+   find them; launch the executable asynchronously instead (NIL: streams, so
+   the GUI tool runs detached without blocking Wanderer). */
+static void wanderer_launch_tool(CONST_STRPTR cmd)
+{
+    BPTR in  = Open("NIL:", MODE_OLDFILE);
+    BPTR out = Open("NIL:", MODE_NEWFILE);
+    if (SystemTags(cmd, SYS_Asynch, TRUE, SYS_Input, (IPTR)in,
+                   SYS_Output, (IPTR)out, TAG_DONE) < 0)
+    {
+        if (in)  Close(in);
+        if (out) Close(out);
+    }
+}
+void wanderer_menufunc_tool_clock(APTR dummy)     { wanderer_launch_tool("SYS:Utilities/Clock"); }
+void wanderer_menufunc_tool_multiview(APTR dummy) { wanderer_launch_tool("SYS:Utilities/MultiView"); }
+void wanderer_menufunc_tool_more(APTR dummy)      { wanderer_launch_tool("SYS:Utilities/More"); }
 ///
 
 ///wanderer_menufunc_wanderer_backdrop()
@@ -2976,6 +3010,13 @@ VOID SetMenuDefaultNotifies(Object *wanderer, Object *strip, STRPTR path)
     DoMenuNotify(strip, MEN_WANDERER_SHUTDOWN, MUIA_Menuitem_Trigger,
                                 wanderer_menufunc_wanderer_shutdown, NULL);
 
+    DoMenuNotify(strip, MEN_TOOLS_CLOCK, MUIA_Menuitem_Trigger,
+                                wanderer_menufunc_tool_clock, NULL);
+    DoMenuNotify(strip, MEN_TOOLS_MULTIVIEW, MUIA_Menuitem_Trigger,
+                                wanderer_menufunc_tool_multiview, NULL);
+    DoMenuNotify(strip, MEN_TOOLS_MORE, MUIA_Menuitem_Trigger,
+                                wanderer_menufunc_tool_more, NULL);
+
     DoMenuNotify(strip, MEN_WINDOW_NEW_DRAWER, MUIA_Menuitem_Trigger,
                                 wanderer_menufunc_window_newdrawer, path);
     DoMenuNotify(strip, MEN_WINDOW_OPEN_PARENT, MUIA_Menuitem_Trigger,
@@ -3361,7 +3402,7 @@ D(bug("[Wanderer] %s: FSHandlerList @ %p\n", __func__, &_WandererIntern_FSHandle
 
         /* Setup timer handler ---------------------------------------------*/
         data->wd_TimerIHN.ihn_Flags  = MUIIHNF_TIMER;
-        data->wd_TimerIHN.ihn_Millis = 1000;
+        data->wd_TimerIHN.ihn_Millis = 250;
         data->wd_TimerIHN.ihn_Object = self;
         data->wd_TimerIHN.ihn_Method = MUIM_Wanderer_HandleTimer;
 
@@ -3572,12 +3613,20 @@ IPTR Wanderer__MUIM_Wanderer_HandleTimer
     Object *cstate = (Object*)(((struct List*)XGET(self, MUIA_Application_WindowList))->lh_Head);
     Object *child = NULL;
 
+    TileDropPoll();
+    BOOL tilesChanged = AppIcon_TilesChanged();
+    BOOL regularTick = (++data->wd_TimerTicks % 4) == 0;
+    /* Sample visibility on every existing 250ms tick, including idle frames. */
     STRPTR scr_title = GetUserScreenTitle(data->wd_Prefs);
 
 //    D(bug("[Wanderer] Timer event, user screen title %s\n", scr_title));
 
     while ((child = NextObject(&cstate)))
     {
+        Object *tileIcons = (Object *)XGET(child, MUIA_IconWindow_IconList);
+        if (tileIcons) DoMethod(tileIcons, MUIM_IconList_UpdateTileVisibility);
+        if (!tilesChanged && !regularTick) continue;
+
         /* Set the Wanderer title to each window's screen title */
         STRPTR current_title = NULL;
 
@@ -3590,8 +3639,14 @@ IPTR Wanderer__MUIM_Wanderer_HandleTimer
             SET(child, MUIA_Window_ScreenTitle, (IPTR) scr_title);
         }
 
+        if (tilesChanged)
+        {
+            Object *icons = (Object *)XGET(child, MUIA_IconWindow_IconList);
+            if (icons) MUI_Redraw(icons, MADF_DRAWOBJECT);
+        }
+
         /* Request rate-limited, conditional refresh */
-        DoMethod(child, MUIM_IconWindow_RateLimitRefresh);
+        if (regularTick) DoMethod(child, MUIM_IconWindow_RateLimitRefresh);
     }
 
     CleanAppIconReplyMessages();
@@ -3620,6 +3675,20 @@ D(bug("[Wanderer] %s: Received message from handler, type = %ld\n", __func__, wb
 
         switch (wbhm->wbhm_Type)
         {
+            case WBHM_TYPE_TILES:
+                /* Coalesced accepted-frame wakeup: consume dirty state without
+                 * advancing the periodic refresh counter or creating a timer. */
+                if (AppIcon_TilesChanged()) {
+                    Object *state = (Object *)(((struct List *)XGET(self,
+                        MUIA_Application_WindowList))->lh_Head);
+                    Object *child;
+                    while ((child = NextObject(&state))) {
+                        Object *icons = (Object *)XGET(child, MUIA_IconWindow_IconList);
+                        if (icons) MUI_Redraw(icons, MADF_DRAWOBJECT);
+                    }
+                }
+                break;
+
             case WBHM_TYPE_SHOW:
 D(bug("[Wanderer] %s: WBHM_TYPE_SHOW\n", __func__));
                 if ((data->wd_Screen = LockPubScreen(NULL)) != NULL)
@@ -3884,7 +3953,10 @@ Object * Wanderer__Func_CreateWandererIntuitionMenu( BOOL isRoot, BOOL isBackdro
                 {NM_ITEM,       _(MSG_MEN_DELETE),      NULL                    , NM_ITEMDISABLED                       , 0, (APTR) MEN_ICON_DELETE },
                 {NM_ITEM,       _(MSG_MEN_FORMAT),      NULL                    , NM_ITEMDISABLED                       , 0, (APTR) MEN_ICON_FORMAT },
                 {NM_ITEM,       _(MSG_EMPTY_TRASH),     NULL                    , NM_ITEMDISABLED                       , 0, (APTR) MEN_ICON_EMPTYTRASH},
-            {NM_TITLE,          _(MSG_MEN_TOOLS),       NULL                    , NM_MENUDISABLED },
+            {NM_TITLE,          _(MSG_MEN_TOOLS),       NULL                    , 0 },
+                {NM_ITEM,       "Clock",                NULL                    , 0, 0, (APTR) MEN_TOOLS_CLOCK },
+                {NM_ITEM,       "MultiView",            NULL                    , 0, 0, (APTR) MEN_TOOLS_MULTIVIEW },
+                {NM_ITEM,       "Text Viewer",          NULL                    , 0, 0, (APTR) MEN_TOOLS_MORE },
             {NM_END}
         };
         _NewWandIntMenu__menustrip = MUI_MakeObject(MUIO_MenustripNM, nm, (IPTR) NULL);
@@ -3946,7 +4018,10 @@ Object * Wanderer__Func_CreateWandererIntuitionMenu( BOOL isRoot, BOOL isBackdro
                 {NM_ITEM,       _(MSG_MEN_DELETE),      NULL                    , NM_ITEMDISABLED                       , 0, (APTR) MEN_ICON_DELETE },
                 {NM_ITEM,       _(MSG_MEN_FORMAT),      NULL                    , NM_ITEMDISABLED },
                 {NM_ITEM,       _(MSG_EMPTY_TRASH),     NULL                    , NM_ITEMDISABLED                       , 0, (APTR) MEN_ICON_EMPTYTRASH},
-            {NM_TITLE,          _(MSG_MEN_TOOLS),       NULL                    , NM_MENUDISABLED },
+            {NM_TITLE,          _(MSG_MEN_TOOLS),       NULL                    , 0 },
+                {NM_ITEM,       "Clock",                NULL                    , 0, 0, (APTR) MEN_TOOLS_CLOCK },
+                {NM_ITEM,       "MultiView",            NULL                    , 0, 0, (APTR) MEN_TOOLS_MULTIVIEW },
+                {NM_ITEM,       "Text Viewer",          NULL                    , 0, 0, (APTR) MEN_TOOLS_MORE },
             {NM_END}
         };
         _NewWandIntMenu__menustrip = MUI_MakeObject(MUIO_MenustripNM, nm, (IPTR) NULL);

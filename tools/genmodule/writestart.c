@@ -1948,4 +1948,3 @@ static void writesets(FILE *out, struct config *cfg)
         );
     fprintf(out, "\n");
 }
-

@@ -1,0 +1,17 @@
+; Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+; Distributed under the AROS Public License, version 1.1.
+; SYS/icontrol.prefs: one ICTL chunk, struct IControlPrefs.
+schema   1
+file     SYS/icontrol.prefs
+layout   compiler/include/prefs/icontrol.h IControlPrefs
+chunk    ICTL size 36
+
+[icontrol/intuition]  level expert  applier iprefs live
+  timeout      ic_TimeOut@16:2        type int    range 0..65535  unit ticks
+  metadrag     ic_MetaDrag@18:2       type int    range -32768..32767
+  flags        ic_Flags@20:4          type flags  choices coercecolors=1,coercelace=2,stringfilter=4,menusnap=8,modepromote=16,avoidwinbordererase=16384,3dmenus=32768,popupmenus=65536,pulldowntitlemenus=131072,screenactivation=67108864,defpubscreen=134217728,offscreenlayers=268435456,priviledgedrefresh=536870912,opaquemove=1073741824,stickymenus=2147483648
+  wbtofront    ic_WBtoFront@24:1      type int    range 0..255
+  fronttoback  ic_FrontToBack@25:1    type int    range 0..255
+  reqtrue      ic_ReqTrue@26:1        type int    range 0..255
+  reqfalse     ic_ReqFalse@27:1       type int    range 0..255
+  vdragmode0   ic_VDragModes@30:2     type flags  choices top=1,bottom=2,left=4,right=8

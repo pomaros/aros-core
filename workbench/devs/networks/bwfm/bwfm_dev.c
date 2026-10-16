@@ -1,5 +1,6 @@
 /*
     Copyright (C) 2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
 
     bwfm.device - SANA-II network device for the Broadcom FullMAC WiFi chip.
 
@@ -18,6 +19,8 @@
 #include <aros/libcall.h>
 #include <aros/symbolsets.h>
 #include <exec/errors.h>
+#include <exec/resident.h>
+#include <stddef.h>
 #include <dos/dos.h>
 #include <dos/dostags.h>
 #include <devices/sana2.h>
@@ -32,12 +35,14 @@
 #include <proto/openfirmware.h>
 
 #include "bwfm.h"
+#include "wireless_prefs.h"
 
 APTR BWFMBase __attribute__((used)) = NULL;     /* bwfm.resource (proto/bwfm.h base) */
 struct DosLibrary *DOSBase __attribute__((used)) = NULL;
 static LIBBASETYPEPTR PumpBase = NULL;          /* device base for the RX pump */
 
 #define BWFM_FW_DIR     "DEVS:Firmware/"
+#define BWFM_RESOURCE_FILE "DEVS:bwfm.resource"
 #define BWFM_C_UP       2               /* firmware "interface up" ioctl */
 #define BWFM_C_GET_BSSID 23             /* firmware "get associated BSSID" */
 
@@ -102,17 +107,62 @@ static const UWORD supported_commands[] =
 
 /* ----------------------------------------------------------------------- */
 
+/*
+ * Platforms whose boot image carries a fixed resident set (Apple Silicon)
+ * install bwfm.resource on disk instead of in ROM. Find its ROMTag in the
+ * loaded segments, as BindDrivers does, and initialize it once.
+ */
+static struct Resident *find_resident(BPTR seglist)
+{
+    const ULONG ressize = offsetof(struct Resident, rt_Init) + sizeof(APTR);
+
+    while (seglist)
+    {
+        UBYTE *addr = (UBYTE *)BADDR(seglist) - sizeof(ULONG);
+        ULONG size = *(ULONG *)addr;
+
+        for (addr += sizeof(BPTR) + sizeof(ULONG), size -= sizeof(BPTR) + sizeof(ULONG);
+             size >= ressize; size -= 2, addr += 2)
+        {
+            struct Resident *res = (struct Resident *)addr;
+
+            if (res->rt_MatchWord == RTC_MATCHWORD && res->rt_MatchTag == res)
+                return res;
+        }
+        seglist = *(BPTR *)BADDR(seglist);
+    }
+    return NULL;
+}
+
+static APTR load_resource(void)
+{
+    BPTR seglist = LoadSeg(BWFM_RESOURCE_FILE);
+    struct Resident *res;
+
+    if (!seglist)
+        return NULL;
+    res = find_resident(seglist);
+    if (!res || !InitResident(res, seglist))
+    {
+        UnLoadSeg(seglist);
+        return NULL;
+    }
+    return OpenResource("bwfm.resource");
+}
+
 static int GM_UNIQUENAME(init)(LIBBASETYPEPTR LIBBASE)
 {
     int i;
 
+    DOSBase = (struct DosLibrary *)OpenLibrary("dos.library", 0);
+
     BWFMBase = OpenResource("bwfm.resource");
+    if (!BWFMBase && DOSBase)
+        BWFMBase = load_resource();
     if (BWFMBase)
         D(bug("[bwfm.device] bwfm.resource present (chip brought up on first open)\n"));
     else
         D(bug("[bwfm.device] bwfm.resource not available\n"));
-
-    DOSBase = (struct DosLibrary *)OpenLibrary("dos.library", 0);
 
     for (i = 0; i < BWFM_MAX_UNITS; i++)
     {
@@ -523,7 +573,22 @@ static void bwfm_pump(void)
                     etype == BWFM_E_REASSOC || etype == BWFM_E_ROAM ||
                     (etype == BWFM_E_LINK && !(info & BWFM_RX_EVENT_LINKUP)))
                 {
+                    /* A roam or reassociation arrives as AUTH + LINK-up with no
+                     * link-down in between, so the transition test would miss
+                     * it - and the keys are gone all the same. Reporting the
+                     * session as ended is enough: the supplicant re-associates
+                     * through S2_SETOPTIONS, which announces CONNECT itself. */
                     link_down(unit);
+                    /* An auto-joined session has no supplicant to bring it
+                     * back: the control worker joins again (an access
+                     * point that drops a new station within seconds is
+                     * common). A supplicant's session is its own. */
+                    if (unit->autojoin_active && unit->online && !unit->joined)
+                    {
+                        unit->autojoin_retry = 1;
+                        if (LIBBASE->ctrl_task != NULL && LIBBASE->ctrl_sig)
+                            Signal(LIBBASE->ctrl_task, LIBBASE->ctrl_sig);
+                    }
                 }
             }
             else if (unit->online)
@@ -581,6 +646,23 @@ static void bwfm_pump(void)
 
 /* Run a queued associate (defined below, near report_events). */
 static void do_associate(struct bwfm_unit *unit);
+static void try_join(struct bwfm_unit *unit);
+
+/* Retry pacing must not depend on ctrl_sig: a failed try_join signals this
+ * worker itself. Treating that latched bit as permission to skip the delay
+ * turns repeated failures into a busy loop. Keep explicit association jobs
+ * responsive while spending the full retry interval asleep. */
+static void wait_autojoin_retry(struct bwfm_unit *unit)
+{
+    ULONG slice;
+
+    for (slice = 0; slice < 50 && unit->autojoin_retry &&
+         unit->online && !unit->joined; slice++)
+    {
+        Delay(5);                      /* 100 ms; 50 slices = five seconds */
+        do_associate(unit);            /* explicit requests cancel auto-join */
+    }
+}
 
 /*
  * Control worker: runs the blocking BWFMJoin for associate requests off the
@@ -604,6 +686,15 @@ static void bwfm_ctrl(void)
     for (;;)
     {
         do_associate(unit);             /* drain any pending job */
+        if (unit->autojoin_retry && unit->online && !unit->joined)
+        {
+            /* The boot-time auto-join failed: try again every five
+             * seconds, still answering associate requests in between. */
+            wait_autojoin_retry(unit);
+            if (unit->autojoin_retry && unit->online && !unit->joined)
+                try_join(unit);
+            continue;
+        }
         if (LIBBASE->ctrl_sig)
             Wait(LIBBASE->ctrl_sig);
         else
@@ -721,14 +812,36 @@ static void tx_request(struct bwfm_unit *unit, struct IOSana2Req *req)
           req->ios2_DstAddr[3], req->ios2_DstAddr[4], req->ios2_DstAddr[5]));
 }
 
+/*
+ * The resource may name the firmware itself (the Apple PCIe radios, whose
+ * names come from the OTP and the device tree): the first file that exists,
+ * in the resource's preference order. -1 when the resource names nothing, so
+ * the SDIO naming below applies.
+ */
+#define BWFM_FW_NAME_MAX        256
+
+static APTR read_named(ULONG type, ULONG *lenp, char *name)
+{
+    ULONG index;
+
+    for (index = 0; BWFMFirmwareName(type, index, name, BWFM_FW_NAME_MAX) == 0; index++)
+    {
+        APTR data = read_file(name, lenp);
+
+        if (data)
+            return data;
+    }
+    return NULL;
+}
+
 /* One-time chip firmware bring-up. Returns TRUE on success. */
 static int load_firmware(LIBBASETYPEPTR LIBBASE)
 {
-    char name[sizeof(BWFM_FW_DIR "brcmfmac00000-sdio.") + BWFM_FW_BOARD_MAX + 16];
+    char name[BWFM_FW_NAME_MAX];
     APTR fw = NULL, nvtxt = NULL, nvbin = NULL;
     ULONG fwlen = 0, nvtxtlen = 0, nvbinlen = 0;
     ULONG chip, chiprev;
-    int ok = FALSE;
+    int ok = FALSE, named;
 
     if (LIBBASE->fw_loaded)
         return TRUE;
@@ -745,20 +858,32 @@ static int load_firmware(LIBBASETYPEPTR LIBBASE)
 
     chip = BWFMChipID();
     chiprev = BWFMChipRev();
-    if (chip == 0 || fw_filename(name, chip, chiprev, NULL, ".bin"))
+    named = BWFMFirmwareName(0, 0, name, sizeof(name)) == 0;
+    if (named)
+    {
+        fw = read_named(0, &fwlen, name);
+        if (!fw)
+        {
+            D(bug("[bwfm.device] no firmware image among the resource's names\n"));
+            goto out;
+        }
+        nvtxt = read_named(1, &nvtxtlen, name);
+        if (nvtxt)
+            nvbin = nvram_convert(nvtxt, nvtxtlen, &nvbinlen);
+    }
+    else if (chip == 0 || fw_filename(name, chip, chiprev, NULL, ".bin"))
     {
         D(bug("[bwfm.device] no firmware mapping for chip %x rev %u\n",
               chip, chiprev));
         return FALSE;
     }
-
-    fw = read_file(name, &fwlen);
-    if (!fw)
+    else if (!(fw = read_file(name, &fwlen)))
     {
         D(bug("[bwfm.device] cannot read firmware '%s'\n", name));
         goto out;
     }
 
+    if (!named)
     {
         const char *board = fw_board_name();
 
@@ -793,10 +918,10 @@ static int load_firmware(LIBBASETYPEPTR LIBBASE)
          * the radio has no valid channels and scanning fails (NOTUP). The
          * Pi 3 (43430) firmware has built-in regulatory and ships no blob, so
          * a missing file is not an error. */
-        if (fw_filename(name, chip, chiprev, NULL, ".clm_blob") == 0)
+        if (named || fw_filename(name, chip, chiprev, NULL, ".clm_blob") == 0)
         {
             ULONG clmlen = 0;
-            APTR clm = read_file(name, &clmlen);
+            APTR clm = named ? read_named(2, &clmlen, name) : read_file(name, &clmlen);
 
             if (clm)
             {
@@ -807,6 +932,22 @@ static int load_firmware(LIBBASETYPEPTR LIBBASE)
             else
                 D(bug("[bwfm.device] no CLM blob at %s (IoErr %ld) - using"
                       " built-in regulatory\n", name, IoErr()));
+        }
+
+        /* Radios that name their own firmware also take a TX capability
+         * blob and a machine calibration (the resource finds that one);
+         * brcmfmac's order is CLM, TX capability, calibration. */
+        if (named)
+        {
+            ULONG txcaplen = 0;
+            APTR txcap = read_named(3, &txcaplen, name);
+
+            if (txcap)
+            {
+                BWFMLoadBlob(3, txcap, txcaplen);
+                FreeVec(txcap);
+            }
+            BWFMLoadBlob(4, NULL, 0);
         }
 
         /* Bring the firmware MAC layer up */
@@ -827,20 +968,59 @@ out:
 }
 
 /*
- * WiFi credentials for auto-join live in DEVS:bwfm.prefs: the first non-blank,
- * non-comment line is the SSID, the second (optional) is the WPA2 passphrase
- * (omit it for an open network). Whole-line values so SSIDs may contain spaces.
- * Returns TRUE when at least an SSID was read.
+ * WiFi credentials for auto-join, in this order:
+ *  1. ENV:Sys/Wireless.prefs, then ENVARC:Sys/Wireless.prefs: the
+ *     wpa_supplicant-style file the network and Wi-Fi preferences write
+ *     (network={ ssid="..." psk="..." }); a bare hex psk is not a
+ *     passphrase and is skipped;
+ *  2. DEVS:bwfm.prefs: the first non-blank, non-comment line is the SSID,
+ *     the second (optional) is the WPA2 passphrase (omit it for an open
+ *     network). Whole-line values so SSIDs may contain spaces.
+ * Returns TRUE when at least an SSID was read. Neither value is logged.
  */
+static int load_wireless_prefs(const char *path, UBYTE *ssid, ULONG *ssidlen,
+    UBYTE *key, ULONG *keylen)
+{
+    struct wireless_prefs prefs;
+    ULONG flen = 0;
+    UBYTE *buf = read_file(path, &flen);
+    int found;
+
+    if (buf == NULL)
+        return FALSE;
+    found = wireless_prefs_parse((const char *)buf, flen, &prefs) &&
+        !prefs.psk_is_hex;
+    FreeVec(buf);
+    if (!found)
+        return FALSE;
+    CopyMem(prefs.ssid, ssid, prefs.ssid_len);
+    *ssidlen = prefs.ssid_len;
+    CopyMem(prefs.psk, key, prefs.psk_len);
+    *keylen = prefs.psk_len;
+    return TRUE;
+}
+
 static int load_wifi_prefs(UBYTE *ssid, ULONG *ssidlen, UBYTE *key, ULONG *keylen)
 {
     ULONG flen = 0, i = 0, line = 0;
-    UBYTE *buf = read_file("DEVS:bwfm.prefs", &flen);
+    UBYTE *buf;
 
     *ssidlen = 0;
     *keylen = 0;
+    if (load_wireless_prefs("ENV:" WIRELESS_PREFS_PATH, ssid, ssidlen, key, keylen))
+    {
+        bug("[bwfm.device] credentials from ENV:" WIRELESS_PREFS_PATH "\n");
+        return TRUE;
+    }
+    if (load_wireless_prefs("ENVARC:" WIRELESS_PREFS_PATH, ssid, ssidlen, key, keylen))
+    {
+        bug("[bwfm.device] credentials from ENVARC:" WIRELESS_PREFS_PATH "\n");
+        return TRUE;
+    }
+    buf = read_file("DEVS:bwfm.prefs", &flen);
     if (buf == NULL)
         return FALSE;
+    bug("[bwfm.device] credentials from DEVS:bwfm.prefs\n");
 
     while (i < flen && line < 2)
     {
@@ -887,7 +1067,7 @@ static void try_join(struct bwfm_unit *unit)
         return;
     if (!load_wifi_prefs(ssid, &ssidlen, key, &keylen))
     {
-        D(bug("[bwfm.device] no DEVS:bwfm.prefs - not auto-joining\n"));
+        D(bug("[bwfm.device] no Wireless.prefs or DEVS:bwfm.prefs - not auto-joining\n"));
         return;
     }
 
@@ -902,11 +1082,26 @@ static void try_join(struct bwfm_unit *unit)
     ReleaseSemaphore(&unit->lock);
     if (BWFMJoin(ssid, ssidlen, keylen ? key : NULL, keylen, NULL, 0) == 0)
     {
+        unit->autojoin_retry = 0;
+        unit->autojoin_active = 1;
         link_up(unit);
         D(bug("[bwfm.device] auto-join OK\n"));
     }
     else
-        D(bug("[bwfm.device] auto-join failed\n"));
+    {
+        /* A weak or busy access point can miss all three attempts; the
+         * control worker tries again while the interface stays online. */
+        unit->autojoin_retry = 1;
+        if (PumpBase != NULL && PumpBase->ctrl_task != NULL && PumpBase->ctrl_sig)
+            Signal(PumpBase->ctrl_task, PumpBase->ctrl_sig);
+        D(bug("[bwfm.device] auto-join failed; retrying from the control worker\n"));
+    }
+    {
+        volatile UBYTE *p = key;
+        ULONG i;
+        for (i = 0; i < sizeof(key); i++)
+            p[i] = 0;
+    }
 }
 
 /* Caller holds unit->lock. NULL when this type is not tracked. */
@@ -1511,6 +1706,9 @@ static void do_associate(struct bwfm_unit *unit)
         return;
     }
     unit->assoc_pending = FALSE;
+    /* A supplicant's request: the session is its own from here. */
+    unit->autojoin_active = 0;
+    unit->autojoin_retry = 0;
     ssidlen = unit->assoc_ssidlen;
     passlen = unit->assoc_passlen;
     ielen = unit->assoc_ielen;
@@ -1909,6 +2107,40 @@ AROS_LH1(void, begin_io, AROS_LHA(struct IOSana2Req *, req, A1),
     AROS_LIBFUNC_EXIT
 }
 
+/* Claim only requests still owned by a pending queue. NT_MESSAGE also
+ * describes requests detached by report_events() and awaiting ReplyMsg():
+ * their completion owner must not be interrupted by a second removal. */
+static BOOL abort_pending(struct bwfm_unit *unit, struct IOSana2Req *req)
+{
+    struct bwfm_opener *opener;
+    struct IOSana2Req *pending;
+    BOOL found = FALSE;
+
+    ObtainSemaphore(&unit->lock);
+    ForeachNode(&unit->event_pending, pending)
+        if (pending == req)
+        {
+            found = TRUE;
+            break;
+        }
+    if (!found)
+        ForeachNode(&unit->openers, opener)
+        {
+            ForeachNode(&opener->read_pending.mp_MsgList, pending)
+                if (pending == req)
+                {
+                    found = TRUE;
+                    break;
+                }
+            if (found)
+                break;
+        }
+    if (found)
+        Remove((struct Node *)req);
+    ReleaseSemaphore(&unit->lock);
+    return found;
+}
+
 AROS_LH1(long, abort_io, AROS_LHA(struct IOSana2Req *, req, A1),
          LIBBASETYPEPTR, LIBBASE, 6, bwfm_device)
 {
@@ -1916,22 +2148,11 @@ AROS_LH1(long, abort_io, AROS_LHA(struct IOSana2Req *, req, A1),
 
     struct bwfm_unit *unit = (struct bwfm_unit *)req->ios2_Req.io_Unit;
 
-    /* Pull a still-queued CMD_READ / S2_ONEVENT off its list and reply it
-     * aborted, so a caller's WaitIO() returns instead of blocking forever.
-     * Re-test ln_Type under the unit lock: the RX pump may have replied (and
-     * unlinked) the request between the caller's AbortIO() and us. */
-    if (unit)
+    if (unit && abort_pending(unit, req))
     {
-        ObtainSemaphore(&unit->lock);
-        if (req->ios2_Req.io_Message.mn_Node.ln_Type == NT_MESSAGE)
-        {
-            Remove((struct Node *)req);
-            ReleaseSemaphore(&unit->lock);
-            req->ios2_Req.io_Error = IOERR_ABORTED;
-            ReplyMsg(&req->ios2_Req.io_Message);
-            return 0;
-        }
-        ReleaseSemaphore(&unit->lock);
+        req->ios2_Req.io_Error = IOERR_ABORTED;
+        ReplyMsg(&req->ios2_Req.io_Message);
+        return 0;
     }
     return -1;          /* not queued / already completed - nothing to abort */
 

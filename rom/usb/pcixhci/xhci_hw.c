@@ -14,6 +14,7 @@
 #include <devices/usb_hub.h>
 
 #include "uhwcmd.h"
+#include "xhci_mmio.h"
 #include "xhciproto.h"
 
 #undef base
@@ -37,7 +38,7 @@ void xhciRingDoorbell(struct PCIController *hc, ULONG slot, ULONG value)
     struct XhciHCPrivate *xhcic = xhciGetHCPrivate(hc);
     volatile struct xhci_dbr *xhcidb = (volatile struct xhci_dbr *)((IPTR)xhcic->xhc_XHCIDB);
 
-    pciusbXHCIDebug("xHCI", DEBUGFUNCCOLOR_SET "%s(%u, %08x)" DEBUGCOLOR_RESET" \n", __func__, slot, value);
+    /* Publication calls this with IRQs masked: MMIO only, no logging. */
     XHCI_MMIO_BARRIER();
     xhcidb[slot].db = AROS_LONG2LE(value);
     /* Read back to flush posted MMIO write (helps some hypervisors). */
@@ -102,7 +103,7 @@ LONG xhciCmdSubmit(struct PCIController *hc,
             }
 
             volatile struct xhci_pr *xhciports = (volatile struct xhci_pr *)((IPTR)xhcic->xhc_XHCIPorts);
-            portsc = AROS_LE2LONG(xhciports[port - 1].portsc);
+            portsc = xhciReadMMIO32(&xhciports[port - 1].portsc);
 
             pciusbXHCIDebugV("xHCI", DEBUGCOLOR_SET "%s:     portsc=%08x" DEBUGCOLOR_RESET" \n", __func__, portsc);
         }
@@ -314,7 +315,7 @@ LONG xhciCmdSubmitAsync(struct PCIController *hc,
             port = (slotctx1 >> 16) & 0xff;
 
             if(port > 0 && port <= hc->hc_NumPorts)
-                portsc = AROS_LE2LONG(xhciports[port - 1].portsc);
+                portsc = xhciReadMMIO32(&xhciports[port - 1].portsc);
         }
         if(!(slot) || !(portsc & XHCIF_PR_PORTSC_CCS)) {
             Enable();

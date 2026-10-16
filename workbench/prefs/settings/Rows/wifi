@@ -1,0 +1,7 @@
+group network
+order 5
+class WiFiEditor.mcc
+name Wi-Fi
+description Networks on the air, joining, forgetting and the radio
+keywords wifi wireless wlan network ssid join passphrase password
+level novice

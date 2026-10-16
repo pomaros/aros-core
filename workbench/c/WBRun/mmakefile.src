@@ -9,7 +9,7 @@ EXEDIR  := $(AROS_C)
 #MM- workbench-c : workbench-c-wbrun
 #MM workbench-c-wbrun : includes linklibs
 
-USER_CPPFLAGS := -DADATE="\"$(shell date "+%d.%m.%Y")\""
+USER_CPPFLAGS := -DADATE="\"$(AROS_BUILD_DATE)\""
 USER_LDFLAGS := -static
 
 %build_prog mmake=workbench-c-wbrun \

@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2020, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
 
     Desc: Add a task.
 */
@@ -26,6 +27,8 @@ static void TaskLaunch(struct Task *parent, struct Task *task, struct Hook *plHo
 {
 #if defined(__AROSEXEC_SMP__)
     int cpunum = KrnGetCPUNumber();
+    /* Context and task fields are complete before another CPU can find it. */
+    Exec_PublishTask(task, SysBase);
 #else
     Disable();
 #endif

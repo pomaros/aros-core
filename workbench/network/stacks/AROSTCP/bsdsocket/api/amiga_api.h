@@ -3,6 +3,7 @@
  *                    Helsinki University of Technology, Finland.
  *                    All rights reserved.
  * Copyright (C) 2005-2026 The AROS Dev Team
+ * Copyright (C) 2026 John KNIPPER <code@jkn.me>.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -218,6 +219,7 @@ extern ULONG api_reconfig_generation;   /* bumped after each completed reload  *
 extern ULONG api_reconfig_expected;     /* consumers signalled at reconfigure-begin */
 extern volatile ULONG api_reconfig_acked; /* consumers that acked (SBTC_RECONFIG_ACK) */
 VOID api_deinit(VOID);
+BOOL api_quiesce_fd(VOID);
 
 /* Function which sets Errno value */
 
@@ -246,7 +248,9 @@ static inline void ReleaseSyscallSemaphore(struct SocketBase *libPtr)
 }
 
 /*
- * inline function for searching library base when taskpointer is known
+ * Search a fully published base by task. The result is borrowed, not retained:
+ * the calling task may rely on its own open reference. Looking up another
+ * task does not by itself guarantee that task or base will remain alive.
  */
 
 static inline struct SocketBase *FindSocketBase(struct Task *task)
@@ -264,6 +268,17 @@ static inline struct SocketBase *FindSocketBase(struct Task *task)
   /* here if Task wasn't in socketBaseList */
   ReleaseSemaphore(&baselist_semaphore);
   return NULL;
+}
+
+/* Snapshot only; it does not grant ownership of a base or an API call. */
+static inline ULONG api_open_count(void)
+{
+  extern struct Library *MasterSocketBase;
+  ULONG count;
+  ObtainSemaphore(&baselist_semaphore);
+  count = MasterSocketBase ? MasterSocketBase->lib_OpenCnt : 0;
+  ReleaseSemaphore(&baselist_semaphore);
+  return count;
 }
 
 #endif /* !AMIGA_API_H */

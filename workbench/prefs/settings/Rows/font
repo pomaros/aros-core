@@ -1,0 +1,7 @@
+group appearance
+order 10
+class FontEditor.mcc
+name Fonts
+description The fonts of window titles, menus, icons and the system text
+keywords text size type typeface screen font system font icon font
+level average

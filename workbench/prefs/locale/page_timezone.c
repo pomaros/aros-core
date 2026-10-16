@@ -720,9 +720,12 @@ Object *Timezone__OM_NEW(struct IClass *cl, Object *obj, struct opSet *msg)
         return handle_New_error(obj, cl, "ERROR: unable to create city_name ListviewObject!\n");
     }
 
+    set((Object *)XGET(data->city_name, MUIA_Listview_List), MUIA_ObjectID, MAKE_ID('L','O','C','Y'));
+
     data->gmt_switch = MUI_MakeObject(MUIO_Checkmark, NULL);
     if (!data->gmt_switch)
         return handle_New_error(obj, cl, "ERROR: unable to create checkmark bject!\n");
+    set(data->gmt_switch, MUIA_ObjectID, MAKE_ID('L','O','G','M'));
 
     data->gmt_label = Label1(_(MSG_GMT_CLOCK));
     if (!data->gmt_label)

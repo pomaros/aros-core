@@ -490,6 +490,8 @@ LLVM_COMPILER_RT_CMAKEBASE :=                                                   
   -DCMAKE_INSTALL_PREFIX=$(CROSSTOOLSDIR)                                                                                               \
   -DCMAKE_BUILD_TYPE=$(LLVM_RELEASE)                                                                                                    \
   -DCOMPILER_RT_BUILD_BUILTINS=ON                                                                                                       \
+  -DLLVM_RUNTIMES_BUILD=ON                                                                                                              \
+  -DCMAKE_MODULE_PATH="$(LLVM_BUILDBASE)/cmake/modules"                                                                                 \
   -DCOMPILER_RT_BUILD_XRAY=OFF                                                                                                          \
   -DCOMPILER_RT_BUILD_MEMPROF=OFF                                                                                                       \
   -DCOMPILER_RT_BUILD_PROFILE=OFF                                                                                                       \
@@ -661,10 +663,12 @@ else
     archive=$(LIBUNWIND_ARCHBASE) suffixes="tar.xz"                                                                                     \
     destination=$(HOSTDIR)/Ports/host/libunwind
 
-# The AROS lld patch only exists for the v11 toolchain; v20+ builds stock lld.
-# Only armeb still needs it - collect-aros asks for the upstream emulation
-# names on every other CPU when the toolchain is llvm.
-ifeq ($(shell test $(LLVM_VERSION_MAJOR) -lt 20; echo $$?),0)
+# The AROS lld patch adds the aarch64elf_aros, armelf_aros and armelfb_aros
+# emulation names. collect-aros asks for the upstream names on every CPU but
+# armeb when the toolchain is llvm, but older trees built against the same
+# installed toolchain (the hosted darwin-aarch64 graft) still pass the _aros
+# names, so the patch is applied for every version that ships one.
+ifneq ($(wildcard $(SRCDIR)/$(CURDIR)/$(LLVMLLD_ARCHBASE)-aros.diff),)
 LLVMLLD_PATCHES_SPECS   := $(LLVMLLD_ARCHBASE)-aros.diff:$(LLVMLLD_ARCHBASE):-p1
 else
 LLVMLLD_PATCHES_SPECS   :=

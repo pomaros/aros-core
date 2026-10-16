@@ -10,7 +10,7 @@ EXEDIR      := $(AROS_WANDERER)/Tools
 #MM  workbench-system-wanderer-tools-diskinfo-catalogs \
 #MM  workbench-system-wanderer-tools-diskinfo-icons
 
-USER_CPPFLAGS := -DADATE="\"$(shell date '+%d.%m.%Y')\""
+USER_CPPFLAGS := -DADATE="\"$(AROS_BUILD_DATE)\""
 
 %build_prog mmake=workbench-system-wanderer-tools-diskinfo \
     progname=DiskInfo targetdir=$(EXEDIR) \

@@ -24,6 +24,22 @@
 #include <string.h>
 #include <stddef.h>
 
+/*
+ * Stack for each emul-handler process. The old 16384 (well under the platform
+ * default AROS_STACKSIZE) overflowed on darwin: one ExamineNext packet stacks
+ * several KB of path/name/sidecar buffers (DoExamineNext + NameToAros/hv_to_nfc
+ * + MetaRead) plus host libc frames, and hosted interrupt delivery (the SIGALRM
+ * scheduler tick, core_IRQ and any softints) runs on the interrupted task's
+ * stack too -- there is no sigaltstack. Under sustained directory-walk load the
+ * handler is almost always the current task, so ticks land on the deepest
+ * frames and push SP below tc_SPLower: core_Switch then logs "Task EMU went
+ * out of stack limits" and the spill corrupts whatever sits below the stack
+ * (the wild NULL-offset faults seen in DoExamineNext). 64 KB gives the host
+ * call path comfortable headroom; one handler process per mounted volume, so
+ * the cost is negligible.
+ */
+#define EMUL_HANDLER_STACKSIZE 65536
+
 static LONG startup(struct emulbase *emulbase)
 {
     APTR ExpansionBase;
@@ -65,7 +81,7 @@ static LONG startup(struct emulbase *emulbase)
         {
             dn->dn_SegList = CreateSegList(EmulHandlerMain);
             dn->dn_Handler = AROS_CONST_BSTR("emul-handler");
-            dn->dn_StackSize = 16384;
+            dn->dn_StackSize = EMUL_HANDLER_STACKSIZE;
             dn->dn_GlobalVec = (BPTR)-1;
 
             AddDosNode(0, ADNF_STARTPROC, dn);
@@ -76,6 +92,116 @@ static LONG startup(struct emulbase *emulbase)
 
     return TRUE;
 }
+
+/*********************************************************************************************/
+
+/*
+ * Launcher hook: mount a host folder named in the AROS_HOST_VOLUME host
+ * environment variable. The value is one or more device strings of the same
+ * form the handler parses, "<Vol>:<hostpath>[;WRITE]" — e.g. "Mac:~/Amiga"
+ * (read-only) or "Mac:~/Amiga;WRITE" (read/write) — separated by newlines, so
+ * several host volumes (e.g. the same folder mounted read-only AND read/write)
+ * can be set up at once. This is OUR mount path: we build fssm_Device directly,
+ * so our read-only-default policy and the ;WRITE keyword are honoured without
+ * ever going through (and being mangled by) the Mount command. A spec without
+ * the keyword stays read-only, like any host volume.
+ *
+ * Runs at a LATER init priority than host_startup (emul_host_unix.c, pri 0) so
+ * the host libc interface used by GetHostEnv is already up.
+ */
+static void mount_one_hostvol(APTR ExpansionBase, char *spec)
+{
+    struct DeviceNode *dn;
+    IPTR pp[4 + sizeof(struct DosEnvec)/sizeof(IPTR)] = {};
+    char nodename[40];
+    int i;
+
+    if (!spec[0] || !strchr(spec, ':'))
+        return;
+
+    /* node name = the volume name (chars before the first ':') */
+    for (i = 0; spec[i] && spec[i] != ':' && i < (int)sizeof(nodename) - 1; i++)
+        nodename[i] = spec[i];
+    nodename[i] = 0;
+
+    pp[0]                 = (IPTR)nodename;
+    pp[1]                 = (IPTR)spec;     /* fssm_Device "<Vol>:<path>[;WRITE]" */
+    pp[2]                 = 0;
+    pp[DE_TABLESIZE  + 4] = DE_DOSTYPE;
+    pp[DE_BUFMEMTYPE + 4] = MEMF_PUBLIC;
+    pp[DE_MASK       + 4] = -1;
+    pp[DE_BOOTPRI    + 4] = 0;
+    pp[DE_DOSTYPE    + 4] = AROS_MAKE_ID('E', 'M', 'U', 0);
+
+    dn = MakeDosNode(pp);
+    if (dn)
+    {
+        dn->dn_SegList   = CreateSegList(EmulHandlerMain);
+        dn->dn_Handler   = AROS_CONST_BSTR("emul-handler");
+        dn->dn_StackSize = EMUL_HANDLER_STACKSIZE;
+        dn->dn_GlobalVec = (BPTR)-1;
+
+        AddDosNode(0, ADNF_STARTPROC, dn);
+    }
+}
+
+/*
+ * Mount one host folder now, on a running system. The launcher hook below does
+ * the same thing at start-up; this is the same step reached later, when the
+ * user asks for another folder from the host side. The handler process is the
+ * one place with the seglist for its own main, so the request comes here rather
+ * than being built by whoever asked.
+ */
+LONG EmulAddHostVolume(struct emulbase *emulbase, CONST_STRPTR spec)
+{
+    APTR ExpansionBase;
+    char copy[512];
+
+    (void)emulbase;
+    if (!spec || !spec[0] || !strchr((const char *)spec, ':'))
+        return FALSE;
+
+    /* mount_one_hostvol keeps the string as the device name, so it must outlive
+     * this call: it is copied into the node by MakeDosNode. */
+    strncpy(copy, (const char *)spec, sizeof(copy) - 1);
+    copy[sizeof(copy) - 1] = 0;
+
+    ExpansionBase = OpenLibrary("expansion.library", 0);
+    if (!ExpansionBase)
+        return FALSE;
+
+    mount_one_hostvol(ExpansionBase, copy);
+    CloseLibrary(ExpansionBase);
+    return TRUE;
+}
+
+static LONG mount_hostvol(struct emulbase *emulbase)
+{
+    APTR ExpansionBase;
+    char *list = GetHostEnv(emulbase, "AROS_HOST_VOLUME");
+    char *spec, *nl;
+
+    if (!list || !list[0])
+        return TRUE;
+
+    if ((ExpansionBase = OpenLibrary("expansion.library", 0)))
+    {
+        /* one "<Vol>:<path>[;WRITE]" per newline-separated line */
+        for (spec = list; spec && *spec; spec = nl)
+        {
+            nl = strchr(spec, '\n');
+            if (nl)
+                *nl++ = 0;
+            mount_one_hostvol(ExpansionBase, spec);
+        }
+
+        CloseLibrary(ExpansionBase);
+    }
+
+    return TRUE;
+}
+
+ADD2INITLIB(mount_hostvol, 10)
 
 ADD2INITLIB(startup, -10)
 

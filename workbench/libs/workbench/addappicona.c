@@ -14,6 +14,7 @@
 
 #include "workbench_intern.h"
 #include "notifyworkbench.h"
+#include "tile.h"
 #include <workbench/workbench.h>
 
 
@@ -333,7 +334,19 @@
         }
     }
 
-        appIcon->ai_DiskObject = diskobj;
+    appIcon->ai_DiskObject = diskobj;
+    if (FindTagItem(WBAPPICONA_Cells, taglist) ||
+        FindTagItem(WBAPPICONA_Surface, taglist) ||
+        FindTagItem(WBAPPICONA_Regions, taglist) ||
+        FindTagItem(WBAPPICONA_Cadence, taglist))
+    {
+        if (!WBTileCreate(appIcon, diskobj, taglist, WorkbenchBase))
+        {
+            FreeVec(appIcon);
+            SetIoErr(ERROR_BAD_NUMBER);
+            return NULL;
+        }
+    }
 
     LockWorkbench();
     AddTail(&WorkbenchBase->wb_AppIcons, (struct Node *)appIcon);

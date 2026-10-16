@@ -1,0 +1,992 @@
+{
+  "qualification": "PASS: public Apple CPU accounting in generic UP VM; no SMP/hardware/system-sleep acceptance",
+  "runtime_revision": "c3cbe0a55e",
+  "production_probe_revision": "bccfc6242b",
+  "positive_revision": "6348f797c23248cb9759db034433b869c9c4bf8c",
+  "negative_revision": "6aab14388766675fd398b5dfa2d66142d627a32f",
+  "positive_verdict": {
+    "result": "PASS",
+    "errors": [],
+    "metrics": {
+      "baseline_cpu_us": 0,
+      "busy_cpu_us": 998050,
+      "idle_cpu_us": 998069,
+      "busy_usage_q32": 4266700750,
+      "expected_busy_usage_q32": 4267244422,
+      "idle_usage_q32": 80940,
+      "busy_wall_us": 1004534,
+      "idle_wall_us": 1008160,
+      "iterations": 654144830,
+      "current_slice_cpu_us": 50116,
+      "current_slice_wall_us": 50108,
+      "exited_children": 32,
+      "sleep_qualified": false,
+      "smp_qualified": false
+    },
+    "workload_host_seconds": 2.501056500012055,
+    "qemu_exit_code": 0,
+    "qmp_orderly_quit": true,
+    "timed_out": false,
+    "actual_aros_guest": true,
+    "observe_rejection": false,
+    "backend": "tcg",
+    "cpus": 1,
+    "post_proof_observation_seconds": 3,
+    "actual_post_proof_observation_seconds": 3.044047583010979,
+    "input_files": {
+      "ABIPROBE": "1964176f9174420dd0e4945680e23c935a738eb3a3ddc8b70e0da6e9089512c0",
+      "SYS.img": "8737855be4b3a3ee8f6cab2e29fe6dc61171107545e79bdf8b9f539062382430",
+      "AROS/GEN0.BND": "ee6c74a1d65dc4d90b4e4ef698b384b3529124707fa6805024e6b62f6a7206df",
+      "AROS/BOOT0.ID": "945603643f9599148b852a23530354d882e344071ec7ab6d7d8ca3b2a7dbfe25",
+      "EFI/BOOT/BOOTAA64.EFI": "493f8aedb87702c24b637b766f580c5478405d01233d7851e3a5f6ddd4009256"
+    },
+    "evidence_hashes": {
+      "serial.log": "2b6f5125b3abb499a8b5987ebca615cedbef17f80d5152b6f054cbe992cfc4fd",
+      "host.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "qemu.trace": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "firmware.log": "cf2bf793f29e2779903e621cea198a8711bbaa72708a98b5ed66cc5686f34394",
+      "qmp.jsonl": "8a221ba66afa286665364ef24739eb5cd3af8f7cbed67c0f29a29d35084fc1bd",
+      "registers.txt": "11aa10a494631b7b83749e0662e5fbf9410ce7e67b617983eb3f0e6de2ae916d",
+      "timeline.json": "dc4b027363de340b6bf659998c04d45436ce3aff737f391142166e35e3645bd8"
+    },
+    "bundle_sha256": "ee6c74a1d65dc4d90b4e4ef698b384b3529124707fa6805024e6b62f6a7206df",
+    "firmware_sha256": "47765fe344818cbc464b1c14ae658fb4b854f5c2ceffa982411731eb4865594d",
+    "seconds": 12.243
+  },
+  "negative_feature_verdict": {
+    "result": "FAIL",
+    "errors": [
+      "reserved failure token",
+      "busy/idle accounting contract"
+    ],
+    "metrics": {},
+    "workload_host_seconds": null,
+    "qemu_exit_code": 0,
+    "qmp_orderly_quit": true,
+    "timed_out": false,
+    "actual_aros_guest": true,
+    "observe_rejection": true,
+    "backend": "tcg",
+    "cpus": 1,
+    "post_proof_observation_seconds": 3,
+    "actual_post_proof_observation_seconds": 3.0543017500313,
+    "input_files": {
+      "ABIPROBE": "1964176f9174420dd0e4945680e23c935a738eb3a3ddc8b70e0da6e9089512c0",
+      "SYS.img": "8737855be4b3a3ee8f6cab2e29fe6dc61171107545e79bdf8b9f539062382430",
+      "AROS/GEN0.BND": "882c3ff56eb8514116a5ebd264d57f45cdf37d92ba4b854ae1f808aba938edee",
+      "AROS/BOOT0.ID": "2eba699cfc0a9e4066ea9095e48d1f51fc7c42e71ef38acf3b334f8a6719dc9c",
+      "EFI/BOOT/BOOTAA64.EFI": "493f8aedb87702c24b637b766f580c5478405d01233d7851e3a5f6ddd4009256"
+    },
+    "evidence_hashes": {
+      "serial.log": "0869bd7fa8664d0139f67ad4215790f76b23015e3c76276d7f4fcda0a2605b5a",
+      "host.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "qemu.trace": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "firmware.log": "cf2bf793f29e2779903e621cea198a8711bbaa72708a98b5ed66cc5686f34394",
+      "qmp.jsonl": "2cb49f051b8d6e68aaae5bbefee6cd6a34825ed7e29451e5b80728847f34aadc",
+      "registers.txt": "45270e88263f0208da1ab755016958664a01447f04c3417925bafb76787c9492",
+      "timeline.json": "27737312ae1ce6edc5c516f0ff0c16f6ccba1f76c226760eb5d47e61c2a6794a"
+    },
+    "bundle_sha256": "882c3ff56eb8514116a5ebd264d57f45cdf37d92ba4b854ae1f808aba938edee",
+    "firmware_sha256": "47765fe344818cbc464b1c14ae658fb4b854f5c2ceffa982411731eb4865594d",
+    "seconds": 11.759
+  },
+  "negative_control_assertion": "PASS: actual disabled producer rejected with six zero counters despite active workload; feature result remains FAIL",
+  "shared_packaged_module_and_build_input_comparison": {
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Developer/Debug/Tests/exec/task_cpu_accounting": {
+      "positive": "ff8c5a0c65b8c37bcde6de984f741eac6e3826bea894cc8f8196ef47e71c3062",
+      "negative": "ff8c5a0c65b8c37bcde6de984f741eac6e3826bea894cc8f8196ef47e71c3062"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Devs/FileSystem.resource": {
+      "positive": "1558d710cb78d852c2b1d26653a6160b140b9944fc85e879d06ef0d8baf960fb",
+      "negative": "1558d710cb78d852c2b1d26653a6160b140b9944fc85e879d06ef0d8baf960fb"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Devs/appleboot.device": {
+      "positive": "493f180c284282ae426e01aab3bd8f740c17530807dac5b86ba426a5a8857f40",
+      "negative": "493f180c284282ae426e01aab3bd8f740c17530807dac5b86ba426a5a8857f40"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Devs/bootloader.resource": {
+      "positive": "a1f0f641181bae8354d4745dd97f3409106fbff763893a405be4292278141e1e",
+      "negative": "a1f0f641181bae8354d4745dd97f3409106fbff763893a405be4292278141e1e"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Devs/lddemon.resource": {
+      "positive": "8790d0e51a27c0bbcfa786dd1c3d11fd1e56bbe08b24436cad3abefb99f8442e",
+      "negative": "8790d0e51a27c0bbcfa786dd1c3d11fd1e56bbe08b24436cad3abefb99f8442e"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Devs/openfirmware.resource": {
+      "positive": "f2052d9134c6e4bd99235b0b761da1114ccca06037a10c8591eaada79b589b90",
+      "negative": "f2052d9134c6e4bd99235b0b761da1114ccca06037a10c8591eaada79b589b90"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Devs/pmgr.resource": {
+      "positive": "4c62445359297d28ca1b5c5547457544bb5f4a33c792f5a47b109c63b6bfda35",
+      "negative": "4c62445359297d28ca1b5c5547457544bb5f4a33c792f5a47b109c63b6bfda35"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Devs/rtkit.resource": {
+      "positive": "9c04814a74363963e6f11adad9e23c2798a51ef108a0458af301fa18ae500573",
+      "negative": "9c04814a74363963e6f11adad9e23c2798a51ef108a0458af301fa18ae500573"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Devs/task.resource": {
+      "positive": "bd324e70c56a2937ea3be1dbe88431888d95313a56f94934b77fbac16b3ed2e5",
+      "negative": "bd324e70c56a2937ea3be1dbe88431888d95313a56f94934b77fbac16b3ed2e5"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/L/fat-handler": {
+      "positive": "a069cc07e226c0e5b75314bd98f396537dd73e4c2896ea010ec44572dec5269c",
+      "negative": "a069cc07e226c0e5b75314bd98f396537dd73e4c2896ea010ec44572dec5269c"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Libs/aros.library": {
+      "positive": "1f19573687e04bad2f7a87acd764b34fa6809d47ae0e4c9077d9cb78641b9bf3",
+      "negative": "1f19573687e04bad2f7a87acd764b34fa6809d47ae0e4c9077d9cb78641b9bf3"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Libs/dos.library": {
+      "positive": "3950608c1fb4d3ddd83ad754492b5182ce2d91805759149962a2dc39d7d0bde4",
+      "negative": "3950608c1fb4d3ddd83ad754492b5182ce2d91805759149962a2dc39d7d0bde4"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Libs/iffparse.library": {
+      "positive": "598bff8e2e68dd7fc7e4e4674d466adaea810523c0ae2cfe4f422a739eb4d8f1",
+      "negative": "598bff8e2e68dd7fc7e4e4674d466adaea810523c0ae2cfe4f422a739eb4d8f1"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Libs/locale.library": {
+      "positive": "743d31cb3e0b2b73553add06250dc8663d2ba0372b3da38b701a74a467e921bd",
+      "negative": "743d31cb3e0b2b73553add06250dc8663d2ba0372b3da38b701a74a467e921bd"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Libs/partition.library": {
+      "positive": "872555d9dcb55e6786e1e38121ccc0f964fb960d46000fa835578841709ec659",
+      "negative": "872555d9dcb55e6786e1e38121ccc0f964fb960d46000fa835578841709ec659"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Libs/posixc.library": {
+      "positive": "53bd97530428fe57dbd150936d8534a5561ea1fee2c7c1af3eae8e116ffe662d",
+      "negative": "53bd97530428fe57dbd150936d8534a5561ea1fee2c7c1af3eae8e116ffe662d"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Libs/stdc.library": {
+      "positive": "c51d832b11cf303dd23dbb331fcb96445c3ad3c9515c19d32e6f3aaac71e2d4c",
+      "negative": "c51d832b11cf303dd23dbb331fcb96445c3ad3c9515c19d32e6f3aaac71e2d4c"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Libs/stdcio.library": {
+      "positive": "1a38657ce77c47948ace76ab26e55f151cd715ac988fe48f661b4f4f1c214d11",
+      "negative": "1a38657ce77c47948ace76ab26e55f151cd715ac988fe48f661b4f4f1c214d11"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Libs/utility.library": {
+      "positive": "b5ff5949259e9b18139340299d343cc70f3a3f69b13f03ec93d6eb501dd8f4d1",
+      "negative": "b5ff5949259e9b18139340299d343cc70f3a3f69b13f03ec93d6eb501dd8f4d1"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/boot/apple/Devs/kernel.resource": {
+      "positive": "798e0eaa759ace5e5a522d31de54f9393eef652d73836789e49b797fb9d84e1e",
+      "negative": "96da7c6220075344e6e414b55b1a8d233acfe25cc74c9eb3b6a8fc57b8b3c2cc"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/boot/apple/Devs/timer.device": {
+      "positive": "dd518c48a754b49479d20ea6ce5f21d6b2605b0d8c31c8a7b3ef47f9890ac52b",
+      "negative": "dd518c48a754b49479d20ea6ce5f21d6b2605b0d8c31c8a7b3ef47f9890ac52b"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/boot/apple/Libs/exec.library": {
+      "positive": "115893c68eebeeb6edf26e35d814d65e689748f51903b397b78b455f9827456a",
+      "negative": "115893c68eebeeb6edf26e35d814d65e689748f51903b397b78b455f9827456a"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/boot/apple/Libs/expansion.library": {
+      "positive": "d05d5bfa43efc46c43cf7451963b884dc308e07352f1bf5fb0ce846cfc7e2de7",
+      "negative": "d05d5bfa43efc46c43cf7451963b884dc308e07352f1bf5fb0ce846cfc7e2de7"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/gen/arch/aarch64-apple/bootstrap/aros-apple-stage2-test.bin": {
+      "positive": "db32ea5a2d3e56f0ddae3984d5172e9b6e67e7c30ecffc3a0d5ffe5067645095",
+      "negative": "db32ea5a2d3e56f0ddae3984d5172e9b6e67e7c30ecffc3a0d5ffe5067645095"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/uefi/BOOTAA64.EFI": {
+      "positive": "493f8aedb87702c24b637b766f580c5478405d01233d7851e3a5f6ddd4009256",
+      "negative": "493f8aedb87702c24b637b766f580c5478405d01233d7851e3a5f6ddd4009256"
+    }
+  },
+  "changed_shared_input_paths": [
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/boot/apple/Devs/kernel.resource"
+  ],
+  "restored_build_inputs_match_positive": {
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Developer/Debug/Tests/exec/task_cpu_accounting": true,
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Devs/FileSystem.resource": true,
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Devs/appleboot.device": true,
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Devs/bootloader.resource": true,
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Devs/lddemon.resource": true,
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Devs/openfirmware.resource": true,
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Devs/pmgr.resource": true,
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Devs/rtkit.resource": true,
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Devs/task.resource": true,
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/L/fat-handler": true,
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Libs/aros.library": true,
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Libs/dos.library": true,
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Libs/iffparse.library": true,
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Libs/locale.library": true,
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Libs/partition.library": true,
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Libs/posixc.library": true,
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Libs/stdc.library": true,
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Libs/stdcio.library": true,
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/Libs/utility.library": true,
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/boot/apple/Devs/kernel.resource": true,
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/boot/apple/Devs/timer.device": true,
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/boot/apple/Libs/exec.library": true,
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/AROS/boot/apple/Libs/expansion.library": true,
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/bin/apple-aarch64/gen/arch/aarch64-apple/bootstrap/aros-apple-stage2-test.bin": true,
+    "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting-vm/uefi/BOOTAA64.EFI": true
+  },
+  "same_SYS_img": true,
+  "same_probe": true,
+  "files": {
+    "cpu-accounting-validation/attempt-001/esp/ABIPROBE": {
+      "sha256": "1964176f9174420dd0e4945680e23c935a738eb3a3ddc8b70e0da6e9089512c0",
+      "bytes": 76352
+    },
+    "cpu-accounting-validation/attempt-001/esp/AROS/BOOT0.ID": {
+      "sha256": "ad4dfd27769064b35739b4b5803e85a78b50a92ce5b4c34329980e3e3b568539",
+      "bytes": 128
+    },
+    "cpu-accounting-validation/attempt-001/esp/AROS/GEN0.BND": {
+      "sha256": "bef284e96a41e9e70a920c4cd4e423a8cf291788cabec36de6b168c729abd43f",
+      "bytes": 4132864
+    },
+    "cpu-accounting-validation/attempt-001/esp/EFI/BOOT/BOOTAA64.EFI": {
+      "sha256": "493f8aedb87702c24b637b766f580c5478405d01233d7851e3a5f6ddd4009256",
+      "bytes": 44032
+    },
+    "cpu-accounting-validation/attempt-001/esp/SYS.img": {
+      "sha256": "fa1d6989e9d14825b1611fa4fd5d535997ac75dcb180da6951c3a54ed1bac4af",
+      "bytes": 1474560
+    },
+    "cpu-accounting-validation/attempt-001/esp/provenance.json": {
+      "sha256": "0637ce3290a9411ce350224bc2dda6107b950cfb3f714c97b81442dc38fa2260",
+      "bytes": 7228
+    },
+    "cpu-accounting-validation/attempt-001/host-context.json": {
+      "sha256": "806c4f6226504b28defb7fd4d59986aff0ea29e48197458e87a13adc28a20a8a",
+      "bytes": 157640
+    },
+    "cpu-accounting-validation/attempt-001/package-command.json": {
+      "sha256": "e7ce014be602d63d518a11892bf6aab23924e1bf6623c8101848a7aef64eb6cd",
+      "bytes": 656
+    },
+    "cpu-accounting-validation/attempt-001/package.log": {
+      "sha256": "b609b37d197ee4b28692a160d244069d09247be2eb7f000fff63c7a19e826e03",
+      "bytes": 1283
+    },
+    "cpu-accounting-validation/attempt-001/run-01.log": {
+      "sha256": "0900409d066df58589e652be1e16eb5c0b2381f9fb7a3bbc1be1d37890d1d81c",
+      "bytes": 1914
+    },
+    "cpu-accounting-validation/attempt-001/tcg-01/command.json": {
+      "sha256": "5f20e9d52da10ee06eae7e989c1f0e70d01e91e150c3998321b34144bb6533e9",
+      "bytes": 780
+    },
+    "cpu-accounting-validation/attempt-001/tcg-01/esp/ABIPROBE": {
+      "sha256": "1964176f9174420dd0e4945680e23c935a738eb3a3ddc8b70e0da6e9089512c0",
+      "bytes": 76352
+    },
+    "cpu-accounting-validation/attempt-001/tcg-01/esp/AROS/BOOT0.ID": {
+      "sha256": "ad4dfd27769064b35739b4b5803e85a78b50a92ce5b4c34329980e3e3b568539",
+      "bytes": 128
+    },
+    "cpu-accounting-validation/attempt-001/tcg-01/esp/AROS/GEN0.BND": {
+      "sha256": "bef284e96a41e9e70a920c4cd4e423a8cf291788cabec36de6b168c729abd43f",
+      "bytes": 4132864
+    },
+    "cpu-accounting-validation/attempt-001/tcg-01/esp/EFI/BOOT/BOOTAA64.EFI": {
+      "sha256": "493f8aedb87702c24b637b766f580c5478405d01233d7851e3a5f6ddd4009256",
+      "bytes": 44032
+    },
+    "cpu-accounting-validation/attempt-001/tcg-01/esp/SYS.img": {
+      "sha256": "fa1d6989e9d14825b1611fa4fd5d535997ac75dcb180da6951c3a54ed1bac4af",
+      "bytes": 1474560
+    },
+    "cpu-accounting-validation/attempt-001/tcg-01/esp/provenance.json": {
+      "sha256": "0637ce3290a9411ce350224bc2dda6107b950cfb3f714c97b81442dc38fa2260",
+      "bytes": 7228
+    },
+    "cpu-accounting-validation/attempt-001/tcg-01/host.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "cpu-accounting-validation/attempt-001/tcg-01/qemu.trace": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "cpu-accounting-validation/attempt-001/tcg-01/qmp.jsonl": {
+      "sha256": "352013654b29cb3d6c6f5864ca59605c3ae4558d3327caceb13917ec279f7079",
+      "bytes": 3528
+    },
+    "cpu-accounting-validation/attempt-001/tcg-01/registers.txt": {
+      "sha256": "7eb806df15095498b6d6452baf30f1e398edbf272a3ebe78d7a95c04e87b3bb3",
+      "bytes": 2012
+    },
+    "cpu-accounting-validation/attempt-001/tcg-01/serial.log": {
+      "sha256": "e90ae763aaf0e862eeb7613082fc0f31c03872266e3be495f8714b933290de63",
+      "bytes": 194
+    },
+    "cpu-accounting-validation/attempt-001/tcg-01/timeline.json": {
+      "sha256": "186e90eb7d20cadb30124ba2a9dbc085ae6a3c1174ced62a84c937ed549ded76",
+      "bytes": 142
+    },
+    "cpu-accounting-validation/attempt-001/tcg-01/verdict.json": {
+      "sha256": "0900409d066df58589e652be1e16eb5c0b2381f9fb7a3bbc1be1d37890d1d81c",
+      "bytes": 1914
+    },
+    "cpu-accounting-validation/attempt-002/esp/ABIPROBE": {
+      "sha256": "1964176f9174420dd0e4945680e23c935a738eb3a3ddc8b70e0da6e9089512c0",
+      "bytes": 76352
+    },
+    "cpu-accounting-validation/attempt-002/esp/AROS/BOOT0.ID": {
+      "sha256": "ad4dfd27769064b35739b4b5803e85a78b50a92ce5b4c34329980e3e3b568539",
+      "bytes": 128
+    },
+    "cpu-accounting-validation/attempt-002/esp/AROS/GEN0.BND": {
+      "sha256": "bef284e96a41e9e70a920c4cd4e423a8cf291788cabec36de6b168c729abd43f",
+      "bytes": 4132864
+    },
+    "cpu-accounting-validation/attempt-002/esp/EFI/BOOT/BOOTAA64.EFI": {
+      "sha256": "493f8aedb87702c24b637b766f580c5478405d01233d7851e3a5f6ddd4009256",
+      "bytes": 44032
+    },
+    "cpu-accounting-validation/attempt-002/esp/SYS.img": {
+      "sha256": "fa1d6989e9d14825b1611fa4fd5d535997ac75dcb180da6951c3a54ed1bac4af",
+      "bytes": 1474560
+    },
+    "cpu-accounting-validation/attempt-002/esp/provenance.json": {
+      "sha256": "02a34c16544648a8a2fb60ec0f44fde3380836957318876fda9bcff60e69427f",
+      "bytes": 7228
+    },
+    "cpu-accounting-validation/attempt-002/host-context.json": {
+      "sha256": "969370075a14604d4a903ce11da03b99819f17121b2c16e57e3ef9554295939c",
+      "bytes": 1198
+    },
+    "cpu-accounting-validation/attempt-002/package-command.json": {
+      "sha256": "82698348467ff99b349a5d37446c2f33bb2008499ebc9328d938eb75008eeac0",
+      "bytes": 656
+    },
+    "cpu-accounting-validation/attempt-002/package.log": {
+      "sha256": "fa74b71b473957fc7f461813960bf587b7421b7c8c01f69b77e0b133757d4d4a",
+      "bytes": 1283
+    },
+    "cpu-accounting-validation/attempt-002/run-01.log": {
+      "sha256": "5c4b343107932022781408f941a21c91940d58bceb58029aa2bc57ab5e4695d7",
+      "bytes": 1957
+    },
+    "cpu-accounting-validation/attempt-002/tcg-01/command.json": {
+      "sha256": "fb88647108a21386e20304a33e87bff13943983b6c0b573e6facd59f96ee41bf",
+      "bytes": 1068
+    },
+    "cpu-accounting-validation/attempt-002/tcg-01/esp/ABIPROBE": {
+      "sha256": "1964176f9174420dd0e4945680e23c935a738eb3a3ddc8b70e0da6e9089512c0",
+      "bytes": 76352
+    },
+    "cpu-accounting-validation/attempt-002/tcg-01/esp/AROS/BOOT0.ID": {
+      "sha256": "ad4dfd27769064b35739b4b5803e85a78b50a92ce5b4c34329980e3e3b568539",
+      "bytes": 128
+    },
+    "cpu-accounting-validation/attempt-002/tcg-01/esp/AROS/GEN0.BND": {
+      "sha256": "bef284e96a41e9e70a920c4cd4e423a8cf291788cabec36de6b168c729abd43f",
+      "bytes": 4132864
+    },
+    "cpu-accounting-validation/attempt-002/tcg-01/esp/EFI/BOOT/BOOTAA64.EFI": {
+      "sha256": "493f8aedb87702c24b637b766f580c5478405d01233d7851e3a5f6ddd4009256",
+      "bytes": 44032
+    },
+    "cpu-accounting-validation/attempt-002/tcg-01/esp/SYS.img": {
+      "sha256": "fa1d6989e9d14825b1611fa4fd5d535997ac75dcb180da6951c3a54ed1bac4af",
+      "bytes": 1474560
+    },
+    "cpu-accounting-validation/attempt-002/tcg-01/esp/boot.log": {
+      "sha256": "c1c5bc47df0dc69d2e9a96f9ef4c43e941adba9759cf23724fef00acfe74eaac",
+      "bytes": 44
+    },
+    "cpu-accounting-validation/attempt-002/tcg-01/esp/provenance.json": {
+      "sha256": "02a34c16544648a8a2fb60ec0f44fde3380836957318876fda9bcff60e69427f",
+      "bytes": 7228
+    },
+    "cpu-accounting-validation/attempt-002/tcg-01/firmware.log": {
+      "sha256": "4bf0d873acf14da454fa277170e5269764d784efe1cd4bfeb4791bb8dbf27467",
+      "bytes": 1484
+    },
+    "cpu-accounting-validation/attempt-002/tcg-01/host.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "cpu-accounting-validation/attempt-002/tcg-01/qemu.trace": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "cpu-accounting-validation/attempt-002/tcg-01/qmp.jsonl": {
+      "sha256": "1031a752aeef7dc1ed0d46bf03f7754629b872f9e9f395e943e0c6854707be68",
+      "bytes": 3528
+    },
+    "cpu-accounting-validation/attempt-002/tcg-01/registers.txt": {
+      "sha256": "02070414de7407c6f9a305eb31fefcc59a2148e4e1b9fc792d0eb678b02aa8bb",
+      "bytes": 2012
+    },
+    "cpu-accounting-validation/attempt-002/tcg-01/serial.log": {
+      "sha256": "89a21bad69c37be5ca7eb4b72a7f4d273edb059e9a8b2f9c50ab1571dc805a03",
+      "bytes": 4720
+    },
+    "cpu-accounting-validation/attempt-002/tcg-01/timeline.json": {
+      "sha256": "590aa234a1c0747ac4ee27772a4aaa2a3cbaf845ed209249799185661b60f4bc",
+      "bytes": 139
+    },
+    "cpu-accounting-validation/attempt-002/tcg-01/verdict.json": {
+      "sha256": "5c4b343107932022781408f941a21c91940d58bceb58029aa2bc57ab5e4695d7",
+      "bytes": 1957
+    },
+    "cpu-accounting-validation/attempt-003/esp/ABIPROBE": {
+      "sha256": "1964176f9174420dd0e4945680e23c935a738eb3a3ddc8b70e0da6e9089512c0",
+      "bytes": 76352
+    },
+    "cpu-accounting-validation/attempt-003/esp/AROS/BOOT0.ID": {
+      "sha256": "945603643f9599148b852a23530354d882e344071ec7ab6d7d8ca3b2a7dbfe25",
+      "bytes": 128
+    },
+    "cpu-accounting-validation/attempt-003/esp/AROS/GEN0.BND": {
+      "sha256": "ee6c74a1d65dc4d90b4e4ef698b384b3529124707fa6805024e6b62f6a7206df",
+      "bytes": 4136960
+    },
+    "cpu-accounting-validation/attempt-003/esp/EFI/BOOT/BOOTAA64.EFI": {
+      "sha256": "493f8aedb87702c24b637b766f580c5478405d01233d7851e3a5f6ddd4009256",
+      "bytes": 44032
+    },
+    "cpu-accounting-validation/attempt-003/esp/SYS.img": {
+      "sha256": "8737855be4b3a3ee8f6cab2e29fe6dc61171107545e79bdf8b9f539062382430",
+      "bytes": 1474560
+    },
+    "cpu-accounting-validation/attempt-003/esp/provenance.json": {
+      "sha256": "a67a4b17539763d60b45e85aaff21fca4d2e7c26efa02d7810bf5aeb0a0e0c25",
+      "bytes": 7228
+    },
+    "cpu-accounting-validation/attempt-003/host-context.json": {
+      "sha256": "7ec3c771a2c86ae5be3d9ea3a2c3637de7c2d0c453c29d5bcb8bd06ded880863",
+      "bytes": 1198
+    },
+    "cpu-accounting-validation/attempt-003/package-command.json": {
+      "sha256": "acb8b1c70c9200fdbf2aa3222293c8863e91174de256214b7865b9ba0b2d4fa5",
+      "bytes": 656
+    },
+    "cpu-accounting-validation/attempt-003/package.log": {
+      "sha256": "4d4a5a5c90bd7564ff32600dab6eb695d682433da691713072e62b65da214e0b",
+      "bytes": 1283
+    },
+    "cpu-accounting-validation/attempt-003/root-replay.log": {
+      "sha256": "33f24a7a7592e5df9542f205393b066af5e42a2ab0d86fb2b9df661732323dd8",
+      "bytes": 1942
+    },
+    "cpu-accounting-validation/attempt-003/run-01.log": {
+      "sha256": "3dabd53d881d7bb5418dbefee9283427b48adbcabe5f7769557b47372b452b70",
+      "bytes": 2095
+    },
+    "cpu-accounting-validation/attempt-003/tcg-01/command.json": {
+      "sha256": "c707e23b510307cd3305269643c7d2f6fbbd7e4dd1513aa307dcef2296505af6",
+      "bytes": 1068
+    },
+    "cpu-accounting-validation/attempt-003/tcg-01/esp/ABIPROBE": {
+      "sha256": "1964176f9174420dd0e4945680e23c935a738eb3a3ddc8b70e0da6e9089512c0",
+      "bytes": 76352
+    },
+    "cpu-accounting-validation/attempt-003/tcg-01/esp/AROS/BOOT0.ID": {
+      "sha256": "945603643f9599148b852a23530354d882e344071ec7ab6d7d8ca3b2a7dbfe25",
+      "bytes": 128
+    },
+    "cpu-accounting-validation/attempt-003/tcg-01/esp/AROS/GEN0.BND": {
+      "sha256": "ee6c74a1d65dc4d90b4e4ef698b384b3529124707fa6805024e6b62f6a7206df",
+      "bytes": 4136960
+    },
+    "cpu-accounting-validation/attempt-003/tcg-01/esp/EFI/BOOT/BOOTAA64.EFI": {
+      "sha256": "493f8aedb87702c24b637b766f580c5478405d01233d7851e3a5f6ddd4009256",
+      "bytes": 44032
+    },
+    "cpu-accounting-validation/attempt-003/tcg-01/esp/SYS.img": {
+      "sha256": "8737855be4b3a3ee8f6cab2e29fe6dc61171107545e79bdf8b9f539062382430",
+      "bytes": 1474560
+    },
+    "cpu-accounting-validation/attempt-003/tcg-01/esp/boot.log": {
+      "sha256": "c1c5bc47df0dc69d2e9a96f9ef4c43e941adba9759cf23724fef00acfe74eaac",
+      "bytes": 44
+    },
+    "cpu-accounting-validation/attempt-003/tcg-01/esp/provenance.json": {
+      "sha256": "a67a4b17539763d60b45e85aaff21fca4d2e7c26efa02d7810bf5aeb0a0e0c25",
+      "bytes": 7228
+    },
+    "cpu-accounting-validation/attempt-003/tcg-01/firmware.log": {
+      "sha256": "cf2bf793f29e2779903e621cea198a8711bbaa72708a98b5ed66cc5686f34394",
+      "bytes": 1484
+    },
+    "cpu-accounting-validation/attempt-003/tcg-01/host.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "cpu-accounting-validation/attempt-003/tcg-01/qemu.trace": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "cpu-accounting-validation/attempt-003/tcg-01/qmp.jsonl": {
+      "sha256": "8a221ba66afa286665364ef24739eb5cd3af8f7cbed67c0f29a29d35084fc1bd",
+      "bytes": 3529
+    },
+    "cpu-accounting-validation/attempt-003/tcg-01/registers.txt": {
+      "sha256": "11aa10a494631b7b83749e0662e5fbf9410ce7e67b617983eb3f0e6de2ae916d",
+      "bytes": 2012
+    },
+    "cpu-accounting-validation/attempt-003/tcg-01/root-replay.json": {
+      "sha256": "33f24a7a7592e5df9542f205393b066af5e42a2ab0d86fb2b9df661732323dd8",
+      "bytes": 1942
+    },
+    "cpu-accounting-validation/attempt-003/tcg-01/serial.log": {
+      "sha256": "2b6f5125b3abb499a8b5987ebca615cedbef17f80d5152b6f054cbe992cfc4fd",
+      "bytes": 10523
+    },
+    "cpu-accounting-validation/attempt-003/tcg-01/timeline.json": {
+      "sha256": "dc4b027363de340b6bf659998c04d45436ce3aff737f391142166e35e3645bd8",
+      "bytes": 167
+    },
+    "cpu-accounting-validation/attempt-003/tcg-01/verdict.json": {
+      "sha256": "3dabd53d881d7bb5418dbefee9283427b48adbcabe5f7769557b47372b452b70",
+      "bytes": 2095
+    },
+    "cpu-accounting-validation/attempt-004-negative/esp/ABIPROBE": {
+      "sha256": "1964176f9174420dd0e4945680e23c935a738eb3a3ddc8b70e0da6e9089512c0",
+      "bytes": 76352
+    },
+    "cpu-accounting-validation/attempt-004-negative/esp/AROS/BOOT0.ID": {
+      "sha256": "2eba699cfc0a9e4066ea9095e48d1f51fc7c42e71ef38acf3b334f8a6719dc9c",
+      "bytes": 128
+    },
+    "cpu-accounting-validation/attempt-004-negative/esp/AROS/GEN0.BND": {
+      "sha256": "882c3ff56eb8514116a5ebd264d57f45cdf37d92ba4b854ae1f808aba938edee",
+      "bytes": 4136960
+    },
+    "cpu-accounting-validation/attempt-004-negative/esp/EFI/BOOT/BOOTAA64.EFI": {
+      "sha256": "493f8aedb87702c24b637b766f580c5478405d01233d7851e3a5f6ddd4009256",
+      "bytes": 44032
+    },
+    "cpu-accounting-validation/attempt-004-negative/esp/SYS.img": {
+      "sha256": "8737855be4b3a3ee8f6cab2e29fe6dc61171107545e79bdf8b9f539062382430",
+      "bytes": 1474560
+    },
+    "cpu-accounting-validation/attempt-004-negative/esp/provenance.json": {
+      "sha256": "e8ddd78b9d6637baf7255190d5f3ba5d191bb0254b8c9308be845f45fd81f4bd",
+      "bytes": 7246
+    },
+    "cpu-accounting-validation/attempt-004-negative/host-context.json": {
+      "sha256": "87101da4a84df7c75da8c317d95549a6adb4bff2298eace2c3e7b3b7e6ba81c9",
+      "bytes": 1198
+    },
+    "cpu-accounting-validation/attempt-004-negative/package-command.json": {
+      "sha256": "07a47f1da48bee7553dc589851c5cb2c8cb5c96e1d04f5fa482fd9035995beb8",
+      "bytes": 665
+    },
+    "cpu-accounting-validation/attempt-004-negative/package.log": {
+      "sha256": "4f41e97d955980ee6e5fff8f5940d34fab3b401ce844184faad718eb00a61902",
+      "bytes": 1319
+    },
+    "cpu-accounting-validation/attempt-004-negative/producer-disabled.patch": {
+      "sha256": "4adc62e49ebb4af4ccb93c3520ffa81083c28046ceccba6932ee84b52a8c8c15",
+      "bytes": 750
+    },
+    "cpu-accounting-validation/attempt-004-negative/root-replay.log": {
+      "sha256": "79967a4729bbc439739a704cc22ba306a6ef0b6c328ff30fa4d95f58c97bbd8a",
+      "bytes": 1543
+    },
+    "cpu-accounting-validation/attempt-004-negative/run-01.log": {
+      "sha256": "20e86264e42c96d2438bdd6ceb616822dfeae5ba620a864465ba30fb13ab9a05",
+      "bytes": 1717
+    },
+    "cpu-accounting-validation/attempt-004-negative/tcg-01/command.json": {
+      "sha256": "b2caca8aa34bab37190ab058af2a71aaf8a6105b7bc8bb6f002f35b7176370aa",
+      "bytes": 1104
+    },
+    "cpu-accounting-validation/attempt-004-negative/tcg-01/esp/ABIPROBE": {
+      "sha256": "1964176f9174420dd0e4945680e23c935a738eb3a3ddc8b70e0da6e9089512c0",
+      "bytes": 76352
+    },
+    "cpu-accounting-validation/attempt-004-negative/tcg-01/esp/AROS/BOOT0.ID": {
+      "sha256": "2eba699cfc0a9e4066ea9095e48d1f51fc7c42e71ef38acf3b334f8a6719dc9c",
+      "bytes": 128
+    },
+    "cpu-accounting-validation/attempt-004-negative/tcg-01/esp/AROS/GEN0.BND": {
+      "sha256": "882c3ff56eb8514116a5ebd264d57f45cdf37d92ba4b854ae1f808aba938edee",
+      "bytes": 4136960
+    },
+    "cpu-accounting-validation/attempt-004-negative/tcg-01/esp/EFI/BOOT/BOOTAA64.EFI": {
+      "sha256": "493f8aedb87702c24b637b766f580c5478405d01233d7851e3a5f6ddd4009256",
+      "bytes": 44032
+    },
+    "cpu-accounting-validation/attempt-004-negative/tcg-01/esp/SYS.img": {
+      "sha256": "8737855be4b3a3ee8f6cab2e29fe6dc61171107545e79bdf8b9f539062382430",
+      "bytes": 1474560
+    },
+    "cpu-accounting-validation/attempt-004-negative/tcg-01/esp/boot.log": {
+      "sha256": "c1c5bc47df0dc69d2e9a96f9ef4c43e941adba9759cf23724fef00acfe74eaac",
+      "bytes": 44
+    },
+    "cpu-accounting-validation/attempt-004-negative/tcg-01/esp/provenance.json": {
+      "sha256": "e8ddd78b9d6637baf7255190d5f3ba5d191bb0254b8c9308be845f45fd81f4bd",
+      "bytes": 7246
+    },
+    "cpu-accounting-validation/attempt-004-negative/tcg-01/firmware.log": {
+      "sha256": "cf2bf793f29e2779903e621cea198a8711bbaa72708a98b5ed66cc5686f34394",
+      "bytes": 1484
+    },
+    "cpu-accounting-validation/attempt-004-negative/tcg-01/host.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "cpu-accounting-validation/attempt-004-negative/tcg-01/qemu.trace": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "cpu-accounting-validation/attempt-004-negative/tcg-01/qmp.jsonl": {
+      "sha256": "2cb49f051b8d6e68aaae5bbefee6cd6a34825ed7e29451e5b80728847f34aadc",
+      "bytes": 3531
+    },
+    "cpu-accounting-validation/attempt-004-negative/tcg-01/registers.txt": {
+      "sha256": "45270e88263f0208da1ab755016958664a01447f04c3417925bafb76787c9492",
+      "bytes": 2012
+    },
+    "cpu-accounting-validation/attempt-004-negative/tcg-01/root-replay.json": {
+      "sha256": "79967a4729bbc439739a704cc22ba306a6ef0b6c328ff30fa4d95f58c97bbd8a",
+      "bytes": 1543
+    },
+    "cpu-accounting-validation/attempt-004-negative/tcg-01/serial.log": {
+      "sha256": "0869bd7fa8664d0139f67ad4215790f76b23015e3c76276d7f4fcda0a2605b5a",
+      "bytes": 6593
+    },
+    "cpu-accounting-validation/attempt-004-negative/tcg-01/timeline.json": {
+      "sha256": "27737312ae1ce6edc5c516f0ff0c16f6ccba1f76c226760eb5d47e61c2a6794a",
+      "bytes": 162
+    },
+    "cpu-accounting-validation/attempt-004-negative/tcg-01/verdict.json": {
+      "sha256": "20e86264e42c96d2438bdd6ceb616822dfeae5ba620a864465ba30fb13ab9a05",
+      "bytes": 1717
+    },
+    "aros-build-cpu-accounting-vm/cpu-boot-01.log": {
+      "sha256": "90b403fd2ace82435821da607cb36b9c823d28029847f9d6051264b0c3d5ff9c",
+      "bytes": 739232
+    },
+    "aros-build-cpu-accounting-vm/cpu-boot-02.log": {
+      "sha256": "531570a03b6b374077fedaa7db6b7c3a148ca301855c51e42cb64c2ea97a28f7",
+      "bytes": 307201
+    },
+    "aros-build-cpu-accounting-vm/cpu-boot-03.log": {
+      "sha256": "ade2d14a35d406e21dcbd57c0393510dcf438ff8d31e7a6fa24c4251267de584",
+      "bytes": 7807
+    },
+    "aros-build-cpu-accounting-vm/cpu-probe-01.log": {
+      "sha256": "1a80c4b6dbbfeaec423b3c779f02ca6bbe79d0200766cfeccd327b947584e648",
+      "bytes": 6167
+    },
+    "aros-build-cpu-accounting-vm/cpu-probe-02.log": {
+      "sha256": "abde2ab4e31015dd3a9d107cd813c79900afad85af78a4d54c5afeb272b7b5cd",
+      "bytes": 683
+    },
+    "aros-build-cpu-accounting-vm/cpu-probe-03.log": {
+      "sha256": "abde2ab4e31015dd3a9d107cd813c79900afad85af78a4d54c5afeb272b7b5cd",
+      "bytes": 683
+    },
+    "aros-build-cpu-accounting-vm/cpu-negative-boot-01.log": {
+      "sha256": "fa65e4f821913b33b6c80c02d5a9e6e1a57ed4e562138593add9fdf5f873e871",
+      "bytes": 8136
+    },
+    "aros-build-cpu-accounting-vm/cpu-restored-boot-01.log": {
+      "sha256": "8896cf1bd07a8ae93d47fa73f7f5f36956a790c819ebcef919ac229b215d7633",
+      "bytes": 8136
+    },
+    "aros-build-cpu-accounting-vm/uefi-build.log": {
+      "sha256": "000ff56c12bf30f4cf45adf22a1e1793d3e5b9946166587dc842f4deca2ab805",
+      "bytes": 7418
+    },
+    "aros-build-cpu-accounting-vm/vm-build-environment.json": {
+      "sha256": "92bd20507ce57bbb9aab0f5aa9684a2f708fbbdca155700ae1c001a49881beae",
+      "bytes": 120
+    },
+    "cpu-accounting-validation/attempt-005/esp/ABIPROBE": {
+      "sha256": "1964176f9174420dd0e4945680e23c935a738eb3a3ddc8b70e0da6e9089512c0",
+      "bytes": 76352
+    },
+    "cpu-accounting-validation/attempt-005/esp/AROS/BOOT0.ID": {
+      "sha256": "945603643f9599148b852a23530354d882e344071ec7ab6d7d8ca3b2a7dbfe25",
+      "bytes": 128
+    },
+    "cpu-accounting-validation/attempt-005/esp/AROS/GEN0.BND": {
+      "sha256": "ee6c74a1d65dc4d90b4e4ef698b384b3529124707fa6805024e6b62f6a7206df",
+      "bytes": 4136960
+    },
+    "cpu-accounting-validation/attempt-005/esp/EFI/BOOT/BOOTAA64.EFI": {
+      "sha256": "493f8aedb87702c24b637b766f580c5478405d01233d7851e3a5f6ddd4009256",
+      "bytes": 44032
+    },
+    "cpu-accounting-validation/attempt-005/esp/SYS.img": {
+      "sha256": "8737855be4b3a3ee8f6cab2e29fe6dc61171107545e79bdf8b9f539062382430",
+      "bytes": 1474560
+    },
+    "cpu-accounting-validation/attempt-005/esp/provenance.json": {
+      "sha256": "a67a4b17539763d60b45e85aaff21fca4d2e7c26efa02d7810bf5aeb0a0e0c25",
+      "bytes": 7228
+    },
+    "cpu-accounting-validation/attempt-005/host-context.json": {
+      "sha256": "2aef849fba4db04c7ee8b67f76e29a4c9477d03ec4e39bc5ed9a971da43e45c0",
+      "bytes": 299
+    },
+    "cpu-accounting-validation/attempt-005/launch-command.json": {
+      "sha256": "4b9f5632482a63b55423b5c98106b7c62525d4692999fec432fb5c3244dd2a9d",
+      "bytes": 406
+    },
+    "cpu-accounting-validation/attempt-005/observe-run.py": {
+      "sha256": "bd25e91531cb4f861c71063e2ecf64d378d7b223bb77935aaf6e2c60386658ed",
+      "bytes": 1524
+    },
+    "cpu-accounting-validation/attempt-005/process-samples.jsonl": {
+      "sha256": "1e3a0372c75e0f78494aa85bc5e088e70aef421ac09e02c2032884c4d035f990",
+      "bytes": 110411
+    },
+    "cpu-accounting-validation/attempt-005/run-01.log": {
+      "sha256": "9b9d4c6352ce8314086f256fe205fefcda47de32b6fdf3648a8a4b5dd999e0e7",
+      "bytes": 2097
+    },
+    "cpu-accounting-validation/attempt-005/tcg-01/command.json": {
+      "sha256": "840bb81ce1a861609ce2190390b8e28a2766d46040e40c727cfbda02a85958a6",
+      "bytes": 1068
+    },
+    "cpu-accounting-validation/attempt-005/tcg-01/esp/ABIPROBE": {
+      "sha256": "1964176f9174420dd0e4945680e23c935a738eb3a3ddc8b70e0da6e9089512c0",
+      "bytes": 76352
+    },
+    "cpu-accounting-validation/attempt-005/tcg-01/esp/AROS/BOOT0.ID": {
+      "sha256": "945603643f9599148b852a23530354d882e344071ec7ab6d7d8ca3b2a7dbfe25",
+      "bytes": 128
+    },
+    "cpu-accounting-validation/attempt-005/tcg-01/esp/AROS/GEN0.BND": {
+      "sha256": "ee6c74a1d65dc4d90b4e4ef698b384b3529124707fa6805024e6b62f6a7206df",
+      "bytes": 4136960
+    },
+    "cpu-accounting-validation/attempt-005/tcg-01/esp/EFI/BOOT/BOOTAA64.EFI": {
+      "sha256": "493f8aedb87702c24b637b766f580c5478405d01233d7851e3a5f6ddd4009256",
+      "bytes": 44032
+    },
+    "cpu-accounting-validation/attempt-005/tcg-01/esp/SYS.img": {
+      "sha256": "8737855be4b3a3ee8f6cab2e29fe6dc61171107545e79bdf8b9f539062382430",
+      "bytes": 1474560
+    },
+    "cpu-accounting-validation/attempt-005/tcg-01/esp/boot.log": {
+      "sha256": "c1c5bc47df0dc69d2e9a96f9ef4c43e941adba9759cf23724fef00acfe74eaac",
+      "bytes": 44
+    },
+    "cpu-accounting-validation/attempt-005/tcg-01/esp/provenance.json": {
+      "sha256": "a67a4b17539763d60b45e85aaff21fca4d2e7c26efa02d7810bf5aeb0a0e0c25",
+      "bytes": 7228
+    },
+    "cpu-accounting-validation/attempt-005/tcg-01/firmware.log": {
+      "sha256": "cf2bf793f29e2779903e621cea198a8711bbaa72708a98b5ed66cc5686f34394",
+      "bytes": 1484
+    },
+    "cpu-accounting-validation/attempt-005/tcg-01/host.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "cpu-accounting-validation/attempt-005/tcg-01/qemu.trace": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "cpu-accounting-validation/attempt-005/tcg-01/qmp.jsonl": {
+      "sha256": "26f3ac4be8456b3d6d66724d6e80c232b48f589fc4df70b8f912f0a47dc21024",
+      "bytes": 3528
+    },
+    "cpu-accounting-validation/attempt-005/tcg-01/registers.txt": {
+      "sha256": "dfca5dea8d50b1a00176b27c8a132e3e107443eccd27211ad8bce6091f162870",
+      "bytes": 2012
+    },
+    "cpu-accounting-validation/attempt-005/tcg-01/root-replay.json": {
+      "sha256": "e2a9b04db3452e92694bf1d3938fea8f602706ac2e31516eb144215ca762594d",
+      "bytes": 1944
+    },
+    "cpu-accounting-validation/attempt-005/tcg-01/serial.log": {
+      "sha256": "223cddeeaf37bc4011e2256787793babe18ba51fe174c3ef059111c841f8709a",
+      "bytes": 10527
+    },
+    "cpu-accounting-validation/attempt-005/tcg-01/timeline.json": {
+      "sha256": "7233354e477d763b96273d4346fea38795678ec40d45eeca2e4bcca0503b9af2",
+      "bytes": 167
+    },
+    "cpu-accounting-validation/attempt-005/tcg-01/verdict.json": {
+      "sha256": "9b9d4c6352ce8314086f256fe205fefcda47de32b6fdf3648a8a4b5dd999e0e7",
+      "bytes": 2097
+    },
+    "cpu-accounting-validation/attempt-005/timing-disclosure.json": {
+      "sha256": "e8225710856fe49d5d3d11016feb6d4a6aa0b56ee078be887f638c0d6bfee5f6",
+      "bytes": 5559
+    }
+  },
+  "quiet_positive_verdict": {
+    "result": "PASS",
+    "errors": [],
+    "metrics": {
+      "baseline_cpu_us": 0,
+      "busy_cpu_us": 982919,
+      "idle_cpu_us": 982950,
+      "busy_usage_q32": 4199131209,
+      "expected_busy_usage_q32": 4199690971,
+      "idle_usage_q32": 131147,
+      "busy_wall_us": 1005218,
+      "idle_wall_us": 1015146,
+      "iterations": 458132041,
+      "current_slice_cpu_us": 50126,
+      "current_slice_wall_us": 50126,
+      "exited_children": 32,
+      "sleep_qualified": false,
+      "smp_qualified": false
+    },
+    "workload_host_seconds": 2.7312157499836758,
+    "qemu_exit_code": 0,
+    "qmp_orderly_quit": true,
+    "timed_out": false,
+    "actual_aros_guest": true,
+    "observe_rejection": false,
+    "backend": "tcg",
+    "cpus": 1,
+    "post_proof_observation_seconds": 3,
+    "actual_post_proof_observation_seconds": 3.036619999911636,
+    "input_files": {
+      "ABIPROBE": "1964176f9174420dd0e4945680e23c935a738eb3a3ddc8b70e0da6e9089512c0",
+      "SYS.img": "8737855be4b3a3ee8f6cab2e29fe6dc61171107545e79bdf8b9f539062382430",
+      "AROS/GEN0.BND": "ee6c74a1d65dc4d90b4e4ef698b384b3529124707fa6805024e6b62f6a7206df",
+      "AROS/BOOT0.ID": "945603643f9599148b852a23530354d882e344071ec7ab6d7d8ca3b2a7dbfe25",
+      "EFI/BOOT/BOOTAA64.EFI": "493f8aedb87702c24b637b766f580c5478405d01233d7851e3a5f6ddd4009256"
+    },
+    "evidence_hashes": {
+      "serial.log": "223cddeeaf37bc4011e2256787793babe18ba51fe174c3ef059111c841f8709a",
+      "host.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "qemu.trace": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "firmware.log": "cf2bf793f29e2779903e621cea198a8711bbaa72708a98b5ed66cc5686f34394",
+      "qmp.jsonl": "26f3ac4be8456b3d6d66724d6e80c232b48f589fc4df70b8f912f0a47dc21024",
+      "registers.txt": "dfca5dea8d50b1a00176b27c8a132e3e107443eccd27211ad8bce6091f162870",
+      "timeline.json": "7233354e477d763b96273d4346fea38795678ec40d45eeca2e4bcca0503b9af2"
+    },
+    "bundle_sha256": "ee6c74a1d65dc4d90b4e4ef698b384b3529124707fa6805024e6b62f6a7206df",
+    "firmware_sha256": "47765fe344818cbc464b1c14ae658fb4b854f5c2ceffa982411731eb4865594d",
+    "seconds": 13.674
+  },
+  "quiet_replay_same_immutable_inputs_as_003": true,
+  "timing_disclosure": {
+    "disclosure": {
+      "board_thread": 39,
+      "message": 379,
+      "author": "claude-upstream",
+      "approximate_start_utc": "2026-10-16T00:18:05Z",
+      "approximate_end_utc": "2026-10-16T00:18:40Z"
+    },
+    "cpu_artifact_timestamps": {
+      "attempt-003": [
+        {
+          "path": "cpu-accounting-validation/attempt-003/tcg-01/command.json",
+          "birth_utc": "2026-10-16T00:16:13.514873+00:00",
+          "mtime_utc": "2026-10-16T00:16:13.514928+00:00",
+          "sha256": "c707e23b510307cd3305269643c7d2f6fbbd7e4dd1513aa307dcef2296505af6"
+        },
+        {
+          "path": "cpu-accounting-validation/attempt-003/tcg-01/qmp.jsonl",
+          "birth_utc": "2026-10-16T00:16:25.714713+00:00",
+          "mtime_utc": "2026-10-16T00:16:25.716436+00:00",
+          "sha256": "8a221ba66afa286665364ef24739eb5cd3af8f7cbed67c0f29a29d35084fc1bd"
+        },
+        {
+          "path": "cpu-accounting-validation/attempt-003/tcg-01/verdict.json",
+          "birth_utc": "2026-10-16T00:16:25.758065+00:00",
+          "mtime_utc": "2026-10-16T00:16:25.758136+00:00",
+          "sha256": "3dabd53d881d7bb5418dbefee9283427b48adbcabe5f7769557b47372b452b70"
+        }
+      ],
+      "attempt-004-negative": [
+        {
+          "path": "cpu-accounting-validation/attempt-004-negative/tcg-01/command.json",
+          "birth_utc": "2026-10-16T00:18:32.142067+00:00",
+          "mtime_utc": "2026-10-16T00:18:32.142104+00:00",
+          "sha256": "b2caca8aa34bab37190ab058af2a71aaf8a6105b7bc8bb6f002f35b7176370aa"
+        },
+        {
+          "path": "cpu-accounting-validation/attempt-004-negative/tcg-01/qmp.jsonl",
+          "birth_utc": "2026-10-16T00:18:43.838425+00:00",
+          "mtime_utc": "2026-10-16T00:18:43.840360+00:00",
+          "sha256": "2cb49f051b8d6e68aaae5bbefee6cd6a34825ed7e29451e5b80728847f34aadc"
+        },
+        {
+          "path": "cpu-accounting-validation/attempt-004-negative/tcg-01/verdict.json",
+          "birth_utc": "2026-10-16T00:18:43.901603+00:00",
+          "mtime_utc": "2026-10-16T00:18:43.901675+00:00",
+          "sha256": "20e86264e42c96d2438bdd6ceb616822dfeae5ba620a864465ba30fb13ab9a05"
+        }
+      ],
+      "attempt-005": [
+        {
+          "path": "cpu-accounting-validation/attempt-005/tcg-01/command.json",
+          "birth_utc": "2026-10-16T00:31:50.711572+00:00",
+          "mtime_utc": "2026-10-16T00:31:50.711655+00:00",
+          "sha256": "840bb81ce1a861609ce2190390b8e28a2766d46040e40c727cfbda02a85958a6"
+        },
+        {
+          "path": "cpu-accounting-validation/attempt-005/tcg-01/qmp.jsonl",
+          "birth_utc": "2026-10-16T00:32:04.324110+00:00",
+          "mtime_utc": "2026-10-16T00:32:04.329416+00:00",
+          "sha256": "26f3ac4be8456b3d6d66724d6e80c232b48f589fc4df70b8f912f0a47dc21024"
+        },
+        {
+          "path": "cpu-accounting-validation/attempt-005/tcg-01/verdict.json",
+          "birth_utc": "2026-10-16T00:32:04.385868+00:00",
+          "mtime_utc": "2026-10-16T00:32:04.385946+00:00",
+          "sha256": "9b9d4c6352ce8314086f256fe205fefcda47de32b6fdf3648a8a4b5dd999e0e7"
+        }
+      ]
+    },
+    "named_hvf_artifact_timestamps": {
+      "hvf": [
+        {
+          "path": "build/vm-power-attempt-010/hvf/command.json",
+          "birth_utc": "2026-10-16T00:21:24.922370+00:00",
+          "mtime_utc": "2026-10-16T00:21:24.922438+00:00",
+          "sha256": "849b5dd9956dfee7a0af21dd401f6f05b9265356d157f0d460a0cc7233063f87"
+        },
+        {
+          "path": "build/vm-power-attempt-010/hvf/serial.log",
+          "birth_utc": "2026-10-16T00:21:24.984108+00:00",
+          "mtime_utc": "2026-10-16T00:21:59.808717+00:00",
+          "sha256": "0adb6c30309fb3fd8e79edaa7944b8e8ee14808df063f50c18aa2dab5f67e104"
+        },
+        {
+          "path": "build/vm-power-attempt-010/hvf/verdict.json",
+          "birth_utc": "2026-10-16T00:21:59.872375+00:00",
+          "mtime_utc": "2026-10-16T00:21:59.872467+00:00",
+          "sha256": "fd84e521ea28ccfaa8d7eb1bbf9311df6eb84c818330784db7593df2b7c7c2c1"
+        }
+      ],
+      "hvf-missing-probe": [
+        {
+          "path": "build/vm-power-attempt-010/hvf-missing-probe/command.json",
+          "birth_utc": "2026-10-16T00:21:59.999340+00:00",
+          "mtime_utc": "2026-10-16T00:21:59.999386+00:00",
+          "sha256": "f030fe31a72ac32a32cdbf24aa0cad4ddb36df02049e4298c1b78f29cf491c13"
+        },
+        {
+          "path": "build/vm-power-attempt-010/hvf-missing-probe/serial.log",
+          "birth_utc": "2026-10-16T00:22:00.024356+00:00",
+          "mtime_utc": "2026-10-16T00:22:05.798754+00:00",
+          "sha256": "99f2bd66134b43f634036039f1023555dc42bfeb492b525201d6bef1dd33f549"
+        },
+        {
+          "path": "build/vm-power-attempt-010/hvf-missing-probe/verdict.json",
+          "birth_utc": "2026-10-16T00:22:05.829196+00:00",
+          "mtime_utc": "2026-10-16T00:22:05.829264+00:00",
+          "sha256": "d862254b08eaffdfbb7fb0089471db938598017797e905e286f827f77a2c1587"
+        }
+      ]
+    },
+    "comparison": "Disclosed approximate interval would overlap negative004 only. Named retained HVF artifact timestamps instead show00:21:24.922\u201300:21:59.872 and no003/004 overlap. Author clarification requested39/398. Reserved same-image005 independently removes qualification doubt.",
+    "reserved_replay": {
+      "sample_count": 55,
+      "start_utc": "2026-10-16T00:31:50.632645+00:00",
+      "end_utc": "2026-10-16T00:32:04.442675+00:00",
+      "pids": [
+        3952,
+        74995
+      ],
+      "interactive_pid": 74995,
+      "automated_pid": 3952,
+      "unexpected_qemu_observed": false,
+      "sampling_interval_seconds": 0.2,
+      "limitation": "Process sampling plus board reservation; not a claim of zero host load or exclusion of a sub-interval unobserved process."
+    }
+  }
+}

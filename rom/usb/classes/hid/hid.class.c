@@ -2748,7 +2748,9 @@ BOOL nParseReport(struct NepClassHid *nch, struct NepHidReport *nhr)
                         if(nhc)
                         {
                             KPRINTF(1, ("Collection open, checking need for cloning.\n"));
-                            if(nhc->nhc_Items.lh_Head->ln_Succ)
+                            /* An empty leaf can have ancestors with input items.
+                             * Preserve the whole open hierarchy on each report
+                             * switch, then clone empty containers for the new ID. */
                             {
                                 struct NepHidCollection *tmpnhc;
                                 struct NepHidCollection *newnhc;
@@ -2780,7 +2782,7 @@ BOOL nParseReport(struct NepClassHid *nch, struct NepHidReport *nhr)
                                     AddTail(&oldnhr->nhr_Collections, &tmpnhc->nhc_Node);
                                     tmpnhc->nhc_Report = oldnhr;
                                     childnhc = newnhc;
-                                } while((tmpnhc = nhc->nhc_Parent));
+                                } while((tmpnhc = tmpnhc->nhc_Parent));
                             }
                         }
                     } else {
@@ -3949,7 +3951,9 @@ BOOL nDetectDefaultAction(struct NepClassHid *nch,  struct NepHidItem *nhi, stru
                                 nha->nha_MouseAxis = HUAT_DELTAX;
                             } else {
                                 nha->nha_MouseAxis = HUAT_ABSX;
-                                nha->nha_ClipEnable = TRUE;
+                                /* Absolute mice describe screen coordinates;
+                                 * tablet edge clipping would offset every hit. */
+                                nha->nha_ClipEnable = !nFindCollID(nch, nhc, 0x010002, 0x010002);
                                 nha->nha_ClipMin = 5;
                                 nha->nha_ClipMax = 95;
                                 nha->nha_ClipStretch = TRUE;
@@ -3965,7 +3969,9 @@ BOOL nDetectDefaultAction(struct NepClassHid *nch,  struct NepHidItem *nhi, stru
                                 nha->nha_MouseAxis = HUAT_DELTAY;
                             } else {
                                 nha->nha_MouseAxis = HUAT_ABSY;
-                                nha->nha_ClipEnable = TRUE;
+                                /* Absolute mice describe screen coordinates;
+                                 * tablet edge clipping would offset every hit. */
+                                nha->nha_ClipEnable = !nFindCollID(nch, nhc, 0x010002, 0x010002);
                                 nha->nha_ClipMin = 5;
                                 nha->nha_ClipMax = 95;
                                 nha->nha_ClipStretch = TRUE;
@@ -6471,55 +6477,56 @@ void nFlushEvents(struct NepClassHid *nch)
     }
     if(nch->nch_NewMouseAbs)
     {
-        ULONG *tagptr = nch->nch_TabTags;
+        struct TagItem *tagptr = nch->nch_TabTags;
         KPRINTF(1, ("Mouse abs movement...\n"));
         nch->nch_FakeEvent.ie_EventAddress = &nch->nch_TabletEvent;
         nch->nch_TabletEvent.ient_RangeX = nch->nch_MouseRangeX;
         nch->nch_TabletEvent.ient_RangeY = nch->nch_MouseRangeY;
         nch->nch_TabletEvent.ient_TabletX = nch->nch_MouseAbsX;
         nch->nch_TabletEvent.ient_TabletY = nch->nch_MouseAbsY;
-        nch->nch_TabletEvent.ient_TagList = (struct TagItem *) tagptr;
+        nch->nch_TabletEvent.ient_TagList = tagptr;
         if(nch->nch_MouseRangeZ)
         {
             KPRINTF(1, ("AbsZ %ld\n", nch->nch_MouseAbsZ));
-            *tagptr++ = TABLETA_TabletZ;
-            *tagptr++ = nch->nch_MouseAbsZ;
-            *tagptr++ = TABLETA_RangeZ;
-            *tagptr++ = nch->nch_MouseRangeZ;
+            tagptr->ti_Tag = TABLETA_TabletZ;
+            (tagptr++)->ti_Data = nch->nch_MouseAbsZ;
+            tagptr->ti_Tag = TABLETA_RangeZ;
+            (tagptr++)->ti_Data = nch->nch_MouseRangeZ;
         }
         if(nch->nch_VldRotX)
         {
             KPRINTF(1, ("AngleX %ld\n", nch->nch_TabRotX));
-            *tagptr++ = TABLETA_AngleX;
-            *tagptr++ = nch->nch_TabRotX;
+            tagptr->ti_Tag = TABLETA_AngleX;
+            (tagptr++)->ti_Data = nch->nch_TabRotX;
         }
         if(nch->nch_VldRotY)
         {
             KPRINTF(1, ("AngleY %ld\n", nch->nch_TabRotY));
-            *tagptr++ = TABLETA_AngleY;
-            *tagptr++ = nch->nch_TabRotY;
+            tagptr->ti_Tag = TABLETA_AngleY;
+            (tagptr++)->ti_Data = nch->nch_TabRotY;
         }
         if(nch->nch_VldRotZ)
         {
             KPRINTF(1, ("AngleZ %ld\n", nch->nch_TabRotZ));
-            *tagptr++ = TABLETA_AngleZ;
-            *tagptr++ = nch->nch_TabRotZ;
+            tagptr->ti_Tag = TABLETA_AngleZ;
+            (tagptr++)->ti_Data = nch->nch_TabRotZ;
         }
         if(nch->nch_VldPressure)
         {
             KPRINTF(1, ("Pressure %ld\n", nch->nch_TabPressure));
-            *tagptr++ = TABLETA_Pressure;
-            *tagptr++ = nch->nch_TabPressure;
+            tagptr->ti_Tag = TABLETA_Pressure;
+            (tagptr++)->ti_Data = nch->nch_TabPressure;
         }
-        *tagptr++ = TABLETA_ButtonBits;
-        *tagptr++ = nch->nch_MouseButtons;
+        tagptr->ti_Tag = TABLETA_ButtonBits;
+        (tagptr++)->ti_Data = nch->nch_MouseButtons;
         if(nch->nch_VldProx)
         {
             KPRINTF(1, ("InProx %ld\n", nch->nch_TabProx));
-            *tagptr++ = TABLETA_InProximity;
-            *tagptr++ = nch->nch_TabProx;
+            tagptr->ti_Tag = TABLETA_InProximity;
+            (tagptr++)->ti_Data = nch->nch_TabProx;
         }
-        *tagptr = TAG_END;
+        tagptr->ti_Tag = TAG_END;
+        tagptr->ti_Data = 0;
         nch->nch_FakeEvent.ie_Class = IECLASS_NEWPOINTERPOS;
         nch->nch_FakeEvent.ie_SubClass = IESUBCLASS_NEWTABLET;
         nch->nch_FakeEvent.ie_Code = IECODE_NOBUTTON;

@@ -133,6 +133,11 @@ struct StackSwapArgs
 /* AROS specific */
 #define TS_TOMBSTONED               7
 #define TS_SPIN                     8
+/* Stopped by FreezeTasks(); kept on TaskWait until ThawTasks() */
+#define TS_FROZEN                   9
+
+/* FreezeTasks()/ThawTasks(): the build cannot freeze (SMP); nothing touched */
+#define FREEZE_UNSUPPORTED          ((ULONG)-1)
 
 /* Predefined Signals */
 #define SIGB_ABORT                  0

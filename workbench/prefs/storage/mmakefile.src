@@ -1,0 +1,15 @@
+# Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+# Distributed under the AROS Public License, version 1.1.
+include $(SRCDIR)/config/aros.cfg
+
+#MM- workbench-prefs : workbench-prefs-storage
+#MM workbench-prefs-storage : workbench-prefs-storage-class workbench-classes-zune-systemprefswindow includes linklibs
+#MM workbench-prefs-storage-class : workbench-classes-zune-prefseditor includes linklibs
+
+%build_prog mmake=workbench-prefs-storage \
+    progname=Storage targetdir=$(AROS_PREFS) files=main
+
+%build_module mmake=workbench-prefs-storage-class \
+    modname=StorageEditor modtype=mcc conffile=editor.conf files=editor
+
+%common

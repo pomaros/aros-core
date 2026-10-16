@@ -1,0 +1,7 @@
+group network
+order 30
+class FirewallEditor.mcc
+name Firewall
+description Packet filter and address translation rules
+keywords firewall filter nat rules
+level expert

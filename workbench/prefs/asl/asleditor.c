@@ -25,20 +25,8 @@
 
 /*********************************************************************************************/
 
-struct AslEditor_DATA
-{
-    Object *drawersfirstobj;
-
-    Object *positionobj;
-    Object *offsetxobj;
-    Object *offsetyobj;
-
-    Object *sizeobj;
-    Object *heightpercentobj;
-    Object *widthpercentobj;
-
-    BOOL noupdatehook;
-};
+#define ASLEDITOR_DATA_H_IN_SOURCE
+#include "asleditor_data.h"
 
 /*********************************************************************************************/
 
@@ -106,7 +94,7 @@ static void UpdateDefaultsHook(struct Hook *hook, Object *self, struct AslEditor
 
     if (changed)
     {
-        SET( _parent(self), MUIA_PrefsEditor_Changed, TRUE);
+        SET(self, MUIA_PrefsEditor_Changed, TRUE);   /* the hook runs on the editor */
     }
 }
 
@@ -273,6 +261,14 @@ IPTR AslEditor__OM_NEW
         data = INST_DATA(CLASS, self);
         
         D(bug("[AslEditor.class] %s: Self @ 0x%p, Data @ 0x%p\n", __PRETTY_FUNCTION__, self, data));
+        /* Stable ids for the settings window's index and port. */
+        SET(drawersfirstobj, MUIA_ObjectID, MAKE_ID('A','S','D','F'));
+        SET(positionobj, MUIA_ObjectID, MAKE_ID('A','S','P','O'));
+        SET(offsetxobj, MUIA_ObjectID, MAKE_ID('A','S','O','X'));
+        SET(offsetyobj, MUIA_ObjectID, MAKE_ID('A','S','O','Y'));
+        SET(sizeobj, MUIA_ObjectID, MAKE_ID('A','S','S','Z'));
+        SET(heightpercentobj, MUIA_ObjectID, MAKE_ID('A','S','H','P'));
+        SET(widthpercentobj, MUIA_ObjectID, MAKE_ID('A','S','W','P'));
 
         data->drawersfirstobj = drawersfirstobj;
 
@@ -388,6 +384,7 @@ IPTR AslEditor__MUIM_PrefsEditor_SetDefaults
 }
 
 /*** Setup ******************************************************************/
+#ifndef ASLEDITOR_MCC
 ZUNE_CUSTOMCLASS_4
 (
     AslEditor, NULL, MUIC_PrefsEditor, NULL,
@@ -396,4 +393,5 @@ ZUNE_CUSTOMCLASS_4
     MUIM_PrefsEditor_ExportFH,    struct MUIP_PrefsEditor_ExportFH *,
     MUIM_PrefsEditor_SetDefaults, Msg
 );
+#endif /* ASLEDITOR_MCC */
 

@@ -190,6 +190,10 @@ bt_status_t bt_l2cap_channel_manager_listen(struct bt_l2cap_channel_manager *mgr
                                              void *user_data);
 void bt_l2cap_channel_manager_unlisten(struct bt_l2cap_channel_manager *mgr, uint16_t psm);
 
+/* The MTU the peer configured for a channel (the largest SDU we may send),
+ * or 0 for an unknown channel. */
+uint16_t bt_l2cap_channel_manager_remote_mtu(struct bt_l2cap_channel_manager *mgr, uint16_t local_cid);
+
 /* Registers a fixed channel (e.g. BT_L2CAP_CID_ATT) as immediately OPEN
  * -- fixed channels exist for as long as the ACL link does, with no
  * Connection Request/Response or configuration handshake (per spec, not

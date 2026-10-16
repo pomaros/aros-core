@@ -2,7 +2,7 @@
 include $(SRCDIR)/config/aros.cfg
 
 FILES       := main locale parsers
-USER_CPPFLAGS := -DADATE="\"$(shell date '+%d.%m.%Y')\""
+USER_CPPFLAGS := -DADATE="\"$(AROS_BUILD_DATE)\""
 EXEDIR      := $(AROS_DEBUG)/Hardware
 
 # Build ACPITool only for PC

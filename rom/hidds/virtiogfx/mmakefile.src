@@ -1,0 +1,15 @@
+include $(SRCDIR)/config/aros.cfg
+
+#MM kernel-hidd-virtiogfx : kernel-hidd-gfx-includes kernel-hidd-storage-includes kernel-hidd-pci-includes kernel-virtio-includes kernel-timer-includes
+
+FILES := init hiddclass displayclass bitmapclass support transport
+USER_LDFLAGS := -static
+USER_CPPFLAGS := -D__OOP_NOATTRBASES__
+
+%build_module mmake=kernel-hidd-virtiogfx \
+  modname=virtiogfx modtype=hidd files=$(FILES) uselibs="hiddstubs"
+
+# Shared framebuffer layout and included implementations must rebuild together.
+FB_SHARED_INPUTS := $(wildcard $(SRCDIR)/rom/hidds/efifbgfx/*.h $(SRCDIR)/rom/hidds/efifbgfx/*.c)
+VIRTIO_SHARED_INPUTS := $(SRCDIR)/rom/devs/virtio/virtio_hw.c $(SRCDIR)/rom/devs/virtio/virtio_queue.c $(wildcard $(SRCDIR)/rom/devs/virtio/*.h)
+$(kernel-hidd-virtiogfx_OBJS) $(kernel-hidd-virtiogfx_STARTOBJS) $(kernel-hidd-virtiogfx_ENDOBJS): $(FB_SHARED_INPUTS) $(VIRTIO_SHARED_INPUTS) $(wildcard $(SRCDIR)/$(CURDIR)/*.h)

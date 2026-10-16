@@ -89,6 +89,11 @@
     /* We do not return until the condition is met */
     for (;;)
     {
+        /* Clear stale notifications before inspecting the queue. Another
+         * CPU can publish an exit after the scan lock is released; clearing
+         * here preserves that new notification for Wait(). Forbid() only
+         * excludes local task switching. */
+        SetSignal(0, SIGF_CHILD);
 #if defined(__AROSEXEC_SMP__)
         EXEC_SPINLOCK_LOCK(&et->et_TaskMsgPort.mp_SpinLock, NULL, SPINLOCK_MODE_READ);
 #endif
@@ -108,7 +113,6 @@
         EXEC_SPINLOCK_UNLOCK(&et->et_TaskMsgPort.mp_SpinLock);
 #endif
         /* No matching children, we have to wait */
-        SetSignal(0, SIGF_CHILD);
         Wait(SIGF_CHILD);
     }
 

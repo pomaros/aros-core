@@ -36,6 +36,53 @@ struct  MUIP_PrefsEditor_ImportFH    {STACKED ULONG MethodID; STACKED BPTR fh;};
 struct  MUIP_PrefsEditor_ExportFH    {STACKED ULONG MethodID; STACKED BPTR fh;};
 #define MUIM_PrefsEditor_SetDefaults (MUIB_PrefsEditor | 0x00000009)
 
+/*** Protected Methods ******************************************************/
+/* Import from or export to the editor's path in a prefs directory ("ENV:",
+ * "ENVARC:"). An editor that keeps its settings through settings.library
+ * overrides both and maps the directory to a layer. */
+#define MUIM_PrefsEditor_ExportToDirectory   (MUIB_PrefsEditor | 0x0000000a)
+struct  MUIP_PrefsEditor_ExportToDirectory   {STACKED ULONG MethodID; STACKED CONST_STRPTR directory;};
+#define MUIM_PrefsEditor_ImportFromDirectory (MUIB_PrefsEditor | 0x0000000b)
+struct  MUIP_PrefsEditor_ImportFromDirectory {STACKED ULONG MethodID; STACKED CONST_STRPTR directory;};
+
+/*** Search methods *********************************************************/
+/* Default implementations walk the editor's gadget tree; an editor whose
+ * layout the walk cannot see overrides them. */
+#define MUIM_PrefsEditor_Describe            (MUIB_PrefsEditor | 0x0000000c)
+struct  MUIP_PrefsEditor_Describe            {STACKED ULONG MethodID; STACKED struct Hook *hook;};
+#define MUIM_PrefsEditor_Filter              (MUIB_PrefsEditor | 0x0000000d)
+/* One match per gadget; highlights address its displayed label. The method
+ * consumes this array synchronously; Text copies each highlight list. */
+struct PrefsEditorMatch
+{
+    ULONG id;
+    struct MUI_TextHighlight highlight;
+};
+struct  MUIP_PrefsEditor_Filter {STACKED ULONG MethodID; STACKED const struct PrefsEditorMatch *matches; STACKED ULONG count;};
+#define MUIM_PrefsEditor_Reveal              (MUIB_PrefsEditor | 0x0000000e)
+struct  MUIP_PrefsEditor_Reveal              {STACKED ULONG MethodID; STACKED ULONG id;};
+
+/* One setting, as Describe hands it to the hook:
+ * CallHookPkt(hook, editor, struct PrefsEditorRecord *). */
+struct PrefsEditorRecord
+{
+    ULONG        per_ID;      /* MUIA_ObjectID, else PREFSEDITOR_PATH_ID | walk index */
+    CONST_STRPTR per_Name;    /* its label, without shortcut marks or escapes */
+    CONST_STRPTR per_Help;    /* MUIA_ShortHelp, or NULL */
+    CONST_STRPTR per_Section; /* title of the enclosing framed group, or NULL */
+    Object      *per_Object;
+    CONST_STRPTR per_Choices; /* visible cycle/radio choices, space-separated */
+    ULONG        per_Role;    /* PREFSEDITOR_ROLE_* */
+};
+#define PREFSEDITOR_ROLE_TEXT 6
+#define PREFSEDITOR_ROLE_ACTION 7
+#define PREFSEDITOR_PATH_ID     0x80000000
+#define PREFSEDITOR_ROLE_STRING 1
+#define PREFSEDITOR_ROLE_CHOICE 2   /* cycle, radio */
+#define PREFSEDITOR_ROLE_NUMBER 3   /* slider, numeric */
+#define PREFSEDITOR_ROLE_TOGGLE 4   /* checkmark */
+#define PREFSEDITOR_ROLE_LIST   5
+
 /*** Public Attributes ******************************************************/
 #define MUIA_PrefsEditor_Name      (MUIB_PrefsEditor | 0x00000000) /* I-G  CONST_STRPTR */
 #define MUIA_PrefsEditor_Changed   (MUIB_PrefsEditor | 0x00000001) /* -SG  BOOL */

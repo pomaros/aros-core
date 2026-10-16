@@ -1,0 +1,7 @@
+group network
+order 20
+class BluetoothEditor.mcc
+name Bluetooth
+description Radios, discovery, paired devices and connections
+keywords bluetooth wireless pair pairing devices radio
+level novice

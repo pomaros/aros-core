@@ -1,0 +1,7 @@
+group input
+order 30
+class IControlEditor.mcc
+name Intuition
+description Screen dragging, menus, window behaviour and mouse shortcuts
+keywords screen drag menu snap coerce
+level expert

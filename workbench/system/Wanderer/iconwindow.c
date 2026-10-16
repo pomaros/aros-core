@@ -917,6 +917,11 @@ IPTR IconWindow__OM_SET(Class *CLASS, Object *self, struct opSet *message)
 
                     D(bug("[Wanderer:IconWindow] %s: New Window dimensions ..  %d x %d @ %d, %d\n", __PRETTY_FUNCTION__, _IconWin__NewWindowWidth, _IconWin__NewWindowHeight, 0, _IconWin__NewWindowTop));
 
+                    /* A changed screen font also moves the bottom of the
+                     * title bar. Updating only the size leaves the backdrop
+                     * at its old Y coordinate and short of the screen edge. */
+                    SET(self, MUIA_Window_LeftEdge, 0);
+                    SET(self, MUIA_Window_TopEdge, _IconWin__NewWindowTop);
                     SET(self, MUIA_Window_Width, _IconWin__NewWindowWidth);
                     SET(self, MUIA_Window_Height, _IconWin__NewWindowHeight);
                 }

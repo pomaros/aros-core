@@ -1,0 +1,7 @@
+group input
+order 10
+class InputEditor.mcc
+name Keyboard and mouse
+description Keyboard layout, key repeat, mouse speed and double-click
+keywords keymap layout repeat mouse speed double click azerty qwertz
+level novice

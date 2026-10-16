@@ -2,7 +2,8 @@
 #define _ETASK_H
 
 /*
-    Copyright (C) 1995-2017, The AROS Development Team. All rights reserved.
+    Copyright © 1995-2017, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     $Id$
 
     Desc: Internal description of the ETask structure
@@ -23,6 +24,10 @@
 #if defined(__AROSEXEC_SMP__)
 #include <aros/types/spinlock_s.h>
 #endif
+
+/* iet_FreezeFlags */
+#define IETF_FREEZE_EXEMPT  0x01    /* SetTaskFreezeExempt(): FreezeTasks() leaves it running */
+#define IETF_FREEZE_PENDING 0x02    /* running on another CPU; core_Switch parks it           */
 
 /* Known alert context types */
 #define AT_NONE     0x00
@@ -61,6 +66,9 @@ struct IntETask
     struct AlertContext iet_AlertData;          /* Extra data coming with the crash        */
 #endif
 #if defined(__AROSEXEC_SMP__)
+    struct Node         iet_RegistryNode;      /* independent of scheduling lists */
+    struct Task        *iet_RegistryTask;      /* NULL after unregistration       */
+    BOOL                iet_RegistryVisible;   /* context initialized, not retired */
     void                *iet_Session;
     spinlock_t          iet_TaskLock;
     IPTR                iet_CpuNumber;          /* core this task is currently running on  */
@@ -73,6 +81,8 @@ struct IntETask
     UQUAD               iet_LastUsageStamp;     /* when that sample was taken              */
     ULONG               iet_QuantumLeft;        /* scheduler ticks left of this task's slice */
 #endif
+    UBYTE               iet_FrozenState;        /* tc_State before FreezeTasks() stopped it  */
+    UBYTE               iet_FreezeFlags;        /* IETF_FREEZE_*                             */
 #ifdef DEBUG_ETASK
     STRPTR              iet_Me;
 #endif

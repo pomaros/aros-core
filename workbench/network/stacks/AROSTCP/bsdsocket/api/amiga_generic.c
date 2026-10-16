@@ -3,6 +3,7 @@
  *                    Helsinki University of Technology, Finland.
  *                    All rights reserved.
  * Copyright (C) 2005-2026, The AROS Development Team.
+ * Copyright (C) 2026 John KNIPPER <code@jkn.me>.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -897,26 +898,21 @@ LONG closeSocketLocked(LONG fd, struct SocketBase *libPtr)
     register int error;
     struct socket *so;
 
-    if((ULONG)fd >= (ULONG)libPtr->dTableSize) {
+    /* Validate before indexing either the pointer table or its bitmap. */
+    if((ULONG)fd >= (ULONG)libPtr->dTableSize || libPtr->dTable == NULL) {
+        error = EBADF;
+        goto Return;
+    }
+    if(!FD_ISSET(fd, (fd_set *)(libPtr->dTable + libPtr->dTableSize))) {
         error = EBADF;
         goto Return;
     }
 
-    /*
-     * Check from used sockets bitmask if this socket is in use
-     */
-    if(! FD_ISSET(fd, (fd_set *)(libPtr->dTable + libPtr->dTableSize))) {
-        error = EBADF;
-        goto Return;
-    }
-
-    /*
-     * If the link library cannot free the fd, then we cannot do it either.
-     */
+    /* A refused callback leaves the descriptor and socket untouched. */
     if(libPtr->fdCallback)
-        if(error = AROS_UFC2(int, libPtr->fdCallback,
+        if((error = AROS_UFC2(int, libPtr->fdCallback,
                              AROS_UFCA(int, fd, D0),
-                             AROS_UFCA(int, FDCB_FREE, D1)))
+                             AROS_UFCA(int, FDCB_FREE, D1))) != 0)
             goto Return;
 
     FD_CLR(fd, (fd_set *)(libPtr->dTable + libPtr->dTableSize));

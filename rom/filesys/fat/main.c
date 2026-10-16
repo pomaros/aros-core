@@ -244,6 +244,7 @@ static LONG InitDiskHandler(struct Globals *glob)
                 {
                     D(bug("\tDevice successfully opened\n"));
                     Probe64BitSupport(glob);
+                    ProbeWriteProtection(glob);
 
                     /* Respect the device's transfer limit, if the mount
                      * environment supplies one */

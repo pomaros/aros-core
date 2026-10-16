@@ -1,0 +1,47 @@
+; Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+; Distributed under the AROS Public License, version 1.1.
+; SYS/printer.prefs: PTXT, PUNT, PDEV and PGFX chunks, each its public
+; structure as the editor writes it.
+schema   1
+file     SYS/printer.prefs
+layout   compiler/include/prefs/printertxt.h PrinterTxtPrefs
+chunk    PTXT size 64
+chunk    PUNT size 56  layout PrinterUnitPrefs
+chunk    PDEV size 52  layout PrinterDeviceUnitPrefs
+chunk    PGFX size 40  layout PrinterGfxPrefs
+
+[printer/text]  chunk PTXT  level average  applier iprefs live
+  driver       pt_Driver@16:30        type string
+  port         pt_Port@46:1           type enum  choices parallel=0,serial=1
+  papertype    pt_PaperType@48:2      type enum  choices fanfold=0,single=1
+  papersize    pt_PaperSize@50:2      type enum  choices usletter=0,uslegal=1,ntractor=2,wtractor=3,custom=4,a0=5,a1=6,a2=7,a3=8,a4=9,a5=10,a6=11,a7=12,a8=13
+  paperlength  pt_PaperLength@52:2    type int   range 1..65535  unit lines
+  pitch        pt_Pitch@54:2          type enum  choices pica=0,elite=1,fine=2
+  spacing      pt_Spacing@56:2        type enum  choices six=0,eight=1
+  leftmargin   pt_LeftMargin@58:2     type int   range 0..65535  unit characters
+  rightmargin  pt_RightMargin@60:2    type int   range 0..65535  unit characters
+  quality      pt_Quality@62:2        type enum  choices draft=0,letter=1
+
+[printer/unit]  chunk PUNT  level expert  applier iprefs live
+  number       pu_UnitNum@16:4        type int   range 0..255
+  deviceflags  pu_OpenDeviceFlags@20:4  type int
+  device       pu_DeviceName@24:32    type string
+
+[printer/deviceunit]  chunk PDEV  level expert  applier iprefs live
+  number       pd_UnitNum@16:4        type int   range 0..255
+  name         pd_UnitName@20:32      type string
+
+[printer/graphics]  chunk PGFX  level average  applier iprefs live
+  aspect       pg_Aspect@16:2         type enum  choices portrait=0,landscape=1
+  shade        pg_Shade@18:2          type enum  choices blackwhite=0,greyscale=1,color=2,greyscale2=3
+  image        pg_Image@20:2          type enum  choices positive=0,negative=1
+  threshold    pg_Threshold@22:2      type int   range 1..15
+  colorcorrect pg_ColorCorrect@24:1   type flags choices red=1,green=2,blue=4
+  dimensions   pg_Dimensions@25:1     type enum  choices ignore=0,bounded=1,absolute=2,pixel=3,multiply=4
+  dithering    pg_Dithering@26:1      type enum  choices ordered=0,halftone=1,floyd=2
+  flags        pg_GraphicFlags@28:2   type flags choices center=1,integerscaling=2,antialias=4
+  density      pg_PrintDensity@30:1   type int   range 1..7
+  maxwidth     pg_PrintMaxWidth@32:2  type int   range 0..65535  unit tenths
+  maxheight    pg_PrintMaxHeight@34:2 type int   range 0..65535  unit tenths
+  xoffset      pg_PrintXOffset@36:1   type int   range 0..255  unit tenths
+  yoffset      pg_PrintYOffset@37:1   type int   range 0..255  unit tenths

@@ -114,20 +114,12 @@ void xhciScheduleIsoTDs(struct PCIController *hc)
             queued = xhciQueuePayloadTRBs(hc, ioreq, driprivate, epring, trbflags, TRUE);
 
             if(queued != -1) {
-                AddTail(&hc->hc_PeriodicTDQueue, (struct Node *) ioreq);
-                if(ptd) {
-                    ptd->ptd_Flags |= PTDF_ACTIVE;
-                    ptd->ptd_Flags &= ~PTDF_BUFFER_VALID;
-                }
                 txdone = TRUE;
             }
         }
 
         if(!txdone) {
-            driprivate->dpSTRB = (UWORD)-1;
-            driprivate->dpTxSTRB = (UWORD)-1;
-            driprivate->dpTxETRB = (UWORD)-1;
-            driprivate->dpSttTRB = (UWORD)-1;
+            xhciRollbackUnsubmitted(unit, ioreq, driprivate, devadrep);
 
             Disable();
             pciusbError("xHCI", DEBUGWARNCOLOR_SET "xHCI: Failed to submit ISO transaction" DEBUGCOLOR_RESET" \n");
@@ -135,8 +127,7 @@ void xhciScheduleIsoTDs(struct PCIController *hc)
                 ptd->ptd_Flags |= PTDF_QUEUED;  /* restore: ioreq is back on IsoXFerQueue */
             AddHead(&hc->hc_IsoXFerQueue, (struct Node *) ioreq);
             Enable();
-        } else {
-            xhciRingDoorbell(hc, driprivate->dpDevice->dc_SlotID, driprivate->dpEPID);
+
         }
     }
 }

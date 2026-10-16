@@ -75,10 +75,7 @@
 
     ForeachNode(sigSem, ss)
     {
-        /* Each member has its own lock - the one ObtainSemaphore()
-         * takes - so counts cannot be lost against a single obtainer. */
         SEM_LOCK(ss);
-
         /* QueueCount == -1 means unlocked */
         ss->ss_QueueCount++;
         if(ss->ss_QueueCount != 0)
@@ -111,7 +108,6 @@
             ss->ss_NestCount++;
             ss->ss_Owner = ThisTask;
         }
-
         SEM_UNLOCK(ss);
     }
 
@@ -121,14 +117,11 @@
 
         while(ss->ss_Link.ln_Succ != NULL)
         {
-            struct Task *owner;
-
-            /* Read the owner under the member's own lock. */
+            BOOL owned;
             SEM_LOCK(ss);
-            owner = ss->ss_Owner;
+            owned = ss->ss_Owner == ThisTask;
             SEM_UNLOCK(ss);
-
-            if(owner != ThisTask)
+            if(!owned)
             {
                 /*
                  *  Somebody else has this one. Wait, then check again.

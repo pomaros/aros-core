@@ -118,6 +118,13 @@ Object *ScreenModeProperties__OM_NEW(Class *CLASS, Object *self, struct opSet *m
     data->def_width  = def_width;
     data->def_height = def_height;
     data->autoscroll = autoscroll;
+    /* Stable ids for the settings window's index and port. */
+    SET(objWidth, MUIA_ObjectID, MAKE_ID('S','M','W','D'));
+    SET(objHeight, MUIA_ObjectID, MAKE_ID('S','M','H','T'));
+    SET(depth, MUIA_ObjectID, MAKE_ID('S','M','D','P'));
+    SET(def_width, MUIA_ObjectID, MAKE_ID('S','M','D','W'));
+    SET(def_height, MUIA_ObjectID, MAKE_ID('S','M','D','H'));
+    SET(autoscroll, MUIA_ObjectID, MAKE_ID('S','M','A','S'));
 
     DoMethod
     (

@@ -1,0 +1,13 @@
+# Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+# Distributed under the AROS Public License, version 1.1.
+#
+# One schema per IFF prefs file, installed beside the editors so
+# settings.library and the settings window find them in SYS:Prefs/Schemas.
+
+include $(SRCDIR)/config/aros.cfg
+
+SCHEMAS := $(call WILDCARD, *.schema)
+
+#MM- workbench-prefs : workbench-prefs-schemas
+
+%copy_files_q mmake=workbench-prefs-schemas files=$(SCHEMAS) dst=$(AROS_PREFS)/Schemas

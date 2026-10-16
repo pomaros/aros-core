@@ -88,7 +88,8 @@
 {
     AROS_LIBFUNC_INIT
 
-    int priority = (LAYERBACKDROP == (flags & LAYERBACKDROP)) ? BACKDROPPRIORITY: UPFRONTPRIORITY;
+    int priority = (flags & LAYERPROTECTED) ? PROTECTEDPRIORITY :
+        ((flags & LAYERBACKDROP) ? BACKDROPPRIORITY : UPFRONTPRIORITY);
 
     return CreateLayerTagList(li, bm, x0, y0, x1, y1, flags, priority, tagList, LayersBase);
 

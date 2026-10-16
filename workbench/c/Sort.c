@@ -1,6 +1,9 @@
 /*
     Copyright (C) 1995-2014, The AROS Development Team. All rights reserved.
 
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>
+    Licensed under the AROS Public License (APL), Version 1.1.
+
     Desc: Sorts the contents of a file
 */
 /*****************************************************************************
@@ -68,13 +71,13 @@
 
 #define ARG_NUM         5
 
-const TEXT version[] = "$VER: Sort 41.2 (3.4.2014)";
+const TEXT version[] = "$VER: Sort 41.3 (4.10.2026)";
 
 struct sorted_data
 {
   struct sorted_data * next;
   UBYTE              * data;
-  ULONG                len; // length of line including '\n'.
+  ULONG                len; /* Line bytes, excluding the newline. */
 };
 
 struct Locale * locale;
@@ -92,19 +95,19 @@ int compare(struct sorted_data * sd1,
   
   if (case_on)
   {
-    int i = col;
+    ULONG i = col;
     
     while (i < len)
     {
       BOOL a,b;
-      a = IsUpper(locale,(ULONG)*(sd1->data+col+i));
-      b = IsUpper(locale,(ULONG)*(sd2->data+col+i));
+      a = IsUpper(locale,(ULONG)*(sd1->data+i));
+      b = IsUpper(locale,(ULONG)*(sd2->data+i));
       
       if (a == b)
       {
         if (0 != (retval = StrnCmp(locale,
-                           sd1->data+col,
-                           sd2->data+col,
+                           sd1->data+i,
+                           sd2->data+i,
                            1,
                            SC_COLLATE2)))
           break;
@@ -124,14 +127,14 @@ int compare(struct sorted_data * sd1,
     retval=StrnCmp(locale,
                    sd1->data+col,
                    sd2->data+col,
-                   len,
+                   len - col,
                    SC_COLLATE2);
 
     if (0 == retval)
     {
       if (sd1->len < sd2->len)
         retval = -100;
-      else
+      else if (sd1->len > sd2->len)
         retval = +100;
     }
   }
@@ -185,13 +188,26 @@ struct sorted_data * sort(UBYTE * data,
     while (pos < data_len && data[pos] != 0x0a)
       pos++;
 
-    if (data[pos] == 0x0a || pos == data_len)
-      len = pos++ - begin;
-    else
-      len = ++pos - begin;
+    len = pos - begin;
+    if (pos < data_len) pos++;
 
     cur = AllocMem(sizeof(struct sorted_data), MEMF_ANY|MEMF_CLEAR);
-      
+    if (!cur)
+    {
+      while (first)
+      {
+        struct sorted_data *next = first->next;
+        FreeMem(first, sizeof(*first)); first = next;
+      }
+      while (tooshort)
+      {
+        struct sorted_data *next = tooshort->next;
+        FreeMem(tooshort, sizeof(*tooshort)); tooshort = next;
+      }
+      SetIoErr(ERROR_NO_FREE_STORE);
+      return NULL;
+    }
+
     if (cur)
     {
       cur->data = data + begin;
@@ -282,11 +298,10 @@ LONG write_data(struct sorted_data * start, BPTR file_out)
     if (write)
     {
       count = Write(file_out, start->data, start->len);
-      if (count != -1 && start->data[start->len-1] != 0x0a)
-        count = Write(file_out, "\n", 1);
-      if (count == -1)
+      if (count != (LONG)start->len || Write(file_out, "\n", 1) != 1)
       {
         error = IoErr();
+        if (!error) error = ERROR_DISK_FULL;
         write = FALSE;
       }
     }
@@ -302,10 +317,12 @@ int __nocommandline;
 
 int main (void)
 {
-  IPTR args[ARG_NUM] = { (IPTR) NULL, (IPTR) NULL, (IPTR) NULL, FALSE, FALSE};
-  struct RDArgs *rda;
-  LONG result = RETURN_OK;
-  LONG error = 0;
+  IPTR args[ARG_NUM] = { 0 };
+  struct RDArgs *rda = NULL;
+  struct FileInfoBlock *fib = NULL;
+  BPTR lock_in = BNULL, in = BNULL, out = BNULL;
+  UBYTE *data = NULL;
+  LONG error = 0, length = 0;
 
   locale = OpenLocale(NULL);
   if (!locale)
@@ -315,74 +332,56 @@ int main (void)
   }
 
   rda = ReadArgs(TEMPLATE, args, NULL);
-  if (rda)
+  if (!rda) { error = IoErr(); goto cleanup; }
+  lock_in = Lock((STRPTR)args[ARG_FROM], ACCESS_READ);
+  if (!lock_in) { error = IoErr(); goto cleanup; }
+  fib = AllocDosObject(DOS_FIB, NULL);
+  if (!fib) { error = ERROR_NO_FREE_STORE; goto cleanup; }
+  if (!Examine(lock_in, fib)) { error = IoErr(); goto cleanup; }
+  if (fib->fib_DirEntryType > 0)
+  { error = ERROR_OBJECT_WRONG_TYPE; goto cleanup; }
+  if (fib->fib_Size < 0) { error = ERROR_BAD_NUMBER; goto cleanup; }
+
+  if (fib->fib_Size)
   {
-    BPTR lock_in;
-    lock_in = Lock((STRPTR)args[ARG_FROM], ACCESS_READ);
-
-    if (lock_in)
-    {
-       BPTR file_out = Open((STRPTR)args[ARG_TO], MODE_NEWFILE);
-       if (file_out == BNULL)
-         error = IoErr();
-       struct FileInfoBlock *fib = AllocDosObject(DOS_FIB, NULL);
-       if (fib == NULL)
-         error = IoErr();
-
-       if (error == 0)
-       {
-          UBYTE * data = NULL;
-          BOOL success = Examine(lock_in, fib);
-
-          /*
-          ** Read the input file into memory
-          */
-          if (fib->fib_Size && success)
-            data = AllocVec(fib->fib_Size, MEMF_ANY);
-
-          if (data)
-          {
-            BPTR in;
-            if ((in = OpenFromLock(lock_in))) {
-                ULONG read = Read(in, data, fib->fib_Size);
-
-                if (-1 != read)
-                {
-                  struct sorted_data * sd;
-                  sd = sort(data,
-                            fib->fib_Size,
-                            (STRPTR)args[ARG_COLSTART],
-                            (BOOL)args[ARG_CASE],
-                            (BOOL)args[ARG_NUMERIC]);
-
-                  error = write_data(sd, file_out);
-                }
-                Close(in);
-                lock_in = BNULL;
-            }
-            FreeVec(data);
-          }
-          else
-            error = IoErr();
-
-          Close(file_out);
-       }
-       FreeDosObject(DOS_FIB, fib);
-       if (lock_in)
-           UnLock(lock_in);
-    }
-    else
-      error = IoErr();
-    FreeArgs(rda);
+    data = AllocVec(fib->fib_Size, MEMF_ANY);
+    if (!data) { error = ERROR_NO_FREE_STORE; goto cleanup; }
   }
-  else
-    error = IoErr();
+  in = OpenFromLock(lock_in);
+  if (!in) { error = IoErr(); goto cleanup; }
+  lock_in = BNULL; /* Only a successful conversion consumes the lock. */
+  while (length < fib->fib_Size)
+  {
+    LONG count = Read(in, data + length, fib->fib_Size - length);
+    if (count < 0) { error = IoErr(); goto cleanup; }
+    if (!count) break;
+    length += count;
+  }
+  /* Preserve the destination until input access and reading have succeeded. */
+  if (!Close(in)) { in = BNULL; error = IoErr(); goto cleanup; }
+  in = BNULL;
+  out = Open((STRPTR)args[ARG_TO], MODE_NEWFILE);
+  if (!out) { error = IoErr(); goto cleanup; }
+  if (length)
+  {
+    struct sorted_data *sd = sort(data, length,
+      (STRPTR)args[ARG_COLSTART], (BOOL)args[ARG_CASE], (BOOL)args[ARG_NUMERIC]);
+    error = sd ? write_data(sd, out) : ERROR_NO_FREE_STORE;
+  }
 
+cleanup:
+  /* Keep the first failure: cleanup calls may replace IoErr(). */
+  if (in && !Close(in) && !error) error = IoErr();
+  if (out && !Close(out) && !error) error = IoErr();
+  if (lock_in) UnLock(lock_in);
+  if (data) FreeVec(data);
+  if (fib) FreeDosObject(DOS_FIB, fib);
+  if (rda) FreeArgs(rda);
+  CloseLocale(locale);
   if (error)
   {
     PrintFault(error, "Sort");
-    result = RETURN_FAIL;
+    return RETURN_FAIL;
   }
-
-  return result;
+  return RETURN_OK;
 }

@@ -2,7 +2,7 @@
     Copyright (C) 2015-2026, The AROS Development Team. All rights reserved.
 
     AArch64 exec platform definitions.
-    TLS access via TPIDR_EL1 system register.
+    TLS access through the platform CPU-anchor accessor.
 */
 #ifndef __EXEC_PLATFORM_H
 #define __EXEC_PLATFORM_H
@@ -50,175 +50,148 @@ struct Exec_PlatformData
     /* No platform-specific data by default */
 };
 
-/* AArch64: All TLS access uses TPIDR_EL1 via mrs/msr */
+/* Accessor also supports EL0-readable anchors on virtual/native Apple. */
 
 #if defined(AROS_NO_ATOMIC_OPERATIONS)
 #define IDNESTCOUNT_INC \
     do { \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         __tls->IDNestCnt++; \
     } while(0)
 #define IDNESTCOUNT_DEC \
     do { \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         __tls->IDNestCnt--; \
     } while(0)
 #define TDNESTCOUNT_INC \
     do { \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         __tls->TDNestCnt++; \
     } while(0)
 #define TDNESTCOUNT_DEC \
     do { \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         __tls->TDNestCnt--; \
     } while(0)
 #define FLAG_SCHEDQUANTUM_CLEAR \
     do { \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         __tls->ScheduleFlags &= ~TLSSF_Quantum; \
     } while(0)
 #define FLAG_SCHEDQUANTUM_SET \
     do { \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         __tls->ScheduleFlags |= TLSSF_Quantum; \
     } while(0)
 #define FLAG_SCHEDSWITCH_CLEAR \
     do { \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         __tls->ScheduleFlags &= ~TLSSF_Switch; \
     } while(0)
 #define FLAG_SCHEDSWITCH_SET \
     do { \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         __tls->ScheduleFlags |= TLSSF_Switch; \
     } while(0)
 #define FLAG_SCHEDDISPATCH_CLEAR \
     do { \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         __tls->ScheduleFlags &= ~TLSSF_Dispatch; \
     } while(0)
 #define FLAG_SCHEDDISPATCH_SET \
     do { \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         __tls->ScheduleFlags |= TLSSF_Dispatch; \
     } while(0)
 #else
 #define IDNESTCOUNT_INC \
     do { \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         AROS_ATOMIC_INC(__tls->IDNestCnt); \
     } while(0)
 #define IDNESTCOUNT_DEC \
     do { \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         AROS_ATOMIC_DEC(__tls->IDNestCnt); \
     } while(0)
 #define TDNESTCOUNT_INC \
     do { \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         AROS_ATOMIC_INC(__tls->TDNestCnt); \
     } while(0)
 #define TDNESTCOUNT_DEC \
     do { \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         AROS_ATOMIC_DEC(__tls->TDNestCnt); \
     } while(0)
 #define FLAG_SCHEDQUANTUM_CLEAR \
     do { \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         AROS_ATOMIC_AND(__tls->ScheduleFlags, ~TLSSF_Quantum); \
     } while(0)
 #define FLAG_SCHEDQUANTUM_SET \
     do { \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         AROS_ATOMIC_OR(__tls->ScheduleFlags, TLSSF_Quantum); \
     } while(0)
 #define FLAG_SCHEDSWITCH_CLEAR \
     do { \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         AROS_ATOMIC_AND(__tls->ScheduleFlags, ~TLSSF_Switch); \
     } while(0)
 #define FLAG_SCHEDSWITCH_SET \
     do { \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         AROS_ATOMIC_OR(__tls->ScheduleFlags, TLSSF_Switch); \
     } while(0)
 #define FLAG_SCHEDDISPATCH_CLEAR \
     do { \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         AROS_ATOMIC_AND(__tls->ScheduleFlags, ~TLSSF_Dispatch); \
     } while(0)
 #define FLAG_SCHEDDISPATCH_SET \
     do { \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         AROS_ATOMIC_OR(__tls->ScheduleFlags, TLSSF_Dispatch); \
     } while(0)
 #endif
 #define IDNESTCOUNT_GET \
     ({ \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         LONG __ret = (__tls->IDNestCnt); \
         __ret;  \
     })
 #define IDNESTCOUNT_SET(val) \
     do { \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         __tls->IDNestCnt = val; \
     } while(0)
 #define TDNESTCOUNT_GET \
     ({ \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         LONG __ret = (__tls->TDNestCnt); \
         __ret;  \
     })
 #define TDNESTCOUNT_SET(val) \
     do { \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         __tls->TDNestCnt = val; \
     } while(0)
 #define FLAG_SCHEDQUANTUM_ISSET \
     ({ \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         BOOL __ret = (__tls->ScheduleFlags & TLSSF_Quantum); \
         __ret;  \
     })
 #define FLAG_SCHEDSWITCH_ISSET \
     ({ \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         BOOL __ret = (__tls->ScheduleFlags & TLSSF_Switch); \
         __ret;  \
     })
 #define FLAG_SCHEDDISPATCH_ISSET \
     ({ \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         BOOL __ret = (__tls->ScheduleFlags & TLSSF_Dispatch); \
         __ret;  \
     })
@@ -226,15 +199,13 @@ struct Exec_PlatformData
  * without Forbid()/Permit(). */
 #define EXEC_BLOCK_DISPATCH_INC \
     do { \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         __tls->TDNestCnt++; \
     } while(0)
 
 #define EXEC_BLOCK_DISPATCH_DEC \
     do { \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         __tls->TDNestCnt--; \
     } while(0)
 

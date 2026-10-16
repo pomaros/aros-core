@@ -51,26 +51,6 @@ AROS_UFH3(LONG, ScanDisplay, AROS_UFHA(struct Hook *, h, A0), AROS_UFHA(char **,
 }
 static struct Hook scanhook = { { NULL, NULL }, (APTR)ScanDisplay };
 
-/* The connect/pair calls block until the device answers (or times out) and
- * pairing waits on the user, so they must not run on the GUI task. A small
- * helper process does the sequence; success registers the device (the
- * library does that on pairing completion), failure leaves it alone. */
-AROS_UFH0(void, ScanConnectProc)
-{
-    AROS_USERFUNC_INIT
-    APTR bd = FindTask(NULL)->tc_UserData;
-    struct Library *BluetoothBase = OpenLibrary("bluetooth.library", 1);
-    if(BluetoothBase) {
-        if(btConnectDevice(bd)) {
-            if(!btPairDevice(bd, TAG_END)) {
-                btDisconnectDevice(bd);
-            }
-        }
-        CloseLibrary(BluetoothBase);
-    }
-    AROS_USERFUNC_EXIT
-}
-
 static APTR DefaultRadio(void)
 {
     struct List *l;
@@ -95,7 +75,7 @@ static void Populate(struct ScanWinData *data)
             struct DevEntry *e;
             STRPTR name = NULL, addr = NULL;
             IPTR isc = 0, isl = 0, isreg = 0, isb = 0, isconn = 0, cod = 0, appear = 0;
-            LONG rssi = 127;
+            SIPTR rssi = 127;  /* btGetAttrs() stores an IPTR */
             btGetAttrs(BGA_DEVICE, bd, BDA_Name, &name, BDA_AddressString, &addr, BDA_RSSI, &rssi,
                        BDA_IsClassic, &isc, BDA_IsLE, &isl, BDA_IsRegistered, &isreg,
                        BDA_IsBonded, &isb, BDA_IsConnected, &isconn,
@@ -215,8 +195,7 @@ AROS_UFH3(IPTR, ScanWinDispatcher,
                      * the Devices page as it connects, and gets registered by the
                      * library once pairing succeeds. Close now so a key from a
                      * freshly bound device cannot trigger another connect here. */
-                    if(CreateNewProcTags(NP_Entry, (IPTR)ScanConnectProc, NP_Name, (IPTR)"Bluetooth pairing",
-                                         NP_UserData, (IPTR)e->bd, NP_Priority, 0, TAG_DONE)) {
+                    if(LaunchBluetoothAction(e->bd, "connectpair")) {
                         set(obj, MUIA_Window_Open, FALSE);
                         return 0;
                     }

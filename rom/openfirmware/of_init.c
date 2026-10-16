@@ -600,6 +600,11 @@ static int OF_Init(LIBBASETYPEPTR LIBBASE)
                                 return TRUE;
                         }
                         D(else bug("[OF] No OpenFirmware tree passed from bootloader\n"));
+                        {
+                                const void *fdt = (const void *)GetTagData(KRN_FlattenedDeviceTree, 0, tags);
+                                LIBBASE->of_Root = OFBuildFDT(fdt);
+                                if (LIBBASE->of_Root) return TRUE;
+                        }
                 }
                 D(else bug("[OF] No BootInfo found\n"));
         }
@@ -608,3 +613,14 @@ static int OF_Init(LIBBASETYPEPTR LIBBASE)
 }
 
 ADD2INITLIB(OF_Init, 0)
+
+/* Borrowed immutable name, including the unit address; never expose node layout. */
+AROS_LH1I(const char *, OF_GetNodeName,
+         AROS_LHA(void *, Key, A0),
+         struct OpenFirmwareBase *, OpenFirmwareBase, 10, Openfirmware)
+{
+    AROS_LIBFUNC_INIT
+    of_node_t *node = (of_node_t *)Key;
+    return node ? node->on_name : NULL;
+    AROS_LIBFUNC_EXIT
+}

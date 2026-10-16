@@ -19,6 +19,7 @@
 
 #define CREATE_FULL_DRAGIMAGE
 
+#include "../tile_transaction.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -33,6 +34,8 @@
 #include <exec/memory.h>
 #include <exec/rawfmt.h>
 #include <graphics/gfx.h>
+#include <graphics/clip.h>
+#include <intuition/intuitionbase.h>
 #include <graphics/view.h>
 #include <graphics/rpattr.h>
 #include <workbench/icon.h>
@@ -62,6 +65,8 @@
 #include <proto/muimaster.h>
 #include <libraries/mui.h>
 #include "iconlist_attributes.h"
+#include "iconlist_grid.h"
+#include "iconlist_visibility.h"
 #include "icon_attributes.h"
 #include "iconlist.h"
 #include "iconlist_private.h"
@@ -512,15 +517,27 @@ static void IconList_GetIconImageRectangle(Object *obj, struct IconList_DATA *da
     D(bug("[IconList]: %s(entry @ %p)\n", __func__, entry));
 #endif
 
+    BOOL tile = FALSE;
     /* Get basic width/height */
     GetIconRectangleA(NULL, entry->ie_DiskObj, NULL, rect, __iconList_DrawIconStateTags);
 #if defined(DEBUG_ILC_ICONPOSITIONING)
     D(bug("[IconList] %s: MinX %d, MinY %d      MaxX %d, MaxY %d\n", __func__, rect->MinX, rect->MinY, rect->MaxX, rect->MaxY));
 #endif
+    if (entry->ie_IconListEntry.type == ILE_TYPE_APPICON)
+    {
+        struct IconTileRequest request = { ICONTILE_SIZE, 0, 0, NULL, 0, 0 };
+        if (DoMethod(obj, MUIM_IconList_Tile, (IPTR)entry, (IPTR)&request))
+        {
+            tile = TRUE;
+            rect->MinX = rect->MinY = 0;
+            rect->MaxX = request.width - 1;
+            rect->MaxY = request.height - 1;
+        }
+    }
     entry->ie_IconWidth  = (rect->MaxX - rect->MinX) + 1;
     entry->ie_IconHeight = (rect->MaxY - rect->MinY) + 1;
     
-    if (entry->ie_IconHeight > data->icld_IconLargestHeight)
+    if (!tile && entry->ie_IconHeight > data->icld_IconLargestHeight)
         data->icld_IconLargestHeight = entry->ie_IconHeight;
 }
 ///
@@ -529,6 +546,12 @@ static void IconList_GetIconImageRectangle(Object *obj, struct IconList_DATA *da
 static void IconList_GetIconImageOffsets(struct IconList_DATA *data, struct IconEntry *entry, LONG *offsetx, LONG *offsety)
 {
     *offsetx = *offsety = 0;
+    if (entry->ie_GridWidth)
+    {
+        if (entry->ie_IconWidth < entry->ie_AreaWidth)
+            *offsetx = (entry->ie_AreaWidth - entry->ie_IconWidth) / 2;
+        return;
+    }
     if (entry->ie_IconWidth < entry->ie_AreaWidth)
          *offsetx += (entry->ie_AreaWidth - entry->ie_IconWidth)/2;
 
@@ -539,6 +562,194 @@ static void IconList_GetIconImageOffsets(struct IconList_DATA *data, struct Icon
     if ((data->icld__Option_IconListMode == ICON_LISTMODE_GRID) &&
             (entry->ie_AreaHeight < data->icld_IconAreaLargestHeight))
         *offsety += ((data->icld_IconAreaLargestHeight - entry->ie_AreaHeight)/2);
+}
+
+/* Named regions consume repeated clicks, except group presenters: their second
+ * click opens the real drawer and must not arm a second child-region SELECTUP. */
+static BOOL IconList_TileRegionConsumesDoubleClick(Object *obj, struct IconList_DATA *data,
+                                                  struct IconEntry *entry, LONG mx, LONG my)
+{
+    struct IconTileRequest anchor={ICONTILE_ANCHOR,0,0,NULL,0,0};
+    if (DoMethod(obj,MUIM_IconList_Tile,(IPTR)entry,(IPTR)&anchor))
+        return FALSE; /* Includes ANCHOR=free (zero); success identifies a group. */
+    LONG offsetx,offsety;
+    IconList_GetIconImageOffsets(data,entry,&offsetx,&offsety);
+    struct IconTileRequest hit={ICONTILE_HIT,0,0,NULL,
+        mx+data->icld_ViewX-entry->ie_IconX-offsetx,
+        my+data->icld_ViewY-entry->ie_IconY-offsety};
+    return DoMethod(obj,MUIM_IconList_Tile,(IPTR)entry,(IPTR)&hit);
+}
+
+/* Group placement and drawing share the same label-inclusive area/offsets.
+ * Anchors constrain the surface, not the containing label rectangle. */
+static void IconList_GetIconAreaRectangle(Object *, struct IconList_DATA *, struct IconEntry *, struct Rectangle *);
+static BOOL IconList_AnchorGroupSurface(struct IconEntry *entry, ULONG anchor,
+    LONG screenWidth, LONG screenHeight, ULONG width, ULONG height,
+    LONG originX, LONG originY, LONG offsetX, LONG offsetY)
+{
+    int x=entry->ie_IconX,y=entry->ie_IconY;
+    BOOL moved=IconTileAnchor(anchor,screenWidth,screenHeight,width,height,
+                             originX+offsetX,originY+offsetY,&x,&y);
+    entry->ie_IconX=x;entry->ie_IconY=y;
+    return moved;
+}
+
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>. APL-1.1.
+ * Sample the actual front layer, not the offscreen drawing buffer. Never call
+ * a presenter (which may take the Workbench registry lock) under a layer lock.
+ * Window/layer lifetime belongs to this MUI thread. Screen-order and layer
+ * snapshots use separate locks; the next 250ms tick observes subsequent moves. */
+static void IconList_PublishTilePointer(Object *obj, struct IconEntry *entry,
+                                        BOOL inside, LONG x, LONG y)
+{
+    if (entry->ie_IconListEntry.type == ILE_TYPE_APPICON) {
+        struct IconTileRequest request = { ICONTILE_POINTER, !!inside, 0, NULL, x, y };
+        DoMethod(obj, MUIM_IconList_Tile, (IPTR)entry, (IPTR)&request);
+    }
+}
+
+static void IconList_PublishTileGeometry(Object *obj, struct IconEntry *entry,
+                                         BOOL valid, LONG left, LONG top,
+                                         ULONG width, ULONG height)
+{
+    struct IconTileRequest request = { ICONTILE_GEOMETRY,
+        valid ? width : 0, valid ? height : 0, NULL,
+        valid ? left : 0, valid ? top : 0 };
+    DoMethod(obj, MUIM_IconList_Tile, (IPTR)entry, (IPTR)&request);
+}
+
+static void IconList_TileMotion(Object *obj, struct IconList_DATA *data, BOOL enable)
+{
+    BOOL subscribed = !!(data->ehn.ehn_Events & IDCMP_MOUSEMOVE);
+    data->icld_TileMotion = enable;
+    if (enable == subscribed || (!enable && data->mouse_pressed)) return;
+    DoMethod(_win(obj), MUIM_Window_RemEventHandler, (IPTR)&data->ehn);
+    if (enable) data->ehn.ehn_Events |= IDCMP_MOUSEMOVE;
+    else data->ehn.ehn_Events &= ~IDCMP_MOUSEMOVE;
+    DoMethod(_win(obj), MUIM_Window_AddEventHandler, (IPTR)&data->ehn);
+}
+
+static void IconList_PublishTileVisibility(Object *obj, struct IconEntry *entry, BOOL visible)
+{
+    if (entry->ie_IconListEntry.type == ILE_TYPE_APPICON) {
+        if (!visible) IconList_PublishTilePointer(obj, entry, FALSE, 0, 0);
+        struct IconTileRequest request = { ICONTILE_VISIBILITY, 0, 0, NULL, visible, 0 };
+        DoMethod(obj, MUIM_IconList_Tile, (IPTR)entry, (IPTR)&request);
+    }
+}
+
+static void IconList_InvalidateTilePlacement(Object *obj, struct IconEntry *entry)
+{
+    if (entry->ie_IconListEntry.type == ILE_TYPE_APPICON) {
+        struct IconTileRequest request = { ICONTILE_PLACEMENT, 0, 0, NULL, 0, 0 };
+        DoMethod(obj, MUIM_IconList_Tile, (IPTR)entry, (IPTR)&request);
+    }
+}
+
+static void IconList_HideTiles(Object *obj, struct IconList_DATA *data)
+{
+    struct IconEntry *entry;
+    ForeachNode(&data->icld_IconList, entry) {
+        IconList_PublishTileVisibility(obj, entry, FALSE);
+        IconList_InvalidateTilePlacement(obj, entry);
+    }
+}
+
+static IPTR IconList_SampleTiles(struct IClass *CLASS, Object *obj,
+                                 BOOL eventPosition, LONG pointerX, LONG pointerY)
+{
+    struct IconList_DATA *data = INST_DATA(CLASS, obj);
+    struct IconEntry *entry;
+    BOOL shown = data->icld_TilesShown;
+    struct Window *window = shown && data->icld_DisplayRastPort ? _window(obj) : NULL;
+    BOOL front = FALSE, haveTiles = FALSE, anchorMoved = FALSE;
+    if (window) {
+        ULONG token = LockIBase(0);
+        front = IntuitionBase->FirstScreen == window->WScreen;
+        if (!eventPosition) { pointerX = window->MouseX; pointerY = window->MouseY; }
+        UnlockIBase(token);
+    }
+    ForeachNode(&data->icld_IconList, entry) {
+        struct IconTileRequest size = { ICONTILE_SIZE, 0, 0, NULL, 0, 0 };
+        BOOL visible = FALSE, inside = FALSE, placed = FALSE;
+        LONG localX = 0, localY = 0, screenLeft = 0, screenTop = 0;
+        if (entry->ie_IconListEntry.type != ILE_TYPE_APPICON) continue;
+        BOOL tile = shown && DoMethod(obj, MUIM_IconList_Tile, (IPTR)entry, (IPTR)&size);
+        haveTiles |= tile;
+        if (front && tile && data->icld_BufferRastPort && entry->ie_DiskObj &&
+            (entry->ie_Flags & ICONENTRY_FLAG_VISIBLE) &&
+            !(data->icld_DisplayFlags & ICONLIST_DISP_MODELIST) &&
+            size.width && size.height && window->WLayer) {
+            LONG ox, oy;
+            struct Layer *layer = window->WLayer;
+            struct ClipRect *clip;
+            struct IconTileRequest anchor={ICONTILE_ANCHOR,0,0,NULL,0,0};
+            if (DoMethod(obj,MUIM_IconList_Tile,(IPTR)entry,(IPTR)&anchor)) {
+                struct Rectangle area;
+                /* Draw/clear recalculate this area and may widen it for the
+                 * label. Sampling must use that same14px (etc.) centering. */
+                IconList_GetIconAreaRectangle(obj,data,entry,&area);
+                IconList_GetIconImageOffsets(data,entry,&ox,&oy);
+                LockLayer(0,layer);
+                anchorMoved |= IconList_AnchorGroupSurface(entry,anchor.width,
+                    window->WScreen->Width,window->WScreen->Height,size.width,size.height,
+                    _mleft(obj)-data->icld_ViewX+layer->bounds.MinX-layer->Scroll_X,
+                    _mtop(obj)-data->icld_ViewY+layer->bounds.MinY-layer->Scroll_Y,ox,oy);
+                UnlockLayer(layer);
+            } else IconList_GetIconImageOffsets(data, entry, &ox, &oy);
+            struct IconTileBounds surface = {
+                _mleft(obj) - data->icld_ViewX + entry->ie_IconX + ox,
+                _mtop(obj) - data->icld_ViewY + entry->ie_IconY + oy, 0, 0 };
+            struct IconTileBounds viewport = { _mleft(obj), _mtop(obj), _mright(obj), _mbottom(obj) };
+            localX = pointerX - surface.minx;
+            localY = pointerY - surface.miny;
+            surface.maxx = surface.minx + size.width - 1;
+            surface.maxy = surface.miny + size.height - 1;
+            struct IconTileBounds fullSurface = surface, projected;
+            if (IconTileIntersect(&surface, &viewport)) {
+                LockLayer(0, layer);
+                /* Same window-relative to screen-relative transform as
+                 * layers.library DoHookClipRects, including layer scrolling. */
+                int dx = layer->bounds.MinX - layer->Scroll_X;
+                int dy = layer->bounds.MinY - layer->Scroll_Y;
+                struct IconTileBounds point = { pointerX + dx, pointerY + dy,
+                                                pointerX + dx, pointerY + dy };
+                struct IconTileBounds screen = { 0, 0, window->WScreen->Width - 1,
+                                                       window->WScreen->Height - 1 };
+                BOOL projectedVisible = IconTileProject(&fullSurface, &viewport, dx, dy, &screen, &projected, &surface);
+                screenLeft = projected.minx; screenTop = projected.miny;
+                placed = projectedVisible;
+                if (projectedVisible)
+                    for (clip = layer->ClipRect; clip; clip = clip->Next) {
+                        struct IconTileBounds bounds = { clip->bounds.MinX, clip->bounds.MinY,
+                                                         clip->bounds.MaxX, clip->bounds.MaxY };
+                        struct IconTileBounds overlap = surface;
+                        if (!clip->lobs && IconTileIntersect(&overlap, &bounds)) {
+                            visible = TRUE;
+                            if (IconTileIntersect(&overlap, &point)) inside = TRUE;
+                        }
+                    }
+                UnlockLayer(layer);
+            }
+        }
+        IconList_PublishTileVisibility(obj, entry, visible);
+        IconList_PublishTileGeometry(obj, entry, visible, screenLeft, screenTop, size.width, size.height);
+        {
+            struct IconTileRequest placement = { ICONTILE_PLACEMENT,
+                placed ? size.width : 0, placed ? size.height : 0,
+                (struct RastPort *)(placed ? window->WScreen : NULL), screenLeft, screenTop };
+            DoMethod(obj, MUIM_IconList_Tile, (IPTR)entry, (IPTR)&placement);
+        }
+        if (visible) IconList_PublishTilePointer(obj, entry, inside, localX, localY);
+    }
+    if (shown) IconList_TileMotion(obj, data, haveTiles);
+    if (anchorMoved) MUI_Redraw(obj,MADF_DRAWOBJECT);
+    return TRUE;
+}
+
+IPTR IconList__MUIM_IconList_UpdateTileVisibility(struct IClass *CLASS, Object *obj, Msg message)
+{
+    return IconList_SampleTiles(CLASS, obj, FALSE, 0, 0);
 }
 
 ///IconList_GetIconLabelRectangle()
@@ -639,13 +850,17 @@ static void IconList_GetIconAreaRectangle(Object *obj, struct IconList_DATA *dat
     D(bug("[IconList]: %s()\n", __func__));
 #endif
 
+    struct IconTileRequest tileRequest = { ICONTILE_SIZE, 0, 0, NULL, 0, 0 };
+    BOOL tile = entry->ie_IconListEntry.type == ILE_TYPE_APPICON &&
+                DoMethod(obj, MUIM_IconList_Tile, (IPTR)entry, (IPTR)&tileRequest);
+
     /* Get entry box width including text width */
     memset(rect, 0, sizeof(struct Rectangle));
 
     IconList_GetIconImageRectangle(obj, data, entry, rect);
 
     entry->ie_AreaWidth = entry->ie_IconWidth;
-    if (data->icld__Option_IconListMode == ICON_LISTMODE_GRID)
+    if (!tile && data->icld__Option_IconListMode == ICON_LISTMODE_GRID)
     {
         entry->ie_AreaHeight = data->icld_IconLargestHeight;
     }
@@ -664,12 +879,22 @@ static void IconList_GetIconAreaRectangle(Object *obj, struct IconList_DATA *dat
 
     entry->ie_AreaHeight = entry->ie_AreaHeight + data->icld__Option_IconImageSpacing + iconlabel_Height;
     
+    /* Only ordinary icon dimensions define the base cell. Reservations
+     * themselves must never feed back into the next pass's cell size. */
+    if (!tile) {
+        if (entry->ie_AreaWidth > data->icld_IconAreaLargestWidth)
+            data->icld_IconAreaLargestWidth = entry->ie_AreaWidth;
+        if (entry->ie_AreaHeight > data->icld_IconAreaLargestHeight)
+            data->icld_IconAreaLargestHeight = entry->ie_AreaHeight;
+    }
+    if (entry->ie_GridWidth > entry->ie_AreaWidth) entry->ie_AreaWidth = entry->ie_GridWidth;
+    if (entry->ie_GridHeight > entry->ie_AreaHeight) entry->ie_AreaHeight = entry->ie_GridHeight;
+
     /* Store */
     rect->MaxX = (rect->MinX + entry->ie_AreaWidth) - 1;
     rect->MaxY = (rect->MinY + entry->ie_AreaHeight) - 1;
     
-    if (entry->ie_AreaWidth > data->icld_IconAreaLargestWidth) data->icld_IconAreaLargestWidth = entry->ie_AreaWidth;
-    if (entry->ie_AreaHeight > data->icld_IconAreaLargestHeight) data->icld_IconAreaLargestHeight = entry->ie_AreaHeight;
+
 }
 ///
 
@@ -846,7 +1071,8 @@ static void UpdateLassoSelection(struct IconList_DATA *data, Object *obj, struct
                 iconrect.MaxX = node->ie_IconX + node->ie_AreaWidth - 1;
                 iconrect.MinY = node->ie_IconY;
                 iconrect.MaxY = node->ie_IconY + node->ie_AreaHeight - 1;
-                if ((data->icld__Option_IconListMode == ICON_LISTMODE_GRID) &&
+                if (!node->ie_GridWidth &&
+                    (data->icld__Option_IconListMode == ICON_LISTMODE_GRID) &&
                     (node->ie_AreaWidth < data->icld_IconAreaLargestWidth)) {
                     iconrect.MinX += ((data->icld_IconAreaLargestWidth - node->ie_AreaWidth)/2);
                     iconrect.MaxX += ((data->icld_IconAreaLargestWidth - node->ie_AreaWidth)/2);
@@ -1182,6 +1408,14 @@ IPTR IconList__MUIM_IconList_DrawEntry(struct IClass *CLASS, Object *obj, struct
 #if defined(DEBUG_ILC_ICONRENDERING)
     D(bug("[IconList] %s: DrawIconState('%s') .. %d, %d\n", __func__, message->entry->ie_IconListEntry.label, iconX, iconY));
 #endif
+        if (message->entry->ie_IconListEntry.type == ILE_TYPE_APPICON)
+        {
+            struct IconTileRequest request = { ICONTILE_DRAW, 0, 0,
+                data->icld_BufferRastPort, iconX, iconY };
+            if (DoMethod(obj, MUIM_IconList_Tile, (IPTR)message->entry, (IPTR)&request))
+                return TRUE;
+        }
+
         BOOL renderSelected = ((message->entry->ie_Flags & (ICONENTRY_FLAG_SELECTED | ICONENTRY_FLAG_LASSO)) != 0);
         DrawIconStateA
           (
@@ -1523,7 +1757,7 @@ IPTR IconList__MUIM_IconList_DrawEntryLabel(struct IClass *CLASS, Object *obj, s
     if (txtbox_width < message->entry->ie_AreaWidth)
         offsetx += ((message->entry->ie_AreaWidth - txtbox_width)/2);
 
-    if ((data->icld__Option_IconListMode == ICON_LISTMODE_GRID) &&
+    if (!message->entry->ie_GridWidth && (data->icld__Option_IconListMode == ICON_LISTMODE_GRID) &&
         (message->entry->ie_AreaWidth < data->icld_IconAreaLargestWidth))
         offsetx += ((data->icld_IconAreaLargestWidth - message->entry->ie_AreaWidth)/2);
 
@@ -1531,11 +1765,11 @@ IPTR IconList__MUIM_IconList_DrawEntryLabel(struct IClass *CLASS, Object *obj, s
     iconlabelrect.MaxX += offsetx;
 
     offsety = (objY - data->icld_ViewY) + message->entry->ie_IconY + data->icld__Option_IconImageSpacing;
-    if ((data->icld__Option_IconListMode == ICON_LISTMODE_GRID) &&
+    if (!message->entry->ie_GridWidth && (data->icld__Option_IconListMode == ICON_LISTMODE_GRID) &&
         (message->entry->ie_AreaHeight < data->icld_IconAreaLargestHeight))
         offsety += ((data->icld_IconAreaLargestHeight - message->entry->ie_AreaHeight)/2);
 
-    if (data->icld__Option_IconListMode == ICON_LISTMODE_GRID)
+    if (!message->entry->ie_GridWidth && data->icld__Option_IconListMode == ICON_LISTMODE_GRID)
     {
         offsety = offsety + data->icld_IconLargestHeight;
     }
@@ -1926,6 +2160,94 @@ IPTR IconList__MUIM_IconList_RethinkDimensions(struct IClass *CLASS, Object *obj
  * they have Provided position or not.
  */
 
+/* Mixed tile/icon grids reserve whole cells, never the largest tile's box
+ * for every ordinary icon. Solve all positions before mutating entries. */
+static BOOL IconList_Layout_TileGrid(struct IClass *CLASS, Object *obj, BOOL preserve)
+{
+    struct IconList_DATA *data = INST_DATA(CLASS, obj);
+    struct IconEntry *entry;
+    struct IconGridSlot *slots;
+    ULONG count=0, index=0, pitchX=64, pitchY=64, maxSpan=1, limit;
+    LONG left=data->icld__Option_IconHorizontalSpacing;
+    LONG top=data->icld__Option_IconVerticalSpacing;
+    BOOL anyTile=FALSE, vertical=!!(data->icld_DisplayFlags & ICONLIST_DISP_VERTICAL);
+    /* List view must not inherit cell slots from the previous icon layout. */
+    ForeachNode(&data->icld_IconList, entry)
+        entry->ie_GridWidth=entry->ie_GridHeight=0;
+    if ((data->icld_DisplayFlags & ICONLIST_DISP_MODELIST) == ICONLIST_DISP_MODELIST)
+        return FALSE;
+    ForeachNode(&data->icld_IconList, entry) {
+        struct IconTileRequest request = { ICONTILE_SIZE, 0, 0, NULL, 0, 0 };
+        if (!entry->ie_DiskObj || !(entry->ie_Flags & ICONENTRY_FLAG_VISIBLE)) continue;
+        ++count;
+        if (entry->ie_IconListEntry.type==ILE_TYPE_APPICON &&
+            DoMethod(obj, MUIM_IconList_Tile, (IPTR)entry, (IPTR)&request)) anyTile=TRUE;
+    }
+    if (!anyTile || !count || count>65535) return FALSE;
+    slots=AllocVec(count*sizeof(*slots), MEMF_CLEAR);
+    if (!slots) return FALSE;
+    ForeachNode(&data->icld_IconList, entry) {
+        struct Rectangle rect;
+        struct IconTileRequest request = { ICONTILE_SIZE, 0, 0, NULL, 0, 0 };
+        struct IconGridSlot *slot;
+        ULONG need;
+        if (!entry->ie_DiskObj || !(entry->ie_Flags & ICONENTRY_FLAG_VISIBLE)) continue;
+        slot=&slots[index++];
+        slot->entry=entry;
+        slot->width=slot->height=1;
+        if (entry->ie_IconListEntry.type==ILE_TYPE_APPICON &&
+            DoMethod(obj, MUIM_IconList_Tile, (IPTR)entry, (IPTR)&request)) {
+            slot->width=request.width/64;
+            slot->height=request.height/64;
+        }
+        IconList_GetIconAreaRectangle(obj,data,entry,&rect);
+        need=(entry->ie_AreaWidth+left+slot->width-1)/slot->width;
+        if (need>pitchX) pitchX=need;
+        need=(entry->ie_AreaHeight+top+slot->height-1)/slot->height;
+        if (need>pitchY) pitchY=need;
+        need=vertical ? slot->height : slot->width;
+        if (need>maxSpan) maxSpan=need;
+        slot->pinned=preserve && entry->ie_ProvidedIconX!=NO_ICON_POSITION &&
+                                entry->ie_ProvidedIconY!=NO_ICON_POSITION;
+    }
+    limit=vertical ? (data->icld_ViewHeight>top ? (data->icld_ViewHeight-top)/pitchY : 1) :
+                     (data->icld_ViewWidth>left ? (data->icld_ViewWidth-left)/pitchX : 1);
+    if (limit<maxSpan) limit=maxSpan;
+    for (index=0; index<count; ++index) {
+        entry=slots[index].entry;
+        if (slots[index].pinned) {
+            slots[index].x=IconGridSnap(entry->ie_ProvidedIconX,left,pitchX);
+            slots[index].y=IconGridSnap(entry->ie_ProvidedIconY,top,pitchY);
+        }
+    }
+    if (!IconGridPlace(slots,count,limit,vertical)) { FreeVec(slots); return FALSE; }
+    for (index=0; index<count; ++index) {
+        struct IconGridSlot *slot=&slots[index];
+        entry=slot->entry;
+        entry->ie_IconX=left+slot->x*pitchX;
+        entry->ie_IconY=top+slot->y*pitchY;
+        entry->ie_GridWidth=slot->width*pitchX-left;
+        entry->ie_GridHeight=slot->height*pitchY-top;
+        entry->ie_AreaWidth=entry->ie_GridWidth;
+        entry->ie_AreaHeight=entry->ie_GridHeight;
+        struct IconTileRequest anchor={ICONTILE_ANCHOR,0,0,NULL,0,0};
+        BOOL group=entry->ie_IconListEntry.type==ILE_TYPE_APPICON &&
+            DoMethod(obj,MUIM_IconList_Tile,(IPTR)entry,(IPTR)&anchor);
+        if (group) {
+            entry->ie_GridWidth=entry->ie_AreaWidth=slot->width*64;
+            entry->ie_GridHeight=entry->ie_AreaHeight=slot->height*64;
+            if (entry->ie_ProvidedIconX!=NO_ICON_POSITION)entry->ie_IconX=entry->ie_ProvidedIconX;
+            if (entry->ie_ProvidedIconY!=NO_ICON_POSITION)entry->ie_IconY=entry->ie_ProvidedIconY;
+        }
+        if (slot->pinned) {
+            entry->ie_ProvidedIconX=entry->ie_IconX;
+            entry->ie_ProvidedIconY=entry->ie_IconY;
+        }
+    }
+    FreeVec(slots);
+    return TRUE;
+}
+
 static VOID IconList_Layout_FullAutoLayout(struct IClass *CLASS, Object *obj)
 {
     struct IconList_DATA        *data = INST_DATA(CLASS, obj);
@@ -1943,6 +2265,8 @@ static VOID IconList_Layout_FullAutoLayout(struct IClass *CLASS, Object *obj)
 
     BOOL                        calcnextpos;
     struct Rectangle            iconrect;
+
+    if (IconList_Layout_TileGrid(CLASS, obj, FALSE)) return;
 
     /* Now go to the actual positioning */
     entry = (struct IconEntry *)GetHead(&data->icld_IconList);
@@ -2059,11 +2383,15 @@ static VOID IconList_Layout_FullAutoLayout(struct IClass *CLASS, Object *obj)
 static VOID IconList_Layout_PartialAutoLayout(struct IClass *CLASS, Object *obj)
 {
     struct IconList_DATA        *data = INST_DATA(CLASS, obj);
-    struct Region               *occupied = NewRegion();
+    struct Region               *occupied;
     struct IconEntry            *entry = NULL;
     LONG                        left = data->icld__Option_IconHorizontalSpacing;
     LONG                        top = data->icld__Option_IconVerticalSpacing;
     LONG                        cur_x = left, cur_y  = top;
+
+    if (IconList_Layout_TileGrid(CLASS, obj, TRUE)) return;
+    occupied = NewRegion();
+    if (!occupied) return;
 
     entry = (struct IconEntry *)GetHead(&data->icld_IconList);
     while (entry != NULL)
@@ -2276,6 +2604,8 @@ IPTR IconList__OM_NEW(struct IClass *CLASS, Object *obj, struct opSet *message)
 
     data = INST_DATA(CLASS, obj);
 
+    data->icld_TileMotion = FALSE;
+    data->icld_TilesShown = FALSE;
     data->icld_Pool =  CreatePool(0,4096,4096);
     if (!data->icld_Pool)
     {
@@ -2414,6 +2744,7 @@ IPTR IconList__OM_DISPOSE(struct IClass *CLASS, Object *obj, Msg message)
     D(bug("[IconList]: %s()\n", __func__));
 #endif
 
+    IconList_HideTiles(obj, data);
     ForeachNode(&data->icld_IconList, node)
     {
         if (node->ie_DiskObj)
@@ -3014,6 +3345,7 @@ IPTR IconList__MUIM_Show(struct IClass *CLASS, Object *obj, struct MUIP_Show *me
 D(bug("[IconList]: %s()\n", __func__));
 #endif
 
+    data->icld_TilesShown = FALSE;
     if ((rc = DoSuperMethodA(CLASS, obj, (Msg)message)))
     {
         struct IconEntry *node = NULL;
@@ -3181,6 +3513,8 @@ D(bug("[IconList]: %s()\n", __func__));
             }
         }
     }
+    data->icld_TilesShown = rc != 0;
+    if (rc) IconList_SampleTiles(CLASS, obj, FALSE, 0, 0);
     return rc;
 }
 ///
@@ -3198,6 +3532,9 @@ IPTR IconList__MUIM_Hide(struct IClass *CLASS, Object *obj, struct MUIP_Hide *me
 D(bug("[IconList]: %s()\n", __func__));
 #endif
 
+    IconList_TileMotion(obj, data, FALSE);
+    data->icld_TilesShown = FALSE;
+    IconList_HideTiles(obj, data);
     if ((rc = DoSuperMethodA(CLASS, obj, (Msg)message)))
     {
         struct IconEntry *node = NULL;
@@ -3246,6 +3583,8 @@ IPTR IconList__MUIM_Cleanup(struct IClass *CLASS, Object *obj, struct MUIP_Clean
     D(bug("[IconList]: %s()\n", __func__));
 #endif
 
+    data->icld_TilesShown = FALSE;
+    IconList_HideTiles(obj, data);
     ForeachNode(&data->icld_IconList, node)
     {
         if (node->ie_DiskObj)
@@ -3684,7 +4023,8 @@ IPTR IconList__MUIM_Draw(struct IClass *CLASS, Object *obj, struct MUIP_Draw *me
                 rect.MinY += _mtop(obj) + (data->update_entry->ie_IconY - data->icld_ViewY);
                 rect.MaxY += _mtop(obj) + (data->update_entry->ie_IconY - data->icld_ViewY);
 
-                if (data->icld__Option_IconListMode == ICON_LISTMODE_GRID)
+                if (!data->update_entry->ie_GridWidth &&
+                    data->icld__Option_IconListMode == ICON_LISTMODE_GRID)
                 {
                     if (data->update_entry->ie_AreaWidth < data->icld_IconAreaLargestWidth)
                     {
@@ -3728,7 +4068,8 @@ IPTR IconList__MUIM_Draw(struct IClass *CLASS, Object *obj, struct MUIP_Draw *me
                         rect2.MinY += _mtop(obj) - data->icld_ViewY + entry->ie_IconY;
                         rect2.MaxY += _mtop(obj) - data->icld_ViewY + entry->ie_IconY;
 
-                        if (data->icld__Option_IconListMode == ICON_LISTMODE_GRID)
+                        if (!entry->ie_GridWidth &&
+                            data->icld__Option_IconListMode == ICON_LISTMODE_GRID)
                         {
                             if (entry->ie_AreaWidth < data->icld_IconAreaLargestWidth)
                             {
@@ -4306,6 +4647,8 @@ IPTR IconList__MUIM_IconList_DestroyEntry(struct IClass *CLASS, Object *obj, str
 
     if (message->entry)
     {
+        IconList_PublishTileVisibility(obj, message->entry, FALSE);
+        IconList_InvalidateTilePlacement(obj, message->entry);
         if (message->entry->ie_Flags & ICONENTRY_FLAG_SELECTED)
         {
             if (data->icld_SelectionLastClicked == message->entry)
@@ -4994,6 +5337,9 @@ IPTR IconList__MUIM_HandleEvent(struct IClass *CLASS, Object *obj, struct MUIP_H
 
     if (message->imsg)
     {
+        if (message->imsg->Class == IDCMP_MOUSEMOVE ||
+            message->imsg->Class == IDCMP_MOUSEBUTTONS)
+            IconList_SampleTiles(CLASS, obj, TRUE, message->imsg->MouseX, message->imsg->MouseY);
         LONG mx = message->imsg->MouseX - _mleft(obj);
         LONG my = message->imsg->MouseY - _mtop(obj);
 
@@ -6147,7 +6493,9 @@ IPTR IconList__MUIM_HandleEvent(struct IClass *CLASS, Object *obj, struct MUIP_H
                                     rect.MinY = node->ie_IconY;
                                     rect.MaxY = node->ie_IconY + node->ie_AreaHeight - 1;
 
-                                    if ((data->icld__Option_IconListMode == ICON_LISTMODE_GRID) &&
+                                    /* Explicit tile slots already include their own centering. */
+                                    if (!node->ie_GridWidth &&
+                                        (data->icld__Option_IconListMode == ICON_LISTMODE_GRID) &&
                                         (node->ie_AreaWidth < data->icld_IconAreaLargestWidth))
                                     {
                                         rect.MinX += ((data->icld_IconAreaLargestWidth - node->ie_AreaWidth)/2);
@@ -6183,6 +6531,15 @@ IPTR IconList__MUIM_HandleEvent(struct IClass *CLASS, Object *obj, struct MUIP_H
                         data->icld_ClickEvent.shift = !!(message->imsg->Qualifier & (IEQUALIFIER_LSHIFT | IEQUALIFIER_RSHIFT));
                         data->icld_ClickEvent.entry = data->icld_SelectionLastClicked ? &data->icld_SelectionLastClicked->ie_IconListEntry : NULL;
                         SET(obj, MUIA_IconList_Clicked, (IPTR)&data->icld_ClickEvent);
+
+                        if (doubleclicked && data->icld_SelectionLastClicked &&
+                            data->icld_SelectionLastClicked->ie_IconListEntry.type == ILE_TYPE_APPICON &&
+                            (data->icld_DisplayFlags & ICONLIST_DISP_MODELIST) != ICONLIST_DISP_MODELIST)
+                        {
+                            if (IconList_TileRegionConsumesDoubleClick(obj,data,
+                                    data->icld_SelectionLastClicked,mx,my))
+                                doubleclicked = FALSE;
+                        }
 
                         if (doubleclicked)
                         {
@@ -6236,6 +6593,19 @@ IPTR IconList__MUIM_HandleEvent(struct IClass *CLASS, Object *obj, struct MUIP_H
                 {
                     if (message->imsg->Code == SELECTUP)
                     {
+                        struct IconEntry *tileEntry = data->icld_SelectionLastClicked;
+                        if ((data->mouse_pressed & LEFT_BUTTON) && !data->icld_LassoActive &&
+                            tileEntry && tileEntry->ie_IconListEntry.type == ILE_TYPE_APPICON &&
+                            abs(mx - data->click_x) <= 3 && abs(my - data->click_y) <= 3 &&
+                            (data->icld_DisplayFlags & ICONLIST_DISP_MODELIST) != ICONLIST_DISP_MODELIST)
+                        {
+                            LONG offsetx, offsety;
+                            IconList_GetIconImageOffsets(data, tileEntry, &offsetx, &offsety);
+                            struct IconTileRequest request = { ICONTILE_CLICK, 0, 0, NULL,
+                                mx + data->icld_ViewX - tileEntry->ie_IconX - offsetx,
+                                my + data->icld_ViewY - tileEntry->ie_IconY - offsety };
+                            DoMethod(obj, MUIM_IconList_Tile, (IPTR)tileEntry, (IPTR)&request);
+                        }
                         if (data->icld_LassoActive == TRUE) {
                             if (DoLassoSelection(data, obj)) {
                                 SET(obj, MUIA_IconList_SelectionChanged, TRUE);
@@ -6288,7 +6658,7 @@ IPTR IconList__MUIM_HandleEvent(struct IClass *CLASS, Object *obj, struct MUIP_H
                     }
 
                     /* Stop listening to mouse move events is no buttons pressed */
-                    if ((data->ehn.ehn_Events & IDCMP_MOUSEMOVE) && !data->mouse_pressed)
+                    if ((data->ehn.ehn_Events & IDCMP_MOUSEMOVE) && !data->mouse_pressed && !data->icld_TileMotion)
                     {
                         DoMethod(_win(obj),MUIM_Window_RemEventHandler, (IPTR)&data->ehn);
                         data->ehn.ehn_Events &= ~IDCMP_MOUSEMOVE;
@@ -6326,9 +6696,11 @@ IPTR IconList__MUIM_HandleEvent(struct IClass *CLASS, Object *obj, struct MUIP_H
                         LONG touch_x, touch_y;
 
                         /* Entry(s) being dragged .... */
-                        DoMethod(_win(obj),MUIM_Window_RemEventHandler, (IPTR)&data->ehn);
-                        data->ehn.ehn_Events &= ~IDCMP_MOUSEMOVE;
-                        DoMethod(_win(obj),MUIM_Window_AddEventHandler, (IPTR)&data->ehn);
+                        if (!data->icld_TileMotion) {
+                            DoMethod(_win(obj),MUIM_Window_RemEventHandler, (IPTR)&data->ehn);
+                            data->ehn.ehn_Events &= ~IDCMP_MOUSEMOVE;
+                            DoMethod(_win(obj),MUIM_Window_AddEventHandler, (IPTR)&data->ehn);
+                        }
 
                         data->mouse_pressed &= ~LEFT_BUTTON;
 
@@ -6814,6 +7186,38 @@ IPTR IconList__MUIM_DragQuery(struct IClass *CLASS, Object *obj, struct MUIP_Dra
 }
 ///
 
+/* Paths are copied while the GUI owns its entries. The worker receives no
+ * MUI/AppIcon/bitmap pointers and validates disk metadata before changing files. */
+static BOOL IconList_TileDefinition(Object *obj, struct IconEntry *entry, char *out)
+{
+    out[0]=0;
+    if (entry->ie_IconListEntry.type==ILE_TYPE_APPICON) {
+        struct IconTileRequest query={ICONTILE_DEFINITION,TILE_TXN_PATH,0,(struct RastPort *)out,0,0};
+        return DoMethod(obj,MUIM_IconList_Tile,(IPTR)entry,(IPTR)&query);
+    }
+    if (!entry->ie_DiskObj || !FindToolType(entry->ie_DiskObj->do_ToolTypes,"TILE")) return FALSE;
+    const char *path=entry->ie_IconNode.ln_Name;
+    if (!path || strlen(path)>=TILE_TXN_PATH) return FALSE;
+    if (strchr(path,':')) { strcpy(out,path);return TRUE; }
+    STRPTR drawer=NULL;GET(obj,MUIA_IconDrawerList_Drawer,&drawer);
+    return drawer && snprintf(out,TILE_TXN_PATH,"%s/%s",drawer,path)<TILE_TXN_PATH;
+}
+static BOOL IconList_QueueTileTransaction(Object *obj, Object *source,
+    struct IconEntry *entry, struct IconEntry *target, ULONG operation, LONG x, LONG y)
+{
+    struct IconList_Drop_Event *event;
+    struct TileDropRequest *request=AllocVec(sizeof(*request),MEMF_CLEAR);
+    if (!request) return FALSE;
+    if (!IconList_TileDefinition(source,entry,request->source) ||
+        (target&&!IconList_TileDefinition(obj,target,request->target))) { FreeVec(request);return FALSE; }
+    event=AllocMem(sizeof(*event),MEMF_CLEAR);
+    if (!event) {FreeVec(request);return FALSE;}
+    NewList(&event->drop_SourceList);event->drop_TargetObj=obj;event->drop_SourceObj=source;event->drop_Tile=request;
+    request->operation=operation;request->x=x;request->y=y;
+    SET(obj,MUIA_IconList_IconsDropped,(IPTR)event);
+    return TRUE;
+}
+
 ///MUIM_DragDrop()
 /**************************************************************************
 MUIM_DragDrop
@@ -6839,6 +7243,7 @@ IPTR IconList__MUIM_DragDrop(struct IClass *CLASS, Object *obj, struct MUIP_Drag
             FreeVec(clean_node->dropse_Node.ln_Name);
             FreeMem(clean_node, sizeof(struct IconList_Drop_SourceEntry));
         }
+        FreeVec(data->icld_DragDropEvent->drop_Tile);
         FreeVec(data->icld_DragDropEvent->drop_TargetPath);
         FreeMem(data->icld_DragDropEvent, sizeof(struct IconList_Drop_Event));
         data->icld_DragDropEvent = NULL;
@@ -6927,6 +7332,43 @@ IPTR IconList__MUIM_DragDrop(struct IClass *CLASS, Object *obj, struct MUIP_Drag
                 {
                     drop_target_node = node;
                     break;
+                }
+            }
+        }
+
+        /* Group definitions cannot contain drawers, including unmarked ones.
+         * Refuse before generic copy routing so a non-tile drawer cannot sneak
+         * past the transactional metadata eligibility check. */
+        if (drop_target_node && entry->ile_IconEntry->ie_DiskObj &&
+            entry->ile_IconEntry->ie_DiskObj->do_Type==WBDRAWER) {
+            BOOL targetGroup=FALSE;
+            if (drop_target_node->ie_IconListEntry.type==ILE_TYPE_APPICON) {
+                struct IconTileRequest query={ICONTILE_ANCHOR,0,0,NULL,0,0};
+                targetGroup=DoMethod(obj,MUIM_IconList_Tile,(IPTR)drop_target_node,(IPTR)&query);
+            } else if (drop_target_node->ie_DiskObj) {
+                STRPTR kind=FindToolType(drop_target_node->ie_DiskObj->do_ToolTypes,"TILE");
+                targetGroup=kind&&!Stricmp(kind,"group");
+            }
+            if (targetGroup) {
+                bug("[TILE3] rejected reason=drawer-in-group source=%s target=%s\n",
+                    entry->ile_IconEntry->ie_IconNode.ln_Name,drop_target_node->ie_IconNode.ln_Name);
+                DisplayBeep(NULL);FreeMem(dragDropEvent,sizeof(*dragDropEvent));goto dragdropdone;
+            }
+        }
+
+        /* Single-definition tile drops are transactional, not generic copies. */
+        {
+            struct IconList_Entry *next=entry;
+            DoMethod(message->obj,MUIM_IconList_NextIcon,MUIV_IconList_NextIcon_Selected,(IPTR)&next);
+            if ((IPTR)next==MUIV_IconList_NextIcon_End) {
+                ULONG operation=0;
+                if (drop_target_node && drop_target_node!=entry->ile_IconEntry) operation=TILE_TXN_CREATE;
+                else if (message->obj!=obj && !directory_path && !drop_target_node) operation=TILE_TXN_EXTRACT;
+                if (operation && IconList_QueueTileTransaction(obj,message->obj,entry->ile_IconEntry,
+                    drop_target_node,operation,drop_target_node?drop_target_node->ie_IconX:message->x-_mleft(obj)+data->icld_ViewX,
+                    drop_target_node?drop_target_node->ie_IconY:message->y-_mtop(obj)+data->icld_ViewY)) {
+                    FreeMem(dragDropEvent,sizeof(*dragDropEvent));
+                    goto dragdropdone;
                 }
             }
         }
@@ -7040,6 +7482,19 @@ IPTR IconList__MUIM_DragDrop(struct IClass *CLASS, Object *obj, struct MUIP_Drag
                         DoMethod(obj, MUIM_IconList_PropagateEntryPos, entry->ile_IconEntry);
                     }
                     SET(obj, MUIA_IconList_IconMoved, (IPTR)entry); // Now notify
+                }
+                if (IconList_Layout_TileGrid(CLASS, obj, TRUE))
+                {
+                    struct IconEntry *snapped;
+                    ForeachNode(&data->icld_IconList, snapped)
+                        if (snapped->ie_Flags & ICONENTRY_FLAG_VISIBLE)
+                            DoMethod(obj, MUIM_IconList_PropagateEntryPos, (IPTR)snapped);
+                }
+                {
+                    struct IconEntry *moved;
+                    ForeachNode(&data->icld_IconList,moved)
+                        if (moved->ie_Flags & ICONENTRY_FLAG_SELECTED)
+                            IconList_QueueTileTransaction(obj,obj,moved,NULL,TILE_TXN_POSITION,moved->ie_IconX,moved->ie_IconY);
                 }
                 MUI_Redraw(obj,MADF_DRAWOBJECT);
                 DoMethod(obj, MUIM_IconList_CoordsSort);
@@ -7704,6 +8159,7 @@ BOOPSI_DISPATCHER(IPTR,IconList_Dispatcher, CLASS, obj, message)
 
         case MUIM_Setup:                        return IconList__MUIM_Setup(CLASS, obj, (struct MUIP_Setup *)message);
 
+        case MUIM_IconList_UpdateTileVisibility: return IconList__MUIM_IconList_UpdateTileVisibility(CLASS, obj, message);
         case MUIM_Show:                         return IconList__MUIM_Show(CLASS,obj, (struct MUIP_Show *)message);
         case MUIM_Hide:                         return IconList__MUIM_Hide(CLASS,obj, (struct MUIP_Hide *)message);
         case MUIM_Cleanup:                      return IconList__MUIM_Cleanup(CLASS, obj, (struct MUIP_Cleanup *)message);

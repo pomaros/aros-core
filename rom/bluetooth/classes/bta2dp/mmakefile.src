@@ -1,0 +1,13 @@
+include $(SRCDIR)/config/aros.cfg
+
+USER_LDFLAGS := -static
+
+FILES := bta2dp.class dev avdtp avrcp stream sbc
+
+#MM- kernel-bluetooth-classes-bta2dp : kernel-bluetooth-btclass kernel-bluetooth-library-includes
+
+%build_module_library mmake=kernel-bluetooth-classes-bta2dp \
+    modname=bta2dp modtype=btclass modsuffix="class" \
+    files="$(FILES)"
+
+%common

@@ -85,6 +85,8 @@ struct bwfm_unit
     ULONG               state;              /* SANA2 unit flags (online etc.) */
     int                 online;             /* S2_ONLINE: deliver received frames */
     int                 joined;             /* associated to the configured AP */
+    int                 autojoin_retry;     /* the boot-time auto-join failed: retry it */
+    int                 autojoin_active;    /* the session in force is the auto-join's */
     UBYTE               hwaddr[ETHER_ADDR_LEN];
     struct Sana2DeviceQuery info;
     struct Sana2DeviceStats stats;

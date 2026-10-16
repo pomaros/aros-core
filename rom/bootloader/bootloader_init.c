@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2011, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER
 
     Bootloader information initialisation.
 */
@@ -105,6 +106,12 @@ static int GM_UNIQUENAME(Init)(LIBBASETYPEPTR BootLoaderBase)
     UWORD vmode = 0x00FF;       /* Dummy mode number by default           */
     UBYTE palette = 0;          /* By default we don't know palette width */
     IPTR fb_addr64 = 0;         /* Full 64-bit framebuffer address from KRN_FBAddr */
+    IPTR fb_width = 0;
+    IPTR fb_height = 0;
+    IPTR fb_depth = 0;
+    IPTR fb_pitch = 0;
+    IPTR fb_format = KRN_FB_FORMAT_NONE;
+    IPTR fb_size = 0;
 
     D(bug("[BootLdr] Init\n"));
 
@@ -148,6 +155,30 @@ static int GM_UNIQUENAME(Init)(LIBBASETYPEPTR BootLoaderBase)
 
         case KRN_FBAddr:
             fb_addr64 = tag->ti_Data;
+            break;
+
+        case KRN_FrameBufferWidth:
+            fb_width = tag->ti_Data;
+            break;
+
+        case KRN_FrameBufferHeight:
+            fb_height = tag->ti_Data;
+            break;
+
+        case KRN_FrameBufferDepth:
+            fb_depth = tag->ti_Data;
+            break;
+
+        case KRN_FrameBufferPitch:
+            fb_pitch = tag->ti_Data;
+            break;
+
+        case KRN_FrameBufferFormat:
+            fb_format = tag->ti_Data;
+            break;
+
+        case KRN_FrameBufferSize:
+            fb_size = tag->ti_Data;
             break;
         }
     }
@@ -221,6 +252,70 @@ static int GM_UNIQUENAME(Init)(LIBBASETYPEPTR BootLoaderBase)
                   BootLoaderBase->Vesa->FrameBufferSize));
             D(bug("[BootLdr] Init: Vesa mode palette width: %d\n", BootLoaderBase->Vesa->PaletteWidth));
             D(bug("[BootLdr] Init: Vesa mode direct color flags %02X\n", vmi->direct_color_mode_info));
+        }
+    }
+    else if (fb_addr64 && fb_width && fb_height &&
+             fb_pitch && fb_width <= fb_pitch / 4 &&
+             fb_height <= fb_size / fb_pitch &&
+             fb_width <= (IPTR)(ULONG)~0UL &&
+             fb_height <= (IPTR)(ULONG)~0UL &&
+             fb_pitch <= (IPTR)(ULONG)~0UL &&
+             ((fb_depth == 32 &&
+               (fb_format == KRN_FB_FORMAT_RGBX8888 ||
+                fb_format == KRN_FB_FORMAT_BGRX8888)) ||
+              (fb_depth == 30 &&
+               fb_format == KRN_FB_FORMAT_X2R10G10B10)))
+    {
+        ULONG size_kib;
+
+        BootLoaderBase->Vesa = AllocMem(sizeof(struct VesaInfo), MEMF_CLEAR);
+        if (BootLoaderBase->Vesa)
+        {
+            IPTR kib = fb_size / 1024 + ((fb_size % 1024) != 0);
+
+            size_kib = kib > (IPTR)(ULONG)~0UL ? (ULONG)~0UL : (ULONG)kib;
+            BootLoaderBase->Vesa->FrameBuffer = (APTR)fb_addr64;
+            BootLoaderBase->Vesa->FrameBufferSize = size_kib;
+            BootLoaderBase->Vesa->XSize = (ULONG)fb_width;
+            BootLoaderBase->Vesa->YSize = (ULONG)fb_height;
+            BootLoaderBase->Vesa->BytesPerLine = (ULONG)fb_pitch;
+            BootLoaderBase->Vesa->BitsPerPixel = (UBYTE)fb_depth;
+            BootLoaderBase->Vesa->ModeNumber = vmode;
+            BootLoaderBase->Vesa->PaletteWidth = palette;
+            /* Shifts follow the VBE v3 convention this file already uses for
+               a real mode structure: 32 - field position - field size. */
+            if (fb_format == KRN_FB_FORMAT_X2R10G10B10)
+            {
+                BootLoaderBase->Vesa->Masks[VI_Red] = 0x3ff00000UL;
+                BootLoaderBase->Vesa->Shifts[VI_Red] = 2;
+                BootLoaderBase->Vesa->Masks[VI_Green] = 0x000ffc00UL;
+                BootLoaderBase->Vesa->Shifts[VI_Green] = 12;
+                BootLoaderBase->Vesa->Masks[VI_Blue] = 0x000003ffUL;
+                BootLoaderBase->Vesa->Shifts[VI_Blue] = 22;
+                BootLoaderBase->Vesa->Masks[VI_Alpha] = 0xc0000000UL;
+                BootLoaderBase->Vesa->Shifts[VI_Alpha] = 0;
+            }
+            else
+            {
+                BootLoaderBase->Vesa->Masks[VI_Green] = 0x0000ff00UL;
+                BootLoaderBase->Vesa->Shifts[VI_Green] = 16;
+                BootLoaderBase->Vesa->Masks[VI_Alpha] = 0xff000000UL;
+                BootLoaderBase->Vesa->Shifts[VI_Alpha] = 0;
+                if (fb_format == KRN_FB_FORMAT_RGBX8888)
+                {
+                    BootLoaderBase->Vesa->Masks[VI_Red] = 0x000000ffUL;
+                    BootLoaderBase->Vesa->Shifts[VI_Red] = 24;
+                    BootLoaderBase->Vesa->Masks[VI_Blue] = 0x00ff0000UL;
+                    BootLoaderBase->Vesa->Shifts[VI_Blue] = 8;
+                }
+                else
+                {
+                    BootLoaderBase->Vesa->Masks[VI_Red] = 0x00ff0000UL;
+                    BootLoaderBase->Vesa->Shifts[VI_Red] = 8;
+                    BootLoaderBase->Vesa->Masks[VI_Blue] = 0x000000ffUL;
+                    BootLoaderBase->Vesa->Shifts[VI_Blue] = 24;
+                }
+            }
         }
     }
 

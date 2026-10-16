@@ -1,0 +1,13 @@
+diff --git a/arch/aarch64-apple/kernel/task_accounting.h b/arch/aarch64-apple/kernel/task_accounting.h
+index 46a4bebd41..d5f5956891 100644
+--- a/arch/aarch64-apple/kernel/task_accounting.h
++++ b/arch/aarch64-apple/kernel/task_accounting.h
+@@ -13,7 +13,7 @@ static inline uint64_t AppleTaskFrequency(void)
+ static inline uint64_t AppleTaskDelta(uint64_t now,uint64_t start)
+ { return (now-start)&APPLE_TASK_COUNTER_MASK; }
+ static inline void AppleTaskDispatch(struct IntETask *et,uint64_t now)
+-{ et->iet_private1=(now&APPLE_TASK_COUNTER_MASK)+1; }
++{ (void)et; (void)now; /* VM negative control: dispatch producer disabled. */ }
+ static inline void AppleTaskSwitch(struct IntETask *et,uint64_t now,uint64_t frequency)
+ {
+     if(et->iet_private1) {

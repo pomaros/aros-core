@@ -288,6 +288,18 @@
 		<td>&lt;aros@aros.org&gt;</td>
 	</tr>
 	<tr>
+		<td>46</td>
+		<td>BTA2DP/AROS</td>
+		<td>John KNIPPER</td>
+		<td>&lt;code@jkn.me&gt;</td>
+	</tr>
+	<tr>
+		<td>47</td>
+		<td>AppleMCA/AROS</td>
+		<td>John KNIPPER</td>
+		<td>&lt;code@jkn.me&gt;</td>
+	</tr>
+	<tr>
 		<td>200</td>
 		<td>via-ac97/AROS</td>
 		<td>Davy Wentzler</td>

@@ -1,13 +1,17 @@
+/*
+    Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
+
+    Desc: CPU context definition for AArch64.
+
+    Shared architectural context for native and hosted AArch64 targets.
+    Darwin hosted copies the integer register prefix to/from its thread state;
+    native platforms use the same order for saved task state.
+*/
+
 #ifndef AROS_AARCH64_CPUCONTEXT_H
 #define AROS_AARCH64_CPUCONTEXT_H
 
-/*
-    Copyright © 2016, The AROS Development Team. All rights reserved.
-    $Id$
-
-    Desc: CPU context definition for ARM AArch64 processors
-    Lang: english
-*/
+#include <exec/types.h>
 
 struct ExceptionContext
 {
@@ -30,4 +34,4 @@ struct ExceptionContext
 /* ExceptionContext Flags */
 #define ECF_FPU  0x0001 /* fpuContext is valid */
 
-#endif
+#endif /* AROS_AARCH64_CPUCONTEXT_H */

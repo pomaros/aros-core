@@ -71,7 +71,7 @@ USER_INCLUDES := \
 USER_CFLAGS := $(CFLAGS_GNU11) $(NOERROR_INT_CONVERSION) $(NOERROR_INCOMPAT_POINTER_TYPES)
 USER_CPPFLAGS := \
     -DAROS_KERNEL $(PFS3_CFLAGS) -DMIN_LIB_VERSION=36 \
-	-DREVDATE="\"$(shell date '+%d.%m.%Y')\""
+	-DREVDATE="\"$(AROS_BUILD_DATE)\""
 
 USER_LDFLAGS += --static
 
@@ -84,7 +84,7 @@ USER_LDFLAGS += --static
 
 USER_CPPFLAGS := \
     -DAROS_KERNEL $(PFS3DS_CFLAGS) -DMIN_LIB_VERSION=36 \
-	-DREVDATE="\"$(shell date '+%d.%m.%Y')\""
+	-DREVDATE="\"$(AROS_BUILD_DATE)\""
 
 %build_module mmake=kernel-fs-pfs3ds \
     modname=pfs3ds modtype=handler \
@@ -105,7 +105,7 @@ KS13STUFF := \
 USER_CPPFLAGS := \
 	-DAROS_NOLIBREQ \
     -DAROS_KERNEL $(PFS3_CFLAGS) $(KS13STUFF) \
-	-DREVDATE="\"$(shell date '+%d.%m.%Y')\""
+	-DREVDATE="\"$(AROS_BUILD_DATE)\""
 
 USER_AFLAGS := \
 	-I$(GENDIR)/include

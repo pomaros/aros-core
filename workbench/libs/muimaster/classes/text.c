@@ -33,9 +33,11 @@ struct MUI_TextData
 {
     ULONG mtd_Flags;
     STRPTR contents;
+    STRPTR display_text;
     CONST_STRPTR preparse;
     TEXT hichar;
     ZText *ztext;
+    struct MUI_TextHighlight highlight;
 
     LONG update;        /* type of update: 1 - everything,
                          * 2 - insert char, no scroll */
@@ -50,6 +52,26 @@ struct MUI_TextData
 
 static const int __version = 1;
 static const int __revision = 1;
+
+static BOOL copy_highlight(struct MUI_TextData *data,
+    const struct MUI_TextHighlight *source)
+{
+    struct MUI_TextHighlightRange *copy = NULL;
+    ULONG count = source ? source->count : 0;
+    /* Bound allocation arithmetic and reject malformed lists atomically. */
+    if (count > 65536 || (count && !source->ranges))
+        return FALSE;
+    if (count)
+    {
+        copy = AllocVec(count * sizeof(*copy), MEMF_ANY);
+        if (!copy) return FALSE;
+        CopyMem(source->ranges, copy, count * sizeof(*copy));
+    }
+    FreeVec((APTR)data->highlight.ranges);
+    data->highlight.ranges = copy;
+    data->highlight.count = count;
+    return TRUE;
+}
 
 static void setup_text(struct MUI_TextData *data, Object *obj);
 
@@ -74,6 +96,10 @@ IPTR Text__OM_NEW(struct IClass *cl, Object *obj, struct opSet *msg)
     {
         switch (tag->ti_Tag)
         {
+        case MUIA_Text_Highlight:
+            copy_highlight(data, (const struct MUI_TextHighlight *)tag->ti_Data);
+            break;
+
         case MUIA_Text_Contents:
             if (tag->ti_Data)
                 data->contents = StrDup((STRPTR) tag->ti_Data);
@@ -129,6 +155,8 @@ IPTR Text__OM_DISPOSE(struct IClass *cl, Object *obj, Msg msg)
 {
     struct MUI_TextData *data = INST_DATA(cl, obj);
 
+    FreeVec(data->display_text);
+    FreeVec((APTR)data->highlight.ranges);
     FreeVec(data->contents);
     FreeVec((APTR) data->preparse);
 
@@ -148,6 +176,11 @@ IPTR Text__OM_SET(struct IClass *cl, Object *obj, struct opSet *msg)
     {
         switch (tag->ti_Tag)
         {
+        case MUIA_Text_Highlight:
+            if (copy_highlight(data, (const struct MUI_TextHighlight *)tag->ti_Data))
+                MUI_Redraw(obj, MADF_DRAWOBJECT);
+            break;
+
         case MUIA_Text_Contents:
             {
                 char *new_contents =
@@ -155,6 +188,8 @@ IPTR Text__OM_SET(struct IClass *cl, Object *obj, struct opSet *msg)
                     ti_Data : "");
                 if (new_contents)
                 {
+                    FreeVec(data->display_text);
+                    data->display_text = NULL;
                     if (data->ztext)
                     {
                         zune_text_destroy(data->ztext);
@@ -176,6 +211,8 @@ IPTR Text__OM_SET(struct IClass *cl, Object *obj, struct opSet *msg)
                     ti_Data : "");
                 if (new_preparse)
                 {
+                    FreeVec(data->display_text);
+                    data->display_text = NULL;
                     if (data->ztext)
                     {
                         zune_text_destroy(data->ztext);
@@ -211,6 +248,25 @@ IPTR Text__OM_GET(struct IClass *cl, Object *obj, struct opGet *msg)
 #define STORE *(msg->opg_Storage)
     switch (msg->opg_AttrID)
     {
+    case MUIA_Text_DisplayText:
+        if (!data->display_text)
+        {
+            ZText *text = zune_text_new(data->preparse, data->contents,
+                (data->mtd_Flags & MTDF_HICHAR) ? ZTEXT_ARG_HICHAR :
+                (data->mtd_Flags & MTDF_HICHARIDX) ? ZTEXT_ARG_HICHARIDX : ZTEXT_ARG_NONE,
+                data->hichar);
+            if (text)
+            {
+                data->display_text = zune_text_plain(text);
+                zune_text_destroy(text);
+            }
+        }
+        STORE = (IPTR)data->display_text;
+        return TRUE;
+
+    case MUIA_Text_Highlight:
+        STORE = (IPTR)&data->highlight;
+        return TRUE;
     case MUIA_Text_Contents:
         STORE = (IPTR) data->contents;
         return TRUE;
@@ -396,8 +452,8 @@ IPTR Text__MUIM_Draw(struct IClass *cl, Object *obj,
         get(_win(obj), MUIA_Window_ActiveObject, &act);
         {
             int y = (_mheight(obj) - data->ztext->height) / 2;
-            zune_text_draw(data->ztext, obj,
-                _mleft(obj), _mright(obj), _mtop(obj) + y);
+            zune_text_draw_highlight(data->ztext, obj,
+                _mleft(obj), _mright(obj), _mtop(obj) + y, &data->highlight);
         }
     }
 

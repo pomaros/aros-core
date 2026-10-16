@@ -65,6 +65,7 @@ struct TimerBase
     ULONG                       tb_ticks_elapsed;	/* Fraction of second for Elapsed in ticks		*/
     ULONG                       tb_prev_tick;		/* Hardware-specific					*/
     ULONG		        tb_eclock_rate;	        /* EClock frequency					*/
+    ULONG                       tb_ElapsedPaused;       /* PauseUpTime(): tb_Elapsed holds, relative units wait	*/
 
 #ifdef USE_VBLANK_EMU
     struct timerequest          tb_vblank_timerequest;  /* VBlank emulation request				*/

@@ -1,0 +1,44 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * SPDX-License-Identifier: APL-1.1
+ * Production helpers and transport predicate are injected by run.py. */
+#include <stdint.h>
+#include <assert.h>
+#include <stdio.h>
+#include <stddef.h>
+#define CORE_IPI_MAX_CPUS 2
+#define CORE_IPI_ONLINE_MASK() 3U
+#define CORE_IPI_AVAILABLE() 1
+#define SPINLOCK_MODE_WRITE 1
+#define IDNESTCOUNT_GET idnest
+#define GetCPUNumber() 0
+struct CallIPIEntry {int dummy;};
+struct List {int dummy;};
+static int ipi_call_queue_lock[2], ipi_call_free[2], ipi_call_inited=1;
+static uint64_t current_mask;
+static int depth, locked, calls, drain_count, save_count, restore_count, idnest;
+static struct CallIPIEntry entry;
+static uint64_t irq_save(void) {uint64_t old=current_mask; assert(!locked); depth++;save_count++;current_mask|=0xc0;return old;}
+static void irq_restore(uint64_t old) {assert(depth && !locked);depth--;restore_count++;current_mask=old;}
+static void lock(int *p) {(void)p;assert(depth && current_mask==0xc0 && !locked);locked=1;}
+static void unlock(int *p) {(void)p;assert(depth && locked);locked=0;}
+#define EXEC_IRQFIQ_DISABLE() irq_save()
+#define EXEC_IRQFIQ_RESTORE(mask) irq_restore(mask)
+#define EXEC_SPINLOCK_LOCK(p,h,m) lock(p)
+#define EXEC_SPINLOCK_UNLOCK(p) unlock(p)
+static void *remhead(struct List *p) {(void)p;assert(depth && locked);return calls++ ? &entry : NULL;}
+#define REMHEAD(p) remhead(p)
+static void core_HandleCallHookIPI(int cpu) {assert(cpu==0 && !depth && !locked);drain_count++;}
+
+@PRODUCTION@
+
+static void reset(uint64_t mask,int nesting) {current_mask=mask;idnest=nesting;depth=locked=calls=drain_count=save_count=restore_count=0;}
+int main(void) {
+ uint64_t masks[]={0,0x40,0x80,0xc0};
+ for(unsigned i=0;i<4;i++) {
+  reset(masks[i],-1);assert(core_TryClaimCallIPI(1)==NULL);assert(!drain_count && !depth && !locked);assert(current_mask==masks[i] && save_count==1 && restore_count==1);
+  reset(masks[i],-1);assert(core_ClaimCallIPI(1)==&entry);assert(drain_count==!!(masks[i] & EXPECTED_IPI_MASK));assert(current_mask==masks[i] && !depth && !locked && save_count==2 && restore_count==2);
+ }
+ reset(0,0);assert(core_ClaimCallIPI(1)==&entry);assert(drain_count==1);
+ reset(0,-1);assert(core_TryClaimCallIPI(-1)==NULL);assert(!save_count);
+ puts("IPI production lock/claim helpers: mask restoration, no drain under lock, bounded try, transport predicate PASS");
+}

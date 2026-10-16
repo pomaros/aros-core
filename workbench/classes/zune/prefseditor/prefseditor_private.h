@@ -19,21 +19,25 @@ struct PrefsEditor_DATA
            ped_Testing,
            ped_CanUse,
            ped_CanSave,
-           ped_CanTest;
+           ped_CanTest,
+           ped_Loaded;
     STRPTR ped_Name,
            ped_Path,
            ped_IconTool;
     BPTR   ped_BackupFH;
     TEXT   ped_BackupPath[15];
            /* Large enough for BACKUP_PREFIX, 8 digits and NULL byte */
+    /* Filter state: sections hidden and labels marked, restored by an
+     * empty filter. */
+    Object *ped_Hidden[32];
+    ULONG   ped_HiddenCount;
+    Object *ped_Marked[64];
+    Object *ped_MarkedGadget[64];
+    BOOL    ped_PreviousMark[64];
+    ULONG   ped_MarkedCount;
 };
 
 #define BACKUP_PREFIX "T:PT"
 
-/*** Private methods ********************************************************/
-#define MUIM_PrefsEditor_ExportToDirectory   (TAG_USER | 0x10000000)
-struct  MUIP_PrefsEditor_ExportToDirectory   {STACKED ULONG MethodID; STACKED CONST_STRPTR directory;};
-#define MUIM_PrefsEditor_ImportFromDirectory (TAG_USER | 0x10000001)
-struct  MUIP_PrefsEditor_ImportFromDirectory {STACKED ULONG MethodID; STACKED CONST_STRPTR directory;};
 
 #endif /* _PREFSEDITOR_PRIVATE_H_ */

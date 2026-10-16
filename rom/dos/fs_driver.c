@@ -1,5 +1,6 @@
 /*
     Copyright (C) 2011-2014, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>
 
     Desc: Low-level filesystem access functions, packet version
 */

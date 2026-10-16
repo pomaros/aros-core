@@ -20,7 +20,7 @@ ifneq ($(AROS_TARGET_VARIANT),)
 endif
 
 FILES := common_init timer_init lowlevel ticks timervblank
-FUNCS := abortio addtime beginio cmptime getsystime subtime readeclock getuptime
+FUNCS := abortio addtime beginio cmptime getsystime subtime readeclock getuptime pauseuptime
 
 USER_CPPFLAGS += \
                -DUSE_EXEC_DEBUG

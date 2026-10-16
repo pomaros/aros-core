@@ -102,6 +102,22 @@ pthread_t GetThreadId(struct Task *task)
     return task == NULL ? used : PTHREAD_THREADS_MAX;
 }
 
+extern int *(*__stdc_errnoptr_hook)(void);
+
+static int *pthread_errnoptr(void)
+{
+    struct Task *task = GET_THIS_TASK;
+    pthread_t id = GetThreadId(task);
+    ThreadInfo *inf = GetThreadInfo(id);
+
+    return inf && inf->task == task ? &inf->thread_errno : NULL;
+}
+
+void _pthread_init_errno(void)
+{
+    __stdc_errnoptr_hook = pthread_errnoptr;
+}
+
 #if defined __mc68000__
 /* No CAS instruction on m68k */
 static int __m68k_sync_val_compare_and_swap(int *v, int o, int n)
@@ -133,6 +149,10 @@ static int __m68k_sync_lock_test_and_set(int *v, int n)
 #define __sync_lock_release(v) __m68k_sync_lock_test_and_set(v, 0)
 #endif
 
+static struct timerequest timer_shared_io;
+static struct MsgPort timer_shared_mp;
+static BOOL timer_shared_ok;
+
 BOOL OpenTimerDevice(struct IORequest *io, struct MsgPort *mp, struct Task *task)
 {
     BYTE signal;
@@ -159,8 +179,9 @@ BOOL OpenTimerDevice(struct IORequest *io, struct MsgPort *mp, struct Task *task
     mp->mp_SigBit = signal;
     NEWLIST(&mp->mp_MsgList);
 
-    // prepare IORequest
-    io->io_Message.mn_Node.ln_Type = NT_MESSAGE;
+    // A request is idle until SendIO publishes it.
+    memset(io, 0, sizeof(struct timerequest));
+    io->io_Message.mn_Node.ln_Type = NT_REPLYMSG;
     io->io_Message.mn_Node.ln_Pri = 0;
     io->io_Message.mn_Node.ln_Name = NULL;
     io->io_Message.mn_ReplyPort = mp;
@@ -173,7 +194,17 @@ BOOL OpenTimerDevice(struct IORequest *io, struct MsgPort *mp, struct Task *task
     io->io_Error = 0;
     return TRUE;
 #else
-    return !OpenDevice((STRPTR)TIMERNAME, UNIT_MICROHZ, io, 0);
+    if (timer_shared_ok)
+    {
+        io->io_Device = timer_shared_io.tr_node.io_Device;
+        io->io_Unit = timer_shared_io.tr_node.io_Unit;
+        return TRUE;
+    }
+    {
+        BOOL opened = !OpenDevice((STRPTR)TIMERNAME, UNIT_MICROHZ, io, 0);
+        io->io_Message.mn_Node.ln_Type = NT_REPLYMSG;
+        return opened;
+    }
 #endif
 }
 
@@ -183,7 +214,7 @@ void CloseTimerDevice(struct IORequest *io)
 
     DB2(bug("%s(%p)\n", __FUNCTION__, io));
 
-    if (!CheckIO(io))
+    if (io->io_Message.mn_Node.ln_Type != NT_REPLYMSG && !CheckIO(io))
     {
         AbortIO(io);
         WaitIO(io);
@@ -192,7 +223,7 @@ void CloseTimerDevice(struct IORequest *io)
 #if defined(__AMIGA__) && !defined(__MORPHOS__)
     io->io_Device = (struct Device *)-1;
 #else
-    if (io->io_Device != NULL)
+    if (io->io_Device != NULL && !timer_shared_ok)
         CloseDevice(io);
 #endif
 
@@ -2631,6 +2662,20 @@ int __pthread_Init_Func(void)
     InitSemaphore(&thread_sem);
     InitSemaphore(&tls_sem);
 
+#if !defined(__AMIGA__) || defined(__MORPHOS__)
+    memset(&timer_shared_mp, 0, sizeof(timer_shared_mp));
+    timer_shared_mp.mp_Node.ln_Type = NT_MSGPORT;
+    timer_shared_mp.mp_Flags = PA_IGNORE;
+    timer_shared_mp.mp_SigTask = GET_THIS_TASK;
+    NEWLIST(&timer_shared_mp.mp_MsgList);
+    memset(&timer_shared_io, 0, sizeof(timer_shared_io));
+    timer_shared_io.tr_node.io_Message.mn_Node.ln_Type = NT_REPLYMSG;
+    timer_shared_io.tr_node.io_Message.mn_ReplyPort = &timer_shared_mp;
+    timer_shared_io.tr_node.io_Message.mn_Length = sizeof(timer_shared_io);
+    timer_shared_ok = !OpenDevice((STRPTR)TIMERNAME, UNIT_MICROHZ,
+                                  (struct IORequest *)&timer_shared_io, 0);
+#endif
+
     // reserve ID 0 for the main thread
     ThreadInfo *inf = &mainthread;
     threads[0] = inf;
@@ -2678,6 +2723,13 @@ void __pthread_Exit_Func(void)
         FreeVec(threads[i]);
     threads_used = 1;
     ReleaseSemaphore(&thread_sem);
+#if !defined(__AMIGA__) || defined(__MORPHOS__)
+    if (timer_shared_ok)
+    {
+        CloseDevice((struct IORequest *)&timer_shared_io);
+        timer_shared_ok = FALSE;
+    }
+#endif
 }
 
 #if defined(__AROS__) || (defined(__AMIGA__) && !defined(__MORPHOS__))

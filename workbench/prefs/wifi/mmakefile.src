@@ -17,4 +17,12 @@ EXEDIR := $(AROS_PREFS)
     progname=WiFi targetdir=$(EXEDIR) \
     files=$(FILES) uselibs="mui"
 
+# The chooser as the settings window's Network page.
+#MM- workbench-prefs : workbench-prefs-wifi-class
+#MM workbench-prefs-wifi-class : includes linklibs workbench-prefs-wifi-catalogs workbench-classes-zune-prefseditor
+
+%build_module mmake=workbench-prefs-wifi-class \
+    modname=WiFiEditor modtype=mcc \
+    conffile=wifieditor.conf files="wifieditor worker locale" uselibs="mui"
+
 %common

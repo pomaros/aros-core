@@ -18,6 +18,7 @@
 #include <intuition/cghooks.h>
 #include <datatypes/datatypesclass.h>
 #include <datatypes/soundclass.h>
+#include <datatypes/soundclassext.h>
 
 #include <clib/alib_protos.h>
 #include <proto/exec.h>
@@ -52,8 +53,8 @@ D(bug("[wave.dt]: %s()\n", __PRETTY_FUNCTION__));
 	LONG Error = OK;
 	BPTR file = (BPTR)msg->dtw_FileHandle;
 	BYTE *Channel[2] = {0};
-	LONG samplesPerSec = 0, totalFrames = 0, numChannels;
-	LONG encodeBufferSize, encodeFrames;
+	LONG samplesPerSec = 0, totalFrames = 0, numChannels, bytes = 1, stride = 1;
+	LONG encodeBufferSize, encodeFrames, dataSize;
 	BYTE *encodeBuffer = NULL;
 	LONG Status, pad_byte=0;
 	struct RIFFChunk chunk;
@@ -67,8 +68,10 @@ D(bug("[wave.dt]: %s()\n", __PRETTY_FUNCTION__));
 
 	{
 	    BYTE *Sample = NULL;
+	    ULONG type = SDTST_M8S;
 	    GetDTAttrs(obj,
 		    SDTA_Sample,		&Sample,
+		    SDTA_SampleType,	&type,
 		    SDTA_LeftSample,	&Channel[0],
 		    SDTA_RightSample,	&Channel[1],
 		    SDTA_SamplesPerSec,	&samplesPerSec,
@@ -76,8 +79,11 @@ D(bug("[wave.dt]: %s()\n", __PRETTY_FUNCTION__));
 	    TAG_END);
 
 	    if (Sample) {
+		/* one buffer: interleaved when stereo, 16-bit when the type says so */
+		bytes = (type == SDTST_M16S || type == SDTST_S16S) ? 2 : 1;
+		stride = (type == SDTST_S8S || type == SDTST_S16S) ? 2 : 1;
 		Channel[0] = Sample;
-		Channel[1] = NULL;
+		Channel[1] = stride == 2 ? Sample + bytes : NULL;
 	    }
 	    if (!Channel[0] && Channel[1]) {
 		Channel[0] = Channel[1];
@@ -96,10 +102,11 @@ D(bug("[wave.dt]: %s()\n", __PRETTY_FUNCTION__));
 		numChannels = 2;
 	else
 		numChannels = 1;
+	dataSize = totalFrames * numChannels * bytes;
 
 	encodeFrames = SND_BUFFER_SIZE / numChannels;
 	do {
-		encodeBufferSize = encodeFrames * numChannels;
+		encodeBufferSize = encodeFrames * numChannels * bytes;
 		encodeBuffer = AllocVec(encodeBufferSize, MEMF_CLEAR);
 		if (!encodeBuffer) encodeFrames >>= 1;
 	} while (!encodeBuffer && encodeFrames > 0);
@@ -108,13 +115,13 @@ D(bug("[wave.dt]: %s()\n", __PRETTY_FUNCTION__));
 		goto out;
 	}
 
-	if ((numChannels == 1) && (totalFrames & 1)) pad_byte=1;
+	if (dataSize & 1) pad_byte=1;
 
 	/* write RIFF-WAVE header */
 	{
 		LONG HDR[3];
 		HDR[0] = ID_RIFF;
-		write_le32(&HDR[1], 2*sizeof(struct RIFFChunk) + sizeof(struct WaveFormat) + totalFrames*numChannels
+		write_le32(&HDR[1], 2*sizeof(struct RIFFChunk) + sizeof(struct WaveFormat) + dataSize
 			+ pad_byte);
 		HDR[2] = ID_WAVE;
 		Status = Write(file, HDR, 12);
@@ -135,9 +142,9 @@ D(bug("[wave.dt]: %s()\n", __PRETTY_FUNCTION__));
 	fmt.formatTag = WAVE_FORMAT_PCM;
 	write_le16(&fmt.numChannels, numChannels);
 	write_le32(&fmt.samplesPerSec, samplesPerSec);
-	write_le32(&fmt.avgBytesPerSec, samplesPerSec * numChannels);
-	write_le16(&fmt.blockAlign, numChannels);
-	write_le16(&fmt.bitsPerSample, 8);
+	write_le32(&fmt.avgBytesPerSec, samplesPerSec * numChannels * bytes);
+	write_le16(&fmt.blockAlign, numChannels * bytes);
+	write_le16(&fmt.bitsPerSample, 8 * bytes);
 	Status = Write(file, &fmt, sizeof(struct WaveFormat));
 	if (Status != sizeof(struct WaveFormat)) {
 	    Error = WriteError(Status);
@@ -146,7 +153,7 @@ D(bug("[wave.dt]: %s()\n", __PRETTY_FUNCTION__));
 
 	/* Write PCM data */
 	chunk.type = ID_data;
-	write_le32(&chunk.size, totalFrames*numChannels);
+	write_le32(&chunk.size, dataSize);
 	Status = Write(file, &chunk, sizeof(struct RIFFChunk));
 	if (Status != sizeof(struct RIFFChunk)) {
 		Error = WriteError(Status);
@@ -154,22 +161,29 @@ D(bug("[wave.dt]: %s()\n", __PRETTY_FUNCTION__));
 	}
 
 	{
-	    LONG frame, frame2, chan;
-	    BYTE *Dst;
+	    LONG frame, frame2, chan, step = stride * bytes;
+	    UBYTE *Dst;
 	    for (frame=totalFrames;frame>0;frame-=encodeFrames) {
-		Dst = encodeBuffer;
+		Dst = (UBYTE *)encodeBuffer;
 
 		if (frame < encodeFrames)
 		    encodeFrames = frame;
 
 		for (frame2=0;frame2<encodeFrames;frame2++) {
 		    for (chan=0;chan<numChannels;chan++) {
-			*Dst++ = (*Channel[chan]++) + 128; // convert signed -> unsigned (8-bit)
+			if (bytes == 2) {
+			    UWORD v = (UWORD)*(WORD *)Channel[chan];
+			    *Dst++ = v & 0xff;          // little endian, signed (16-bit)
+			    *Dst++ = v >> 8;
+			} else {
+			    *Dst++ = (*Channel[chan]) + 128; // convert signed -> unsigned (8-bit)
+			}
+			Channel[chan] += step;
 		    }
 		}
 
-		Status = Write(file, encodeBuffer, encodeFrames * numChannels);
-		if (Status != (encodeFrames * numChannels)) {
+		Status = Write(file, encodeBuffer, encodeFrames * numChannels * bytes);
+		if (Status != (encodeFrames * numChannels * bytes)) {
 		    Error = WriteError(Status);
 		    goto out;
 		}
@@ -198,7 +212,7 @@ out:
 }
 
 static LONG ConvertWAVE (BPTR file, BYTE **ChannelsPtr,
-	struct VoiceHeader *vhdr)
+	struct VoiceHeader *vhdr, LONG *sampleBytes)
 {
     BOOL Done = FALSE;
     LONG Error = OK, Status;
@@ -350,7 +364,8 @@ D(bug("[wave.dt] %s: DATA Chunk Type\n", __PRETTY_FUNCTION__));
 						    totalFrames = totalFramesMax;
 					    }
 				    }
-				    sampleBufferSize = totalFrames;
+				    *sampleBytes = dec_data.sampleBytes == 2 ? 2 : 1;
+				    sampleBufferSize = totalFrames * *sampleBytes;
 
 				    // allocate buffers
 
@@ -364,6 +379,8 @@ D(bug("[wave.dt] %s: DATA Chunk Type\n", __PRETTY_FUNCTION__));
 						    }
 					    }
 				    }
+				    if (Error != OK)
+					    break;
 				    numBlocks = (SND_BUFFER_SIZE + (fmt->blockAlign >> 1)) / fmt->blockAlign;
 				    if (!numBlocks) numBlocks++;
 				    do {
@@ -503,26 +520,52 @@ D(bug("[wave.dt]: %s()\n", __PRETTY_FUNCTION__));
 	if (vhdr && file && SourceType == DTST_FILE)
 	{
 	    BYTE *Channel[MAX_CHANNELS] = {0};
+	    LONG bytes = 1;
 	    /* Convert the audio file */
-	    Error = ConvertWAVE(file, Channel, vhdr);
+	    Error = ConvertWAVE(file, Channel, vhdr, &bytes);
 	    if (Error == OK)
 	    {
 		BYTE *Sample = NULL;
+		ULONG type, frames = vhdr->vh_OneShotHiSamples;
 
-		if (!Channel[0] || !Channel[1]) {
-		    if (Channel[0])
-			Sample = Channel[0];
-		    else
-			Sample = Channel[1];
+		/* one buffer, interleaved for stereo, typed: the form sound.datatype plays */
+		if (Channel[0] && Channel[1]) {
+		    Sample = AllocVec(2 * frames * bytes, MEMF_ANY);
+		    if (Sample) {
+			ULONG f;
+
+			if (bytes == 2) {
+			    const WORD *l = (const WORD *)Channel[0], *r = (const WORD *)Channel[1];
+			    WORD *d = (WORD *)Sample;
+
+			    for (f = 0; f < frames; f++) {
+				*d++ = l[f];
+				*d++ = r[f];
+			    }
+			} else {
+			    for (f = 0; f < frames; f++) {
+				Sample[2 * f] = Channel[0][f];
+				Sample[2 * f + 1] = Channel[1][f];
+			    }
+			}
+		    } else {
+			Error = ERROR_NO_FREE_STORE;
+		    }
+		    FreeVec(Channel[0]);
+		    FreeVec(Channel[1]);
+		    type = bytes == 2 ? SDTST_S16S : SDTST_S8S;
+		} else {
+		    Sample = Channel[0] ? Channel[0] : Channel[1];
+		    type = bytes == 2 ? SDTST_M16S : SDTST_M8S;
 		}
 
 		/* Fill in the remaining information */
+		if (Error == OK)
 		SetDTAttrs(self, NULL, NULL,
 			DTA_ObjName, FilePart(FileName),
 			SDTA_Sample, Sample,
-			SDTA_LeftSample, Channel[0],
-			SDTA_RightSample, Channel[1],
-			SDTA_SampleLength, vhdr->vh_OneShotHiSamples,
+			SDTA_SampleType, type,
+			SDTA_SampleLength, frames,
 			SDTA_SamplesPerSec, vhdr->vh_SamplesPerSec,
 			SDTA_Volume,	 64,
 			SDTA_Cycles, 1,

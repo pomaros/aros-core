@@ -31,37 +31,8 @@
 
 /*** Instance Data **********************************************************/
 
-struct AppearanceEditor_DATA
-{
-    APTR *ae_readBuff;
-
-    Object *ae_ThemePreview;
-    Object *ae_ThemeEnable;
-    Object *ae_ThemeChoice;
-    Object *ae_ThemePalette;
-    Object *ae_OptionPalette;
-    Object *ae_ThemeFont;
-    Object *ae_OptionFont;
-    Object *ae_ThemePointer;
-    Object *ae_OptionPointer;
-    Object *ae_ThemeZune;
-    Object *ae_OptionZune;
-    Object *ae_ThemeWand;
-    Object *ae_OptionWand;
-
-    Object *ae_ThemeDescGrp;
-    Object *ae_ThemeDescA;
-    Object *ae_ThemeDescB;
-    
-    Object *ae_CompEnable;
-    Object *ae_CompBelow;
-    Object *ae_CompLeft;
-    Object *ae_CompRight;
-    Object *ae_CompAlpha;
-
-    IPTR   *ae_ThemeArray;
-    struct Hook ae_PreviewHook;
-};
+#define APPEARANCEEDITOR_DATA_H_IN_SOURCE
+#include "appearanceeditor_data.h"
 
 static    STRPTR THEMES_DEFAULT;
 static    STRPTR THEMES_AMIGAOS = "AmigaOS3.x";
@@ -451,6 +422,20 @@ Object *AppearanceEditor__OM_NEW(Class *CLASS, Object *self, struct opSet *messa
     {
         SETUP_INST_DATA;
 
+        /* Stable ids for the settings window's index and port. */
+        SET(_ThemeEnable, MUIA_ObjectID, MAKE_ID('A','P','T','E'));
+        SET(_ThemeSelectionObj, MUIA_ObjectID, MAKE_ID('A','P','T','S'));
+        SET(_ThemeZunePrefsObj, MUIA_ObjectID, MAKE_ID('A','P','T','Z'));
+        SET(_ThemeWandPrefsObj, MUIA_ObjectID, MAKE_ID('A','P','T','W'));
+        SET(_ThemePalettePrefsObj, MUIA_ObjectID, MAKE_ID('A','P','T','P'));
+        SET(_ThemeFontPrefsObj, MUIA_ObjectID, MAKE_ID('A','P','T','F'));
+        SET(_ThemePointerPrefsObj, MUIA_ObjectID, MAKE_ID('A','P','T','O'));
+        SET(_CompEnable, MUIA_ObjectID, MAKE_ID('A','P','C','E'));
+        SET(_CompBelow, MUIA_ObjectID, MAKE_ID('A','P','C','B'));
+        SET(_CompLeft, MUIA_ObjectID, MAKE_ID('A','P','C','L'));
+        SET(_CompRight, MUIA_ObjectID, MAKE_ID('A','P','C','R'));
+        SET(_CompAlpha, MUIA_ObjectID, MAKE_ID('A','P','C','A'));
+
         data->ae_ThemePreview = _ThemePreviewObj;
         data->ae_ThemeEnable = _ThemeEnable;
         data->ae_ThemeChoice = _ThemeSelectionObj;
@@ -506,6 +491,24 @@ Object *AppearanceEditor__OM_NEW(Class *CLASS, Object *self, struct opSet *messa
             (IPTR) self, 3, MUIM_CallHook, (IPTR)&data->ae_PreviewHook, (IPTR)NULL
         );
 #endif
+
+        DoMethod
+        (
+            data->ae_OptionPalette, MUIM_Notify, MUIA_Selected, MUIV_EveryTime,
+            (IPTR) self, 3, MUIM_CallHook, (IPTR)&data->ae_PreviewHook, (IPTR)NULL
+        );
+
+        DoMethod
+        (
+            data->ae_OptionFont, MUIM_Notify, MUIA_Selected, MUIV_EveryTime,
+            (IPTR) self, 3, MUIM_CallHook, (IPTR)&data->ae_PreviewHook, (IPTR)NULL
+        );
+
+        DoMethod
+        (
+            data->ae_OptionPointer, MUIM_Notify, MUIA_Selected, MUIV_EveryTime,
+            (IPTR) self, 3, MUIM_CallHook, (IPTR)&data->ae_PreviewHook, (IPTR)NULL
+        );
 
         DoMethod
         (
@@ -1147,6 +1150,7 @@ IPTR AppearanceEditor__MUIM_PrefsEditor_SetDefaults
 }
 
 /*** Setup ******************************************************************/
+#ifndef APPEARANCEEDITOR_MCC
 ZUNE_CUSTOMCLASS_7
 (
     AppearanceEditor, NULL, MUIC_PrefsEditor, NULL,
@@ -1158,4 +1162,5 @@ ZUNE_CUSTOMCLASS_7
     MUIM_PrefsEditor_ExportFH,    struct MUIP_PrefsEditor_ExportFH *,
     MUIM_PrefsEditor_SetDefaults, Msg
 );
+#endif /* APPEARANCEEDITOR_MCC */
 

@@ -101,6 +101,7 @@ Object *Region__OM_NEW(struct IClass *cl, Object *obj, struct opSet *msg)
     }
 
     data->child = obj;
+    set(obj, MUIA_ObjectID, MAKE_ID('L','O','R','G'));
 
     ForeachNode(&region_list, entry)
     {

@@ -1,5 +1,6 @@
 /*
     Copyright (C) 2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
 
     fd.library integration for bsdsocket.library.
 
@@ -27,6 +28,7 @@
 #include <sys/errno.h>
 #include <sys/uio.h>
 #include <sys/ioctl.h>
+#include <limits.h>
 
 #include <aros/libcall.h>
 #include <exec/types.h>
@@ -56,8 +58,8 @@ struct Library *FDBase = NULL;
 
 /*
  * Return the SocketBase to use as the sleep/lock context for a blocking
- * operation on behalf of the calling task. fdh_task_done() closes it again
- * when it was opened just for this call.
+ * operation on behalf of the calling task. Each call holds a library
+ * reference until its socket operation and cleanup have completed.
  *
  * A blocking socket operation sleeps (tsleep) on the base passed as its
  * process context, and the matching wakeup() signals that base's owner task.
@@ -68,25 +70,16 @@ struct Library *FDBase = NULL;
  * worker thread reading an inherited socket descriptor reaches us through
  * fd.library without ever opening bsdsocket.library.  Sleeping such a task on
  * the socket owner's base (so->so_pgid) would let two tasks share one base's
- * sleep state and corrupt the sleep queue.  Give the task a base of its own
- * for the call. It is not kept: nothing would close it when the thread ends,
- * and a later task at the same address would inherit it.
+ * sleep state and corrupt the sleep queue.  Give the task its own base
+ * instead. Acquire a library reference for each operation, even when the
+ * task already owns a base. Close that reference after the operation; an
+ * implicit worker context must not outlive a task that never opened it.
+ * If allocation fails, the operation must fail too: borrowing the socket
+ * owner's base would reintroduce the shared sleeper and misdirect wakeups.
  */
-static struct SocketBase *fdh_task_base(BOOL *temp)
+static struct SocketBase *fdh_task_base(void)
 {
-    struct SocketBase *p = FindSocketBase(FindTask(NULL));
-
-    *temp = FALSE;
-    if (p == NULL && (p = api_hookbase_open()) != NULL)
-        *temp = TRUE;
-
-    return p;
-}
-
-static void fdh_task_done(struct SocketBase *p, BOOL temp)
-{
-    if (temp)
-        api_hookbase_close(p);
+    return (struct SocketBase *)OpenLibrary("bsdsocket.library", 0);
 }
 
 /* fd still leads to so; the caller holds syscall_semaphore */
@@ -126,11 +119,13 @@ static SIPTR fdh_sock_read(APTR data, LONG fd, APTR buf, IPTR nbytes, LONG *perr
     struct iovec aiov;
     struct mbuf *from = NULL, *control = NULL;
     LONG error, flags = 0, len;
-    BOOL temp;
 
-    if (so == NULL) { *perror = EBADF; return -1; }  /* fd without a socket */
-    if (nbytes < 0) { *perror = EINVAL; return -1; }
-    if ((p = fdh_task_base(&temp)) == NULL) { *perror = ENOMEM; return -1; }
+    /* IPTR is unsigned; uio_resid and the stack's transfer counts are int.
+       Reject before narrowing or creating a caller context. */
+    if (so == NULL) { *perror = EBADF; return -1; }
+    if (nbytes > INT_MAX) { *perror = EINVAL; return -1; }
+    p = fdh_task_base();
+    if (p == NULL) { *perror = ENOMEM; return -1; }
 
     aiov.iov_base = buf;
     aiov.iov_len = nbytes;
@@ -153,13 +148,13 @@ static SIPTR fdh_sock_read(APTR data, LONG fd, APTR buf, IPTR nbytes, LONG *perr
     else
         error = EBADF;
     ReleaseSyscallSemaphore(p);
-    fdh_task_done(p, temp);
 
     if (from)
         m_freem(from);
     if (control)
         m_freem(control);
 
+    CloseLibrary((struct Library *)p);
     if (error) { *perror = error; return -1; }
     return (SIPTR)(len - auio.uio_resid);
 }
@@ -171,11 +166,12 @@ static SIPTR fdh_sock_write(APTR data, LONG fd, CONST_APTR buf, IPTR nbytes, LON
     struct uio auio;
     struct iovec aiov;
     LONG error, len;
-    BOOL temp;
 
-    if (so == NULL) { *perror = EBADF; return -1; }  /* fd without a socket */
-    if (nbytes < 0) { *perror = EINVAL; return -1; }
-    if ((p = fdh_task_base(&temp)) == NULL) { *perror = ENOMEM; return -1; }
+    /* Match the receive-side bound before narrowing to the stack's count. */
+    if (so == NULL) { *perror = EBADF; return -1; }
+    if (nbytes > INT_MAX) { *perror = EINVAL; return -1; }
+    p = fdh_task_base();
+    if (p == NULL) { *perror = ENOMEM; return -1; }
 
     aiov.iov_base = (caddr_t)buf;
     aiov.iov_len = nbytes;
@@ -198,8 +194,8 @@ static SIPTR fdh_sock_write(APTR data, LONG fd, CONST_APTR buf, IPTR nbytes, LON
     else
         error = EBADF;
     ReleaseSyscallSemaphore(p);
-    fdh_task_done(p, temp);
 
+    CloseLibrary((struct Library *)p);
     if (error) { *perror = error; return -1; }
     return (SIPTR)(len - auio.uio_resid);
 }
@@ -275,7 +271,8 @@ static LONG fdh_sock_ioctl(APTR data, LONG fd, IPTR request, APTR arg, LONG *per
     ObtainSemaphore(&syscall_semaphore);
     if (!fdh_valid(fd, so))
         error = EBADF;
-    else switch (request)
+    /* ioctl's signed int and fcntl's unsigned macro denote the same request. */
+    else switch ((ULONG)request)
     {
     case FIONBIO:
         if (arg == NULL)
@@ -329,18 +326,32 @@ BOOL fdhooks_setup(void)
     if (FDBase == NULL)
         return FALSE;
 
-    FD_SetOwnerHooks(FD_OWNER_BSDSOCKET, &bsdsocket_fd_hooks);
+    if (FD_SetOwnerHooks(FD_OWNER_BSDSOCKET, &bsdsocket_fd_hooks) != 0) {
+        CloseLibrary(FDBase);
+        FDBase = NULL;
+        return FALSE;
+    }
     return TRUE;
 }
 
-void fdhooks_cleanup(void)
+/* Nonblocking admission barrier. EBUSY keeps the old table and library
+   reference intact, including while a retirement callback is running. */
+BOOL fdhooks_withdraw(void)
 {
+    return FDBase == NULL ||
+        FD_SetOwnerHooks(FD_OWNER_BSDSOCKET, NULL) == 0;
+}
+
+BOOL fdhooks_cleanup(void)
+{
+    if (!fdhooks_withdraw())
+        return FALSE;
     if (FDBase != NULL)
     {
-        FD_SetOwnerHooks(FD_OWNER_BSDSOCKET, NULL);
         CloseLibrary(FDBase);
         FDBase = NULL;
     }
+    return TRUE;
 }
 
 #endif /* ENABLE_FDLIBRARY */

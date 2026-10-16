@@ -37,6 +37,7 @@ struct KernelInterface
     void *  (*mmap)(void *addr, size_t length, int prot, int flags, int fd, off_t offset);
     int     (*munmap)(void *addr, size_t length);
     int    *(*__error)(void);
+    void    (*_exit)(int status);
 #ifdef HOST_OS_darwin
     void    (*sys_icache_invalidate)(void *start, size_t len);
 #endif
@@ -49,10 +50,11 @@ struct KernelInterface
     int     (*SigDelSet)(sigset_t *set, int signum);
 #endif
 #ifdef HOST_OS_darwin
-    /* Used by core_IRQ to tell whether a process-directed SIGALRM was
-     * delivered to AROS's own host thread, and to forward it there
-     * (thread-directed) if not. Both are async-signal-safe. */
+    /* Used by core_IRQ to tell whether a process-directed SIGALRM was delivered
+     * to AROS's own host thread or to a foreign (libdispatch/Metal) worker. */
     void *  (*pthread_self)(void);
+    /* Used by core_IRQ to FORWARD a mis-delivered tick to AROS's thread
+     * (thread-directed signal). Async-signal-safe per POSIX. */
     int     (*pthread_kill)(void *thread, int sig);
 #endif
 };

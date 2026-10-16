@@ -468,6 +468,8 @@ struct MUIP_CreateFrameClippingRegion
 #define MUIA_NestedDisabled \
     (MUIB_Area | 0x00000000)        /* Zune 20030530  isg BOOL        */
 
+#define MUIA_Area_SearchMark (MUIB_Area | 0x00000009) /* isg BOOL */
+
 #ifdef MUI_OBSOLETE
 #define MUIA_ExportID (MUIB_MUI | 0x0042d76e)     /* V4  isg ULONG */
 #endif /* MUI_OBSOLETE */
@@ -582,6 +584,8 @@ struct MUI_AreaData
 
 #define MADF_INVIRTUALGROUP        (1<<29) /* PRIV UNDOC: The object is inside a virtual group */
 #define MADF_ISVIRTUALGROUP        (1<<30) /* PRIV UNDOC: The object is a virtual group */
+
+#define MADF2_SEARCHMARK (1UL << 0) /* PRIV */
 
 #define MADF_DRAWFLAGS (MADF_DRAWOBJECT | MADF_DRAWUPDATE | MADF_DRAW_XXX \
     | MADF_DRAWFRAME | MADF_DRAW_XXX_2 | MADF_DRAWALL)

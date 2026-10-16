@@ -35,10 +35,8 @@
 #include "smattributes.h"
 
 
-struct SMEditor_DATA
-{
-    Object *selector, *properties, *attributes;
-};
+#define SMEDITOR_DATA_H_IN_SOURCE
+#include "smeditor_data.h"
 
 #define SMEditorObject BOOPSIOBJMACRO_START(SMEditor_CLASS->mcc_Class)
 #define SETUP_INST_DATA struct SMEditor_DATA *data = INST_DATA(CLASS, self)
@@ -492,6 +490,7 @@ static IPTR SMEditor__MUIM_PrefsEditor_SetDefaults
     return success;
 }
 
+#ifndef SCREENMODEEDITOR_MCC
 ZUNE_CUSTOMCLASS_6
 (
     SMEditor, NULL, MUIC_PrefsEditor, NULL,
@@ -502,3 +501,4 @@ ZUNE_CUSTOMCLASS_6
     MUIM_PrefsEditor_Test, struct MUIP_PrefsEditor_ExportFH *,
     MUIM_PrefsEditor_SetDefaults,     Msg
 );
+#endif /* SCREENMODEEDITOR_MCC */

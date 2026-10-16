@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2025, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
 
     Desc: Sets up the ExecBase a bit. (Mostly clearing).
 */
@@ -260,6 +261,9 @@ struct ExecBase *PrepareExecBase(struct MemHeader *mh, struct TagItem *msg)
     SysBase->PortList.lh_Type = NT_MSGPORT;
 
 #if defined(__AROSEXEC_SMP__)
+    EXEC_SPINLOCK_INIT(&PrivExecBase(SysBase)->TaskRegistrySpinLock);
+    NEWLIST(&PrivExecBase(SysBase)->TaskRegistry);
+
     EXEC_SPINLOCK_INIT(&PrivExecBase(SysBase)->TaskRunningSpinLock);
     NEWLIST(&PrivExecBase(SysBase)->TaskRunning);
     PrivExecBase(SysBase)->TaskRunning.lh_Type = NT_TASK;
@@ -342,6 +346,15 @@ struct ExecBase *PrepareExecBase(struct MemHeader *mh, struct TagItem *msg)
         opts = strcasestr(args, "stacksnoop");
         if (opts)
             PrivExecBase(SysBase)->IntFlags = EXECF_StackSnoop;
+
+        /*
+         * Opt-in crash containment: a CPU trap in a user task becomes a
+         * recoverable guru + RemTask of the offender instead of a dead-end
+         * alert. Default (flag absent) keeps the classic dead-end behavior.
+         */
+        opts = strcasestr(args, "containment");
+        if (opts)
+            PrivExecBase(SysBase)->IntFlags |= EXECF_Containment;
 
         /*
          * Parse system runtime debug flags.

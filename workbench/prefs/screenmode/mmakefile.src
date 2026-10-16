@@ -6,7 +6,7 @@ FILES       := args locale main misc prefs smeditor smproperties smselector smat
 EXEDIR      := $(AROS_PREFS)
 
 #MM- workbench-prefs : workbench-prefs-screenmode
-#MM workbench-prefs-screenmode : includes linklibs \
+#MM workbench-prefs-screenmode : includes linklibs classes-zune-nfloattext-class \
 #MM workbench-prefs-screenmode-catalogs workbench-prefs-screenmode-copyimages
 
 %build_prog mmake=workbench-prefs-screenmode \
@@ -27,5 +27,15 @@ $(AROS_IMAGES)/display-portrait : $(SRCDIR)/$(CURDIR)/display-portrait.png
 
 #MM
 workbench-prefs-screenmode-copyimages : $(AROS_IMAGES)/display-landscape $(AROS_IMAGES)/display-portrait
+
+# The same editor as a shared class for the settings window.
+CLASSFILES := args locale misc prefs smproperties smselector smattributes screenmodeeditor_init smeditor_mcc
+
+#MM- workbench-prefs : workbench-prefs-screenmode-class
+#MM workbench-prefs-screenmode-class : includes linklibs workbench-prefs-screenmode-catalogs workbench-prefs-screenmode-copyimages workbench-classes-zune-prefseditor classes-zune-nfloattext-class
+
+%build_module mmake=workbench-prefs-screenmode-class \
+    modname=ScreenModeEditor modtype=mcc \
+    conffile=screenmodeeditor.conf files="$(CLASSFILES)"
 
 %common

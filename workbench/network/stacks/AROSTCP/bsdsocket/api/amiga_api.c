@@ -3,6 +3,7 @@
  *                    Helsinki University of Technology, Finland.
  *                    All rights reserved.
  * Copyright (C) 2005-2026 The AROS Dev Team
+ * Copyright (C) 2026 John KNIPPER <code@jkn.me>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -232,10 +233,18 @@ AROS_LH1(struct Library *, Open,
      * One task may open socket library more than once. In that case caller
      * receives the base it has opened already.
      */
+    ObtainSemaphore(&baselist_semaphore);
     if((newBase = FindSocketBase(FindTask(NULL))) != NULL) {
+        /* A same-task callback must not resurrect a base being closed. */
+        if(newBase->libNode.lib_OpenCnt == 0) {
+            ReleaseSemaphore(&baselist_semaphore);
+            return NULL;
+        }
         newBase->libNode.lib_OpenCnt++;
+        ReleaseSemaphore(&baselist_semaphore);
         return (struct Library *)newBase;
     }
+    ReleaseSemaphore(&baselist_semaphore);
     /*
      * Create new library base.
      * All fields in the base will first be initialized to zero and then
@@ -270,6 +279,15 @@ AROS_LH1(struct Library *, Open,
     if(newBase == NULL)
         return NULL;
 
+    /* Reserve the master's reference while the private base initializes.
+     * An incomplete base must never be visible to list readers. */
+    newBase->libNode.lib_Node.ln_Succ = NULL;
+    newBase->libNode.lib_Node.ln_Pred = NULL;
+    ObtainSemaphore(&baselist_semaphore);
+    libPtr->lib_OpenCnt++;
+    libPtr->lib_Flags &= ~LIBF_DELEXP;
+    ReleaseSemaphore(&baselist_semaphore);
+
     /*
      * Initialize new library base
      */
@@ -282,16 +300,6 @@ AROS_LH1(struct Library *, Open,
     newBase->errnoSize = sizeof newBase->defErrno;
     newBase->thisTask = FindTask(NULL);
     newBase->sigIntrMask = SIGBREAKF_CTRL_C;
-
-    /*
-     * add this newly allocated library base to our list of opened
-     * socket libraries, and modify some MASTER library base fields
-     */
-    ObtainSemaphore(&baselist_semaphore);
-    AddTail(&socketBaseList, (struct Node *)newBase);
-    libPtr->lib_OpenCnt++;		/* mark us as having another opener */
-    libPtr->lib_Flags &= ~LIBF_DELEXP;	/* prevent delayed expunges */
-    ReleaseSemaphore(&baselist_semaphore);
 
     /* initialize syslog variables */
 #if 0 /* initialization to zero is implicit */
@@ -318,8 +326,12 @@ AROS_LH1(struct Library *, Open,
                 AllocMem(newBase->dTableSize * sizeof(struct socket *) +
                          ((newBase->dTableSize - 1) / NFDBITS + 1) * sizeof(fd_mask),
                          MEMF_CLEAR | MEMF_PUBLIC)) != NULL &&
-            openSleepTimer(newBase))
+            openSleepTimer(newBase)) {
+        ObtainSemaphore(&baselist_semaphore);
+        AddTail(&socketBaseList, (struct Node *)newBase);
+        ReleaseSemaphore(&baselist_semaphore);
         return (struct Library *)newBase;
+    }
     /*
      * There was some error if we reached here. Call Close to clean up.
      */
@@ -340,6 +352,7 @@ ULONG *__ELL_Expunge(struct Library *libPtr)
      * Since every user gets her own library base, Major library base
      * can be removed immediately after
      */
+    ObtainSemaphore(&baselist_semaphore);
     if(libPtr->lib_OpenCnt == 0 && AROSTCP_FLAG_CANEXPUNGE) {
         VOID *freestart;
         ULONG  size;
@@ -355,6 +368,7 @@ ULONG *__ELL_Expunge(struct Library *libPtr)
         size = libPtr->lib_NegSize + libPtr->lib_PosSize;
         FreeMem(freestart, size);
 
+        ReleaseSemaphore(&baselist_semaphore);
         return NULL; /* no AmigaDos seglist there (for system use) */
     }
     /*
@@ -362,6 +376,7 @@ ULONG *__ELL_Expunge(struct Library *libPtr)
      */
     libPtr->lib_Flags |= LIBF_DELEXP;	/* set delayed expunge flag */
     SB_Expunged = FALSE;
+    ReleaseSemaphore(&baselist_semaphore);
     return NULL;
 }
 
@@ -438,13 +453,16 @@ ULONG *__UL_Close(struct SocketBase *libPtr)
     VOID *freestart;
     ULONG  size;
     int	 i;
-    BOOL expunge;
 
     /*
      * one task may have SocketLibrary opened more than once.
      */
-    if(--libPtr->libNode.lib_OpenCnt > 0)
+    ObtainSemaphore(&baselist_semaphore);
+    if(--libPtr->libNode.lib_OpenCnt > 0) {
+        ReleaseSemaphore(&baselist_semaphore);
         return NULL;
+    }
+    ReleaseSemaphore(&baselist_semaphore);
 #ifdef DEBUG
 #if defined(__AROS__)
     D(bug("[AROSTCP](amiga_api.c) __UL_Close: Closing proc 0x%lx base 0x%lx\n", libPtr->thisTask, libPtr));
@@ -486,8 +504,12 @@ ULONG *__UL_Close(struct SocketBase *libPtr)
     ReleaseSyscallSemaphore(libPtr);
 
     ObtainSemaphore(&baselist_semaphore);
-    Remove((struct Node *)libPtr); /* remove this librarybase from our list
-				    of opened library bases */
+    /* Failed initialization calls this cleanup without publishing a node. */
+    if(libPtr->libNode.lib_Node.ln_Succ != NULL) {
+        Remove((struct Node *)libPtr);
+        libPtr->libNode.lib_Node.ln_Succ = NULL;
+        libPtr->libNode.lib_Node.ln_Pred = NULL;
+    }
     ReleaseSemaphore(&baselist_semaphore);
 
     closeSleepTimer(libPtr);
@@ -515,11 +537,11 @@ ULONG *__UL_Close(struct SocketBase *libPtr)
      * If no more libraries are open and delayed expunge is asked,
      * ELL_expunge() is called.
      */
-    expunge = MasterSocketBase->lib_OpenCnt == 0 &&
-            (MasterSocketBase->lib_Flags & LIBF_DELEXP);
+    if(MasterSocketBase->lib_OpenCnt == 0 &&
+            (MasterSocketBase->lib_Flags & LIBF_DELEXP)) {
+        __ELL_Expunge(MasterSocketBase);
+    }
     ReleaseSemaphore(&baselist_semaphore);
-    if(expunge)
-        return __ELL_Expunge(MasterSocketBase);
 
     return NULL; /* always return null */
 }
@@ -596,8 +618,21 @@ VOID api_hookbase_close(struct SocketBase *p)
 
 #if defined(ENABLE_FDLIBRARY)
 extern BOOL fdhooks_setup(void);        /* amiga_fdhooks.c */
-extern void fdhooks_cleanup(void);
+extern BOOL fdhooks_withdraw(void);
+extern BOOL fdhooks_cleanup(void);
 #endif
+
+/* Stop fd admission before any network resource is destroyed. The normal
+   stop request is rejected while admitted operations remain; error cleanup
+   keeps resources alive until the same barrier succeeds. */
+BOOL api_quiesce_fd(void)
+{
+#if defined(ENABLE_FDLIBRARY)
+    return fdhooks_withdraw();
+#else
+    return TRUE;
+#endif
+}
 
 BOOL api_init()
 {
@@ -842,7 +877,7 @@ VOID api_sendbreaktotasks()
     D(bug("[AROSTCP](amiga_api.c) api_sendbreaktotask()\n"));
 #endif
 
-    ObtainSemaphoreShared(&baselist_semaphore);
+    ObtainSemaphore(&baselist_semaphore);
     for(libNode = socketBaseList.lh_Head; libNode->ln_Succ;
             libNode = libNode->ln_Succ)
         if(((struct SocketBase *)libNode)->thisTask != Nettrace_Task)
@@ -883,7 +918,7 @@ VOID api_sendreconfig(BOOL begin)
         api_reconfig_state = NETRC_ONLINE;
     }
 
-    Forbid();
+    ObtainSemaphoreShared(&baselist_semaphore);
     for(libNode = socketBaseList.lh_Head; libNode->ln_Succ;
             libNode = libNode->ln_Succ) {
         struct SocketBase *sb = (struct SocketBase *)libNode;
@@ -892,7 +927,7 @@ VOID api_sendreconfig(BOOL begin)
             count++;
         }
     }
-    Permit();
+    ReleaseSemaphore(&baselist_semaphore);
 
     if(begin)
         api_reconfig_expected = count;  /* how many acks to wait for (net_reload) */
@@ -912,14 +947,14 @@ VOID api_sendaddrchange(VOID)
     if(api_state != API_SHOWN)
         return;         /* no external consumers before the API is visible */
 
-    Forbid();
+    ObtainSemaphoreShared(&baselist_semaphore);
     for(libNode = socketBaseList.lh_Head; libNode->ln_Succ;
             libNode = libNode->ln_Succ) {
         struct SocketBase *sb = (struct SocketBase *)libNode;
         if(sb->thisTask != Nettrace_Task && sb->sigAddrChangeMask)
             Signal(sb->thisTask, sb->sigAddrChangeMask);
     }
-    Permit();
+    ReleaseSemaphore(&baselist_semaphore);
 }
 
 /*
@@ -935,7 +970,7 @@ VOID api_logopeners(VOID)
     struct { struct Task *task; char name[48]; } held[8];
     int n = 0, i;
 
-    Forbid();
+    ObtainSemaphoreShared(&baselist_semaphore);
     for(libNode = socketBaseList.lh_Head; libNode->ln_Succ && n < 8;
             libNode = libNode->ln_Succ)
     {
@@ -954,7 +989,7 @@ VOID api_logopeners(VOID)
         held[n].name[j] = '\0';
         n++;
     }
-    Permit();
+    ReleaseSemaphore(&baselist_semaphore);
 
     for(i = 0; i < n; i++)
         __log(LOG_ERR, "bsdsocket.library still held by task '%s' (0x%p)",
@@ -982,7 +1017,9 @@ VOID api_deinit()
         return;
 
 #if defined(ENABLE_FDLIBRARY)
-    fdhooks_cleanup();
+    /* Also honor the barrier if called independently of deinit_all(). */
+    while (!fdhooks_cleanup())
+        Delay(1);
 #endif
 
     Forbid();

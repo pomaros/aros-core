@@ -4,7 +4,7 @@ include $(SRCDIR)/config/aros.cfg
 
 USER_LDFLAGS := -static
 
-FILES         := prefseditor support
+FILES         := prefseditor support search
 INCLUDE_FILES := prefseditor.h
 
 #MM- workbench-classes-zune : workbench-classes-zune-prefseditor

@@ -8,6 +8,8 @@
 # TARGET CONFIG SECTION
 # -------------------------------------------------------------------------- 
 
+export AROS_VM_GUEST           := @AROS_VM_GUEST@
+
 FAMILY                        := @aros_target_family@
 FLAVOUR                       := @aros_flavour@
 SHARED_MOD                    := @aros_shared_default@

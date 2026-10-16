@@ -636,9 +636,52 @@ void zune_text_get_bounds(ZText * text, Object * obj)
 
 // problem is cheight being seldom 0
 
-void zune_text_draw(ZText * text, Object * obj, WORD left, WORD right,
-    WORD top)
+/* Flatten the parsed stream, using exactly the coordinates Highlight draws.
+ * Images consume no character; newlines consume one. Caller owns the result. */
+STRPTR zune_text_plain(ZText *text)
 {
+    ZTextLine *line;
+    ZTextChunk *chunk;
+    ULONG length = 0;
+    STRPTR result, out;
+    for (line = (ZTextLine *)text->lines.mlh_Head; line->node.mln_Succ;
+        line = (ZTextLine *)line->node.mln_Succ)
+    {
+        for (chunk = (ZTextChunk *)line->chunklist.mlh_Head; chunk->node.mln_Succ;
+            chunk = (ZTextChunk *)chunk->node.mln_Succ)
+            if (chunk->str && !chunk->image && !chunk->obj && !chunk->alpha_data)
+                length += strlen(chunk->str);
+        length++;
+    }
+    result = AllocVec(length + 1, MEMF_ANY);
+    if (!result) return NULL;
+    out = result;
+    for (line = (ZTextLine *)text->lines.mlh_Head; line->node.mln_Succ;
+        line = (ZTextLine *)line->node.mln_Succ)
+    {
+        for (chunk = (ZTextChunk *)line->chunklist.mlh_Head; chunk->node.mln_Succ;
+            chunk = (ZTextChunk *)chunk->node.mln_Succ)
+            if (chunk->str && !chunk->image && !chunk->obj && !chunk->alpha_data)
+            {
+                ULONG n = strlen(chunk->str);
+                CopyMem(chunk->str, out, n);
+                out += n;
+            }
+        if (line->node.mln_Succ->mln_Succ) *out++ = '\n';
+    }
+    *out = 0;
+    return result;
+}
+
+void zune_text_draw(ZText *text, Object *obj, WORD left, WORD right, WORD top)
+{
+    zune_text_draw_highlight(text, obj, left, right, top, NULL);
+}
+
+void zune_text_draw_highlight(ZText * text, Object * obj, WORD left, WORD right,
+    WORD top, const struct MUI_TextHighlight *highlight)
+{
+    ULONG offset = 0;
     struct RastPort *rp;
     ULONG pensave;
     ULONG style = FS_NORMAL;
@@ -723,6 +766,36 @@ void zune_text_draw(ZText * text, Object * obj, WORD left, WORD right,
                     SetSoftStyle(rp, chunk_node->style, 0xff);
                     style = chunk_node->style;
                 }
+                if (highlight)
+                {
+                    ULONG i, length = strlen(chunk_node->str);
+                    ULONG oldpen = GetAPen(rp);
+                    for (i = 0; i < highlight->count; i++)
+                    {
+                        const struct MUI_TextHighlightRange *r = &highlight->ranges[i];
+                        ULONG begin, end;
+                        /* Subtraction avoids wraparound for untrusted ranges. */
+                        if (r->start >= offset + length ||
+                            (r->start < offset && r->length <= offset - r->start))
+                            continue;
+                        begin = r->start > offset ? r->start - offset : 0;
+                        end = r->start < offset ? r->length - (offset - r->start) :
+                            (r->length > length - begin ? length : begin + r->length);
+                        if (end > length) end = length;
+                        if (end > begin)
+                        {
+                            LONG x1 = x + TextLength(rp, chunk_node->str, begin);
+                            LONG x2 = x + TextLength(rp, chunk_node->str, end) - 1;
+                            if (x1 < left) x1 = left;
+                            if (x2 > right) x2 = right;
+                            SetAPen(rp, _pens(obj)[MPEN_FILL]);
+                            if (x1 <= x2)
+                                RectFill(rp, x1, top, x2, top + line_node->lheight - 1);
+                        }
+                    }
+                    SetAPen(rp, oldpen);
+                    offset += length;
+                }
                 if (chunk_node->cheight == 0)
                     Move(rp, x, _font(obj)->tf_Baseline + top);
                 else
@@ -755,9 +828,35 @@ void zune_text_draw(ZText * text, Object * obj, WORD left, WORD right,
                     SetDrMd(rp, JAM1);
                 }
                 Text(rp, chunk_node->str, strlen(chunk_node->str));
+                if (highlight)
+                {
+                    ULONG i, length = strlen(chunk_node->str), start = offset - length;
+                    ULONG oldpen = GetAPen(rp);
+                    for (i = 0; i < highlight->count; i++)
+                    {
+                        const struct MUI_TextHighlightRange *r = &highlight->ranges[i];
+                        ULONG begin, end;
+                        if (r->start >= start + length ||
+                            (r->start < start && r->length <= start - r->start)) continue;
+                        begin = r->start > start ? r->start - start : 0;
+                        end = r->start < start ? r->length - (start - r->start) :
+                            (r->length > length - begin ? length : begin + r->length);
+                        if (end > length) end = length;
+                        if (end > begin)
+                        {
+                            SetAPen(rp, _dri(obj)->dri_Pens[FILLTEXTPEN]);
+                            Move(rp, x + TextLength(rp, chunk_node->str, begin),
+                                _font(obj)->tf_Baseline + top + (chunk_node->cheight ?
+                                (line_node->lheight - chunk_node->cheight) / 2 : 0));
+                            Text(rp, chunk_node->str + begin, end - begin);
+                        }
+                    }
+                    SetAPen(rp, oldpen);
+                }
             }
             x += chunk_node->cwidth;
         }
         top += line_node->lheight;
+        offset++; /* newline in displayed coordinates */
     }
 }

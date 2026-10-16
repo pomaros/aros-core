@@ -69,8 +69,6 @@ BOOL PrepareContext(struct Task *task, APTR entryPoint, APTR fallBack,
     ctx->fp = 0;
     ctx->lr = (UQUAD)(IPTR)fallBack;
 
-    ctx->Flags = 0;
-
     /* The frame Dispatch() will load. SP must be 16-byte aligned (AAPCS64). */
     ctx->sp = (UQUAD)(IPTR)task->tc_SPReg & ~(UQUAD)15;
     ctx->pc = (UQUAD)(IPTR)entryPoint;

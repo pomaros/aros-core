@@ -18,7 +18,9 @@ FILES := main \
     iconwindow_volumelist \
     iconwindowbackfill \
     wandererprefsfont \
-    appobjects
+    appobjects \
+    tile_transaction \
+    tile_drop
 
 #MM- workbench-system : workbench-system-wanderer
 #MM- workbench-system-wanderer : \

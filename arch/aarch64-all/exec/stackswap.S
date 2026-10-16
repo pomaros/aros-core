@@ -5,7 +5,7 @@
 
     Translated from the arm-all version. Uses the build-generated symbolic
     offsets from <aros/aarch64/asm.h> (Disable, Enable, tc_SPLower, tc_SPUpper,
-    stk_Lower, stk_Upper, stk_Pointer, ThisTask) -- no magic numbers.
+    stk_Lower, stk_Upper, stk_Pointer, FindTask) -- no magic numbers.
 
     FindTask(NULL)'s vector offset is out of the load immediate range, so
     its address is formed with a sub first.

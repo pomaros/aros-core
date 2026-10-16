@@ -11,6 +11,12 @@
  * Returns TRUE on success.
  */
 BOOL virtio_hw_map(device_t dev);
+/* Caller must stop device/queues and remove users before releasing mappings. */
+void virtio_hw_unmap(device_t dev);
+
+/* Acknowledged device reset, leaving status zero. Software users/IRQs must
+ * be stopped separately before freeing queues. FALSE forbids freeing DMA. */
+BOOL virtio_hw_stop(device_t dev);
 
 /* Reset the device, walk through ACK -> DRIVER. */
 BOOL virtio_hw_reset(device_t dev);
@@ -29,6 +35,8 @@ BOOL  virtio_hw_setup_queue(device_t dev, UWORD qid, struct virtio_queue *vq);
 
 /* Switch device to DRIVER_OK. */
 BOOL  virtio_hw_driver_ok(device_t dev);
+BOOL  virtio_hw_route_irq(device_t dev);
+BOOL  virtio_hw_route_queue_irq(device_t dev, UWORD queue);
 
 /* Read virtio-blk device cfg into dev cached fields. */
 void  virtio_hw_read_blk_config(device_t dev);

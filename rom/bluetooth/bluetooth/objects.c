@@ -37,12 +37,12 @@
 struct BtHardware * bFindHardware(LIBBASETYPEPTR BluetoothBase, STRPTR name, ULONG unit)
 {
     struct BtHardware *bth;
-    Forbid();
+    bGuard(BluetoothBase);
     while(*name) {
         bth = (struct BtHardware *) BluetoothBase->bt_Hardware.lh_Head;
         while(bth->bth_Node.ln_Succ) {
             if((bth->bth_Unit == unit) && (!strcmp(bth->bth_DevName, name))) {
-                Permit();
+                bUnguard(BluetoothBase);
                 return(bth);
             }
             bth = (struct BtHardware *) bth->bth_Node.ln_Succ;
@@ -54,7 +54,7 @@ struct BtHardware * bFindHardware(LIBBASETYPEPTR BluetoothBase, STRPTR name, ULO
             }
         } while(*(++name));
     }
-    Permit();
+    bUnguard(BluetoothBase);
     return(NULL);
 }
 /* \\\ */
@@ -87,13 +87,13 @@ AROS_LH2(struct BtHardware *, btAddHardware,
         bth->bth_State = BHS_OFFLINE;
         if((bth->bth_Node.ln_Name = bth->bth_DevName = btCopyStr(name))) {
             btSafeRawDoFmt(buf, 64, "bthw<%s/%ld>", name, unit);
-            bth->bth_ReadySignal = SIGB_SINGLE;
+            bth->bth_ReadySignal = bAllocReadySignal();
             bth->bth_ReadySigTask = FindTask(NULL);
-            SetSignal(0, SIGF_SINGLE); // clear single bit
             if((tmptask = btSpawnSubTask(buf, bHWTask, bth))) {
                 btBorrowLocksWait(tmptask, 1UL<<bth->bth_ReadySignal);
                 if(bth->bth_Task) {
                     bth->bth_ReadySigTask = NULL;
+                    bFreeReadySignal(bth->bth_ReadySignal);
                     btAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname),
                                    "New hardware %s/%ld added (%s, %s).",
                                    bth->bth_DevName,
@@ -105,6 +105,7 @@ AROS_LH2(struct BtHardware *, btAddHardware,
                 }
             }
             bth->bth_ReadySigTask = NULL;
+            bFreeReadySignal(bth->bth_ReadySignal);
             btFreeVec(bth->bth_DevName);
         }
         btFreeVec(bth);
@@ -159,7 +160,7 @@ AROS_LH1(void, btRemHardware,
 
     Forbid();
     /* Note that the subtask unlinks the hardware! */
-    bth->bth_ReadySignal = SIGB_SINGLE;
+    bth->bth_ReadySignal = bAllocReadySignal();
     bth->bth_ReadySigTask = FindTask(NULL);
     if(bth->bth_Task) {
         Signal(bth->bth_Task, SIGBREAKF_CTRL_C);
@@ -168,6 +169,7 @@ AROS_LH1(void, btRemHardware,
     while(bth->bth_Task) {
         Wait(1L<<bth->bth_ReadySignal);
     }
+    bFreeReadySignal(bth->bth_ReadySignal);
     KPRINTF(1, ("FreeHardware(%p) freevec name\n", bth));
     btAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname),
                    "Removed hardware %s/%ld. Bye bye!",
@@ -1078,9 +1080,9 @@ AROS_LH3(struct BtChannel *, btAllocChannel,
         if(bd->bd_PoPoCfg.bpc_AutoConnect) {
             bch->bch_Flags |= BCHF_AUTOCONNECT;
         }
-        Forbid();
+        bGuard(BluetoothBase);
         bd->bd_UseCnt++;
-        Permit();
+        bUnguard(BluetoothBase);
         if(bep) {
             LONG err;
             bSubmitCtrl(BluetoothBase, bd->bd_Hardware, bd, BTPRI_OPENCHANNEL, 0, 0, bep, 0, &err);
@@ -1118,13 +1120,13 @@ AROS_LH1(void, btFreeChannel,
         bSubmitCtrl(BluetoothBase, bd->bd_Hardware, bd, BTPRI_CLOSECHANNEL, 0, 0, bch->bch_Endpoint, 0, &err);
     }
 
-    Forbid();
+    bGuard(BluetoothBase);
     if(!(--bd->bd_UseCnt) && (bd->bd_Flags & BDFF_DELEXPUNGE)) {
-        Permit();
+        bUnguard(BluetoothBase);
         KPRINTF(20, ("Finally getting rid of device %s\n", bd->bd_Name));
         bFreeDevice(BluetoothBase, bd);
     } else {
-        Permit();
+        bUnguard(BluetoothBase);
     }
 
     btFreeVec(bch);
@@ -1232,17 +1234,25 @@ AROS_LH1(LONG, btWaitChannel,
     struct BtDevice *bd = bch->bch_Device;
     LONG ioerr;
     KPRINTF(5, ("btWaitChannel(%p)\n", bch));
-    while(bch->bch_Msg.mn_Node.ln_Type == NT_MESSAGE) {
-        sigs |= Wait(1L<<bch->bch_MsgPort->mp_SigBit);
-    }
-    Forbid();
-    if(bch->bch_Msg.mn_Node.ln_Type == NT_REPLYMSG) {
+    {
+        /* A replied message may still be on its way onto the port from
+           another CPU, and the caller may already have taken it with
+           GetMsg(): remove it only when it is really linked, and give up
+           after a bounded number of looks once it is marked replied. */
+        ULONG looks = 0;
+        for(;;) {
+            while(bch->bch_Msg.mn_Node.ln_Type == NT_MESSAGE) {
+                sigs |= Wait(1L<<bch->bch_MsgPort->mp_SigBit);
+            }
+            if(bch->bch_Msg.mn_Node.ln_Type != NT_REPLYMSG ||
+               bTakeReply(BluetoothBase, bch->bch_MsgPort, &bch->bch_Msg) || ++looks > 1000) {
+                break;
+            }
+        }
         bch->bch_Msg.mn_Node.ln_Type = NT_FREEMSG;
-        Remove(&bch->bch_Msg.mn_Node);
     }
     // avoid signals getting lost for other messages arriving.
     SetSignal(sigs, sigs);
-    Permit();
     ioerr = bch->bch_Error;
     if(bd) {
         switch(ioerr) {
@@ -1329,7 +1339,6 @@ BOOL bSubmitCtrl(LIBBASETYPEPTR BluetoothBase, struct BtHardware *bth, struct Bt
                  UWORD request, UWORD val, UWORD idx, APTR data, ULONG len, LONG *error)
 {
     struct BtChannel bch;
-    struct MsgPort mp;
 
     if(!bth || !bth->bth_Task) {
         if(error) {
@@ -1338,7 +1347,6 @@ BOOL bSubmitCtrl(LIBBASETYPEPTR BluetoothBase, struct BtHardware *bth, struct Bt
         return(FALSE);
     }
     memset(&bch, 0, sizeof(bch));
-    memset(&mp, 0, sizeof(mp));
     bch.bch_Device = bd;
     bch.bch_Hardware = bth;
     bch.bch_Request = request;
@@ -1351,23 +1359,24 @@ BOOL bSubmitCtrl(LIBBASETYPEPTR BluetoothBase, struct BtHardware *bth, struct Bt
     if(FindTask(NULL) == bth->bth_Task) {
         bHandleChannel(BluetoothBase, bth, &bch, TRUE);
     } else {
-        mp.mp_Flags = PA_SIGNAL;
-        mp.mp_SigBit = SIGB_SINGLE;
-        mp.mp_SigTask = FindTask(NULL);
-        NewList(&mp.mp_MsgList);
-        bch.bch_MsgPort = &mp;
-        bch.bch_Msg.mn_ReplyPort = &mp;
+        /* A port of our own with a private signal, emptied through
+           GetMsg(): a stack port with SIGF_SINGLE let a late reply on
+           another CPU signal an Exec semaphore wait or a reused stack. */
+        struct MsgPort *port = CreateMsgPort();
+        if(!port) {
+            if(error) {
+                *error = BTIOERR_OUTOFMEMORY;
+            }
+            return(FALSE);
+        }
+        bch.bch_MsgPort = port;
+        bch.bch_Msg.mn_ReplyPort = port;
         bch.bch_Msg.mn_Node.ln_Type = NT_MESSAGE;
-        SetSignal(0, SIGF_SINGLE);
         PutMsg(&bth->bth_TaskMsgPort, &bch.bch_Msg);
-        while(bch.bch_Msg.mn_Node.ln_Type == NT_MESSAGE) {
-            Wait(SIGF_SINGLE);
+        while(GetMsg(port) != &bch.bch_Msg) {
+            WaitPort(port);
         }
-        Forbid();
-        if(bch.bch_Msg.mn_Node.ln_Type == NT_REPLYMSG) {
-            Remove(&bch.bch_Msg.mn_Node);
-        }
-        Permit();
+        DeleteMsgPort(port);
     }
     if(error) {
         *error = bch.bch_Error;
@@ -1738,7 +1747,8 @@ void bUpdateLEConnInterval(LIBBASETYPEPTR BluetoothBase)
 /* /// "btAddServiceRecordA()" */
 /*
  * A record the SDP server advertises: ServiceRecordHandle, ServiceClassIDList,
- * ProtocolDescriptorList (L2CAP [+PSM] [, RFCOMM channel]), BrowseGroupList
+ * ProtocolDescriptorList (L2CAP [+PSM] [, RFCOMM channel | upper protocol
+ * + version]), BrowseGroupList
  * (public browse root), BluetoothProfileDescriptorList and ServiceName. The
  * attribute list content is encoded once; the record handle is unique per
  * stack lifetime.
@@ -1755,6 +1765,9 @@ AROS_LH1(APTR, btAddServiceRecordA,
     ULONG psm = GetTagData(BSRA_PSM, 0, tags);
     ULONG profile = GetTagData(BSRA_ProfileUUID16, uuid16, tags);
     ULONG version = GetTagData(BSRA_ProfileVersion, 0x0102, tags);
+    ULONG upper = GetTagData(BSRA_ProtocolUUID16, 0, tags);
+    ULONG upperversion = GetTagData(BSRA_ProtocolVersion, 0x0100, tags);
+    struct TagItem *features = FindTagItem(BSRA_SupportedFeatures, tags);
     STRPTR name = (STRPTR) GetTagData(BSRA_Name, 0, tags);
     STRPTR owner = (STRPTR) GetTagData(BSRA_Owner, 0, tags);
     UBYTE buf[256];
@@ -1799,13 +1812,20 @@ AROS_LH1(APTR, btAddServiceRecordA,
     bt_sdp_encode_sequence_header(&w, 3);
     bt_sdp_encode_uuid16(&w, uuid16);
     bt_sdp_encode_uint(&w, 0x0004, 2);
-    /* L2CAP descriptor: 5 bytes with a PSM, 3 without; RFCOMM descriptor: 5 */
-    protolen = ((proto == BSVP_L2CAP) ? 7 : 5) + ((proto == BSVP_RFCOMM) ? 7 : 0);
+    /* Each descriptor is a sequence (2-byte header): L2CAP with its PSM holds
+       a UUID16 (3) and a uint16 (3), 8 in all; L2CAP alone 5; RFCOMM with
+       its channel 7; an upper protocol (AVDTP) with its version 8. */
+    protolen = (proto == BSVP_L2CAP) ? 8 + (upper ? 8 : 0) : 5 + 7;
     bt_sdp_encode_sequence_header(&w, protolen);
     if(proto == BSVP_L2CAP) {
-        bt_sdp_encode_sequence_header(&w, 5);
+        bt_sdp_encode_sequence_header(&w, 6);
         bt_sdp_encode_uuid16(&w, 0x0100);
         bt_sdp_encode_uint(&w, psm, 2);
+        if(upper) {
+            bt_sdp_encode_sequence_header(&w, 6);
+            bt_sdp_encode_uuid16(&w, upper);
+            bt_sdp_encode_uint(&w, upperversion, 2);
+        }
     } else {
         bt_sdp_encode_sequence_header(&w, 3);
         bt_sdp_encode_uuid16(&w, 0x0100);
@@ -1826,6 +1846,11 @@ AROS_LH1(APTR, btAddServiceRecordA,
         bt_buf_writer_write_u8(&w, 0x25);        /* text, 8 bit length */
         bt_buf_writer_write_u8(&w, nlen);
         bt_buf_writer_write_bytes(&w, (const uint8_t *) name, nlen);
+    }
+    if(features) {
+        /* attribute IDs ascend: SupportedFeatures follows ServiceName */
+        bt_sdp_encode_uint(&w, 0x0311, 2);
+        bt_sdp_encode_uint(&w, features->ti_Data, 2);
     }
     bsr->bsr_AttrsLen = bt_buf_writer_len(&w);
     if(!(bsr->bsr_Attrs = btAllocVec(bsr->bsr_AttrsLen))) {
@@ -1985,6 +2010,45 @@ AROS_LH4(LONG, btGetServiceValue,
     }
     ReleaseSemaphore(&BluetoothBase->bt_GattLock);
     return(actual);
+    AROS_LIBFUNC_EXIT
+}
+/* \\\ */
+
+/* /// "btCloneEndpoint()" */
+/*
+ * A second endpoint for an L2CAP endpoint's PSM. Its channels open their own
+ * L2CAP channel instead of sharing the original's: AVDTP carries signalling
+ * and media on two channels to PSM 25. The clone belongs to the same
+ * service and is freed with it; it is never a listener.
+ */
+AROS_LH1(APTR, btCloneEndpoint,
+         AROS_LHA(APTR, original, A0),
+         LIBBASETYPEPTR, BluetoothBase, 92, bt)
+{
+    AROS_LIBFUNC_INIT
+    struct BtEndpoint *bep = original;
+    struct BtEndpoint *clone;
+    struct BtDevice *bd;
+    UBYTE name[40];
+
+    if(!bep || (bep->bep_Type != BEPT_L2CAP) || !bep->bep_Service) {
+        return(NULL);
+    }
+    bd = bep->bep_Service->bsv_Device;
+    btSafeRawDoFmt(name, sizeof(name), "L2CAP PSM 0x%04lx (clone)", (ULONG) bep->bep_PSM);
+    btLockWriteDevice(bd);
+    if((clone = bAllocEndpoint(BluetoothBase, bep->bep_Service))) {
+        clone->bep_Type = bep->bep_Type;
+        clone->bep_CanRead = bep->bep_CanRead;
+        clone->bep_CanWrite = bep->bep_CanWrite;
+        clone->bep_PSM = bep->bep_PSM;
+        clone->bep_MaxPktSize = bep->bep_MaxPktSize;
+        clone->bep_Clone = TRUE;
+        clone->bep_Name = btCopyStr(name);
+        clone->bep_Node.ln_Name = clone->bep_Name;
+    }
+    btUnlockDevice(bd);
+    return(clone);
     AROS_LIBFUNC_EXIT
 }
 /* \\\ */

@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>
     Copyright (C) 1995-2023, The AROS Development Team. All rights reserved.
 */
 
@@ -24,6 +25,47 @@ struct header
 };
 
 static IPTR _OpenCatalog(const struct Locale * locale, CONST_STRPTR name, STRPTR language);
+
+/* The caller holds lb_CatalogLock. Zero is a wildcard only for requests;
+   publication always compares the actual parsed version, including zero. */
+static struct IntCatalog *FindCachedCatalog(struct IntLocaleBase *base,
+    CONST_STRPTR name, CONST_STRPTR language, ULONG version, BOOL exact)
+{
+    struct IntCatalog *catalog;
+    ForeachNode(&base->lb_CatalogList, catalog)
+    {
+        if (catalog->ic_Name[0] && catalog->ic_Catalog.cat_Language &&
+            !strcmp(catalog->ic_Name, name) &&
+            !strcmp(catalog->ic_Catalog.cat_Language, language) &&
+            (!exact || catalog->ic_Catalog.cat_Version == version))
+            return catalog;
+    }
+    return NULL;
+}
+
+/* Parsing and duplicate disposal do not hold the shared list lock. */
+static struct IntCatalog *PublishCatalog(struct IntLocaleBase *base,
+    struct IntCatalog *candidate, struct LocaleBase *LocaleBase)
+{
+    struct IntCatalog *catalog;
+    ObtainSemaphore(&base->lb_CatalogLock);
+    catalog = FindCachedCatalog(base, candidate->ic_Name,
+        candidate->ic_Catalog.cat_Language, candidate->ic_Catalog.cat_Version, TRUE);
+    if (catalog)
+        catalog->ic_UseCount++;
+    else
+    {
+        catalog = candidate;
+        AddHead((struct List *)&base->lb_CatalogList, &catalog->ic_Catalog.cat_Link);
+    }
+    ReleaseSemaphore(&base->lb_CatalogLock);
+    if (catalog != candidate)
+    {
+        dispose_catalog(candidate, LocaleBase);
+        FreeVec(candidate);
+    }
+    return catalog;
+}
 
 /*****************************************************************************
 
@@ -149,29 +191,15 @@ static IPTR _OpenCatalog(const struct Locale * locale, CONST_STRPTR name, STRPTR
 
         DEBUG_OPENCATALOG(dprintf("OpenCatalogA: search cached Catalog\n"));
 
-        ForeachNode(&_localeBase->lb_CatalogList, catalog)
+        catalog = FindCachedCatalog(_localeBase, name, language, version, version != 0);
+        if (catalog)
         {
-            if ((catalog->ic_Name[0] != '\0') &&
-                 (catalog->ic_Catalog.cat_Language) &&
-                 (0 == strcmp(catalog->ic_Name, name)) &&
-                 (0 == strcmp(catalog->ic_Catalog.cat_Language, language)))
-            {
-                DEBUG_OPENCATALOG(dprintf
-                    ("OpenCatalogA: found Catalog 0x%lx\n", catalog));
-                catalog->ic_UseCount++;
-                ReleaseSemaphore(&_localeBase->lb_CatalogLock);
-
-                if (def_locale)
-                {
-                    CloseLocale(def_locale);
-                }
-
-                SetIoErr(ERROR_ACTION_NOT_KNOWN);
-
-                DEBUG_OPENCATALOG(dprintf
-                    ("OpenCatalogA: return Catalog 0x%lx\n", catalog));
-                return (struct Catalog *)catalog;
-            }
+            catalog->ic_UseCount++;
+            ReleaseSemaphore(&_localeBase->lb_CatalogLock);
+            if (def_locale)
+                CloseLocale(def_locale);
+            SetIoErr(ERROR_ACTION_NOT_KNOWN);
+            return &catalog->ic_Catalog;
         }
         DEBUG_OPENCATALOG(dprintf("OpenCatalogA: found none\n"));
 
@@ -213,7 +241,10 @@ static IPTR _OpenCatalog(const struct Locale * locale, CONST_STRPTR name, STRPTR
                 break;
 
             pref_language++;
-            language = locale->loc_PrefLanguages[pref_language];
+            /* All ten preference slots may be occupied. Do not read slot
+             * ten while deciding whether the search is exhausted. */
+            language = pref_language < 10
+                ? locale->loc_PrefLanguages[pref_language] : NULL;
         }
 
         DEBUG_OPENCATALOG(dprintf("OpenCatalogA: language 0x%lx\n",
@@ -282,11 +313,7 @@ static IPTR _OpenCatalog(const struct Locale * locale, CONST_STRPTR name, STRPTR
                             strcpy(catalog->ic_LanguageName, language);
                         }
 
-                        /* Connect this catalog to the list of catalogs */
-                        ObtainSemaphore(&_localeBase->lb_CatalogLock);
-                        AddHead((struct List *)&_localeBase->
-                            lb_CatalogList, &catalog->ic_Catalog.cat_Link);
-                        ReleaseSemaphore(&_localeBase->lb_CatalogLock);
+                        catalog = PublishCatalog(_localeBase, catalog, LocaleBase);
 
                         CloseIFF(iff);
                         Close((BPTR) iff->iff_Stream);

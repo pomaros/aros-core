@@ -150,35 +150,8 @@ struct WPEditor_AdvancedBackgroundWindow_DATA
     struct Hook         wpedabwd_Hook_DrawModeChage;
 };
 
-struct WPEditor_DATA
-{
-    struct WPEditor_AdvancedBackgroundWindow_DATA       *wped_AdvancedViewSettings_WindowData;
-
-    struct WPEditor_ViewSettingsObject                  *wped_ViewSettings_Current;
-
-    Object                                              *wped_FirstBGImSpecObj,
-                                                        *wped_FirstBGAdvancedObj;
-
-    ULONG                                               wped_DimensionsSet;
-                                                        
-    Object                                              *wped_ViewSettings_GroupObj,
-                                                        *wped_ViewSettings_SpacerObj,
-                                                        *wped_c_NavigationMethod,
-                                                        *wped_cm_ToolbarEnabled,
-                                                        *wped_IconDropMode,
-#if defined(DEBUG_CHANGESCREENTITLE)
-                                                        *wped_s_screentitle,
-#endif
-                                                        *wped_toolbarpreview,
-#if defined(DEBUG_NETWORKBROWSER)
-                                                        *wped_cm_EnableNetworkBrowser,
-#endif
-#if defined(DEBUG_SHOWUSERFILES)
-                                                        *wped_cm_EnableUserFiles,
-#endif
-                                                        *wped_toolbarGroup;
-    struct Hook                                         wped_Hook_CloseAdvancedOptions;
-};
+#define WPEDITOR_DATA_H_IN_SOURCE
+#include "wpeditor_data.h"
 
 //static struct Hook navichangehook;
 static STRPTR        _wpeditor_intern_NavigationModes[3];
@@ -959,6 +932,7 @@ struct WPEditor_ViewSettingsObject *WPEditor__FindViewSettingObjects(char * this
  *The function returns the new ViewSetting object or NULL if
  *it failed;
  */
+
 struct WPEditor_ViewSettingsObject *WPEditor__NewViewSettingObjects(char * this_Name, BOOL backfillsupport)
 {
     struct WPEditor_ViewSettingsObject *_viewSettings_Current = NULL;
@@ -982,6 +956,19 @@ D(bug("[WPEditor] WPEditor__NewViewSettingObjects('%s')\n", this_Name));
 
             if (_viewSettings_Current->wpedbo_ImageSpecObject)
             {
+                /* Standard views have fixed ids, independent of import order.
+                 * Other named views use PrefsEditor's tree-path fallback. */
+                ULONG background_id = 0;
+                if (strcmp(this_Name, "Workbench") == 0)
+                    background_id = MAKE_ID('W','B','B','W');
+                else if (strcmp(this_Name, "Drawer") == 0)
+                    background_id = MAKE_ID('W','B','B','D');
+                else if (strcmp(this_Name, "Screen") == 0)
+                    background_id = MAKE_ID('W','B','B','S');
+                else if (strcmp(this_Name, "Toolbar") == 0)
+                    background_id = MAKE_ID('W','B','B','T');
+                SET(_viewSettings_Current->wpedbo_ImageSpecObject,
+                    MUIA_ObjectID, background_id);
                 if (backfillsupport)
                     _viewSettings_Current->wpedbo_AdvancedOptionsObject = SimpleButton(_(MSG_ADVANCED));
 
@@ -1714,6 +1701,33 @@ D(bug("[WPEditor] WPEditor__OM_NEW: 'Advanced' Window Object @ 0x%p\n", advanced
         data->wped_toolbarpreview                     = _WP_Toolbar_PreviewObj;
 
         data->wped_toolbarGroup                       = _WP_Toolbar_GroupObj;
+        /* Stable ids for the settings window's index and port. */
+        SET(_WP_Navigation_TypeObj, MUIA_ObjectID, MAKE_ID('W','P','N','T'));
+        SET(_WP_Navigation_IconDropModeObj, MUIA_ObjectID, MAKE_ID('W','P','D','M'));
+        SET(_WP_Toolbar_EnabledObj, MUIA_ObjectID, MAKE_ID('W','P','T','B'));
+        SET(_WP_AdvancedView_X_OffsetObj, MUIA_ObjectID, MAKE_ID('W','P','X','O'));
+        SET(_WP_AdvancedView_Y_OffsetObj, MUIA_ObjectID, MAKE_ID('W','P','Y','O'));
+        SET(_WP_AdvancedView_Icon_ListModeObj, MUIA_ObjectID, MAKE_ID('W','P','L','M'));
+        SET(_WP_AdvancedView_Icon_TextModeObj, MUIA_ObjectID, MAKE_ID('W','P','T','M'));
+        SET(_WP_AdvancedView_Icon_SortModeObj, MUIA_ObjectID, MAKE_ID('W','P','S','M'));
+        SET(_WP_AdvancedView_Icon_ViewModeObj, MUIA_ObjectID, MAKE_ID('W','P','V','M'));
+        SET(_WP_AdvancedView_Icon_AutoSortObj, MUIA_ObjectID, MAKE_ID('W','P','A','S'));
+        SET(_WP_AdvancedView_Icon_DragTransparentObj, MUIA_ObjectID, MAKE_ID('W','P','D','T'));
+        SET(_WP_AdvancedView_IconLabel_MaxLineLenObj, MUIA_ObjectID, MAKE_ID('W','P','M','L'));
+        SET(_WP_AdvancedView_Icon_HorSpacingObj, MUIA_ObjectID, MAKE_ID('W','P','H','S'));
+        SET(_WP_AdvancedView_Icon_VertSpacingObj, MUIA_ObjectID, MAKE_ID('W','P','V','S'));
+        SET(_WP_AdvancedView_Icon_ImageSpacingObj, MUIA_ObjectID, MAKE_ID('W','P','I','S'));
+        SET(_WP_AdvancedView_IconLabel_LabelFontObj, MUIA_ObjectID, MAKE_ID('W','P','L','F'));
+        SET(_WP_AdvancedView_IconLabel_InfoFontObj, MUIA_ObjectID, MAKE_ID('W','P','I','F'));
+        SET(_WP_AdvancedView_IconLabel_MultiLineNoObj, MUIA_ObjectID, MAKE_ID('W','P','M','N'));
+        SET(_WP_AdvancedView_IconLabel_TextMultiLineObj, MUIA_ObjectID, MAKE_ID('W','P','T','L'));
+        SET(_WP_AdvancedView_IconLabel_MultiLineonFocusObj, MUIA_ObjectID, MAKE_ID('W','P','M','F'));
+        SET(_WP_AdvancedView_IconLabel_HorPaddObj, MUIA_ObjectID, MAKE_ID('W','P','H','P'));
+        SET(_WP_AdvancedView_IconLabel_VertPaddObj, MUIA_ObjectID, MAKE_ID('W','P','V','P'));
+        SET(_WP_AdvancedView_IconLabel_BorderWidthObj, MUIA_ObjectID, MAKE_ID('W','P','B','W'));
+        SET(_WP_AdvancedView_IconLabel_BorderHeightObj, MUIA_ObjectID, MAKE_ID('W','P','B','H'));
+        SET(_WP_AdvancedView_TileModeObj, MUIA_ObjectID, MAKE_ID('W','P','T','I'));
+        SET(_WP_AdvancedViewRenderModeObj, MUIA_ObjectID, MAKE_ID('W','P','R','M'));
         data->wped_Hook_CloseAdvancedOptions.h_Entry  = ( HOOKFUNC )WandererPrefs_Hook_CloseAdvancedOptionsFunc;
 
         //-- Setup notifications -------------------------------------------
@@ -1746,13 +1760,19 @@ D(bug("[WPEditor] WPEditor__OM_NEW: 'Advanced' Window Object @ 0x%p\n", advanced
             (IPTR)self, 3, MUIM_Set, MUIA_PrefsEditor_Changed, TRUE
         );
 
+#endif
+        /* The navigation mode is always on the page, with or without the
+         * internal toolbar. */
         DoMethod
         (
             data->wped_c_NavigationMethod, MUIM_Notify, MUIA_Cycle_Active, MUIV_EveryTime,
             (IPTR)self, 3, MUIM_Set, MUIA_PrefsEditor_Changed, TRUE
         );
-
-#endif
+        DoMethod
+        (
+            data->wped_IconDropMode, MUIM_Notify, MUIA_Cycle_Active, MUIV_EveryTime,
+            (IPTR)self, 3, MUIM_Set, MUIA_PrefsEditor_Changed, TRUE
+        );
 #if defined(DEBUG_NETWORKBROWSER)
         DoMethod
         (
@@ -2849,6 +2869,7 @@ IPTR WPEditor__MUIM_PrefsEditor_Use
 }
 
 /*** Setup ******************************************************************/
+#ifndef WANDEREREDITOR_MCC
 ZUNE_CUSTOMCLASS_7
 (
     WPEditor, NULL, MUIC_PrefsEditor, NULL,
@@ -2860,3 +2881,4 @@ ZUNE_CUSTOMCLASS_7
     MUIM_PrefsEditor_Use,                  Msg,
     MUIM_PrefsEditor_Save,                 Msg
 );
+#endif /* WANDEREREDITOR_MCC */

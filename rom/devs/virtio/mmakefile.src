@@ -1,12 +1,20 @@
 include $(SRCDIR)/config/aros.cfg
 
-#MM kernel-virtio : kernel-timer-includes
+#MM kernel-virtio-includes : kernel-virtio-includes-copy
+#MM includes-copy : kernel-virtio-includes-copy
+
+# The global include pass also invokes this directory's local make target.
+# The mmake dependency above alone does not define that entry point.
+.PHONY: includes-copy
+includes-copy: kernel-virtio-includes-copy
+
+#MM kernel-virtio : kernel-timer-includes kernel-hidd-storage-includes kernel-hidd-pci-includes
 
 INCLUDE_FILES := $(call WILDCARD, include/hardware/*.h)
-%copy_includes path=hardware dir=include/hardware
+%copy_includes mmake=kernel-virtio-includes-copy path=hardware dir=include/hardware
 
 INCLUDE_FILES := $(call WILDCARD, include/hidd/*.h)
-%copy_includes path=hidd dir=include/hidd
+%copy_includes mmake=kernel-virtio-includes-copy path=hidd dir=include/hidd
 
 VIRTIODEVICEFILES :=  \
         virtio_init \
@@ -34,5 +42,10 @@ USER_LDFLAGS := -static
   modname=virtio modtype=device \
   files="$(VIRTIODEVICEFILES) $(VIRTIOCLASSFILES)" \
   uselibs="hiddstubs"
+
+# All module translation units share private structure layouts. Keep an
+# explicit dependency even when a bootstrap-generated .d file was empty.
+VIRTIO_PRIVATE_HEADERS := $(wildcard $(SRCDIR)/$(CURDIR)/*.h)
+$(kernel-virtio_OBJS) $(kernel-virtio_STARTOBJS) $(kernel-virtio_ENDOBJS): $(VIRTIO_PRIVATE_HEADERS)
 
 %common

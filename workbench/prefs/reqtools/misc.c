@@ -30,7 +30,7 @@ VOID ShowMessage(CONST_STRPTR msg)
         }
         else
         {
-            printf("ReqTools: %s\n", msg);
+            Printf((CONST_STRPTR)"ReqTools: %s\n", (IPTR)msg);
         }
     }
 }

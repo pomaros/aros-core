@@ -158,6 +158,11 @@ void xhciDisconnectDevice(struct PCIController *hc, struct pciusbXHCIDevice *dev
 
 void xhciUpdateFrameCounter(struct PCIController *hc);
 void xhciAbortRequest(struct PCIController *hc, struct IOUsbHWReq *ioreq);
+/* Task-only retirement transaction; caller pins request/device/ring and
+ * excludes endpoint publication, recovery, teardown and completion release
+ * across command waits. FALSE means quarantine, never permission to free. */
+BOOL xhciRetireCancelledRequest(struct PCIController *hc, struct IOUsbHWReq *ioreq,
+                                struct timerequest *timerreq);
 
 BOOL xhciSetFeature(struct PCIUnit *unit, struct PCIController *hc, UWORD hciport, UWORD idx, UWORD val, WORD *retval);
 BOOL xhciClearFeature(struct PCIUnit *unit, struct PCIController *hc, UWORD hciport, UWORD idx, UWORD val,
@@ -168,6 +173,18 @@ WORD xhciQueueTRB(struct PCIController *hc, volatile struct pcisusbXHCIRing *rin
                   ULONG trbflags);
 WORD xhciQueueTRB_IO(struct PCIController *hc, volatile struct pcisusbXHCIRing *ring, UQUAD payload,
                      ULONG plen, ULONG trbflags, struct IORequest *ioreq);
+/* Caller owns an acknowledged stopped endpoint and holds the ring lock.
+ * Prepare neutralises only this request; Commit retains correlation until an
+ * indicated Set TR Dequeue command has succeeded. Neither function frees IO.
+ */
+BOOL xhciPrepareStoppedCancellation(struct PCIController *hc, volatile struct pcisusbXHCIRing *ring,
+                                    struct IORequest *ioreq, UWORD first, UWORD last,
+                                    UWORD stopped, BOOL dcs, struct xhciCancelPlan *plan);
+BOOL xhciCommitStoppedCancellation(volatile struct pcisusbXHCIRing *ring, struct IORequest *ioreq,
+                                   const struct xhciCancelPlan *plan, BOOL dequeueAcknowledged);
+BOOL xhciQueueControl_IO(struct PCIController *hc, volatile struct pcisusbXHCIRing *ring,
+                         UQUAD setup, UQUAD payload, ULONG bytes, ULONG flags,
+                         struct IORequest *ioreq, struct xhciControlTRBs *indices);
 WORD xhciQueueData(struct PCIController *hc, volatile struct pcisusbXHCIRing *ring, UQUAD payload, ULONG plen,
                    ULONG trbflags, BOOL ioconlast);
 WORD xhciQueueData_IO(struct PCIController *hc, volatile struct pcisusbXHCIRing *ring, UQUAD payload, ULONG plen,

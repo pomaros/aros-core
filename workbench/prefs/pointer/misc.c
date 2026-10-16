@@ -30,7 +30,7 @@ VOID ShowMessage(CONST_STRPTR msg)
         }
         else
         {
-            printf("Pointer: %s\n", msg);
+            Printf((CONST_STRPTR)"Pointer: %s\n", (IPTR)msg);
         }
     }
 }

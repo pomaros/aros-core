@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2023, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
 
     Desc: Exec utility functions.
 */
@@ -193,6 +194,9 @@ Exec_InitETask(struct Task *task, struct Task *parent, struct ExecBase *SysBase)
 
     /* Get a unique identifier for this task */
     Forbid();
+#if defined(__AROSEXEC_SMP__)
+    Exec_RegisterTask(task, SysBase);
+#else
     while(et->et_UniqueID == 0)
     {
         //TODO: Replace with UUID!
@@ -211,6 +215,7 @@ Exec_InitETask(struct Task *task, struct Task *parent, struct ExecBase *SysBase)
         D(bug("[EXEC:ETask] Init: done\n");)
         Enable();
     }
+#endif
    
     D(bug("[EXEC:ETask] Init:     Task ID : %08x\n", et->et_UniqueID);)
 
@@ -247,6 +252,10 @@ Exec_CleanupETask(struct Task *task, struct ExecBase *SysBase)
 
     D(bug("[EXEC:ETask] Cleanup: Task @ 0x%p, ETask @ 0x%p\n", task, et);)
 
+#if defined(__AROSEXEC_SMP__)
+    /* Also covers NewAddTask's context/launch failure paths. */
+    Exec_UnregisterTask(task, SysBase);
+#endif
     Forbid();
 
 #if defined(__AROSEXEC_SMP__)

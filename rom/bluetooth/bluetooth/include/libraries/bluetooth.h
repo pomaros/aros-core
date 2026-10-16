@@ -306,6 +306,7 @@
 #define BCHA_AutoConnect      (BCHA_Dummy + 0x06) /* BOOL (settable): connect device if needed */
 #define BCHA_MaxPktSize       (BCHA_Dummy + 0x07) /* ULONG channel MTU */
 #define BCHA_NoWait           (BCHA_Dummy + 0x08) /* BOOL (settable): reads return what is available */
+#define BCHA_RemoteMTU        (BCHA_Dummy + 0x09) /* ULONG largest SDU the peer accepts on the open channel, 0 before */
 
 /* Tags for application binding and btGetAttrs(BGA_APPBINDING,...) */
 #define BABA_Dummy           (BT_TAGBASE + 0x700)
@@ -367,6 +368,9 @@
 #define BSRA_Name            (BSRA_Dummy + 0x05) /* STRPTR ServiceName */
 #define BSRA_ProfileUUID16   (BSRA_Dummy + 0x06) /* ULONG profile in the ProfileDescriptorList (default: BSRA_UUID16) */
 #define BSRA_ProfileVersion  (BSRA_Dummy + 0x07) /* ULONG (default 0x0102) */
+#define BSRA_ProtocolUUID16  (BSRA_Dummy + 0x08) /* ULONG protocol above L2CAP (e.g. 0x0019 AVDTP), BSVP_L2CAP only */
+#define BSRA_ProtocolVersion (BSRA_Dummy + 0x09) /* ULONG version of that protocol (e.g. 0x0103) */
+#define BSRA_SupportedFeatures (BSRA_Dummy + 0x0a) /* ULONG attribute 0x0311, omitted when not given */
 
 /* GATT services (BSRA_Protocol = BSVP_ATT) are registered the same way. The
    stack keeps the values and answers the requests of connecting devices; a

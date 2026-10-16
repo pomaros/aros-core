@@ -1,0 +1,7 @@
+group system
+order 30
+class BoingIconBarEditor.mcc
+name Icon bar
+description The programs in BoingIconBar's dock
+keywords dock icon bar launcher
+level average

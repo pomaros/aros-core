@@ -295,6 +295,9 @@ static void StarterFunc(void)
 
     D(bug("%s(%p, %p, %p, %p)\n", __FUNCTION__, thread, attr, start, arg));
 
+    /* Route stdc's errno through per-thread storage before any worker runs. */
+    _pthread_init_errno();
+
     if (thread == NULL || start == NULL)
         return EINVAL;
 

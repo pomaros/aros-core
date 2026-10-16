@@ -149,7 +149,7 @@ AROS_UFH3(VOID, LocRawDoFmtFormatStringFunc_SysV,
 
     REPLACEMENT_LOCK;
 
-    retval = FormatString(&(IntLB(LocaleBase)->lb_CurrentLocale->il_Locale),
+    retval = FormatString(&(LocaleCurrentLoad(LocaleBase)->il_Locale),
         (STRPTR) FormatString, DataStream, &hook);
 
     REPLACEMENT_UNLOCK;
@@ -233,7 +233,7 @@ AROS_UFH3(VOID, LocRawDoFmtFormatStringFunc_SysV,
 
     REPLACEMENT_LOCK;
 
-    InternalFormatString(&(IntLB(LocaleBase)->lb_CurrentLocale->il_Locale),
+    InternalFormatString(&(LocaleCurrentLoad(LocaleBase)->il_Locale),
         (STRPTR) FormatString, dStream, iStream, &hook);
 
     REPLACEMENT_UNLOCK;

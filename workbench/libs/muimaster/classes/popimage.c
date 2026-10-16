@@ -106,7 +106,8 @@ IPTR Popimage__MUIM_Popimage_OpenWindow(struct IClass *cl, Object *obj,
     {
         Object *ok_button, *cancel_button;
         char *img_spec = NULL;
-        ULONG x = 0, y = 0;
+        /* GetAttr stores a pointer-sized value, including on 64-bit targets. */
+        IPTR x = 0, y = 0;
 
         get(_win(obj), MUIA_Window_LeftEdge, &x);
         get(_win(obj), MUIA_Window_TopEdge, &y);
@@ -164,7 +165,7 @@ IPTR Popimage__MUIM_Popimage_OpenWindow(struct IClass *cl, Object *obj,
 
     if (data->wnd)
     {
-        ULONG opened = FALSE;
+        IPTR opened = FALSE;
 
         set(data->wnd, MUIA_Window_Open, TRUE);
         get(data->wnd, MUIA_Window_Open, &opened);

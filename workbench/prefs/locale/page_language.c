@@ -487,6 +487,9 @@ Object *Language__OM_NEW(struct IClass *cl, Object *obj, struct opSet *msg)
 
     set(pref_list, MUIA_UserData, avail_list);
     set(avail_list, MUIA_UserData, pref_list);
+    /* Stable ids for search, Reveal and the port: LO = Locale. */
+    set(avail_list, MUIA_ObjectID, MAKE_ID('L','O','A','V'));
+    set(pref_list, MUIA_ObjectID, MAKE_ID('L','O','P','R'));
 
     data->charset = TextObject,
         TextFrame,
@@ -517,6 +520,7 @@ Object *Language__OM_NEW(struct IClass *cl, Object *obj, struct opSet *msg)
     if(!data->clear || !data->available || !data->preferred || !data->charset || !data->cslist ||
             !data->cslistview || !data->popup)
         return handle_New_error(obj,cl,"ERROR: MakeObject failed\n");
+    set(data->cslist, MUIA_ObjectID, MAKE_ID('L','O','C','S'));
 
     DoMethod(data->cslist, MUIM_List_Sort);
     DoMethod(data->cslist, MUIM_List_InsertSingle, _(MSG_NOT_SPECIFIED), MUIV_List_Insert_Top);

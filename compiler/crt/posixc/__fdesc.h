@@ -66,6 +66,8 @@ typedef struct _fdesc
 } fdesc;
 
 struct PosixCIntBase;
+void __fdesc_lock(void);
+void __fdesc_unlock(void);
 int __getfdslots(void);
 void __getfdarray(APTR *arrayptr, int *slotsptr);
 void __setfdarray(APTR array, int slots);

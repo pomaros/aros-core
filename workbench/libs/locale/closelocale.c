@@ -1,6 +1,8 @@
 /*
     Copyright (C) 1995-2011, The AROS Development Team. All rights reserved.
 
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>
+
     Desc: CloseLocale() - Close a locale structure.
 */
 #include <exec/types.h>
@@ -53,17 +55,16 @@
         ObtainSemaphore(&IntLB(LocaleBase)->lb_LocaleLock);
         if (--IntL(locale)->il_Count == 0)
         {
-            /* Free the locale structure if it's not the current locale */
-            if (locale !=
-                (struct Locale *)IntLB(LocaleBase)->lb_CurrentLocale)
+            /* Published objects back lock-free readers and escaped strings. */
+            if (!IntL(locale)->il_Published)
             {
                 /* Close old .language, if any */
-                if (IntLB(locale)->lb_CurrentLocale->il_CurrentLanguage)
-                    CloseLibrary(IntLB(locale)->lb_CurrentLocale->
+                if (IntL(locale)->il_CurrentLanguage)
+                    CloseLibrary(IntL(locale)->
                         il_CurrentLanguage);
 
                 /* Close old dos.catalog */
-                CloseCatalog(IntLB(locale)->lb_CurrentLocale->
+                CloseCatalog(IntL(locale)->
                     il_DosCatalog);
 
                 FreeMem(locale, sizeof(struct IntLocale));

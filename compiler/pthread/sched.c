@@ -21,6 +21,9 @@
 
 #include <proto/exec.h>
 #include <exec/execbase.h>
+#ifdef __AROS__
+#include <aros/config.h>
+#endif
 
 
 #include "sched.h"
@@ -53,14 +56,15 @@ int sched_yield(void)
     SysBase->SysFlags |= 1<<15; // trigger rescheduling on Permit();
 #endif
     Permit();
+#elif defined(__AROS__) && (AROS_FLAVOUR & AROS_FLAVOUR_EMULATION) && !defined(__AROSEXEC_SMP__)
+    /* The hosted UP dispatcher consumes this flag when Permit reenables it. */
+    Forbid();
+    SysBase->SysFlags |= SFF_AttnSwitch;
+    Permit();
 #else
     BYTE oldpri;
-    struct Task *task;
+    struct Task *task = FindTask(NULL);
 
-    D(bug("%s()\n", __FUNCTION__));
-
-    task = FindTask(NULL);
-    // changing the priority will trigger a reschedule
     oldpri = SetTaskPri(task, -10);
     SetTaskPri(task, oldpri);
 #endif

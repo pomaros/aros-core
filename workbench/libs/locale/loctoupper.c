@@ -63,9 +63,9 @@
     DEBUG_CONVTOUPPER(dprintf("locToUpper: char 0x%lx\n", character));
 
     DEBUG_CONVTOUPPER(dprintf("locToUpper: locale 0x%lx\n",
-        (struct Locale *)IntLB(LocaleBase)->lb_CurrentLocale));
+        (struct Locale *)LocaleCurrentLoad(LocaleBase)));
 
-    retval = ConvToUpper((struct Locale *)IntLB(LocaleBase)->lb_CurrentLocale,
+    retval = ConvToUpper((struct Locale *)LocaleCurrentLoad(LocaleBase),
         character);
 
     DEBUG_CONVTOUPPER(dprintf("locToUpperr: retval 0x%lx\n", retval));

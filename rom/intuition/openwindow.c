@@ -46,6 +46,7 @@ struct OpenWindowActionMsg
     struct Hook                 *shapehook;
     struct Layer                *parentlayer;
     BOOL                             invisible;
+    BOOL                             tileoverlay;
     BOOL                             success;
 };
 
@@ -123,6 +124,7 @@ static VOID int_openwindow(struct OpenWindowActionMsg *msg,
     ULONG                                extrabuttons = 0, extrabuttonsid = ETI_Dummy;
   //ULONG                                      lock;
     ULONG                            windowinvisible = FALSE;
+    BOOL                             tileoverlay = FALSE;
     BOOL                                 driver_init_done = FALSE, have_helpgroup = FALSE;
     BOOL                             do_setwindowpointer = FALSE;
 
@@ -547,6 +549,10 @@ moreFlags |= (name); else moreFlags &= ~(name)
                 break;
 #endif
 
+            case WA_TileOverlay:
+                tileoverlay = !!tag->ti_Data;
+                break;
+
             case WA_Pointer:
             case WA_BusyPointer:
                 do_setwindowpointer = TRUE;
@@ -557,6 +563,13 @@ moreFlags |= (name); else moreFlags &= ~(name)
         } /* while ((tag = NextTagItem (&tagList))) */
 
     } /* if (tagList) */
+
+    /* Protected overlays cannot activate or acquire a parent/secondary layer.
+     * Validate before allocation so incompatible requests fail without effects. */
+    if (tileoverlay && (parentl ||
+        (nw.Flags & (WFLG_BORDERLESS | WFLG_TOOLBOX)) != (WFLG_BORDERLESS | WFLG_TOOLBOX) ||
+        (nw.Flags & (WFLG_ACTIVATE | WFLG_GIMMEZEROZERO | WFLG_BACKDROP))))
+        goto exit;
 
     if (nw.Flags & WFLG_SIZEGADGET)
     {
@@ -1068,6 +1081,7 @@ moreFlags |= (name); else moreFlags &= ~(name)
     msg.shapehook = shapehook;
     msg.parentlayer = parentl;
     msg.invisible = windowinvisible;
+    msg.tileoverlay = tileoverlay;
     msg.success = FALSE;
 
     /* int_openwindow() may activate and render the window before returning.
@@ -1266,7 +1280,7 @@ static VOID int_openwindow(struct OpenWindowActionMsg *msg,
 #endif
 
     /* Create a layer for the window */
-    LONG layerflags = 0;
+    LONG layerflags = msg->tileoverlay ? LAYERPROTECTED : 0;
 
     EnterFunc(bug("int_OpenWindow(w=%p)\n", w));
 

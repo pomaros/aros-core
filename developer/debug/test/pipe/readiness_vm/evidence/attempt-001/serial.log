@@ -1,0 +1,56 @@
+UEFI firmware (version edk2-stable202408-prebuilt.qemu.org built at 16:28:50 on Sep 12 2024)
+ArmTrngLib could not be correctly initialized.
+Error: Image at 0005FDB6000 start failed: 00000001
+Error: Image at 0005FCB2000 start failed: Unsupported
+Error: Image at 0005FC37000 start failed: Not Found
+Error: Image at 0005FB5D000 start failed: Aborted
+Tpm2SubmitCommand - Tcg2 - Not Found
+Tpm2GetCapabilityPcrs fail!
+Tpm2SubmitCommand - Tcg2 - Not Found
+Image type X64 can't be loaded on AARCH64 UEFI system.
+[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01HBdsDxe: loading Boot0001 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x2,0x0)
+ConvertPages: failed to find range 140000000 - 140024FFF
+BdsDxe: starting Boot0001 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x2,0x0)
+AROSBOOTAA64: starting generic UEFI loader
+AROSBOOTAA64: bundle verified; modules=0x0000000000000018
+AROSBOOTAA64: generation selected; sequence=0x0000000000000001 slot=0x0000000000000000 fallback=0x0000000000000000 degraded=0x0000000000000000
+AROSBOOTAA64: generation transport=esp
+AROSBOOTAA64: payload entry=0x000000005404d000
+AROSBOOTAA64: platform prepared; exiting boot services
+[VM] GIC + CNTV deadline ready
+[PMGR] init: fdt discovery status 2
+[RTKit] init: pmgr.resource missing
+Exec Bootstrap Task: Could not open version 33 or higher of library "iffparse.library".
+Exec Bootstrap Task: Could not open version 39 or higher of library "locale.library".
+Exec Bootstrap Task: Could not open version 50 or higher of library "dos.library".
+Exec Bootstrap Task: Could not open version 39 or higher of library "dos.library".
+[KT] idle-int vector=0x0000000000000005 refused=0x0000000000000000 dispatched=0x0000000000000001 ready_nonempty=0x0000000000000000 spsr=0x00000000800003c0 this=Exec Bootstrap Task state=0x0000000000000002
+[KT] idle-int vector=0x0000000000000005 refused=0x0000000000000000 dispatched=0x0000000000000001 ready_nonempty=0x0000000000000000 spsr=0x00000000800003c0 this=Exec Bootstrap Task state=0x0000000000000002
+[KT] idle-int vector=0x0000000000000005 refused=0x0000000000000000 dispatched=0x0000000000000001 ready_nonempty=0x0000000000000000 spsr=0x00000000800003c0 this=Exec Bootstrap Task state=0x0000000000000002
+[VM] timer.device three waits PASS
+[KT] idle-int vector=0x0000000000000005 refused=0x0000000000000000 dispatched=0x0000000000000001 ready_nonempty=0x0000000000000000 spsr=0x00000000800003c0 this=Exec Bootstrap Task state=0x0000000000000002
+[KT] idle-int vector=0x0000000000000005 refused=0x0000000000000000 dispatched=0x0000000000000001 ready_nonempty=0x0000000000000000 spsr=0x00000000800003c0 this=Exec Bootstrap Task state=0x0000000000000002
+[VM] IRQ handler chain PASS
+[KT] idle-int vector=0x0000000000000005 refused=0x0000000000000000 dispatched=0x0000000000000001 ready_nonempty=0x0000000000000000 spsr=0x00000000800003c0 this=Exec Bootstrap Task state=0x0000000000000002
+[KT] idle-int vector=0x0000000000000005 refused=0x0000000000000000 dispatched=0x0000000000000001 ready_nonempty=0x0000000000000000 spsr=0x00000000800003c0 this=Exec Bootstrap Task state=0x0000000000000002
+[KT] idle-int vector=0x0000000000000005 refused=0x0000000000000000 dispatched=0x0000000000000001 ready_nonempty=0x0000000000000000 spsr=0x00000000800003c0 this=Exec Bootstrap Task state=0x0000000000000002
+[KI] idle wake compute PASS
+[KI] dispatch masks: disabled 0x00000000000000c0 plain 0x0000000000000040 PASS
+[KT] timer op=0x0000000000000002 status=0x0000000000000000 deadline=0x0000000009dbd850 now=0x00000000086da258 cntv_ctl=0x0000000000000001 fiq_ready=0x0000000000000000
+[KT] timer op=0x0000000000000002 status=0x0000000000000000 deadline=0x0000000009dbd851 now=0x00000000086ddb3d cntv_ctl=0x0000000000000001 fiq_ready=0x0000000000000000
+[VM] OpenFirmware FDT + PCI config PASS
+[SMP0] guest command begin (two 10-second windows)
+[KI] runtime exception before recovery vector=0x0000000000000008 esr=0x0000000092000004 far=0xfffffffffffffd50 elr=0x00000000541d71c4 spsr=0x0000000020000040 depth=0x0000000000000000
+[KI] runtime exception before recovery x19=0x00000000400006c0 x20=0x000000004009e840 x21=0x00000000541da3ed x22=0x0000000000000001 x23=0x00000000541ac6dc x24=0x00000000400a8a28 x29=0x0000000040121d10 x30=0x00000000541d70bc
+[B2Q] FAIL: stage-two startup
+FAIL_DAIF=0x00000000000003c0
+PHASE=0x000000000000000b
+RETURN=0x0000000000000025
+KERNEL_PHASE=0x000000000000000a
+KERNEL_STATUS=0x0000000000000000
+KERNEL_DETAIL=0x0000000000000000
+C_STATUS=0x0000000000000000
+C_DETAIL=0x0000000000000506
+C_RESIDENTS=0x0000000000000016
+C_ABI_RETURN=0x0000000000000049
+C_ABI_PA

@@ -1,3 +1,6 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>
+ * This file is distributed under the AROS Public License, version 1.1.
+ */
 /*
     Copyright (C) 1995-2007, The AROS Development Team. All rights reserved.
 
@@ -47,7 +50,7 @@
 {
     AROS_LIBFUNC_INIT
     
-    return (KMBase(KeymapBase)->DefaultKeymap);
+    return (KeymapDefaultLoad(KMBase(KeymapBase)));
 
     AROS_LIBFUNC_EXIT
 } /* AskKeyMapDefault */

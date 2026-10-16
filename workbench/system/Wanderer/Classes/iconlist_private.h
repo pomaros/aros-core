@@ -47,6 +47,8 @@ struct ListViewModeAttribs
 
 struct IconList_DATA
 {
+    BOOL                          icld_TileMotion; /* keep IDCMP_MOUSEMOVE for shown tiles */
+    BOOL                          icld_TilesShown; /* successful Show until Hide/Cleanup */
     APTR                          icld_Pool;                          /* Pool to allocate data from */
 
     struct RastPort               *icld_DisplayRastPort;

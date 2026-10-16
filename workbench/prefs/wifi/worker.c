@@ -55,6 +55,7 @@
 
 struct MsgPort *WifiWorkerPort = NULL;
 struct Task *WifiMainTask = NULL;
+ULONG WifiMainSignal = SIGF_SINGLE;
 
 struct Library *SocketBase = NULL;      /* open only while an address is read */
 
@@ -1341,7 +1342,7 @@ VOID WifiWorker(VOID)
     BOOL done = FALSE;
 
     WifiWorkerPort = port;
-    Signal(WifiMainTask, SIGF_SINGLE);       /* port is up (or NULL on failure) */
+    Signal(WifiMainTask, WifiMainSignal);       /* port is up (or NULL on failure) */
     if (port == NULL)
         return;
 
@@ -1387,5 +1388,5 @@ VOID WifiWorker(VOID)
     /* The window waits for this before it frees the port's last message. */
     DeleteMsgPort(port);
     WifiWorkerPort = NULL;
-    Signal(WifiMainTask, SIGF_SINGLE);
+    Signal(WifiMainTask, WifiMainSignal);
 }

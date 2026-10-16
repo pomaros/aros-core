@@ -68,9 +68,9 @@
             string1, string2, length));
 
     DEBUG_STRNCMP(dprintf("locStrnCmp: CurrentLocale 0x%lx\n",
-            (struct Locale *)IntLB(LocaleBase)->lb_CurrentLocale));
+            (struct Locale *)LocaleCurrentLoad(LocaleBase)));
 
-    retval = StrnCmp((struct Locale *)IntLB(LocaleBase)->lb_CurrentLocale,
+    retval = StrnCmp((struct Locale *)LocaleCurrentLoad(LocaleBase),
         (STRPTR) string1, (STRPTR) string2, length, SC_ASCII);
 
     DEBUG_STRNCMP(dprintf("StrnCmp: retval 0x%lx\n", retval));

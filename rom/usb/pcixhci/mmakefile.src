@@ -7,10 +7,15 @@ FILES := \
         pcixhci_dev \
         buffer \
         xhci_hcd \
+        xhci_ring \
         xhci_periodic \
         xhci_isoch \
         xhci_async \
+        xhci_control \
         xhci_schedule \
+        xhci_request \
+        xhci_cancel \
+        xhci_dma \
         xhci_hcport \
         xhci_hw \
         xhci_controllerclass \

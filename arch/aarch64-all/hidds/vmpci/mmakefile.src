@@ -1,0 +1,8 @@
+include $(SRCDIR)/config/aros.cfg
+ifeq ($(AROS_VM_GUEST),1)
+USER_CPPFLAGS := -D__OOP_NOLIBBASE__ -D__OOP_NOATTRBASES__ -D__OOP_NOMETHODBASES__ -I$(SRCDIR)/rom/hidds/pci
+USER_LDFLAGS := -static
+#MM kernel-hidd-vmpci : kernel-hidd-pciecam kernel-openfirmware
+%build_module mmake=kernel-hidd-vmpci modname=vmpci modtype=hidd files="vmpci_init vmpci_dma vmpci_irq"
+endif
+%common

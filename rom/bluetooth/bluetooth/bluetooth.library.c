@@ -18,6 +18,10 @@
 #include <proto/utility.h>
 #include <proto/btclass.h>
 #include <proto/timer.h>
+#if defined(__AROSPLATFORM_SMP__)
+#include <proto/execlock.h>
+#include <resources/execlock.h>
+#endif
 
 #include <string.h>
 
@@ -94,6 +98,8 @@ static int GM_UNIQUENAME(libInit)(LIBBASETYPEPTR BluetoothBase)
         BluetoothBase->bt_NextGattHandle = 0x0001;
 
         InitSemaphore(&BluetoothBase->bt_ReentrantLock);
+        InitSemaphore(&BluetoothBase->bt_Guard);
+        BluetoothBase->bt_ExecLockBase = OpenResource("execlock.resource");
 
         if((BluetoothBase->bt_MemPool = CreatePool(MEMF_CLEAR|MEMF_PUBLIC|MEMF_SEM_PROTECTED, 16384, 1024))) {
             if((BluetoothBase->bt_SemaMemPool = CreatePool(MEMF_CLEAR|MEMF_PUBLIC, 16*sizeof(struct BtReadLock), sizeof(struct BtBorrowLock)))) {
@@ -221,13 +227,14 @@ int GM_UNIQUENAME(libExpunge)(LIBBASETYPEPTR BluetoothBase)
 
     bStopPopup(BluetoothBase);
     if(BluetoothBase->bt_EventHandler.bh_Task) {
-        BluetoothBase->bt_EventHandler.bh_ReadySignal = SIGB_SINGLE;
+        BluetoothBase->bt_EventHandler.bh_ReadySignal = bAllocReadySignal();
         BluetoothBase->bt_EventHandler.bh_ReadySigTask = FindTask(NULL);
         Signal(BluetoothBase->bt_EventHandler.bh_Task, SIGBREAKF_CTRL_C);
         while(BluetoothBase->bt_EventHandler.bh_Task) {
             Wait(1L<<BluetoothBase->bt_EventHandler.bh_ReadySignal);
         }
         BluetoothBase->bt_EventHandler.bh_ReadySigTask = NULL;
+        bFreeReadySignal(BluetoothBase->bt_EventHandler.bh_ReadySignal);
     }
     bGarbageCollectEvents(BluetoothBase);
 
@@ -366,6 +373,114 @@ static void bDebugSemaInfo(LIBBASETYPEPTR BluetoothBase, struct BtSemaInfo *bsi)
 }
 /* \\\ */
 
+/* /// "bGuard()" */
+/* The library's lists and lock bookkeeping are shared by tasks running on
+   every CPU. A recursive Exec semaphore serializes them; Forbid() would
+   only hold the local processor on an SMP Exec. */
+void bGuard(LIBBASETYPEPTR BluetoothBase)
+{
+    ObtainSemaphore(&BluetoothBase->bt_Guard);
+}
+
+void bUnguard(LIBBASETYPEPTR BluetoothBase)
+{
+    ReleaseSemaphore(&BluetoothBase->bt_Guard);
+}
+
+/* Waits with the guard fully released, as Wait() breaks a Forbid(), then
+   takes it back to the same nesting depth. */
+ULONG bGuardWait(LIBBASETYPEPTR BluetoothBase, ULONG signals)
+{
+    struct Task *thistask = FindTask(NULL);
+    ULONG depth = 0;
+    ULONG sigs;
+
+    while(BluetoothBase->bt_Guard.ss_Owner == thistask) {
+        ReleaseSemaphore(&BluetoothBase->bt_Guard);
+        depth++;
+    }
+    sigs = Wait(signals);
+    while(depth--) {
+        ObtainSemaphore(&BluetoothBase->bt_Guard);
+    }
+    return(sigs);
+}
+
+/* A task without a free signal cannot be woken: it polls with the guard
+   released instead of borrowing SIGF_SINGLE from Exec's semaphores. */
+void bGuardPoll(LIBBASETYPEPTR BluetoothBase)
+{
+    struct Task *thistask = FindTask(NULL);
+    ULONG depth = 0;
+
+    while(BluetoothBase->bt_Guard.ss_Owner == thistask) {
+        ReleaseSemaphore(&BluetoothBase->bt_Guard);
+        depth++;
+    }
+    btDelayMS(2);
+    while(depth--) {
+        ObtainSemaphore(&BluetoothBase->bt_Guard);
+    }
+}
+
+/* ReplyMsg() marks a message replied before it takes the port's lock and
+   links it, possibly on another CPU. Remove our message only once it is
+   really on the list, under that lock; FALSE means not there (yet). The
+   UP SDK names the same port field mp_Pad. */
+BOOL bTakeReply(LIBBASETYPEPTR BluetoothBase, struct MsgPort *port, struct Message *msg)
+{
+    struct Node *n;
+    BOOL taken = FALSE;
+#if defined(__AROSPLATFORM_SMP__)
+    APTR ExecLockBase = BluetoothBase->bt_ExecLockBase;
+#if defined(__AROSEXEC_SMP__)
+    APTR lock = &port->mp_SpinLock;
+#else
+    APTR lock = &port->mp_Pad;
+#endif
+#endif
+    Forbid();
+#if defined(__AROSPLATFORM_SMP__)
+    if(ExecLockBase) {
+        ObtainLock(lock, SPINLOCK_MODE_WRITE, 0);
+    }
+#endif
+    for(n = port->mp_MsgList.lh_Head; n->ln_Succ; n = n->ln_Succ) {
+        if(n == &msg->mn_Node) {
+            Remove(n);
+            taken = TRUE;
+            break;
+        }
+    }
+#if defined(__AROSPLATFORM_SMP__)
+    if(ExecLockBase) {
+        ReleaseLock(lock, 0);
+    }
+#endif
+    Permit();
+    return(taken);
+}
+
+/* Start/stop handshakes with sub tasks. A private signal keeps a late
+   Signal() from waking an Exec semaphore wait, which SIGF_SINGLE would. */
+BYTE bAllocReadySignal(void)
+{
+    BYTE bit = AllocSignal(-1);
+    if(bit < 0) {
+        bit = SIGB_SINGLE;
+    }
+    SetSignal(0, 1UL << bit);
+    return(bit);
+}
+
+void bFreeReadySignal(BYTE bit)
+{
+    if(bit != SIGB_SINGLE) {
+        FreeSignal(bit);
+    }
+}
+/* \\\ */
+
 /* /// "bInitSem()" */
 void bInitSem(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls, STRPTR name)
 {
@@ -378,15 +493,15 @@ void bInitSem(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls, STRPTR name)
     bls->bls_SharedLockCount = 0;
     bls->bls_Dead = FALSE;
 
-    Forbid();
+    bGuard(BluetoothBase);
     bsi = (struct BtSemaInfo *) AllocPooled(BluetoothBase->bt_SemaMemPool, sizeof(struct BtSemaInfo));
     if(!bsi) {
-        Permit();
+        bUnguard(BluetoothBase);
         return;
     }
     bsi->bsi_LockSem = bls;
     AddTail(&BluetoothBase->bt_DeadlockDebug, &bsi->bsi_Node);
-    Permit();
+    bUnguard(BluetoothBase);
 }
 /* \\\ */
 
@@ -394,7 +509,7 @@ void bInitSem(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls, STRPTR name)
 void bDeleteSem(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
 {
     struct BtSemaInfo *bsi;
-    Forbid();
+    bGuard(BluetoothBase);
     bls->bls_Dead = TRUE;
     bsi = (struct BtSemaInfo *) BluetoothBase->bt_DeadlockDebug.lh_Head;
     while(bsi->bsi_Node.ln_Succ) {
@@ -410,7 +525,7 @@ void bDeleteSem(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
         }
         bsi = (struct BtSemaInfo *) bsi->bsi_Node.ln_Succ;
     }
-    Permit();
+    bUnguard(BluetoothBase);
 }
 /* \\\ */
 
@@ -420,10 +535,13 @@ void bLockSemExcl(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
     struct BtReadLock waitbrl;
     struct Task *thistask = FindTask(NULL);
 
+    BYTE sig = -1;
+
     waitbrl.brl_Task = thistask;
     waitbrl.brl_IsExcl = TRUE;
+    waitbrl.brl_SigMask = 0;
 
-    Forbid();
+    bGuard(BluetoothBase);
     do {
         // it's already mine!!
         if(thistask == bls->bls_Owner) {
@@ -441,17 +559,28 @@ void bLockSemExcl(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
             }
         }
 
-        // okay, bad luck, we've got to wait somehow
+        // okay, bad luck, we've got to wait somehow, on a signal of our own:
+        // SIGF_SINGLE belongs to Exec's semaphores, which the guard is
+        if(!waitbrl.brl_SigMask && sig < 0) {
+            sig = AllocSignal(-1);
+            waitbrl.brl_SigMask = (sig >= 0) ? (1UL << sig) : 0;
+        }
         AddHead(&bls->bls_WaitQueue, &waitbrl.brl_Node);
-        thistask->tc_SigRecvd &= ~SIGF_SINGLE;
-
-        Wait(SIGF_SINGLE);
+        if(waitbrl.brl_SigMask) {
+            SetSignal(0, waitbrl.brl_SigMask);
+            bGuardWait(BluetoothBase, waitbrl.brl_SigMask);
+        } else {
+            bGuardPoll(BluetoothBase);
+        }
 
         Remove(&waitbrl.brl_Node);
     } while(TRUE);
     bls->bls_Owner = thistask;
     bls->bls_ExclLockCount++;
-    Permit();
+    bUnguard(BluetoothBase);
+    if(sig >= 0) {
+        FreeSignal(sig);
+    }
 }
 /* \\\ */
 
@@ -460,13 +589,14 @@ void bLockSemShared(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
 {
     struct BtReadLock *brl;
     struct Task *thistask = FindTask(NULL);
+    BYTE sig = -1;
 
-    Forbid();
+    bGuard(BluetoothBase);
     // is this already locked exclusively by me?
     if(thistask == bls->bls_Owner) {
         // yes? then just increase exclusive lock count
         bls->bls_ExclLockCount++;
-        Permit();
+        bUnguard(BluetoothBase);
         return;
     }
 
@@ -476,7 +606,7 @@ void bLockSemShared(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
         if(brl->brl_Task == thistask) {
             KPRINTF(1, ("Increasing ReadLock (%p) count to %ld\n", thistask, brl->brl_Count));
             brl->brl_Count++;
-            Permit();
+            bUnguard(BluetoothBase);
             return;
         }
         brl = (struct BtReadLock *) brl->brl_Node.ln_Succ;
@@ -486,7 +616,7 @@ void bLockSemShared(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
     if(!(brl = (struct BtReadLock *) AllocPooled(BluetoothBase->bt_SemaMemPool, sizeof(struct BtReadLock)))) {
         KPRINTF(20, ("No mem for shared lock! context (%p) on %p\n", thistask, bls));
         // try exclusive lock as fallback (needs no memory)
-        Permit();
+        bUnguard(BluetoothBase);
         bLockSemExcl(BluetoothBase, bls);
         return;
     }
@@ -495,16 +625,28 @@ void bLockSemShared(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
     brl->brl_Task = thistask;
     brl->brl_Count = 0;
     brl->brl_IsExcl = FALSE;
+    brl->brl_SigMask = 0;
 
     // if it's exclusively locked, wait for this lock to vanish
     while(bls->bls_Owner) {
+        if(!brl->brl_SigMask && sig < 0) {
+            sig = AllocSignal(-1);
+            brl->brl_SigMask = (sig >= 0) ? (1UL << sig) : 0;
+        }
         AddTail(&bls->bls_WaitQueue, &brl->brl_Node);
-        thistask->tc_SigRecvd &= ~SIGF_SINGLE;
-
-        Wait(SIGF_SINGLE);
+        if(brl->brl_SigMask) {
+            SetSignal(0, brl->brl_SigMask);
+            bGuardWait(BluetoothBase, brl->brl_SigMask);
+        } else {
+            bGuardPoll(BluetoothBase);
+        }
 
         Remove(&brl->brl_Node);
     }
+    if(sig >= 0) {
+        FreeSignal(sig);
+    }
+    brl->brl_SigMask = 0;
 
     if(brl->brl_IsExcl) {
         // we got promoted by BorrowLocks during the process! So we don't need the shared stuff anymore
@@ -517,7 +659,7 @@ void bLockSemShared(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
         brl->brl_Count++;
         bls->bls_SharedLockCount++;
     }
-    Permit();
+    bUnguard(BluetoothBase);
     return;
 }
 /* \\\ */
@@ -529,11 +671,11 @@ void bUnlockSem(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
     struct Task *thistask = FindTask(NULL);
     BOOL gotit = FALSE;
 
-    Forbid();
+    bGuard(BluetoothBase);
     if(bls->bls_Owner) {
         // exclusively locked, this means unlocking task must be owner
         if(bls->bls_Owner != thistask) {
-            Permit();
+            bUnguard(BluetoothBase);
             btDebugSemaphores();
             btAddErrorMsg(RETURN_WARN, (STRPTR) GM_UNIQUENAME(libname),
                            "Attempt to unlock exclusive semaphore %p not owned by task %s!",
@@ -543,14 +685,14 @@ void bUnlockSem(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
         }
         if(--bls->bls_ExclLockCount) {
             // still locked
-            Permit();
+            bUnguard(BluetoothBase);
             return;
         }
         bls->bls_Owner = NULL;
         // otherwise drop through and notify
     } else {
         if(!bls->bls_SharedLockCount) {
-            Permit();
+            bUnguard(BluetoothBase);
             btDebugSemaphores();
             btAddErrorMsg(RETURN_WARN, (STRPTR) GM_UNIQUENAME(libname),
                            "Attempt to unlock (free) semaphore %p once too often by task %s!",
@@ -563,7 +705,7 @@ void bUnlockSem(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
             if(brl->brl_Task == thistask) {
                 if(--brl->brl_Count) {
                     // can't be the last lock, so just reduce count and return
-                    Permit();
+                    bUnguard(BluetoothBase);
                     return;
                 }
                 // remove read lock, it's no longer needed
@@ -578,7 +720,7 @@ void bUnlockSem(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
             brl = (struct BtReadLock *) brl->brl_Node.ln_Succ;
         }
         if(!gotit) {
-            Permit();
+            bUnguard(BluetoothBase);
             btDebugSemaphores();
             btAddErrorMsg(RETURN_WARN, (STRPTR) GM_UNIQUENAME(libname),
                            "Attempt to unlock (shared) semaphore %p once too often by task %s!",
@@ -590,10 +732,12 @@ void bUnlockSem(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
     // notify waiting tasks
     brl = (struct BtReadLock *) bls->bls_WaitQueue.lh_Head;
     while(brl->brl_Node.ln_Succ) {
-        Signal(brl->brl_Task, SIGF_SINGLE);
+        if(brl->brl_SigMask) {
+            Signal(brl->brl_Task, brl->brl_SigMask);
+        }
         brl = (struct BtReadLock *) brl->brl_Node.ln_Succ;
     }
-    Permit();
+    bUnguard(BluetoothBase);
 }
 /* \\\ */
 
@@ -608,13 +752,13 @@ AROS_LH0(void, btDebugSemaphores,
     btAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname),
                    "Debug Semaphores (%p)", thistask);
 
-    Forbid();
+    bGuard(BluetoothBase);
     bsi = (struct BtSemaInfo *) BluetoothBase->bt_DeadlockDebug.lh_Head;
     while(bsi->bsi_Node.ln_Succ) {
         bDebugSemaInfo(BluetoothBase, bsi);
         bsi = (struct BtSemaInfo *) bsi->bsi_Node.ln_Succ;
     }
-    Permit();
+    bUnguard(BluetoothBase);
     AROS_LIBFUNC_EXIT
 }
 /* \\\ */
@@ -673,7 +817,7 @@ AROS_LH2(ULONG, btBorrowLocksWait,
     XPRINTF(10, ("Borrowing locks from %p (%s) to %p (%s)!\n",
                  thistask, thistask->tc_Node.ln_Name, task, task->tc_Node.ln_Name));
 
-    Forbid();
+    bGuard(BluetoothBase);
     bsi = (struct BtSemaInfo *) BluetoothBase->bt_DeadlockDebug.lh_Head;
     while(bsi->bsi_Node.ln_Succ) {
         bls = bsi->bsi_LockSem;
@@ -692,7 +836,7 @@ AROS_LH2(ULONG, btBorrowLocksWait,
         bsi = (struct BtSemaInfo *) bsi->bsi_Node.ln_Succ;
     }
     if(!cnt) {
-        Permit();
+        bUnguard(BluetoothBase);
         XPRINTF(10, ("Nothing to borrow!\n"));
         return(Wait(signals));
     }
@@ -722,7 +866,9 @@ AROS_LH2(ULONG, btBorrowLocksWait,
 
                         bls->bls_ExclLockCount = 0;
                         bls->bls_Owner = NULL;
-                        Signal(task, SIGF_SINGLE);
+                        if(brl->brl_SigMask) {
+                            Signal(task, brl->brl_SigMask);
+                        }
                         XPRINTF(10, ("Waiting lock %p transfer\n", bls));
                     }
                     moveowner = FALSE;
@@ -758,7 +904,9 @@ AROS_LH2(ULONG, btBorrowLocksWait,
                                 Remove(&brl->brl_Node);
                                 FreePooled(BluetoothBase->bt_SemaMemPool, brl, sizeof(struct BtReadLock));
                                 bls->bls_SharedLockCount--;
-                                Signal(task, SIGF_SINGLE);
+                                if(brl2->brl_SigMask) {
+                                    Signal(task, brl2->brl_SigMask);
+                                }
                             }
                             moveowner = FALSE;
                             XPRINTF(10, ("Waiting shared lock %p transfer\n", bls));
@@ -804,7 +952,7 @@ AROS_LH2(ULONG, btBorrowLocksWait,
         bsi = (struct BtSemaInfo *) bsi->bsi_Node.ln_Succ;
     }
 
-    sigmask = Wait(signals);
+    sigmask = bGuardWait(BluetoothBase, signals);
 
     // try to get moved locks back first
     bbl = (struct BtBorrowLock *) borrows.lh_Head;
@@ -861,7 +1009,7 @@ AROS_LH2(ULONG, btBorrowLocksWait,
         FreePooled(BluetoothBase->bt_SemaMemPool, bbl, sizeof(struct BtBorrowLock));
         bbl = (struct BtBorrowLock *) reclaims.lh_Head;
     }
-    Permit();
+    bUnguard(BluetoothBase);
 
     return(sigmask);
     AROS_LIBFUNC_EXIT
@@ -958,21 +1106,29 @@ AROS_LH1(void, btDelayMS,
          LIBBASETYPEPTR, BluetoothBase, 11, bt)
 {
     AROS_LIBFUNC_INIT
-    struct MsgPort mp;
+    struct MsgPort mp, *port;
     struct timerequest tr;
 
-    memset(&mp, 0, sizeof(mp));
-
     KPRINTF(1, ("btDelayMS(%ld)\n", milli));
-    mp.mp_Flags = PA_SIGNAL;
-    mp.mp_SigBit = SIGB_SINGLE;
-    mp.mp_SigTask = FindTask(NULL);
-    NewList(&mp.mp_MsgList);
+    /* A private signal: the timer's reply, possibly from another CPU, must
+       not reach an Exec semaphore wait as SIGF_SINGLE would. The stack
+       port remains only as a fallback without a free signal. */
+    if(!(port = CreateMsgPort())) {
+        memset(&mp, 0, sizeof(mp));
+        mp.mp_Flags = PA_SIGNAL;
+        mp.mp_SigBit = SIGB_SINGLE;
+        mp.mp_SigTask = FindTask(NULL);
+        NewList(&mp.mp_MsgList);
+        port = &mp;
+    }
     CopyMem(&BluetoothBase->bt_TimerIOReq, &tr, sizeof(tr));
-    tr.tr_node.io_Message.mn_ReplyPort = &mp;
+    tr.tr_node.io_Message.mn_ReplyPort = port;
     tr.tr_time.tv_secs  = milli / 1000;
     tr.tr_time.tv_micro = (milli % 1000) * 1000;
     DoIO((struct IORequest *) &tr);
+    if(port != &mp) {
+        DeleteMsgPort(port);
+    }
     AROS_LIBFUNC_EXIT
 }
 /* \\\ */
@@ -1667,6 +1823,10 @@ AROS_LH3(LONG, btGetAttrsA,
         struct BtChannel *bch = (struct BtChannel *) btstruct;
         if((ti = FindTagItem(BCHA_MaxPktSize, tags))) {
             *((IPTR *) ti->ti_Data) = bch->bch_Endpoint ? bch->bch_Endpoint->bep_MaxPktSize : 0;
+            count++;
+        }
+        if((ti = FindTagItem(BCHA_RemoteMTU, tags))) {
+            *((IPTR *) ti->ti_Data) = bch->bch_Endpoint ? bch->bch_Endpoint->bep_RemoteMTU : 0;
             count++;
         }
         break;

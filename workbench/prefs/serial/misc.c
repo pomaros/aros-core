@@ -30,7 +30,7 @@ VOID ShowMessage(CONST_STRPTR msg)
         }
         else
         {
-            printf("Serial: %s\n", msg);
+            Printf((CONST_STRPTR)"Serial: %s\n", (IPTR)msg);
         }
     }
 }

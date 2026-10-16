@@ -88,7 +88,8 @@
 {
     AROS_LIBFUNC_INIT
 
-    int priority = (LAYERBACKDROP == (flags & LAYERBACKDROP)) ? BACKDROPPRIORITY: UPFRONTPRIORITY;
+    int priority = (flags & LAYERPROTECTED) ? PROTECTEDPRIORITY :
+        ((flags & LAYERBACKDROP) ? BACKDROPPRIORITY : UPFRONTPRIORITY);
     struct TagItem behindtags[] =
     {
         {LA_InFrontOf, 0           },

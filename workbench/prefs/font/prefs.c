@@ -5,11 +5,16 @@
 #include <proto/iffparse.h>
 
 #include <string.h>
+#include <aros/debug.h>
 #include <stdio.h>
 
 #include "prefs.h"
 #include "misc.h"
 #include "locale.h"
+#include "fontsettings.h"
+
+#include <libraries/settings.h>
+#include <proto/settings.h>
 
 #define PREFS_PATH_ENVARC "ENVARC:SYS/font.prefs"
 #define PREFS_PATH_ENV    "ENV:SYS/font.prefs"
@@ -99,6 +104,13 @@ BOOL Prefs_HandleArgs(STRPTR from, BOOL use, BOOL save)
             return FALSE;
         }
     }
+    else if (SettingsBase != NULL)
+    {
+        Prefs_Default(fp);
+        if (FontSettings_Load(fp, SETTING_LAYER_APPLIED, NULL) != SETTING_OK &&
+            FontSettings_Load(fp, SETTING_LAYER_MACHINE, NULL) != SETTING_OK)
+            Prefs_Default(fp);
+    }
     else
     {
         if (!Prefs_Load(PREFS_PATH_ENV, fp))
@@ -115,6 +127,14 @@ BOOL Prefs_HandleArgs(STRPTR from, BOOL use, BOOL save)
         }
     }
 
+    if (SettingsBase != NULL)
+    {
+        if ((use || save) && FontSettings_Store(fp, SETTING_LAYER_APPLIED) != SETTING_OK)
+            ShowMessage("Can't write " PREFS_PATH_ENV ".");
+        if (save && FontSettings_Store(fp, SETTING_LAYER_MACHINE) != SETTING_OK)
+            ShowMessage("Can't write " PREFS_PATH_ENVARC ".");
+        return TRUE;
+    }
     if (use || save)
     {
         fh = Open(PREFS_PATH_ENV, MODE_NEWFILE);
@@ -202,7 +222,7 @@ BOOL Prefs_ImportFH(BPTR fh, struct FontPrefs fp[])
 
                     if (error < 0)
                     {
-                        printf("Error: ReadChunkBytes() returned %d!\n", (int)error);
+                        bug("Font: ReadChunkBytes() returned %d\n", (int)error);
                     }
 
                     FileFontPrefs2FontPrefs(&ffp, &fp[i]);
@@ -211,14 +231,14 @@ BOOL Prefs_ImportFH(BPTR fh, struct FontPrefs fp[])
                 }
                 else
                 {
-                    printf("ParseIFF() failed, returncode %d!\n", (int)error);
+                    bug("Font: ParseIFF() failed, %d\n", (int)error);
                     success = FALSE;
                     break;
                 }
             }
             else
             {
-                printf("StopChunk() failed, returncode %d!\n", (int)error);
+                bug("Font: StopChunk() failed, %d\n", (int)error);
                 success = FALSE;
             }
         }
@@ -272,7 +292,7 @@ BOOL Prefs_ExportFH(BPTR fh, struct FontPrefs fp[])
 
                 if (error != 0) // TODO: We need some error checking here!
                 {
-                    printf("error: PushChunk() = %d\n", (int)error);
+                    bug("Font: PushChunk() = %d\n", (int)error);
                 }
 
                 convertEndian(&fp[i]); // Convert to m68k endian
@@ -285,7 +305,7 @@ BOOL Prefs_ExportFH(BPTR fh, struct FontPrefs fp[])
 
                 if (error != 0) // TODO: We need some error checking here!
                 {
-                    printf("error: PopChunk() = %d\n", (int)error);
+                    bug("Font: PopChunk() = %d\n", (int)error);
                 }
             }
 

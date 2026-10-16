@@ -867,6 +867,7 @@ ant
 android_tool
 CCACHE
 DISTCC
+AROS_VM_GUEST
 LIBOBJS
 EGREP
 GREP
@@ -996,6 +997,7 @@ with_toolchain
 enable_lto
 enable_coverage
 enable_wchar32
+enable_vm_guest
 enable_build_type
 enable_debug
 with_logresource
@@ -1707,6 +1709,8 @@ Optional Features:
                           Enable coverage instrumentation if the target
                           compiler supports it (default=no)
   --enable-wchar32=yes|no Enable uint32 WCHAR support in the compiler/AROS
+                          (default=no)
+  --enable-vm-guest       Build the single-CPU Apple-derived AArch64 VM guest
                           (default=no)
   --enable-build-type=TYPE
                           Select the build type. Available types are:
@@ -4176,7 +4180,9 @@ ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
 ac_link='$CC -o conftest$ac_exeext $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
 ac_compiler_gnu=$ac_cv_c_compiler_gnu
 
-CXX_BASE=$CXX
+# Autoconf 2.72+ may append a language-standard flag directly to CXX. Keep the
+# executable name separate: it is later used to derive sibling tool names.
+CXX_BASE=`echo "$CXX" | sed 's/[[:space:]].*$//'`
 # Extract the first word of "$CXX", so it can be a program name with args.
 set dummy $CXX; ac_word=$2
 { printf '%s\n' "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
@@ -4715,7 +4721,10 @@ ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
 ac_link='$CC -o conftest$ac_exeext $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
 ac_compiler_gnu=$ac_cv_c_compiler_gnu
 
-CC_BASE=$CC
+# Likewise, AC_PROG_CC can produce e.g. "gcc -std=gnu23". Treating that whole
+# string as the executable makes the LLVM-family probe invent names such as
+# llvm-argcc and leaves the host archiver empty.
+CC_BASE=`echo "$CC" | sed 's/[[:space:]].*$//'`
 ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -7893,7 +7902,7 @@ printf %s "checking if Python's mako templates are installed... " >&6; }
 for ac_prog in python \
      python3 \
      python2 \
-                         python4.0                    python3.9                    python3.8                    python3.7                    python3.6                    python3.5                    python3.4                    python3.3                    python3.2                    python3.1                    python3.0                                                            python2.7                    python2.6                    python2.5                    python2.4                    python2.3                    python2.2                    python2.1                    python2.0
+                         python4.0                    python3.9                    python3.8                    python3.7                    python3.6                    python3.5                    python3.4                    python3.3                    python3.2                    python3.1                    python3.0                                                            python2.7                    python2.6                    python2.5                    python2.4                    python2.3                    python2.2                    python2.1                    python2.0                    python
 do
   # Extract the first word of "$ac_prog", so it can be a program name with args.
 set dummy $ac_prog; ac_word=$2
@@ -9861,6 +9870,22 @@ esac
 
 #-----------------------------------------------------------------------------
 
+# Check whether --enable-vm-guest was given.
+if test ${enable_vm_guest+y}
+then :
+  enableval=$enable_vm_guest; aros_vm_guest="$enableval"
+else case e in #(
+  e) aros_vm_guest=no ;;
+esac
+fi
+
+case "$aros_vm_guest" in
+    yes) AROS_VM_GUEST=1 ;;
+    no) AROS_VM_GUEST=0 ;;
+    *) as_fn_error $? "--enable-vm-guest accepts only yes or no" "$LINENO" 5 ;;
+esac
+
+
 { printf '%s\n' "$as_me:${as_lineno-$LINENO}: checking which type of build to do" >&5
 printf %s "checking which type of build to do... " >&6; }
 # Check whether --enable-build_type was given.
@@ -11012,6 +11037,27 @@ printf '%s\n' "$darwin_sdk_path" >&6; }
                 export PATH="$aros_xcode_path/Platforms/$aros_ios_platform.platform/Developer/usr/bin:$PATH"
                 llvm_target_cpu="ARM"
                 ;;
+            *aarch64*|*arm64*)
+                PLATFORM_EXECSMP="#define __AROSPLATFORM_SMP__"
+                aros_target_cpu="aarch64"
+                aros_object_format="aarch64elf_aros"
+                aros_target_mkdep="$aros_target_mkdep -D__GNUC__ -Daarch64"
+                aros_macosx_version="11.0"
+                aros_config_cflags="$aros_config_cflags $""(CFLAGS_NO_OMIT_FP)"
+                aros_config_cxxflags="$aros_config_cxxflags $""(CFLAGS_NO_OMIT_FP)"
+                aros_kernel_isa_flags="-arch arm64"
+                aros_kernel_ldflags="-arch arm64"
+                aros_nominal_depth=8
+                aros_kernel_rs="$toolchain_ar"
+                aros_kernel_ar_flags="-cr"
+                aros_kernel_ld="$toolchain_ld -arch arm64"
+                aros_kernel_as="$toolchain_as -arch arm64"
+                aros_kernel_ranlib="ranlib"
+                aros_kernel_nm="nm"
+                aros_kernel_strip="strip"
+                kernel_tool_prefix=""
+                llvm_target_cpu="AArch64"
+                ;;
             *)
                 as_fn_error $? "\"Unsupported target CPU for darwin hosted flavour -- $target_cpu\"" "$LINENO" 5
                 ;;
@@ -11243,6 +11289,44 @@ printf '%s\n' "$darwin_sdk_path" >&6; }
                 ;;
             *)
                 as_fn_error $? "\"Unknown CPU for EfikaMX $target_cpu\"" "$LINENO" 5
+                ;;
+        esac
+        ;;
+
+    apple)
+        PLATFORM_EXECSMP="#define __AROSPLATFORM_SMP__"
+        case "$aros_target_variant" in
+            smp)
+                                                aros_target_suffix=""
+                ENABLE_EXECSMP="#define __AROSEXEC_SMP__"
+                ;;
+        esac
+                        PLATFORM_EXECWXSEG="#define __AROSPLATFORM_WXSEG__"
+        aros_flavour="standalone"
+        aros_target_arch="apple"
+        aros_shared_default="no"
+        aros_target_mkdep="$aros_target_mkdep -D__GNUC__ -Daarch64"
+
+                        aros_kernel_toolchain=$aros_toolchain
+        kernel_toolchain_c_compiler=$toolchain_c_compiler
+        kernel_toolchain_cxx_compiler=$toolchain_cxx_compiler
+        if test "$aros_kernel_toolchain" = "llvm"; then
+            aros_kernel_llvmwrapper=yes
+        fi
+
+        case "$target_cpu" in
+            *aarch64* | *arm64*)
+                aros_target_cpu="aarch64"
+                target_cpu="aarch64"
+                aros_object_format="aarch64elf_aros"
+                aros_isa_flags="$""(ISA_AARCH64_FLAGS)"
+                                aros_config_cflags="$aros_config_cflags $""(CFLAGS_NO_STRICT_ALIASING) $""(CFLAGS_NO_ASYNCHRONOUS_UNWIND_TABLES)"
+                aros_config_cxxflags="$aros_config_cxxflags $""(CFLAGS_NO_STRICT_ALIASING) $""(CFLAGS_NO_ASYNCHRONOUS_UNWIND_TABLES)"
+                aros_config_aflags="$aros_config_aflags $""(CFLAGS_NO_ASYNCHRONOUS_UNWIND_TABLES)"
+                llvm_target_cpu="AArch64"
+                ;;
+            *)
+                as_fn_error $? "\"Unsupported CPU '$target_cpu' for Apple Silicon\"" "$LINENO" 5
                 ;;
         esac
         ;;
@@ -11718,6 +11802,22 @@ fi
 esac
 
 #-----------------------------------------------------------------------------
+if test "$aros_vm_guest" = yes; then
+    if test "$aros_target_arch" != apple || test "$aros_target_cpu" != aarch64; then
+        as_fn_error $? "--enable-vm-guest requires --target=apple-aarch64" "$LINENO" 5
+    fi
+fi
+
+# The public Apple target supplies virtual guests only. Native hardware drivers
+# are maintained separately and are not part of this source distribution.
+if test "$aros_target_arch" = apple && test "$aros_vm_guest" != yes; then
+    as_fn_error $? "PomAROS public core requires --enable-vm-guest for --target=apple-aarch64" "$LINENO" 5
+fi
+
+if test "$aros_target_arch" = apple && test "$aros_target_variant" = smp; then
+    as_fn_error $? "PomAROS public VM target currently supports the single-CPU build only" "$LINENO" 5
+fi
+
 crosstools_guess="yes"
 aros_target_toolchain="no"
 aros_kernel_sysroot=""
@@ -19876,7 +19976,7 @@ if test "$aros_target_variant" = ""; then
     aros_target_platform="$aros_target_arch-$aros_target_cpu"
 else
     case "$target_os" in
-        pc)
+        pc | apple)
             aros_target_platform="$aros_target_arch-$aros_target_cpu"
             ;;
         *)
@@ -21021,7 +21121,7 @@ AROS_TARGET32_CPU=$aros_target_cpu32
         orig_target_objdump=${orig_target_objdump}
         orig_target_objcopy=${orig_target_objcopy}
         orig_target_strip=${orig_target_strip}
-        aros_kernel_ld=${aros_kernel_ld}
+        aros_kernel_ld='${aros_kernel_ld}'
 
 
 
@@ -21030,7 +21130,7 @@ AROS_TARGET32_CPU=$aros_target_cpu32
             aros_target_cpu=${aros_target_cpu}
             aros_target_arch=${aros_target_arch}
             aros_target_suffix=${aros_target_suffix}
-            aros_kernel_ld=${aros_kernel_ld}
+            aros_kernel_ld='${aros_kernel_ld}'
 
 
 

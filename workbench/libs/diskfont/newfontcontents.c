@@ -141,7 +141,6 @@ struct contentsBuffer
                 /* Loop through the files in this font's directory */
                 while (ExNext(lock, fib))
                 {
-                    BPTR  fontSeg;
                     struct DiskFontHeader *dfh = NULL;
                     struct contentsBuffer *cNode;
                     
@@ -149,23 +148,10 @@ struct contentsBuffer
                     if(fib->fib_DirEntryType >= 0)
                         continue;
 
-                    fontSeg = LoadSeg(fib->fib_FileName);
-
-                    if(fontSeg == BNULL)
+                    dfh = LoadDiskFontData(fib->fib_FileName, "test", FALSE,
+                                           (struct DiskfontBase *)DiskfontBase);
+                    if (dfh == NULL)
                         continue;
-
-                    /* Skip NextSegment and ReturnCode */
-                    dfh = ConvDiskFont(fontSeg, "test", FALSE, (struct DiskfontBase *)DiskfontBase);
-                    UnLoadSeg(fontSeg);
-                    
-                    if(dfh == NULL)
-                    {
-                        FreeBuffers((struct List *)&contentsList);
-                        UnLock(lock);
-                        FreeDosObject(DOS_FIB, fib);
-                        CurrentDir(oldDir);
-                        return NULL;
-                    }
 
                     cNode = AllocVec(sizeof(struct contentsBuffer),
                                      MEMF_PUBLIC | MEMF_CLEAR);

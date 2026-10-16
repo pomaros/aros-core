@@ -1,3 +1,6 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>
+ * This file is distributed under the AROS Public License, version 1.1.
+ */
 #ifndef DEVICES_KEYMAP_H
 #define DEVICES_KEYMAP_H
 
@@ -17,10 +20,14 @@
 #   include <exec/nodes.h>
 #endif
 
+#include <exec/semaphores.h>
+
 struct KeyMapResource
 {
     struct Node kr_Node;
     struct List kr_List;
+    /* Task-context list access must hold this semaphore, including readers. */
+    struct SignalSemaphore kr_Semaphore;
 };
 
 struct KeyMap
@@ -69,6 +76,10 @@ struct KeyMapNodePacked
     struct KeyMapPacked kn_KeyMap;
 } __packed;
 #endif
+
+/* ConfigureKeyMapSwitcher()/HandleKeyMapSwitcher() (keymap.library 43). */
+#define KEYMAP_SWITCH_DISABLED 0xffff
+#define KEYMAP_SWITCH_NOKEY    0xffff
 
 #define KCB_SHIFT       0
 #define KCF_SHIFT       (1 << KCB_SHIFT)

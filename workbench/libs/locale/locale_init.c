@@ -42,7 +42,8 @@ static int Init(LIBBASETYPEPTR LIBBASE)
         CopyMem(&defLocale, IntLB(LIBBASE)->lb_DefaultLocale, sizeof(struct Locale));
 
         /* Set lb_CurrentLocale *BEFORE* SetLocaleLanguage */
-        IntLB(LIBBASE)->lb_CurrentLocale = IntLB(LIBBASE)->lb_DefaultLocale;
+        IntLB(LIBBASE)->lb_DefaultLocale->il_Published = TRUE;
+        LocaleCurrentStore((struct LocaleBase *)LIBBASE, IntLB(LIBBASE)->lb_DefaultLocale);
 
         /* Setup the languages - will not fail here. */
         SetLocaleLanguage(IntLB(LIBBASE)->lb_DefaultLocale, (struct LocaleBase *)LIBBASE);

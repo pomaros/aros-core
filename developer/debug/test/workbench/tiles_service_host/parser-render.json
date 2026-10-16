@@ -1,0 +1,23 @@
+{
+  "result": "PASS",
+  "parser_negatives": 39,
+  "geometry_cases": 480,
+  "fuzz_inputs": 10000,
+  "small_surface_cases": 3920,
+  "hover_weather_checked": true,
+  "weather_surface_cases": 16200,
+  "eyes_surface_cases": 5400,
+  "text_bearings_checked": true,
+  "scope": "Unmodified production parser/render code; host recording graphics fixture, not native pixels or guest proof",
+  "source_sha256": {
+    "tiles_config.c": "e8e511f2f8fb4e53e09b1f948befbb6f91b2bec7fc5d661432a8313bd03c6b46",
+    "tiles_config.h": "6da567f9376c24fa045de87c61e609d326dbf5ce6cd85b1a6d051193f7a94061",
+    "tiles_render.c": "a8dc2cdf429896879b795e020e49853c5da8df22d9621a88b5b0275ae70cb8fe",
+    "tiles_render.h": "e62e8c06461b94132b21227296688cd76feda53ea0316168f65ec84410fc284b"
+  },
+  "fixture_sha256": {
+    "run.py": "7a6e42414d5e13d4e68f58ce40656fe6979e8b6ee772ae0238b5714696fa5177",
+    "test.c": "6144fcbd4630bdbfd183d2bd43bb8cebb6804f7572d2c72d1fb5762ec7b95b71",
+    "graphics_fixture.h": "ff5278dfcc9f2bf95e5d9b18589e03201cf8a9f5addf295b75db9f56e0efd0e5"
+  }
+}

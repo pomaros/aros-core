@@ -1,6 +1,8 @@
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
 
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>
+
     Desc: Tell locale that the preferences have been changed.
 */
 
@@ -73,7 +75,8 @@ static const char *langlist[] =
     AROS_LIBFUNC_INIT
 
     struct IntLocale *old = NULL;
-    STRPTR language, dotptr;
+    char language[sizeof(((struct IntLocale *)0)->LanguageName)];
+    STRPTR dotptr;
     ULONG index = 0;
 
     if(locale != NULL)
@@ -81,17 +84,20 @@ static const char *langlist[] =
         /* Lock the locale structures */
         ObtainSemaphore(&IntLB(LocaleBase)->lb_LocaleLock);
 
-        /* Remote the old locale, and decrease its user count. */
-        old = IntLB(LocaleBase)->lb_CurrentLocale;
-        old->il_Count--;
+        /* Transfer the old current reference to the caller. */
+        old = LocaleCurrentLoad(LocaleBase);
         
         /* Update the count and install the new locale. */
-        IntL(locale)->il_Count++;
-        IntLB(LocaleBase)->lb_CurrentLocale = IntL(locale);
+        if (IntL(locale) != IntLB(LocaleBase)->lb_DefaultLocale)
+            IntL(locale)->il_Count++;
+        IntL(locale)->il_Published = TRUE;
+        LocaleCurrentStore(LocaleBase, IntL(locale));
         ReleaseSemaphore(&IntLB(LocaleBase)->lb_LocaleLock);
 
-        /* Let's be mean to save some hassle */
-        language = locale->loc_LanguageName;
+        /* Readers may use the published locale on another CPU. Strip the
+           suffix only in this private copy, never in the shared object. */
+        strncpy(language, locale->loc_LanguageName, sizeof(language) - 1);
+        language[sizeof(language) - 1] = 0;
         if ((dotptr = strchr(language, '.')))
             *dotptr = 0;
 
@@ -112,7 +118,6 @@ static const char *langlist[] =
             }
         }
 
-        if (dotptr) *dotptr = '.';
     }
     return (struct Locale *)old;
         

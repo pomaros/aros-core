@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
 
     Desc: exec.library resident and initialization.
 */
@@ -207,6 +208,9 @@ AROS_UFH3S(struct ExecBase *, GM_UNIQUENAME(init),
         goto execfatal;
     }
     t->tc_UnionETask.tc_ETask->et_RegFrame = ctx;
+#if defined(__AROSEXEC_SMP__)
+    Exec_PublishTask(t, SysBase);
+#endif
 
     DINIT("Bootstrap task ETask @ 0x%p\n", t->tc_UnionETask.tc_ETask);
 

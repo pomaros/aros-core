@@ -62,16 +62,8 @@ STATIC const struct MUI_Palette_Entry initialpens[MAXPENS + 1] =
 };
 
 /*** Instance Data **********************************************************/
-struct PalEditor_DATA
-{
-    Object                      *palpe_palette;
-    ULONG                       *penmap4;
-    ULONG                       *penmap8;
-    struct MUI_Palette_Entry    *pens;
-    UWORD                       *origcols;
-    UWORD                       count;
-    BOOL                        restore;
-};
+#define PALEDITOR_DATA_H_IN_SOURCE
+#include "paleditor_data.h"
 
 STATIC VOID PalPrefs2Gadgets(struct PalEditor_DATA *data);
 STATIC VOID Gadgets2PalPrefs(struct PalEditor_DATA *data);
@@ -415,6 +407,7 @@ IPTR PalEditor__MUIM_Cleanup
 }
 
 /*** Setup ******************************************************************/
+#ifndef PALETTEEDITOR_MCC
 ZUNE_CUSTOMCLASS_7
 (
     PalEditor, NULL, MUIC_PrefsEditor, NULL,
@@ -426,3 +419,4 @@ ZUNE_CUSTOMCLASS_7
     MUIM_PrefsEditor_ExportFH,    struct MUIP_PrefsEditor_ExportFH *,
     MUIM_PrefsEditor_SetDefaults, Msg
 );
+#endif /* PALETTEEDITOR_MCC */

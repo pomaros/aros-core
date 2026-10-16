@@ -19,7 +19,7 @@ FILES := adminspaces \
 	 req \
 	 sfs_security
 
-USER_CPPFLAGS := -DSFS_BE -DADATE="\"$(shell date '+%d.%m.%Y')\""
+USER_CPPFLAGS := -DSFS_BE -DADATE="\"$(AROS_BUILD_DATE)\""
 USER_LDFLAGS := -static
 
 #MM kernel-fs-sfs : kernel-fs-sfs-deps

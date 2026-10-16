@@ -4,7 +4,7 @@ FILES := handler commands filesystem notification support ram_security
 
 #MM- kernel-fs-ram : includes linklibs kernel-security-includes
 
-USER_CPPFLAGS := -DADATE="\"$(shell date '+%d.%m.%Y')\""
+USER_CPPFLAGS := -DADATE="\"$(AROS_BUILD_DATE)\""
 USER_CFLAGS := -fno-builtin
 
 ifneq ($(ROM_OPTIMIZATION_CFLAGS),)

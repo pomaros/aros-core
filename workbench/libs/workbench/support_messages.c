@@ -105,6 +105,7 @@ VOID __DestroyIWBHM_WB
                 break;
                 
             case WBHM_TYPE_SHOW:
+            case WBHM_TYPE_TILES:
             case WBHM_TYPE_HIDE:
                 /* No additional resources to free */
                 break;

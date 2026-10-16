@@ -1,0 +1,13 @@
+; Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+; Distributed under the AROS Public License, version 1.1.
+; SYS/palette.prefs: one PALT chunk, struct PalettePrefs (packed, 400 bytes).
+; The pen tables and the 32 colour specs are arrays; the schema names the
+; first entries the editors expose, the rest follow the same stride.
+schema   1
+file     SYS/palette.prefs
+layout   compiler/include/prefs/palette.h PalettePrefs
+chunk    PALT size 400
+
+[palette/pens]  level expert  applier iprefs live
+  fourcolor  pap_4ColorPens@16:64   type string  level expert
+  eightcolor pap_8ColorPens@80:64   type string  level expert

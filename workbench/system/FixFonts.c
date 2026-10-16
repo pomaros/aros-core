@@ -119,9 +119,12 @@ int main()
                                     {
                                     if (fhead->fch_NumEntries>0)
                                     {
+                                    /* Compute the serialized size before endian conversion.
+                                       AllocVec metadata is private and differs on 64-bit. */
+                                    size = sizeof(*fhead) + fhead->fch_NumEntries * sizeof(struct FontContents);
                                     #ifdef __AROS__
                                     #if !AROS_BIG_ENDIAN
-                                    WORD i;
+                                    ULONG i;
                                     
                                     for(i = 0; i < fhead->fch_NumEntries; i++)
                                     {
@@ -170,8 +173,6 @@ int main()
                                     file=Open(fullname,MODE_NEWFILE);
                                     if (file)
                                     {
-                                        /* Find the size of the header. This is definitely a hack... */
-                                        size=*((LONG *)((UBYTE *)fhead-AROS_ALIGN(sizeof(ULONG))))-sizeof(LONG); /* Ehem. This is AllocVec'd */
                                         rc=0;
                                         if (Write(file,fhead,size)<0) rc=IoErr();
                                         Close(file);

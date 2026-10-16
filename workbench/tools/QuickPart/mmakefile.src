@@ -27,7 +27,7 @@ USER_CFLAGS := $(NOWARN_FLAGS)
 
 #MM- workbench-tools : workbench-tools-quickpart
 #MM workbench-tools-quickpart : workbench-tools-quickpart-setup iconset-$(AROS_TARGET_ICONSET)-additional-icons-aros-tools-QuickPart workbench-tools-quickpart-images workbench-tools-quickpart-catalogs
-#MM workbench-tools-quickpart : includes linklibs kernel-hidd-storage-includes
+#MM workbench-tools-quickpart : includes linklibs kernel-hidd-storage-includes workbench-libs-uuid-includes
 
 %build_prog mmake=workbench-tools-quickpart \
     progname=QuickPart targetdir=$(EXEDIR) \

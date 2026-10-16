@@ -32,27 +32,8 @@ static    CONST_STRPTR MouseSpeed[] = {NULL, NULL, NULL, NULL, };
 static struct Hook display_hook;
 
 /*** Instance Data **********************************************************/
-struct IPEditor_DATA
-{
-    Object *iped_KeyTypesView;
-    Object *iped_KeyTypes;
-    Object *iped_DefKey;
-    Object *iped_AltKey;
-    Object *iped_SetDefKey;
-    Object *iped_SetAltKey;
-    Object *iped_RepeatRate;
-    Object *iped_RepeatDelay;
-    Object *iped_SwitchEnable;
-    Object *iped_SwitchKey;
-    Object *iped_Accelerated;
-    Object *iped_MouseSpeed;
-    Object *iped_DoubleClickDelay;
-    Object *iped_LeftHandedMouse;
-
-    struct Hook iped_setHook;
-    struct Hook iped_setEnableHook;
-    struct Hook iped_switchEnableHook;
-};
+#define IPEDITOR_DATA_H_IN_SOURCE
+#include "ipeditor_data.h"
 
 /*** Local Functions ********************************************************/
 static BOOL InputPrefs2Gadgets(struct IPEditor_DATA *data);
@@ -298,6 +279,18 @@ Object *IPEditor__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
         SETUP_INST_DATA;
 
         data->iped_RepeatRate = RepeatRate;
+        /* Stable ids for the settings window's index and port. */
+        SET(keyTypesView, MUIA_ObjectID, MAKE_ID('I','P','K','T'));
+        SET(defKey, MUIA_ObjectID, MAKE_ID('I','P','D','K'));
+        SET(altKey, MUIA_ObjectID, MAKE_ID('I','P','A','K'));
+        SET(RepeatRate, MUIA_ObjectID, MAKE_ID('I','P','R','R'));
+        SET(RepeatDelay, MUIA_ObjectID, MAKE_ID('I','P','R','D'));
+        SET(switchEnable, MUIA_ObjectID, MAKE_ID('I','P','S','E'));
+        SET(switchKey, MUIA_ObjectID, MAKE_ID('I','P','S','K'));
+        SET(GadMouseSpeed, MUIA_ObjectID, MAKE_ID('I','P','M','S'));
+        SET(Accelerated, MUIA_ObjectID, MAKE_ID('I','P','A','C'));
+        SET(DoubleClickDelay, MUIA_ObjectID, MAKE_ID('I','P','D','C'));
+        SET(LeftHandedMouse, MUIA_ObjectID, MAKE_ID('I','P','L','H'));
         data->iped_RepeatDelay = RepeatDelay;
         data->iped_KeyTypesView = keyTypesView;
         data->iped_KeyTypes = keyTypes;
@@ -612,6 +605,7 @@ IPTR IPEditor__MUIM_PrefsEditor_SetDefaults
 }
 
 /*** Setup ******************************************************************/
+#ifndef INPUTEDITOR_MCC
 ZUNE_CUSTOMCLASS_4
 (
     IPEditor, NULL, MUIC_PrefsEditor, NULL,
@@ -620,3 +614,4 @@ ZUNE_CUSTOMCLASS_4
     MUIM_PrefsEditor_ExportFH,    struct MUIP_PrefsEditor_ExportFH *,
     MUIM_PrefsEditor_SetDefaults, Msg
 );
+#endif /* INPUTEDITOR_MCC */

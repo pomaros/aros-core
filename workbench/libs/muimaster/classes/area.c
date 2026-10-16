@@ -294,6 +294,10 @@ static IPTR Area__OM_NEW(struct IClass *cl, Object *obj, struct opSet *msg)
             data->mad_ControlChar = tag->ti_Data;
             break;
 
+        case MUIA_Area_SearchMark:
+            _handle_bool_tag(data->mad_Flags2, tag->ti_Data, MADF2_SEARCHMARK);
+            break;
+
         case MUIA_CycleChain:
             _handle_bool_tag(data->mad_Flags, tag->ti_Data, MADF_CYCLECHAIN);
             break;
@@ -478,6 +482,11 @@ static IPTR Area__OM_SET(struct IClass *cl, Object *obj, struct opSet *msg)
 
     while ((tag = NextTagItem(&tags)) != NULL) {
         switch (tag->ti_Tag) {
+        case MUIA_Area_SearchMark:
+            _handle_bool_tag(data->mad_Flags2, tag->ti_Data, MADF2_SEARCHMARK);
+            MUI_Redraw(obj, MADF_DRAWOBJECT);
+            break;
+
         case MUIA_Background:
             old_backgroundspec = data->mad_BackgroundSpec;
             data->mad_BackgroundSpec = zune_image_spec_duplicate(tag->ti_Data);
@@ -721,6 +730,10 @@ static IPTR Area__OM_GET(struct IClass *cl, Object *obj, struct opGet *msg)
     struct MUI_AreaData *data = INST_DATA(cl, obj);
 
     switch (msg->opg_AttrID) {
+    case MUIA_Area_SearchMark:
+        STORE = (data->mad_Flags2 & MADF2_SEARCHMARK) != 0;
+        return TRUE;
+
     case MUIA_Background:
         STORE = (IPTR)data->mad_Background;
         return TRUE;
@@ -748,6 +761,14 @@ static IPTR Area__OM_GET(struct IClass *cl, Object *obj, struct opGet *msg)
 
     case MUIA_Font:
         STORE = (IPTR)data->mad_FontPreset;
+        return TRUE;
+
+    case MUIA_FrameTitle:
+        STORE = (IPTR)data->mad_FrameTitle;
+        return TRUE;
+
+    case MUIA_InputMode:
+        STORE = (IPTR)data->mad_InputMode;
         return TRUE;
 
     case MUIA_Height:
@@ -1296,6 +1317,17 @@ static IPTR Area__MUIM_Draw(struct IClass *cl, Object *obj,
     _font(obj) = obj_font;
     SetFont(_rp(obj), _font(obj));
 
+    if (data->mad_Flags2 & MADF2_SEARCHMARK)
+    {
+        ULONG pen = GetAPen(_rp(obj));
+        SetAPen(_rp(obj), _pens(obj)[MPEN_SHINE]);
+        Move(_rp(obj), _left(obj), _top(obj));
+        Draw(_rp(obj), _right(obj), _top(obj));
+        Draw(_rp(obj), _right(obj), _bottom(obj));
+        Draw(_rp(obj), _left(obj), _bottom(obj));
+        Draw(_rp(obj), _left(obj), _top(obj));
+        SetAPen(_rp(obj), pen);
+    }
     /*    MUI_RemoveClipping(muiRenderInfo(obj), areaclip);*/
 
     return TRUE;

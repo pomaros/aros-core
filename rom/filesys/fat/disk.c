@@ -140,6 +140,23 @@ void Probe64BitSupport(struct Globals *glob)
         }
 }
 
+/* Ask the device whether the medium may be written; a device that does not
+ * answer the question is taken as writable, as before. */
+void ProbeWriteProtection(struct Globals *glob)
+{
+    glob->readonly = FALSE;
+    glob->diskioreq->iotd_Req.io_Command = TD_PROTSTATUS;
+    glob->diskioreq->iotd_Req.io_Length = 0;
+    glob->diskioreq->iotd_Req.io_Data = NULL;
+    glob->diskioreq->iotd_Req.io_Actual = 0;
+    if (DoIO((struct IORequest *)glob->diskioreq) == 0
+        && glob->diskioreq->iotd_Req.io_Actual != 0)
+    {
+        D(bug("ProbeWriteProtection: device is write protected\n"));
+        glob->readonly = TRUE;
+    }
+}
+
 /* N.B. returns an Exec error code, not a DOS error code! */
 LONG AccessDisk(BOOL do_write, ULONG num, ULONG nblocks, ULONG block_size,
     UBYTE *data, APTR priv)

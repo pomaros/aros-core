@@ -1,0 +1,7 @@
+group system
+order 50
+class ReqToolsEditor.mcc
+name ReqTools requesters
+description Defaults of the requesters of ReqTools programs
+keywords reqtools requester
+level expert

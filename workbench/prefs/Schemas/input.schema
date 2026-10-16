@@ -1,0 +1,28 @@
+; Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+; Distributed under the AROS Public License, version 1.1.
+; SYS/input.prefs: INPT and KMSW chunks, in the packed big-endian layouts
+; of workbench/prefs/input/prefs.h (FileInputPrefs, FileKMSPrefs).
+schema   1
+file     SYS/input.prefs
+layout   workbench/prefs/input/prefs.h FileInputPrefs
+chunk    INPT size 116
+chunk    KMSW size 70  layout FileKMSPrefs
+
+[input/keyboard]  chunk INPT  level novice  applier iprefs live
+  keymap        ip_Keymap@0:16               type keymap
+  keymapname    ip_KeymapName@48:64          type keymap
+  repeatdelay   ip_KeyRptDelay_micro@30:4    type int  range 0..999999  unit microseconds
+  repeatspeed   ip_KeyRptSpeed_micro@38:4    type int  range 0..999999  unit microseconds
+  classic       ip_ClassicKeyboard@44:4      type bool  level expert
+
+[input/mouse]  chunk INPT  level novice  applier iprefs live
+  doubleclick   ip_DoubleClick_micro@22:4    type int  range 0..999999  unit microseconds
+  acceleration  ip_MouseAccel@42:2           type int  range 0..4
+  pointerticks  ip_PointerTicks@16:2         type int  range 1..255  level average
+  swapbuttons   ip_SwitchMouseButtons@112:4  type bool
+
+[input/switcher]  chunk KMSW  level average  applier iprefs live
+  enabled       kms_Enabled@0:1              type bool
+  qualifier     kms_SwitchQual@2:2           type int  range 0..65535  level expert
+  code          kms_SwitchCode@4:2           type int  range 0..65535  level expert
+  altkeymap     kms_AltKeymap@6:64           type keymap

@@ -12,12 +12,14 @@
 #include <dos/doshunks.h>
 #include <dos/dosasl.h>
 #include <dos/dosextens.h>
+#include <dos/dostags.h>
 #include <string.h>
 
 #include <proto/dos.h>
 #include <proto/graphics.h>
 
 #include "diskfont_intern.h"
+#include "font_hunk.h"
 
 /****************************************************************************************/
 
@@ -33,42 +35,21 @@
 
 #define SKIPPTR(ptr)    ptr += sizeof(LONG)
 
-#if AROS_BIG_ENDIAN
-// BE conversion functions.
-#define CONVLONG(ptr, destlong)  \
-destlong = (*((ULONG *)(ptr))); \
-SKIPLONG(ptr);
+#define CONVLONG(ptr, destlong) do { CHECKFONT(ptr, 4); (destlong)=FontBE32(ptr); SKIPLONG(ptr); } while (0);
+#define CONVWORD(ptr, destword) do { CHECKFONT(ptr, 2); (destword)=((UWORD)ptr[0]<<8)|ptr[1]; SKIPWORD(ptr); } while (0);
+#define CONVBYTE(ptr, destbyte) do { CHECKFONT(ptr, 1); (destbyte)=ptr[0]; SKIPBYTE(ptr); } while (0);
 
-#define CONVWORD(ptr, destword) \
-destword = (*((UWORD *)(ptr))); \
-SKIPWORD(ptr);
-
-#define CONVBYTE(ptr, destbyte) \
-destbyte = ptr[0]; \
-SKIPBYTE(ptr);
-
-#define COPYPTR(ptr, destptr) \
-(destptr) = (APTR)(IPTR)(*((ULONG *)(ptr))); \
-SKIPPTR(ptr);
-#else
-// LE conversion functions.
-#define CONVLONG(ptr, destlong)  \
-destlong = ptr[0] << 24 | ptr[1] << 16 | ptr[2] << 8 | ptr[3]; \
-SKIPLONG(ptr);
-
-#define CONVWORD(ptr, destword) \
-destword = ptr[0] <<  8 | ptr[1]; \
-SKIPWORD(ptr);
-
-#define CONVBYTE(ptr, destbyte) \
-destbyte = ptr[0]; \
-SKIPBYTE(ptr);
-
-#define COPYPTR(ptr, destptr) \
-(destptr) = (APTR)((IPTR)0 + ptr[0] << 24 | ptr[1] << 16 | ptr [2] << 8 | ptr[3]); \
-SKIPPTR(ptr);
-#endif
 /****************************************************************************************/
+
+#define CHECKFONT(p, n) do { if (image && !FontDataRange(image, (p), (n))) goto failure; } while (0)
+#define COPYPTR(ptr, destptr) do { \
+    uint32_t token; CHECKFONT(ptr, 4); token=FontBE32(ptr); \
+    if (image && token) { \
+        if (token<4 || (size_t)(token-4)>=image->size) goto failure; \
+        (destptr)=(APTR)(image->data+token-4); \
+    } else (destptr)=(APTR)(IPTR)token; \
+    SKIPPTR(ptr); \
+} while (0)
 
 /****************/
 /* ConvDiskFont */
@@ -76,7 +57,7 @@ SKIPPTR(ptr);
 
 /****************************************************************************************/
 
-struct DiskFontHeader *ConvDiskFont(BPTR seglist, CONST_STRPTR fontname, BOOL doextend,
+static struct DiskFontHeader *ConvDiskFont(BPTR seglist, const struct FontData *image, CONST_STRPTR fontname, BOOL doextend,
                               struct DiskfontBase *DiskfontBase)
 {
     UWORD count, numchars;
@@ -111,7 +92,8 @@ struct DiskFontHeader *ConvDiskFont(BPTR seglist, CONST_STRPTR fontname, BOOL do
     memset(&tmp_dfh, 0, sizeof (struct DiskFontHeader));
 
     /* Get start of diskfontheader. (Go past the dummy exe header) */
-    ptr = UB(BADDR(seglist)) + sizeof (ULONG) + sizeof(BPTR);
+    ptr = image ? image->data + 4 : UB(BADDR(seglist)) + sizeof (ULONG) + sizeof(BPTR);
+    CHECKFONT(ptr, 106);
 
     /* Skip the whole DiskFontHeader */
     SKIPPTR(ptr);                           /* dfh_TF.ln_Succ   */
@@ -209,8 +191,13 @@ struct DiskFontHeader *ConvDiskFont(BPTR seglist, CONST_STRPTR fontname, BOOL do
     /* Calculate size of one character data bitmap */
     chardatasize = tf->tf_YSize * tf->tf_Modulo;
 
+    if (tf->tf_HiChar < tf->tf_LoChar) goto failure;
     numchars = (tf->tf_HiChar - tf->tf_LoChar) + 2; /* + 2 because of default character (255) */
 
+    CHECKFONT(charloc_ptr, numchars * sizeof(ULONG));
+    if (charspace_ptr) CHECKFONT(charspace_ptr, numchars * sizeof(UWORD));
+    if (charkern_ptr) CHECKFONT(charkern_ptr, numchars * sizeof(UWORD));
+    if (chardata_ptr) CHECKFONT(chardata_ptr, chardatasize);
     if (tf->tf_Style & FSF_COLORFONT)
     {
         APTR temp_ptr;
@@ -221,6 +208,7 @@ struct DiskFontHeader *ConvDiskFont(BPTR seglist, CONST_STRPTR fontname, BOOL do
 
         D(bug("Colorfont found\n"));
 
+        CHECKFONT(ptr, 44);
         /* Convert extended colortextfont info */
         CONVWORD(ptr, CTF(tf)->ctf_Flags);
         CONVBYTE(ptr, CTF(tf)->ctf_Depth);
@@ -257,6 +245,7 @@ struct DiskFontHeader *ConvDiskFont(BPTR seglist, CONST_STRPTR fontname, BOOL do
         temp_ptr = CTF(tf)->ctf_ColorFontColors;
 
         ptr = (UBYTE *)cfc_ptr;
+        CHECKFONT(ptr, 8);
         SKIPWORD(ptr);
         CONVWORD(ptr, CFC(temp_ptr)->cfc_Count);
         COPYPTR (ptr, colortable_ptr);
@@ -266,6 +255,7 @@ struct DiskFontHeader *ConvDiskFont(BPTR seglist, CONST_STRPTR fontname, BOOL do
         count = CFC(temp_ptr)->cfc_Count;
         ptr = (UBYTE *)colortable_ptr;
 
+        CHECKFONT(ptr, count * sizeof(UWORD));
         CFC(temp_ptr)->cfc_ColorTable = prevsegment = AllocSegment(prevsegment,
                                                                    count * sizeof (UWORD),
                                                                    MEMF_ANY,
@@ -284,6 +274,7 @@ struct DiskFontHeader *ConvDiskFont(BPTR seglist, CONST_STRPTR fontname, BOOL do
         {
             if (!ctf_chardata_ptrs[i]) continue;
 
+            CHECKFONT(ctf_chardata_ptrs[i], chardatasize);
             CTF(tf)->ctf_CharData[i] = prevsegment = AllocSegment(prevsegment,
                                                                   chardatasize,
                                                                   MEMF_ANY,
@@ -417,8 +408,10 @@ struct DiskFontHeader *ConvDiskFont(BPTR seglist, CONST_STRPTR fontname, BOOL do
         /* Count number of tags w/TAG_DONE */
         do
         {
+            CHECKFONT(ptr, 8);
             CONVLONG(ptr, tag)
             SKIPLONG(ptr);
+            if (numtags == 65535) goto failure;
             numtags ++;
         }
         while (tag != TAG_DONE);
@@ -487,6 +480,37 @@ failure:
     ReturnPtr("ConvTextFont", struct DiskFontHeader *, 0);
 }
 
+struct DiskFontHeader *LoadDiskFontData(CONST_STRPTR filename,
+    CONST_STRPTR fontname, BOOL doextend, struct DiskfontBase *DiskfontBase)
+{
+    struct DiskFontHeader *dfh=NULL;
+    struct FontData image;
+    BPTR file=Open(filename, MODE_OLDFILE);
+    LONG length;
+    UBYTE *buffer;
+    int decoded=0;
+    if (!file) return NULL;
+    if (Seek(file, 0, OFFSET_END)<0 ||
+        (length=Seek(file, 0, OFFSET_BEGINNING))<0 || length>16*1024*1024) {
+        Close(file); return NULL;
+    }
+    buffer=AllocVec((ULONG)length+((ULONG)length+15)/16, MEMF_PUBLIC|MEMF_CLEAR);
+    if (!buffer) { Close(file); return NULL; }
+    if (Read(file, buffer, length)!=length) decoded=-1;
+    else decoded=FontHunkDecode(buffer, length, buffer+length, &image);
+    Close(file);
+    if (decoded==1) dfh=ConvDiskFont(BNULL, &image, fontname, doextend, DiskfontBase);
+    FreeVec(buffer);
+    if (decoded==0) {
+        BPTR seglist=LoadSeg(filename);
+        if (seglist) {
+            dfh=ConvDiskFont(seglist, NULL, fontname, doextend, DiskfontBase);
+            UnLoadSeg(seglist);
+        }
+    }
+    return dfh;
+}
+
 void DisposeConvDiskFont(struct DiskFontHeader *dfh,
                          struct DiskfontBase *DiskfontBase)
 {
@@ -512,34 +536,15 @@ struct TextFont *ReadDiskFont(
 {
     struct DiskFontHeader *dfh = NULL;
     STRPTR           filename;
-    BPTR             seglist;
+
     
     EnterFunc(bug("ReadDiskFont(reqattr=%p, name=%s, ysize=%d)\n",
                  reqattr, reqattr->tta_Name, reqattr->tta_YSize));
         
     filename = reqattr->tta_Name;
     
-    if ((seglist = LoadSeg(filename)) != 0)
-    {
-        dfh = ConvDiskFont(seglist, realfontname, TRUE, DiskfontBase);
-        UnLoadSeg(seglist);
-
-        if (dfh != NULL)
-        {
-            D(bug("ReadDiskFont: dfh=0x%lx\n"));
-            ReturnPtr("ReadDiskFont", struct TextFont *, &dfh->dfh_TF);
-        }
-        else
-        {
-            D(bug("ReadDiskFont: error converting seglist\n"));
-            ReturnPtr("ReadDiskFont", struct TextFont *, NULL);
-        }
-    }
-    else
-    {
-        D(bug("Could not load segment list\n"));
-        ReturnPtr("ReadDiskFont", struct TextFont *, NULL);
-    }
+    dfh = LoadDiskFontData(filename, realfontname, TRUE, DiskfontBase);
+    return dfh ? &dfh->dfh_TF : NULL;
 }
 
 /****************************************************************************************/

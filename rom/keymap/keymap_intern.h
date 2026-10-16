@@ -1,3 +1,6 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>
+ * This file is distributed under the AROS Public License, version 1.1.
+ */
 #ifndef KEYMAP_INTERN_H
 #define KEYMAP_INTERN_H
 /*
@@ -72,13 +75,46 @@ WORD GetDeadKeyIndex(UWORD code, UWORD qual, struct KeyMap *km);
 #define KMBase(x) ((struct KeymapBase *)x)
 
 
+/* State is accessed only with local interrupts disabled and SwitchLock held. */
+struct KeymapSwitcher
+{
+    ULONG Lock;
+    struct KeyMap *Alternate;
+    UWORD Qualifier;
+    UWORD Code;
+    BOOL Active;
+};
+
+struct KeyMap *KeymapSelect(struct KeymapBase *base, struct KeyMap *requested);
+
 /* Librarybase struct */
 struct KeymapBase
 {
     struct Library               LibNode;
     struct KeyMap               *DefaultKeymap;
     struct KeyMapResource        KeymapResource;
+    struct KeymapSwitcher        Switcher;
 };
 
+
+/* Published keymaps remain alive and immutable, including in interrupt users.
+ * SMP readers acquire initialized contents without taking a sleeping lock. */
+static inline struct KeyMap *KeymapDefaultLoad(struct KeymapBase *base)
+{
+#ifdef __AROSEXEC_SMP__
+    return __atomic_load_n(&base->DefaultKeymap, __ATOMIC_ACQUIRE);
+#else
+    return base->DefaultKeymap;
+#endif
+}
+
+static inline void KeymapDefaultStore(struct KeymapBase *base, struct KeyMap *map)
+{
+#ifdef __AROSEXEC_SMP__
+    __atomic_store_n(&base->DefaultKeymap, map, __ATOMIC_RELEASE);
+#else
+    base->DefaultKeymap = map;
+#endif
+}
 
 #endif /* KEYMAP_INTERN_H */

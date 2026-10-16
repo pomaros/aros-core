@@ -55,21 +55,8 @@ static UBYTE menupulldownclassic_imagedata[MENUPULLDOWNCLASSIC_WIDTH * MENUPULLD
 
 /*********************************************************************************************/
 
-struct IControlEditor_DATA
-{
-    Object  *menutypeobj;
-    Object  *menulookobj;
-    Object  *menustickobj;
-    Object  *menutitlepullobj;
-    Object  *offscreenobj;
-    Object  *defpubscrobj;
-    Object  *scrleftdragobj;
-    Object  *scrrightdragobj;
-    Object  *scrtopdragobj;
-    Object  *scrbotdragobj;
-    Object  *metadragobj;
-    Object  *previewpage;
-};
+#define ICONTROLEDITOR_DATA_H_IN_SOURCE
+#include "icontroleditor_data.h"
 
 /*********************************************************************************************/
 
@@ -485,6 +472,18 @@ IPTR IControlEditor__OM_NEW
     data->scrbotdragobj = scrbotdragobj;
     data->metadragobj = metadragobj;
     data->previewpage = previewpage;
+    /* Stable ids for the settings window's index and port. */
+    SET(menutypeobj, MUIA_ObjectID, MAKE_ID('I','C','M','T'));
+    SET(menulookobj, MUIA_ObjectID, MAKE_ID('I','C','M','L'));
+    SET(menustickobj, MUIA_ObjectID, MAKE_ID('I','C','M','S'));
+    SET(menutitlepullobj, MUIA_ObjectID, MAKE_ID('I','C','M','P'));
+    SET(offscreenobj, MUIA_ObjectID, MAKE_ID('I','C','O','F'));
+    SET(defpubscrobj, MUIA_ObjectID, MAKE_ID('I','C','D','P'));
+    SET(scrleftdragobj, MUIA_ObjectID, MAKE_ID('I','C','S','L'));
+    SET(scrrightdragobj, MUIA_ObjectID, MAKE_ID('I','C','S','R'));
+    SET(scrtopdragobj, MUIA_ObjectID, MAKE_ID('I','C','S','T'));
+    SET(scrbotdragobj, MUIA_ObjectID, MAKE_ID('I','C','S','B'));
+    SET(metadragobj, MUIA_ObjectID, MAKE_ID('I','C','M','D'));
     SET(data->defpubscrobj, MUIA_ShortHelp, __(MSG_FRONTMOST_DEFAULT_DESC));
 
     DoMethod
@@ -632,6 +631,7 @@ IPTR IControlEditor__MUIM_PrefsEditor_SetDefaults
 }
 
 /*** Setup ******************************************************************/
+#ifndef ICONTROLEDITOR_MCC
 ZUNE_CUSTOMCLASS_4
 (
     IControlEditor, NULL, MUIC_PrefsEditor, NULL,
@@ -640,4 +640,5 @@ ZUNE_CUSTOMCLASS_4
     MUIM_PrefsEditor_ExportFH,    struct MUIP_PrefsEditor_ExportFH *,
     MUIM_PrefsEditor_SetDefaults, Msg
 );
+#endif /* ICONTROLEDITOR_MCC */
 

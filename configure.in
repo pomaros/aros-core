@@ -141,10 +141,15 @@ fi
 # Due to a bug in autoconf check for c++ compiler first.
 # For mor info see, http://osdir.com/ml/bug-autoconf-gnu/2010-05/msg00001.html.
 AC_PROG_CXX([${host_cxx_compilers}])
-CXX_BASE=$CXX
+# Autoconf 2.72+ may append a language-standard flag directly to CXX. Keep the
+# executable name separate: it is later used to derive sibling tool names.
+CXX_BASE=`echo "$CXX" | sed 's/[[[:space:]]].*$//'`
 AC_PATH_PROG(CXX,$CXX)
 AC_PROG_CC([${host_c_compilers}])
-CC_BASE=$CC
+# Likewise, AC_PROG_CC can produce e.g. "gcc -std=gnu23". Treating that whole
+# string as the executable makes the LLVM-family probe invent names such as
+# llvm-argcc and leaves the host archiver empty.
+CC_BASE=`echo "$CC" | sed 's/[[[:space:]]].*$//'`
 AC_PROG_CPP
 CPP_BASE=$CPP
 AC_PATH_PROG(CC,$CC)
@@ -1031,6 +1036,16 @@ case "$aros_toolchain" in
 esac
 
 #-----------------------------------------------------------------------------
+
+AC_ARG_ENABLE(vm-guest,AS_HELP_STRING([--enable-vm-guest],
+    [Build the single-CPU Apple-derived AArch64 VM guest (default=no)]),
+    [aros_vm_guest="$enableval"], [aros_vm_guest=no])
+case "$aros_vm_guest" in
+    yes) AROS_VM_GUEST=1 ;;
+    no) AROS_VM_GUEST=0 ;;
+    *) AC_MSG_ERROR([--enable-vm-guest accepts only yes or no]) ;;
+esac
+AC_SUBST(AROS_VM_GUEST)
 
 AC_MSG_CHECKING([which type of build to do])
 AC_ARG_ENABLE(build_type,AS_HELP_STRING([--enable-build-type=TYPE],[Select the build type. Available types are: personal, nightly, snapshot, milestone, release. Do NOT use this option unless you know what you are doing! (default=personal)]),build_type=$enableval,build_type="personal")
@@ -2082,6 +2097,53 @@ case "$target_os" in
         esac
         ;;
 
+    apple)
+        PLATFORM_EXECSMP="#define __AROSPLATFORM_SMP__"
+        case "$aros_target_variant" in
+            smp)
+                dnl VM builds use separate output directories for the SMP ABI.
+                dnl Retain the packaging layout and platform include selection.
+                aros_target_suffix=""
+                ENABLE_EXECSMP="#define __AROSEXEC_SMP__"
+                ;;
+        esac
+        dnl Native Apple mappings are W^X. Runtime-generated trampolines use
+        dnl the kernel page arena and are changed from R/W to R/X explicitly.
+        PLATFORM_EXECWXSEG="#define __AROSPLATFORM_WXSEG__"
+        aros_flavour="standalone"
+        aros_target_arch="apple"
+        aros_shared_default="no"
+        aros_target_mkdep="$aros_target_mkdep -D__GNUC__ -Daarch64"
+
+        dnl The Apple target is freestanding AROS, not the Darwin-hosted port.
+        dnl Use the AROS cross toolchain for kernel objects from the first file.
+        aros_kernel_toolchain=$aros_toolchain
+        kernel_toolchain_c_compiler=$toolchain_c_compiler
+        kernel_toolchain_cxx_compiler=$toolchain_cxx_compiler
+        if test "$aros_kernel_toolchain" = "llvm"; then
+            aros_kernel_llvmwrapper=yes
+        fi
+
+        case "$target_cpu" in
+            *aarch64* | *arm64*)
+                aros_target_cpu="aarch64"
+                target_cpu="aarch64"
+                aros_object_format="aarch64elf_aros"
+                aros_isa_flags="$""(ISA_AARCH64_FLAGS)"
+                dnl Native Apple AROS does not reserve x18: dispatch saves
+                dnl and restores it as ordinary task state. Only hosted
+                dnl Darwin, and binaries built to also run there, reserve it.
+                aros_config_cflags="$aros_config_cflags $""(CFLAGS_NO_STRICT_ALIASING) $""(CFLAGS_NO_ASYNCHRONOUS_UNWIND_TABLES)"
+                aros_config_cxxflags="$aros_config_cxxflags $""(CFLAGS_NO_STRICT_ALIASING) $""(CFLAGS_NO_ASYNCHRONOUS_UNWIND_TABLES)"
+                aros_config_aflags="$aros_config_aflags $""(CFLAGS_NO_ASYNCHRONOUS_UNWIND_TABLES)"
+                llvm_target_cpu="AArch64"
+                ;;
+            *)
+                AC_MSG_ERROR("Unsupported CPU '$target_cpu' for Apple Silicon")
+                ;;
+        esac
+        ;;
+
     chrp)
         aros_target_arch="chrp"
         aros_shared_default="no"
@@ -2440,6 +2502,22 @@ case "$target_os" in
 esac
 
 #-----------------------------------------------------------------------------
+if test "$aros_vm_guest" = yes; then
+    if test "$aros_target_arch" != apple || test "$aros_target_cpu" != aarch64; then
+        AC_MSG_ERROR([--enable-vm-guest requires --target=apple-aarch64])
+    fi
+fi
+
+# The public Apple target supplies virtual guests only. Native hardware drivers
+# are maintained separately and are not part of this source distribution.
+if test "$aros_target_arch" = apple && test "$aros_vm_guest" != yes; then
+    AC_MSG_ERROR([PomAROS public core requires --enable-vm-guest for --target=apple-aarch64])
+fi
+
+if test "$aros_target_arch" = apple && test "$aros_target_variant" = smp; then
+    AC_MSG_ERROR([PomAROS public VM target currently supports the single-CPU build only])
+fi
+
 crosstools_guess="yes"
 aros_target_toolchain="no"
 aros_kernel_sysroot=""
@@ -4225,7 +4303,7 @@ if test "$aros_target_variant" = ""; then
     aros_target_platform="$aros_target_arch-$aros_target_cpu"
 else
     case "$target_os" in
-        pc)
+        pc | apple)
             aros_target_platform="$aros_target_arch-$aros_target_cpu"
             ;;
         *)
@@ -4701,7 +4779,7 @@ AC_CONFIG_COMMANDS([binutils-support],
         orig_target_objdump=${orig_target_objdump}
         orig_target_objcopy=${orig_target_objcopy}
         orig_target_strip=${orig_target_strip}
-        aros_kernel_ld=${aros_kernel_ld}
+        aros_kernel_ld='${aros_kernel_ld}'
     ]
 )
 if test "${use_ld_wrapper}" = "yes"; then
@@ -4727,7 +4805,7 @@ if test "${use_kernel_cc_wrapper}" = "yes"; then
             aros_target_cpu=${aros_target_cpu}
             aros_target_arch=${aros_target_arch}
             aros_target_suffix=${aros_target_suffix}
-            aros_kernel_ld=${aros_kernel_ld}
+            aros_kernel_ld='${aros_kernel_ld}'
         ]
     )
     AC_CONFIG_FILES(

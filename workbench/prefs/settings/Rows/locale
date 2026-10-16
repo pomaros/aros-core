@@ -1,0 +1,7 @@
+group region
+order 10
+class LocaleEditor.mcc
+name Language and country
+description The languages of menus and messages, the country and the time zone
+keywords locale language country region time zone date format character set
+level average

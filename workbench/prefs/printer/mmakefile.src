@@ -15,4 +15,14 @@ USER_CFLAGS := -DMUI_OBSOLETE
     progname=Printer targetdir=$(EXEDIR) \
     files=$(FILES)
 
+# The same editor as a shared class for the settings window.
+CLASSFILES := locale prefs args misc printereditor_init editor_mcc
+
+#MM- workbench-prefs : workbench-prefs-printer-class
+#MM workbench-prefs-printer-class : includes linklibs workbench-prefs-printer-catalogs workbench-classes-zune-prefseditor
+
+%build_module mmake=workbench-prefs-printer-class \
+    modname=PrinterEditor modtype=mcc \
+    conffile=printereditor.conf files="$(CLASSFILES)"
+
 %common

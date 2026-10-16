@@ -18,6 +18,20 @@ EXEDIR      := $(AROSDIR)/Prefs
     progname=Locale targetdir=$(EXEDIR) \
     files=$(FILES)
 
+# The same editor as a shared class for the settings window.
+CLASSFILES  := localeeditor_init misc locale languagelist \
+               page_language page_region page_timezone prefs registertab_mcc
+
+#MM- workbench-prefs : workbench-prefs-locale-class
+#MM workbench-prefs-locale-class : includes linklibs \
+#MM     workbench-prefs-locale-catalogs \
+#MM     workbench-prefs-locale-images \
+#MM     workbench-classes-zune-prefseditor
+
+%build_module mmake=workbench-prefs-locale-class \
+    modname=LocaleEditor modtype=mcc \
+    conffile=localeeditor.conf files=$(CLASSFILES)
+
 
 IMAGES      := earthmap_small timezones_small
 SRCIMAGES   := $(foreach f, $(IMAGES), pics/$(f).ilbm)

@@ -16,3 +16,7 @@ USER_CPPFLAGS := \
 %build_module mmake=kernel-hidd-efifbgfx \
   modname=efifbgfx modtype=hidd \
   files=$(FILES)
+
+# Shared framebuffer layout and included implementations must rebuild together.
+FB_SHARED_INPUTS := $(wildcard $(SRCDIR)/rom/hidds/efifbgfx/*.h $(SRCDIR)/rom/hidds/efifbgfx/*.c)
+$(kernel-hidd-efifbgfx_OBJS) $(kernel-hidd-efifbgfx_STARTOBJS) $(kernel-hidd-efifbgfx_ENDOBJS): $(FB_SHARED_INPUTS) $(wildcard $(SRCDIR)/$(CURDIR)/*.h)

@@ -31,6 +31,19 @@
 #define MUIA_Text_SetVMax \
     (MUIB_MUI | 0x00420d8b)       /* MUI: V11 i.. BOOL   */
 
+/* Ranges use zero-based displayed character offsets, excluding formatting
+ * escapes and shortcut markers, including newlines. Text copies the list on
+ * NEW/SET; GET is borrowed until the next SET/disposal. NULL clears it. */
+/* Borrowed, read-only rendered characters (no escapes/shortcut marker). */
+#define MUIA_Text_DisplayText (MUIB_Text | 0x00000001)
+#define MUIA_Text_Highlight (MUIB_Text | 0x00000000)
+struct MUI_TextHighlightRange { ULONG start, length; };
+struct MUI_TextHighlight
+{
+    ULONG count;
+    const struct MUI_TextHighlightRange *ranges;
+};
+
 /* Codes which can be used in text strings */
 #define MUIX_L "\033l"          /* justify left */
 #define MUIX_C "\033c"          /* justify centered */

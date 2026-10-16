@@ -35,4 +35,6 @@ struct OpenFirmwareBase {
     of_node_t			*of_Root;
 };
 
+of_node_t *OFBuildFDT(const void *blob);
+
 #endif /* OF_INTERN_H_ */

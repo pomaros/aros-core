@@ -27,11 +27,13 @@ EXECPUBLICFILES :=		\
     makelib		\
     pool		\
     rawdofmt		\
+    reschedule_fairness \
     semaphoretest	\
     semtorture		\
     stackswap 		\
     signaltest		\
     supertest		\
+    task_cpu_accounting \
     tasklist		\
     tasktest		\
     traptest		\

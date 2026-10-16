@@ -1,0 +1,22 @@
+#
+# Settings: every settings editor in one window.
+
+include $(SRCDIR)/config/aros.cfg
+
+FILES  := main settingswindow catalogue
+EXEDIR := $(AROS_PREFS)
+
+#MM- workbench-prefs : workbench-prefs-settings
+#MM workbench-prefs-settings : includes linklibs workbench-classes-zune-prefswindow workbench-prefs-settings-catalogue workbench-libs-settings-includes workbench-libs-settings
+
+%build_prog mmake=workbench-prefs-settings \
+    progname=Settings targetdir=$(EXEDIR) \
+    files=$(FILES)
+
+#MM
+workbench-prefs-settings-catalogue :
+	@$(MKDIR) $(AROS_PREFS)/Index/Groups $(AROS_PREFS)/Index/Rows
+	@$(CP) $(SRCDIR)/$(CURDIR)/Groups/* $(AROS_PREFS)/Index/Groups/
+	@$(CP) $(SRCDIR)/$(CURDIR)/Rows/* $(AROS_PREFS)/Index/Rows/
+
+%common

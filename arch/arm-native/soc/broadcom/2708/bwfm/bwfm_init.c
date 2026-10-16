@@ -2800,6 +2800,32 @@ AROS_LH2(void, BWFMEventPost,
  * into buf; returns the length (0 if none / out of range). The SANA-II device's
  * S2_GETNETWORKS hands these to wpa_supplicant as S2INFO_InfoElements.
  */
+/* The SDIO parts are named by bwfm.device itself; nothing to add here. */
+AROS_LH4(int, BWFMFirmwareName,
+                AROS_LHA(uint32_t, type, D0),
+                AROS_LHA(uint32_t, index, D1),
+                AROS_LHA(char *, out, A0),
+                AROS_LHA(uint32_t, size, D2),
+                struct BWFMBase *, BWFMBase, 19, Bwfm)
+{
+    AROS_LIBFUNC_INIT
+    (void)type; (void)index; (void)out; (void)size; (void)BWFMBase;
+    return -1;
+    AROS_LIBFUNC_EXIT
+}
+
+AROS_LH3(int, BWFMLoadBlob,
+                AROS_LHA(uint32_t, type, D0),
+                AROS_LHA(void *, data, A0),
+                AROS_LHA(uint32_t, len, D1),
+                struct BWFMBase *, BWFMBase, 20, Bwfm)
+{
+    AROS_LIBFUNC_INIT
+    (void)type; (void)data; (void)len; (void)BWFMBase;
+    return -1;
+    AROS_LIBFUNC_EXIT
+}
+
 AROS_LH3(int, BWFMScanIE,
                 AROS_LHA(int, idx, D0),
                 AROS_LHA(void *, buf, A0),

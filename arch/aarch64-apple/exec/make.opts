@@ -1,0 +1,6 @@
+# Copyright (C) 2026 John KNIPPER. All rights reserved.
+# Licensed under the AROS Public License (APL) Version 1.1.
+
+# ExecBase is constructed before the Apple port has established FP/SIMD task
+# ownership.  Integer-only compiler output is part of that early-boot contract.
+USER_CFLAGS += $(CFLAGS_GENERAL_REGS_ONLY)

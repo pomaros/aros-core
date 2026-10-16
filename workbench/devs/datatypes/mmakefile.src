@@ -22,6 +22,7 @@ AUDIODESCRIPTORS  := \
 PICDESCRIPTORS    := \
 			 AVIF \
 			 Degas \
+			 FFmpeg \
 			 GEMImage \
 			 HEIC \
 			 JXL JXLBox \

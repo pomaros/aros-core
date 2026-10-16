@@ -63,9 +63,9 @@
     DEBUG_CONVTOLOWER(dprintf("locToLower: char 0x%lx\n", character));
 
     DEBUG_CONVTOLOWER(dprintf("locToLower: locale 0x%lx\n",
-        (struct Locale *)IntLB(LocaleBase)->lb_CurrentLocale));
+        (struct Locale *)LocaleCurrentLoad(LocaleBase)));
 
-    retval = ConvToLower((struct Locale *)IntLB(LocaleBase)->lb_CurrentLocale,
+    retval = ConvToLower((struct Locale *)LocaleCurrentLoad(LocaleBase),
         character);
 
     DEBUG_CONVTOLOWER(dprintf("locToLower: retval 0x%lx\n", retval));

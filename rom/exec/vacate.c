@@ -79,8 +79,7 @@
         }
     }
 
-    /* Fulfilled - release it. Drop our lock first: ReleaseSemaphore()
-     * takes the same one. */
+    /* No, it must have been fulfilled. Release the semaphore and done. */
     SEM_UNLOCK(sigSem);
     ReleaseSemaphore(sigSem);
 

@@ -1,0 +1,14 @@
+#
+#  Makefile.in for the Bluetooth A2DP AHI driver (bta2dp.device)
+#
+
+VPATH		= @srcdir@
+
+srcdir		= @srcdir@
+
+DRIVER		= bta2dp.audio
+MODEFILE	= BTA2DP
+
+OBJECTS		= bta2dp-init.o bta2dp-main.o bta2dp-playslave.o bta2dp-accel.o
+
+include ../Common/Makefile.common

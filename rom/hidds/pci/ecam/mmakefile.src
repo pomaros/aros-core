@@ -1,0 +1,6 @@
+include $(SRCDIR)/config/aros.cfg
+USER_CPPFLAGS := -D__OOP_NOLIBBASE__ -D__OOP_NOATTRBASES__ -D__OOP_NOMETHODBASES__
+USER_LDFLAGS := -static
+#MM kernel-hidd-pciecam : kernel-hidd-pci
+%build_module mmake=kernel-hidd-pciecam modname=pciecam modtype=hidd files="pciecam_init pciecam_class"
+%common

@@ -40,6 +40,10 @@
 /* Puddle size, in slots. Must be at least 1 */
 #define TASKSTORAGEPUDDLE       16
 
+struct RTContext;
+struct TaskResBase;
+void taskres_ResourceExit(struct Task *task, struct TaskResBase *TaskResBase);
+
 struct TaskResBase
 {
     struct Library              trb_LibNode;
@@ -58,6 +62,15 @@ struct TaskResBase
     struct List                 trb_LockedLists;
     struct Library *            trb_UtilityBase;
     struct SignalSemaphore      trb_NotifySem;                      /* Protects trb_NotifyHooks                                     */
+#if defined(__AROSEXEC_SMP__)
+    spinlock_t                  trb_RTLock;
+#endif
+    struct MinList              trb_RTContexts;
+    struct MinList              trb_RTRecords;
+    struct MinList              trb_RTPins;
+    IPTR                        trb_RTNext;
+    ULONG                       trb_RTReclaimed[8];
+    ULONG                       trb_RTCloseErrors;
     struct MinList              trb_NotifyHooks;                    /* struct Hook nodes registered with AddTaskNotifyHook()        */
 };
 

@@ -30,7 +30,7 @@ VOID ShowMessage(CONST_STRPTR msg)
         }
         else
         {
-            printf("Serial: %s\n", msg);
+            Printf("Locale: %s\n", (IPTR)msg);
         }
     }
 }

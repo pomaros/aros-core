@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
 
     Desc: Private data belonging to exec.library
 */
@@ -113,6 +114,9 @@ struct IntExecBase
     spinlock_t                  LibListSpinLock;
     spinlock_t                  PortListSpinLock;
     spinlock_t                  SemListSpinLock;
+    /* Membership is independent of ready/running/waiting transitions. */
+    spinlock_t                  TaskRegistrySpinLock;
+    struct List                 TaskRegistry;
 
     /* .. and then scheduling related locks ... */
     spinlock_t                  TaskRunningSpinLock;
@@ -142,6 +146,8 @@ struct IntExecBase
 #define EXECF_StackSnoop        (1 << EXECB_StackSnoop)
 #define EXECB_CPUAffinity       2                                /* Set once the CPU affinity masks should be used               */
 #define EXECF_CPUAffinity       (1 << EXECB_CPUAffinity)
+#define EXECB_Containment       3                                /* Boot arg "containment": a user-task CPU trap becomes a       */
+#define EXECF_Containment       (1 << EXECB_Containment)         /* recoverable guru + RemTask, not dead-end (traphandler.c)     */
 
 /* Additional private task states */
 #define TS_SERVICE              128

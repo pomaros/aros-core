@@ -131,7 +131,7 @@ struct TextFont *DF_OpenFontPath(struct TextAttr *, struct DiskfontBase *);
 
 /* diskfont_io.c */
 
-struct DiskFontHeader *ConvDiskFont(BPTR, CONST_STRPTR, BOOL, struct DiskfontBase *);
+struct DiskFontHeader *LoadDiskFontData(CONST_STRPTR, CONST_STRPTR, BOOL, struct DiskfontBase *);
 void DisposeConvDiskFont(struct DiskFontHeader *, struct DiskfontBase *);
 struct TextFont *ReadDiskFont(struct TTextAttr *, CONST_STRPTR, struct DiskfontBase *);
 

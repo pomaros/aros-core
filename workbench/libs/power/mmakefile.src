@@ -1,0 +1,18 @@
+# Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+# Distributed under the AROS Public License, version 1.1.
+
+include $(SRCDIR)/config/aros.cfg
+
+FILES := power_init power_transition power_source power_provider \
+         addpowernotifya rempowernotify powersleepa getpowerstatea addpowerwakea rempowerwake
+
+USER_LDFLAGS := -static
+
+#MM- workbench-libs-complete : workbench-libs-power
+%build_module mmake=workbench-libs-power \
+    modname=power modtype=library \
+    files="$(FILES)" archspecific=yes moduledir=Libs
+
+#MM includes-copy
+INCLUDE_FILES := $(call WILDCARD, include/libraries/*.h)
+%copy_includes path=libraries dir=include/libraries

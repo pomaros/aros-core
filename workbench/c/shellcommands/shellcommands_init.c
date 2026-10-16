@@ -6,10 +6,13 @@
 
 #define DEBUG 0
 #include <aros/debug.h>
+#include <aros/config.h>
+#include <aros/kernel.h>
 
 #include <exec/resident.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
+#include <proto/kernel.h>
 #include <proto/utility.h>      /* For Stricmp */
 
 #include <aros/symbolsets.h>
@@ -26,6 +29,7 @@ static int GM_UNIQUENAME(Init)(LIBBASETYPEPTR LIBBASE)
 {
     struct shcommand *sh;
     APTR UtilityBase;
+    ULONG command_bytes;
     int pos;
 
     D(bug("[ShellCommands] Init\n"));
@@ -55,7 +59,22 @@ static int GM_UNIQUENAME(Init)(LIBBASETYPEPTR LIBBASE)
     }
 
     LIBBASE->sc_Commands = pos;
-    LIBBASE->sc_Command = AllocMem(sizeof(LIBBASE->sc_Command[0])*pos, 0);
+#if defined(__AROSPLATFORM_WXSEG__)
+    {
+        struct KernelBase *KernelBase = OpenResource("kernel.resource");
+
+        if (KernelBase == NULL) {
+            CloseLibrary(DOSBase);
+            CloseLibrary(UtilityBase);
+            return FALSE;
+        }
+        command_bytes = sizeof(LIBBASE->sc_Command[0]) * pos;
+        LIBBASE->sc_Command = KrnAllocPages(NULL, command_bytes, MEMF_ANY);
+    }
+#else
+    command_bytes = sizeof(LIBBASE->sc_Command[0]) * pos;
+    LIBBASE->sc_Command = AllocMem(command_bytes, 0);
+#endif
     if (LIBBASE->sc_Command == NULL) {
         CloseLibrary(DOSBase);
         CloseLibrary(UtilityBase);
@@ -72,6 +91,23 @@ static int GM_UNIQUENAME(Init)(LIBBASETYPEPTR LIBBASE)
 #ifdef __AROS_USE_FULLJMP
         CacheClearE(&scs->scs_Code, sizeof(struct FullJumpVec), CACRF_ClearI | CACRF_ClearD);
 #endif
+    }
+
+#if defined(__AROSPLATFORM_WXSEG__)
+    {
+        struct KernelBase *KernelBase = OpenResource("kernel.resource");
+
+        /* The jump vectors are immutable after construction.  Keep the
+         * complete dedicated allocation R/X, never executable data in the
+         * ordinary Exec pool. */
+        KrnSetProtection(LIBBASE->sc_Command, command_bytes,
+            MAP_Readable | MAP_Executable);
+    }
+#endif
+
+    ForeachElementInSet(SETNAME(SHCOMMANDS), 1, pos, sh) {
+        struct ShellCommandSeg *scs = &LIBBASE->sc_Command[pos-1];
+
         AddSegment(sh->sh_Name, MKBADDR(&scs->scs_Next), CMD_INTERNAL);
         if (Stricmp(sh->sh_Name, "NewShell") == 0)
             AddSegment("NewCLI", MKBADDR(&scs->scs_Next), CMD_INTERNAL);

@@ -1,0 +1,13 @@
+# Copyright (C) 2026 John KNIPPER. All rights reserved.
+# Licensed under the AROS Public License (APL) Version 1.1.
+
+include $(SRCDIR)/config/aros.cfg
+
+#MM- workbench-c : workbench-c-sntpsync
+#MM- workbench-c-quick : workbench-c-sntpsync-quick
+#MM workbench-c-sntpsync : includes linklibs network-includes
+
+%build_prog mmake=workbench-c-sntpsync progname=SNTPSync \
+    files="SNTPSync sntp_packet" targetdir=$(AROS_C)
+
+%common

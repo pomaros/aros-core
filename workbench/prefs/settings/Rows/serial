@@ -1,0 +1,7 @@
+group devices
+order 30
+class SerialEditor.mcc
+name Serial port
+description Speed, data bits, parity and buffer of the serial port
+keywords baud rate parity stop bits handshake
+level expert

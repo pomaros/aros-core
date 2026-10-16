@@ -1,0 +1,7 @@
+group appearance
+order 30
+class PaletteEditor.mcc
+name Colours
+description The pens and colours of the screen
+keywords palette colour color pen
+level average

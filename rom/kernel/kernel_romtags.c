@@ -14,13 +14,23 @@
 #include <proto/alib.h>
 #include <proto/exec.h>
 
-#include <string.h>
-
 #include <kernel_base.h>
 #include <kernel_debug.h>
 #include <kernel_romtags.h>
 
 #define D(x)
+
+/* Resident discovery runs before stdc.library exists.  Do not route these
+ * boot-critical comparisons through the stdc link-library wrapper. */
+static BOOL resident_name_equal(CONST_STRPTR left, CONST_STRPTR right)
+{
+    while (*left && *left == *right)
+    {
+        left++;
+        right++;
+    }
+    return *left == *right;
+}
 
 /* The following define prevents the initial
  * scan to count residents */
@@ -48,7 +58,7 @@ static LONG findname(struct Resident **list, ULONG len, CONST_STRPTR name)
     
     for (i = 0; i < len; i++)
     {
-        if (!strcmp(name, list[i]->rt_Name))
+        if (resident_name_equal(name, list[i]->rt_Name))
             return i;
     }
 
@@ -347,7 +357,7 @@ struct Resident *krnFindResident(struct Resident **resList, const char *name)
 
     for (i = 0; resList[i]; i++)
     {
-        if (!strcmp(resList[i]->rt_Name, name))
+        if (resident_name_equal(resList[i]->rt_Name, name))
             return resList[i];
     }
     return NULL;

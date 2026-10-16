@@ -1,0 +1,24 @@
+# Copyright (C) 2026 John KNIPPER <code@jkn.me>
+# Licensed under the AROS PUBLIC LICENSE (APL) Version 1.1.
+include $(SRCDIR)/config/aros.cfg
+
+RELOAD_GENERATION ?= 1
+USER_CFLAGS += -DRELOAD_GENERATION=$(RELOAD_GENERATION)
+TARGETDIR := $(AROS_TESTS)/Reload
+USER_INCLUDES := -I$(TARGETDIR)/$(AROS_DIR_DEVELOPER)/include
+
+#MM test-reload-check : test-reload-probe
+#MM test-reload-async : test-reload-probe
+#MM test-reload-worker : test-reload-probe
+
+%build_module mmake=test-reload-probe modname=reloadprobe modtype=library \
+    files=reloadprobe prefix=$(TARGETDIR)
+
+%build_prog mmake=test-reload-check progname=ReloadCheck files=reloadcheck \
+    targetdir=$(TARGETDIR)
+
+%build_prog mmake=test-reload-async progname=ReloadAsync files=reloadasync \
+    targetdir=$(TARGETDIR)
+
+%build_prog mmake=test-reload-worker progname=ReloadWorker files=reloadworker \
+    targetdir=$(TARGETDIR)

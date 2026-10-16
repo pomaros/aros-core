@@ -308,6 +308,7 @@ IPTR PEPalette__OM_NEW(Class *CLASS, Object *self, struct opSet * msg)
         MUIA_Background, MUII_ButtonBack,
         MUIA_Group_Horiz, TRUE,
         Child, (IPTR)(ListviewObject,
+                MUIA_ObjectID, MAKE_ID('P','L','P','N'),
                 MUIA_Listview_List, (IPTR)(list = ListObject,
             End),
         End),
@@ -324,6 +325,7 @@ IPTR PEPalette__OM_NEW(Class *CLASS, Object *self, struct opSet * msg)
     PEModeStrings[1] = _(MSG_MULTICOLOR);
 
     coloradjust = ColoradjustObject,
+            MUIA_ObjectID, MAKE_ID('P','L','C','A'),
             End;
 
     data = INST_DATA(CLASS, self);

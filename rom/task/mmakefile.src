@@ -17,7 +17,7 @@ PRIV_EXEC_INCLUDES = \
     $(TARGET_KERNEL_INCLUDES) \
     -I$(SRCDIR)/rom/kernel
 
-INCLUDE_FILES := task.h
+INCLUDE_FILES := task.h task_rt.h
 
 USER_CPPFLAGS := \
                -DUSE_EXEC_DEBUG
@@ -54,7 +54,8 @@ TASKRES_FUNCS :=             \
         GetParentTaskStorageSlot \
         AddTaskNotifyHook    \
         RemTaskNotifyHook    \
-        SetTaskAffinity
+        SetTaskAffinity      \
+        TaskResourceControl
 
 TASKRES_FILES :=             \
         task_init            \

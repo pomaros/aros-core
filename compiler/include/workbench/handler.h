@@ -15,7 +15,8 @@ enum WBHM_Type
     WBHM_TYPE_SHOW,   /* Open all windows */
     WBHM_TYPE_HIDE,   /* Close all windows */
     WBHM_TYPE_OPEN,   /* Open a drawer */
-    WBHM_TYPE_UPDATE  /* Update an object */
+    WBHM_TYPE_UPDATE, /* Update an object */
+    WBHM_TYPE_TILES   /* Coalesced cached tile frame refresh; no payload */
 };
 
 struct WBHandlerMessage

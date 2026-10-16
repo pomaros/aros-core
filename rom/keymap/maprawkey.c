@@ -1,3 +1,6 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>
+ * This file is distributed under the AROS Public License, version 1.1.
+ */
 /*
     Copyright (C) 1995-2020, The AROS Development Team. All rights reserved.
 
@@ -75,8 +78,7 @@
 
     D(bug("[keymap] %s(0x%p)\n", __func__, keyMap));
 
-    if (!keyMap)
-        keyMap = KMBase(KeymapBase)->DefaultKeymap;
+    keyMap = KeymapSelect(KMBase(KeymapBase), keyMap);
 
     /* Don't handle non-rawkey events */
     if (event->ie_Class != IECLASS_RAWKEY)

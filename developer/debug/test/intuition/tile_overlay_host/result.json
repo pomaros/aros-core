@@ -1,0 +1,12 @@
+{
+  "result": "PASS",
+  "hashes": {
+    "rom/hyperlayers/upfrontlayer.c": "34be3188a535e93753f3f2af94149734ae612f946c0d1350767af8c5ca440f18",
+    "rom/hyperlayers/behindlayer.c": "f004c8c1765a4aa9edf2963844226e93ef639400fcf1eee0253ea13722226f27",
+    "rom/hyperlayers/movelayerinfrontof.c": "0753c95b4844ce740b49453d48d62ada5355283c9a33ed11683881456e22cb51",
+    "rom/hyperlayers/createupfrontlayertaglist.c": "282fd4aeb4c5e7cb09560ce857a3e4ef411b4702ae0bf646e643f7a4f42b7f6e",
+    "rom/hyperlayers/createbehindlayertaglist.c": "0bf52944ab3dc91efb0dd582efdc809ed01f41181d5ce5b35f7ccd7ddc4fa815",
+    "rom/intuition/openwindow.c": "ab4018f3c70d150576bd8efd58a77b1e4e7a80e08090067ee373ebec03548b85"
+  },
+  "scope": "Production priority selection, reorder bodies and window validation; mocked list mutation/graphics, no guest layer proof"
+}

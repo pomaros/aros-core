@@ -1,0 +1,29 @@
+{
+  "result": "PASS",
+  "baseline_source_sha256": {
+    "rom/task/TaskResourceControl.c": "4ed2e764fe7487582f030a45cfbdd7d91bad3d36627de2a4a8e9560a3943d7bd",
+    "rom/task/task_rt.h": "b35a648707f3f46c74eb104d208231213bce50c13f603f9d0b8dece6a7ddb7e7",
+    "rom/task/task_execfuncs.c": "1ab66e3f917069ff407f8b6e9a8d904ed689c437cfc8d05cb4c6918f390eff9b",
+    "rom/dos/createnewproc.c": "2d6bcde6abdb5b59a592d5ae228d8f59a757c6bbf94f1af9d991bb575f563cc2"
+  },
+  "cases": {
+    "close-consumed-handle": {
+      "result": "PASS",
+      "regression_rejected": true,
+      "exit_code": -6,
+      "generated_sha256": "151b35249c88c113d6570a8fe6a072a29038ffb880e6ce90dd5ef6528245dacb"
+    },
+    "missing-exit-cleanup": {
+      "result": "PASS",
+      "regression_rejected": true,
+      "exit_code": -6,
+      "generated_sha256": "51d7eeb0e55a419e3bc04a5df4de101d867ec908f941b5d0d45ed93534c810db"
+    },
+    "missing-early-dos-cleanup": {
+      "result": "PASS",
+      "regression_rejected": true,
+      "exit_code": -6,
+      "generated_sha256": "e00b4d37b0a2dd24d1177b5c569f69ff0d2d1b579f8c72acd21945046ee65526"
+    }
+  }
+}

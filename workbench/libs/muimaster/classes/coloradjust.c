@@ -1,5 +1,7 @@
 /*
     Copyright (C) 2002-2018, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>
+    Distributed under the AROS Public License 1.1.
 */
 
 #define MUIMASTER_YES_INLINE_STDARG
@@ -220,6 +222,9 @@ IPTR Coloradjust__OM_NEW(struct IClass *cl, Object *obj, struct opSet *msg)
     colorwheelbase = OpenLibrary("gadgets/colorwheel.gadget", 0);
     gradientsliderbase = OpenLibrary("gadgets/gradientslider.gadget", 0);
 
+    /* TAG_IGNORE suppresses the child tag, not evaluation of its value.
+     * Leave unavailable optional gadgets NULL so later hooks and conversion
+     * calls cannot use a library that failed to open. */
     obj = (Object *) DoSuperNewTags
         (cl, obj, NULL,
         MUIA_Group_Columns, 2,
@@ -251,7 +256,7 @@ IPTR Coloradjust__OM_NEW(struct IClass *cl, Object *obj, struct opSet *msg)
         Child, (IPTR) (HGroup,
             MUIA_Group_HorizSpacing, 2,
             (!colorwheelbase) ? TAG_IGNORE : Child,
-                (IPTR) (wheel = (Object *) BoopsiObject,
+                (IPTR) (wheel = colorwheelbase ? (Object *) BoopsiObject,
                 MUIA_Boopsi_ClassID, (IPTR) "colorwheel.gadget",
                 MUIA_Boopsi_MinWidth, 16,
                 MUIA_Boopsi_MinHeight, 16,
@@ -265,9 +270,9 @@ IPTR Coloradjust__OM_NEW(struct IClass *cl, Object *obj, struct opSet *msg)
                 GA_Height, 0,
                 ICA_TARGET, ICTARGET_IDCMP,
                 MUIA_FillArea, TRUE,
-            End),
+            End : NULL),
             (!gradientsliderbase) ? TAG_IGNORE : Child,
-                (IPTR) (grad = (Object *) BoopsiObject,
+                (IPTR) (grad = gradientsliderbase ? (Object *) BoopsiObject,
                 MUIA_Boopsi_ClassID, (IPTR) "gradientslider.gadget",
                 MUIA_Boopsi_MinWidth, 16,
                 MUIA_Boopsi_MinHeight, 16,
@@ -283,7 +288,7 @@ IPTR Coloradjust__OM_NEW(struct IClass *cl, Object *obj, struct opSet *msg)
                 PGA_Freedom, LORIENT_VERT,
                 ICA_TARGET, ICTARGET_IDCMP,
                 MUIA_FillArea, TRUE,
-            End),
+            End : NULL),
             (!colorwheelbase && !gradientsliderbase) ? Child : TAG_IGNORE,
                 (IPTR)HVSpace,
         End),

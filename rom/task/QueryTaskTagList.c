@@ -72,7 +72,11 @@
 
     struct TagItem * Tag = NULL;
     struct Library *UtilityBase = TaskResBase->trb_UtilityBase;
+#ifdef TASK_CPU_QUERY_PREPARE
+    TASK_CPU_QUERY_PREPARE;
+#else
     struct IntETask *task_et = GetIntETask(task);
+#endif
 
     D(
         bug("[TaskRes] %s: task @ 0x%p\n", __func__, task);
@@ -83,6 +87,9 @@
         
     while ((Tag = NextTagItem(&tagList)) != NULL)
     {
+#ifdef TASK_QUERY_SKIP_TAG
+        if (TASK_QUERY_SKIP_TAG(Tag->ti_Tag)) continue;
+#endif
         if (Tag->ti_Tag > TaskTag_REG_General0 && Tag->ti_Tag < TaskTag_REG_FloatCount)
         {
             // General Purpose Registers...
@@ -153,19 +160,27 @@
         case(TaskTag_CPUTime):
             {
                 struct timeval *storeval = (struct timeval *)Tag->ti_Data;
+#ifdef TASK_CPU_QUERY_TIME
+                TASK_CPU_QUERY_TIME(storeval);
+#else
                 if (task_et)
                 {
                     storeval->tv_micro = (task_et->iet_CpuTime.tv_nsec + 500) / 1000;
                     storeval->tv_secs  = task_et->iet_CpuTime.tv_sec;
                 }
+#endif
             }
             break;
         case(TaskTag_CPUUsage):
             {
+#ifdef TASK_CPU_QUERY_USAGE
+                TASK_CPU_QUERY_USAGE((ULONG *)Tag->ti_Data);
+#else
                 if (task_et)
                     *(ULONG *)(Tag->ti_Data) = task_et->iet_CpuUsage;
                 else
                     *(ULONG *)(Tag->ti_Data) = 0;
+#endif
             }
             break;
         case(TaskTag_StartTime):

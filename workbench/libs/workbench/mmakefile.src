@@ -10,7 +10,7 @@ USER_CPPFLAGS := \
 	       -D__ICON_NOLIBBASE__
 USER_LDFLAGS := -static
 
-FILES := support support_messages handler handler_support 
+FILES := support support_messages handler handler_support tile
 FUNCS := \
     addappicona \
     addappmenuitema \

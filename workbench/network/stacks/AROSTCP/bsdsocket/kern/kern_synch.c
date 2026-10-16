@@ -200,7 +200,7 @@ tsleep_main(struct SocketBase *p, ULONG wakemask)
     ULONG sigmask, bmask, timermask;
     struct timerequest *timerReply;
     register queue_t q;
-    int result;
+    int result, awakened;
 #if defined(__AROS__)
     D(bug("[AROSTCP](kern_synch.c) tsleep_main()\n"));
 #endif
@@ -235,10 +235,17 @@ tsleep_main(struct SocketBase *p, ULONG wakemask)
         /*
          * check if we were woken up.
          *
-         * If p->p_chan is zero then the wakener has removed us from
+         * If p->p_wchan is zero then the wakener has removed us from
          * the sleep queue.
+         * Wait may return for a timer or another signal while wakeup is
+         * running on another CPU. Observe its queue state under the same
+         * semaphore used by the writer, then release it before returning
+         * or processing timer messages.
          */
-        if(p->p_wchan == 0) {
+        ObtainSemaphore(&sleep_semaphore);
+        awakened = (p->p_wchan == 0);
+        ReleaseSemaphore(&sleep_semaphore);
+        if(awakened) {
             /*
              * Set back the signals which interrupted us so that user program can
              * detect them

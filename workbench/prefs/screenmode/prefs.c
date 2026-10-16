@@ -76,7 +76,7 @@ BOOL Prefs_ImportFH(BPTR fh)
 
                 if (error < 0)
                 {
-                    printf("Error: ReadChunkBytes() returned %d!\n", (int)error);
+                    bug("Error: ReadChunkBytes() returned %d!\n", (int)error);
                 }
                 else
                 {
@@ -95,13 +95,13 @@ BOOL Prefs_ImportFH(BPTR fh)
             }
             else
             {
-                printf("ParseIFF() failed, returncode %d!\n", (int)error);
+                bug("ParseIFF() failed, returncode %d!\n", (int)error);
                 success = FALSE;
             }
         }
         else
         {
-            printf("StopChunk() failed, returncode %d!\n", (int)error);
+            bug("StopChunk() failed, returncode %d!\n", (int)error);
             success = FALSE;
         }
 
@@ -176,7 +176,7 @@ BOOL Prefs_ExportFH(BPTR fh)
                 char buf[256];
 
                 NameFromFH(fh, buf, sizeof(buf));
-                printf("Error saving prefs file %s!\n", buf);
+                bug("Error saving prefs file %s!\n", buf);
             }
         }
         else

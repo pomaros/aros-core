@@ -23,6 +23,8 @@ extern struct Library      *MUIMasterBase;
 extern struct Library      *BluetoothBase;
 extern struct Library      *IconBase;
 
+BOOL LaunchBluetoothAction(APTR device, const char *action);
+
 /* pick a device-class icon (ICON_DEV_*) from Class-of-Device / LE Appearance */
 ULONG DeviceIconFor(IPTR cod, IPTR appearance, IPTR isclassic);
 

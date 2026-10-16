@@ -1,6 +1,7 @@
 /*
  * fat-handler - FAT12/16/32 filesystem handler
  *
+ * Copyright (C) 2026 John KNIPPER <code@jkn.me>
  * Copyright (C) 2006 Marek Szyprowski
  * Copyright (C) 2007-2026 The AROS Development Team
  *
@@ -41,8 +42,40 @@ void ProcessPackets(struct Globals *glob)
 
         pkt = (struct DosPacket *)msg->mn_Node.ln_Name;
 
+        /* A write-protected medium refuses every change up front, before a
+         * directory entry or FAT block could be dirtied in the cache. */
+        if (glob->readonly)
+        {
+            switch (pkt->dp_Type)
+            {
+            case ACTION_FINDOUTPUT:
+            case ACTION_FINDUPDATE:
+            case ACTION_WRITE:
+            case ACTION_SET_FILE_SIZE:
+            case ACTION_FORMAT:
+            case ACTION_DELETE_OBJECT:
+            case ACTION_RENAME_OBJECT:
+            case ACTION_CREATE_DIR:
+            case ACTION_SET_PROTECT:
+            case ACTION_SET_DATE:
+            case ACTION_SET_COMMENT:
+            case ACTION_RENAME_DISK:
+                D(bug("[fat] packet %ld refused: write protected\n",
+                    pkt->dp_Type));
+                err = ERROR_DISK_WRITE_PROTECTED;
+                pkt->dp_Type = ACTION_NIL;
+                break;
+            default:
+                break;
+            }
+        }
+
         switch (pkt->dp_Type)
         {
+        case ACTION_NIL:
+            /* Refused above; the reply below carries the error. */
+            break;
+
         case ACTION_LOCATE_OBJECT:
             {
                 struct ExtFileLock *fl = BADDR(pkt->dp_Arg1), *lock;
@@ -207,6 +240,29 @@ void ProcessPackets(struct Globals *glob)
                 FreeLock(lock, glob);
                 ReleaseDirHandle(&dh, glob);
 
+                break;
+            }
+
+        case ACTION_FH_FROM_LOCK:
+            {
+                struct FileHandle *fh = BADDR(pkt->dp_Arg1);
+                struct ExtFileLock *fl = BADDR(pkt->dp_Arg2);
+
+                if ((err = TestLock(fl, glob)))
+                    break;
+                if (!fh || !fl || (fl->gl->attr & ATTR_DIRECTORY))
+                {
+                    err = ERROR_OBJECT_WRONG_TYPE;
+                    break;
+                }
+
+                /* Transfer the existing reference to the file handle. Do not
+                 * copy/free it or change its shared/exclusive access mode.
+                 * On failure the caller must retain ownership of the lock. */
+                fl->pos = 0;
+                fh->fh_Arg1 = (IPTR) MKBADDR(fl);
+                fh->fh_Port = DOSFALSE;
+                res = DOSTRUE;
                 break;
             }
 
@@ -473,6 +529,49 @@ void ProcessPackets(struct Globals *glob)
 
                 if (inhibit == DOSTRUE)
                 {
+                    /* Assigns and other outstanding locks may keep the super
+                     * block alive after DoDiskRemove clears glob->sb. Flush
+                     * before that transition: neither its destructor nor the
+                     * normal active-volume timer can be relied on afterwards. */
+                    if (glob->disk_inhibited == 0 && glob->sb != NULL)
+                    {
+                        if (!Cache_Flush(glob->sb->cache))
+                        {
+                            err = IoErr();
+                            if (err == 0) err = ERROR_UNKNOWN;
+                            break;
+                        }
+                        /* Detach stops the active-volume timer, so commit the
+                         * clean marker here after the data, before removal.
+                         * MarkVolumeClean's FALSE also means "no change"; FAT
+                         * access errors are reported through fat_io_error. */
+                        glob->sb->fat_io_error = FALSE;
+                        MarkVolumeClean(glob);
+                        if (glob->sb->fat_io_error)
+                        {
+                            glob->sb->volume_dirty = TRUE;
+                            err = ERROR_UNKNOWN;
+                            break;
+                        }
+                        if (!Cache_Flush(glob->sb->cache))
+                        {
+                            err = IoErr();
+                            if (err == 0) err = ERROR_UNKNOWN;
+                            MarkVolumeDirty(glob);
+                            break;
+                        }
+                        glob->diskioreq->iotd_Req.io_Command = CMD_UPDATE;
+                        glob->diskioreq->iotd_Req.io_Data = NULL;
+                        glob->diskioreq->iotd_Req.io_Length = 0;
+                        if (DoIO((struct IORequest *)glob->diskioreq) != 0)
+                        {
+                            /* Keep the mounted volume dirty for a retry when
+                             * the device could not confirm persistence. */
+                            MarkVolumeDirty(glob);
+                            err = ERROR_UNKNOWN;
+                            break;
+                        }
+                    }
                     glob->disk_inhibited++;
                     if (glob->disk_inhibited == 1)
                         DoDiskRemove(glob);

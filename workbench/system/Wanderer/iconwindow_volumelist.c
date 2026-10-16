@@ -383,6 +383,15 @@ BOOL IconWindowVolumeList__Func_ParseBackdrop(Object *self, struct IconEntry *bd
                         }
                         UnLock(lofLock);
 
+                        /* The registered tile (including its static fallback)
+                         * already presents this left-out definition. Keep the
+                         * backdrop entry on disk: removing the AppIcon triggers
+                         * a root update and restores the ordinary disk icon. */
+                        if (AppIcon_TileDefinitionRegistered(bdrp_fullfile)) {
+                            FreeVec(bdrp_fullfile);
+                            continue;
+                        }
+
                         bdrp_namepart = FilePart(bdrp_fullfile);
 
                         struct IconEntry *this_entry = NULL, *iconNode = NULL, *tmpentry = NULL;
@@ -1338,6 +1347,28 @@ IPTR IconWindowVolumeList__MUIM_IconList_DrawEntryLabel(struct IClass *CLASS, Ob
 }
 
 ///
+IPTR IconWindowVolumeList__MUIM_IconList_Tile(struct IClass *CLASS, Object *self,
+                                             struct MUIP_IconList_Tile *message)
+{
+    struct IconTileRequest *request = message->request;
+    struct AppIcon *icon = (struct AppIcon *)message->entry->ie_User1;
+    if (message->entry->ie_IconListEntry.type != ILE_TYPE_APPICON)
+        return FALSE;
+    switch (request->action) {
+    case ICONTILE_SIZE: return AppIcon_TileSize(icon, &request->width, &request->height);
+    case ICONTILE_DRAW: return AppIcon_DrawTile(icon, request->rp, request->x, request->y);
+    case ICONTILE_CLICK: return AppIcon_TileClick(icon, request->x, request->y);
+    case ICONTILE_HIT: return AppIcon_TileHit(icon, request->x, request->y);
+    case ICONTILE_DEFINITION: return AppIcon_CopyTileDefinition(icon, (char *)request->rp, request->width);
+    case ICONTILE_ANCHOR: return AppIcon_TileAnchor(icon, &request->width);
+    case ICONTILE_PLACEMENT: return AppIcon_TilePlacement(icon, (struct Screen *)request->rp, request->width != 0 && request->height != 0, request->x, request->y, request->width, request->height);
+    case ICONTILE_GEOMETRY: return AppIcon_TileGeometry(icon, request->width != 0 && request->height != 0, request->x, request->y, request->width, request->height);
+    case ICONTILE_POINTER: return AppIcon_TilePointer(icon, request->width != 0, request->x, request->y);
+    case ICONTILE_VISIBILITY: return AppIcon_TileVisibility(icon, request->x != 0);
+    }
+    return FALSE;
+}
+
 /*** Setup ******************************************************************/
 ICONWINDOWICONVOLUMELIST_CUSTOMCLASS
 (
@@ -1355,5 +1386,6 @@ ICONWINDOWICONVOLUMELIST_CUSTOMCLASS
     MUIM_IconList_DestroyEntry, struct MUIP_IconList_DestroyEntry *,
     MUIM_IconList_PropagateEntryPos, struct MUIP_IconList_PropagateEntryPos *,
     MUIM_IconList_DrawEntry,    struct MUIP_IconList_DrawEntry *,
-    MUIM_IconList_DrawEntryLabel, struct MUIP_IconList_DrawEntryLabel *
+    MUIM_IconList_DrawEntryLabel, struct MUIP_IconList_DrawEntryLabel *,
+    MUIM_IconList_Tile, struct MUIP_IconList_Tile *
 );

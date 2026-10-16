@@ -22,6 +22,56 @@
 #include "hostlib.h"
 #include "shutdown.h"
 
+#if defined(HOST_OS_darwin)
+typedef void *host_pthread_t;
+extern host_pthread_t pthread_self(void);
+
+static volatile int HostLockState;
+static volatile uintptr_t HostLockOwner;
+static volatile unsigned int HostLockDepth;
+
+static void Host_Lock(void)
+{
+    uintptr_t self = (uintptr_t)pthread_self();
+
+    if (HostLockOwner == self)
+    {
+        HostLockDepth++;
+        return;
+    }
+
+    while (__sync_lock_test_and_set(&HostLockState, 1))
+        ;
+
+    HostLockOwner = self;
+    __sync_synchronize();
+    HostLockDepth = 1;
+}
+
+static void Host_Unlock(void)
+{
+    uintptr_t self = (uintptr_t)pthread_self();
+
+    if (HostLockOwner != self || HostLockDepth == 0)
+        return;
+
+    if (--HostLockDepth == 0)
+    {
+        HostLockOwner = 0;
+        __sync_synchronize();
+        __sync_lock_release(&HostLockState);
+    }
+}
+#else
+static void Host_Lock(void)
+{
+}
+
+static void Host_Unlock(void)
+{
+}
+#endif
+
 #if AROS_MODULES_DEBUG
 /* gdb hooks from which it obtains modules list */
 
@@ -41,11 +91,6 @@ static void Host_JIT_WriteProtect(int enabled)
     pthread_jit_write_protect_np(enabled);
 }
 
-/* Cocoa display C API (implemented in cocoa_display.m) */
-extern void *cocoa_display_init(int width, int height);
-extern int   cocoa_display_get_pitch(void);
-extern void  cocoa_display_refresh(void);
-extern void  cocoa_runloop_step(void);
 #endif
 
 /*
@@ -62,6 +107,8 @@ static struct HostInterface _HostIFace =
     Host_HostLib_GetPointer,
     KPutC,
     Host_HostLib_GetTime,
+    Host_Lock,
+    Host_Unlock,
 #if AROS_MODULES_DEBUG
     &Debug_ModList,
 #else
@@ -69,22 +116,7 @@ static struct HostInterface _HostIFace =
 #endif
 #if defined(__APPLE__) && defined(__aarch64__)
     Host_JIT_WriteProtect,
-    cocoa_display_init,
-    cocoa_display_get_pitch,
-    cocoa_display_refresh,
-    cocoa_runloop_step,
-    NULL,  /* cocoa_fb_base - set at runtime */
-    0,     /* cocoa_fb_width */
-    0,     /* cocoa_fb_height */
-    0,     /* cocoa_fb_pitch */
-    0,     /* cocoa_event_write */
-    0,     /* cocoa_event_read */
-    {{0}}  /* cocoa_events */
 #else
-    NULL,
-    NULL,
-    NULL,
-    NULL,
     NULL,
 #endif
 };

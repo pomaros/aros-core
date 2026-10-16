@@ -267,7 +267,9 @@ static void bEndpointWrite(struct BtHWEndpoint *hep, struct BtChannel *bch)
         bRFCOMMWrite(hep, bch);
         return;
     }
-    if(bch->bch_Length > BT_L2CAP_MAX_SEND_LEN) {
+    if(bch->bch_Length > BT_L2CAP_MAX_SEND_LEN ||
+       (hep->hep_Endpoint && hep->hep_Endpoint->bep_RemoteMTU && bch->bch_Length > hep->hep_Endpoint->bep_RemoteMTU)) {
+        /* an SDU above the peer's MTU would be dropped by the peer */
         bReplyChannel(BluetoothBase, bch, BTIOERR_BADPARAMS, 0);
         return;
     }
@@ -292,7 +294,21 @@ static void bEndpointEvent(struct bt_l2cap_channel_event_info *info, void *user_
     case BT_L2CAP_CHANNEL_EVENT_OPENED:
         hep->hep_LocalCID = info->local_cid;
         hep->hep_State = HEPS_OPEN;
+        hep->hep_Endpoint->bep_RemoteMTU = bt_l2cap_channel_manager_remote_mtu(&hep->hep_Conn->cn_L2CAP, info->local_cid);
         KPRINTF(10, ("endpoint channel open cid %04lx\n", info->local_cid));
+        /* A NOWAIT read opens a channel without waiting for data: a media
+           sink never sends any, yet its user needs the peer MTU. */
+        {
+            struct MinNode *next;
+            for(mn = hep->hep_ReadReqs.mlh_Head; (next = mn->mln_Succ); mn = next) {
+                struct BtChannel *bch = BCH_FROM_QNODE(mn);
+                if(bch->bch_Flags & BCHF_NOWAIT) {
+                    Remove((struct Node *) mn);
+                    bch->bch_Flags &= ~BCHF_QUEUED;
+                    bReplyChannel(BluetoothBase, bch, 0, 0);
+                }
+            }
+        }
         /* flush queued writes */
         while((mn = (struct MinNode *) RemHead((struct List *) &hep->hep_WriteReqs))) {
             struct BtChannel *bch = BCH_FROM_QNODE(mn);
@@ -325,6 +341,7 @@ static void bEndpointEvent(struct bt_l2cap_channel_event_info *info, void *user_
         KPRINTF(10, ("endpoint channel closed (%ld)\n", info->close_reason));
         hep->hep_State = HEPS_CLOSED;
         hep->hep_LocalCID = 0;
+        hep->hep_Endpoint->bep_RemoteMTU = 0;
         bReqQueueFlush(BluetoothBase, &hep->hep_ReadReqs, err);
         bReqQueueFlush(BluetoothBase, &hep->hep_WriteReqs, err);
         break;
@@ -1041,7 +1058,7 @@ static void bConnUp(struct BtHWConn *cn, UWORD handle, UBYTE role)
     btLockReadDevice(bd);
     for(bsv = (struct BtService *) bd->bd_Services.lh_Head; bsv->bsv_Node.ln_Succ; bsv = (struct BtService *) bsv->bsv_Node.ln_Succ) {
         for(bep = (struct BtEndpoint *) bsv->bsv_Endpoints.lh_Head; bep->bep_Node.ln_Succ; bep = (struct BtEndpoint *) bep->bep_Node.ln_Succ) {
-            if((bep->bep_Type == BEPT_L2CAP) && (cn->cn_LinkType == BDLT_ACL)) {
+            if((bep->bep_Type == BEPT_L2CAP) && !bep->bep_Clone && (cn->cn_LinkType == BDLT_ACL)) {
                 struct BtHWEndpoint *hep = bFindHWEndpoint(cn, bep);
                 if(!hep) {
                     hep = bAllocHWEndpoint(cn, bep);

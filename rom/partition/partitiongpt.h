@@ -53,6 +53,7 @@ struct GPTPartition
 
 /* AROS-specific flags */
 #define GPT_PF1_AROS_BOOTABLE (1 << 28)
-#define GPT_PF1_AROS_BOOTPRI  0x000000FF	/* Mask for boot priority */
+#define GPT_PF1_AROS_BOOTPRI  0x00FF0000	/* GPT bits 48..55, signed priority */
+#define GPT_PF1_AROS_BOOTPRI_SHIFT 16
 
 #endif /* PARTITIONGPT_H */

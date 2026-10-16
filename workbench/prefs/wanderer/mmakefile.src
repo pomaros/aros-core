@@ -12,4 +12,14 @@ EXEDIR      := $(AROS_PREFS)
     progname=Wanderer targetdir=$(EXEDIR) \
     files=$(FILES)
 
+# The same editor as a shared class for the settings window.
+CLASSFILES := locale entryelements wanderereditor_init wpeditor_mcc
+
+#MM- workbench-prefs : workbench-prefs-wanderer-class
+#MM workbench-prefs-wanderer-class : includes linklibs workbench-prefs-wanderer-catalogs workbench-classes-zune-prefseditor
+
+%build_module mmake=workbench-prefs-wanderer-class \
+    modname=WandererEditor modtype=mcc \
+    conffile=wanderereditor.conf files="$(CLASSFILES)"
+
 %common

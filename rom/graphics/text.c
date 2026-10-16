@@ -13,6 +13,51 @@
 
 #include "gfxfuncsupport.h"
 
+#if defined(__aarch64__)
+static BOOL textfont_has_bitmap_data(struct TextFont *tf)
+{
+    return (tf != NULL) &&
+           ((IPTR)tf->tf_CharData > 4096) &&
+           ((IPTR)tf->tf_CharLoc > 4096) &&
+           (((IPTR)tf->tf_CharLoc & 3) == 0) &&
+           (tf->tf_CharKern == NULL ||
+            (((IPTR)tf->tf_CharKern > 4096) && (((IPTR)tf->tf_CharKern & 1) == 0))) &&
+           (tf->tf_CharSpace == NULL ||
+            (((IPTR)tf->tf_CharSpace > 4096) && (((IPTR)tf->tf_CharSpace & 1) == 0))) &&
+           (tf->tf_Modulo > 0) &&
+           (tf->tf_Modulo <= 4096) &&
+           (tf->tf_XSize > 0) &&
+           (tf->tf_YSize > 0) &&
+           (tf->tf_YSize <= 1024) &&
+           (tf->tf_LoChar <= tf->tf_HiChar) &&
+           (NUMCHARS(tf) > 0) &&
+           (NUMCHARS(tf) <= 512);
+}
+#else
+static BOOL textfont_has_bitmap_data(struct TextFont *tf)
+{
+    return (tf != NULL) &&
+           (tf->tf_CharData != NULL) &&
+           (tf->tf_CharLoc != NULL) &&
+           (tf->tf_Modulo > 0) &&
+           (tf->tf_LoChar <= tf->tf_HiChar);
+}
+#endif
+
+static BOOL textfont_glyph_in_bounds(struct TextFont *tf, ULONG glyphpos,
+                                     UWORD glyphwidth, WORD rasheight)
+{
+    ULONG rowbits;
+
+    if (!glyphwidth)
+        return TRUE;
+    if (rasheight <= 0 || rasheight > tf->tf_YSize)
+        return FALSE;
+
+    rowbits = (ULONG)tf->tf_Modulo * 8;
+    return (glyphpos < rowbits) && ((ULONG)glyphwidth <= rowbits - glyphpos);
+}
+
 void BltTemplateBasedText(struct RastPort *rp, CONST_STRPTR text, ULONG len,
                           struct GfxBase *GfxBase);
 
@@ -67,6 +112,9 @@ void ColorFontBasedText(struct RastPort *rp, CONST_STRPTR text, ULONG len,
 {
     AROS_LIBFUNC_INIT
 
+    if(!rp || !string || !rp->Font)
+        return;
+
     if(count) {
         struct ColorTextFont *ctf = (struct ColorTextFont *)rp->Font;
         BOOL                  antialias;
@@ -104,6 +152,9 @@ void BltTemplateBasedText(struct RastPort *rp, CONST_STRPTR text, ULONG len,
     BOOL                 is_bold, is_italic, fastfont;
     BOOL                 allocated = FALSE;
     ULONG                rassize;
+
+    if (!rp || !text || !textfont_has_bitmap_data(rp->Font))
+        return;
 
     tf = rp->Font;
     is_bold = (rp->AlgoStyle & FSF_BOLD) != 0;
@@ -148,6 +199,8 @@ void BltTemplateBasedText(struct RastPort *rp, CONST_STRPTR text, ULONG len,
 
     raswidth  = te.te_Extent.MaxX - te.te_Extent.MinX + 1;
     rasheight = te.te_Extent.MaxY - te.te_Extent.MinY + 1;
+    if (raswidth <= 0 || rasheight <= 0 || raswidth > 4096 || rasheight > 1024)
+        return;
 
     raswidth16 = (raswidth + 15) & ~15;
     raswidth_bpr = raswidth16 / 8;
@@ -249,6 +302,8 @@ void BltTemplateBasedText(struct RastPort *rp, CONST_STRPTR text, ULONG len,
 
             glyphwidth = charloc & 0xFFFF;
             glyphpos = charloc >> 16;
+            if (!textfont_glyph_in_bounds(tf, glyphpos, glyphwidth, rasheight))
+                glyphwidth = 0;
 
             if(tf->tf_CharKern) {
                 x += ((WORD *)tf->tf_CharKern)[idx];
@@ -294,6 +349,8 @@ void BltTemplateBasedText(struct RastPort *rp, CONST_STRPTR text, ULONG len,
                 }
 
                 wx = x + italicshift + (bold ? tf->tf_BoldSmear : 0);
+                if (glyphwidth == 0 || wx < 0 || wx + glyphwidth > raswidth16)
+                    continue;
 
                 glyphdata = ((UBYTE *)tf->tf_CharData) + glyphpos / 8;
                 dst = raster + wx / 8;
@@ -440,16 +497,23 @@ void BltTemplateAlphaBasedText(struct RastPort *rp, CONST_STRPTR text, ULONG len
     if(!CyberGfxBase)
         return;
 
+    if (!rp || !text)
+        return;
+
+    tf = rp->Font;
+    if (!textfont_has_bitmap_data(tf))
+        return;
+
     TextExtent(rp, text, len, &te);
 
     raswidth  = te.te_Extent.MaxX - te.te_Extent.MinX + 1;
     rasheight = te.te_Extent.MaxY - te.te_Extent.MinY + 1;
+    if (raswidth <= 0 || rasheight <= 0 || raswidth > 4096 || rasheight > 1024)
+        return;
 
     raswidth_bpr = raswidth;
 
     if((raster = AllocVec(raswidth * rasheight, MEMF_CLEAR))) {
-        tf = rp->Font;
-
         x = -te.te_Extent.MinX;
 
         is_bold   = (rp->AlgoStyle & FSF_BOLD) != 0;
@@ -473,6 +537,8 @@ void BltTemplateAlphaBasedText(struct RastPort *rp, CONST_STRPTR text, ULONG len
 
             glyphwidth = charloc & 0xFFFF;
             glyphpos = charloc >> 16;
+            if (!textfont_glyph_in_bounds(tf, glyphpos, glyphwidth, rasheight))
+                glyphwidth = 0;
 
             if(tf->tf_CharKern) {
                 x += ((WORD *)tf->tf_CharKern)[idx];
@@ -491,6 +557,8 @@ void BltTemplateAlphaBasedText(struct RastPort *rp, CONST_STRPTR text, ULONG len
                 }
 
                 wx = x + italicshift + (bold ? tf->tf_BoldSmear : 0);
+                if (glyphwidth == 0 || wx < 0 || wx + glyphwidth > raswidth)
+                    continue;
 
                 glyphdata = ((UBYTE *)((struct ColorTextFont *)tf)->ctf_CharData[0]) + glyphpos;
                 dst = raster + wx;

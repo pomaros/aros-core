@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>
     Copyright (C) 1995-2020, The AROS Development Team. All rights reserved.
 
     OpenLocale() - Give access to a new locale.
@@ -152,6 +153,7 @@ extern void InitLocale(
                                     ("OpenLocale: locale 0x%lx\n", locale));
                                 if (locale)
                                 {
+                                    locale->il_Count = 1;
                                     InitLocale(name, locale, lp,
                                         LocaleBase);
                                     break;
@@ -181,8 +183,9 @@ extern void InitLocale(
                 &IntLB(LocaleBase)->lb_LocaleLock));
 
         ObtainSemaphore(&IntLB(LocaleBase)->lb_LocaleLock);
-        locale = IntLB(LocaleBase)->lb_CurrentLocale;
-        locale->il_Count++;
+        locale = LocaleCurrentLoad(LocaleBase);
+        if (locale != IntLB(LocaleBase)->lb_DefaultLocale)
+            locale->il_Count++;
         ReleaseSemaphore(&IntLB(LocaleBase)->lb_LocaleLock);
     }
 

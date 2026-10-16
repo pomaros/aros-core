@@ -1,0 +1,11 @@
+include $(SRCDIR)/config/aros.cfg
+
+#MM workbench-tools-vmexchange : includes linklibs
+
+%build_prog mmake=workbench-tools-vmexchange \
+    progname=VMExchange files="main client" targetdir=$(AROS_C)
+#MM workbench-tools-vmsync : includes linklibs
+
+%build_prog mmake=workbench-tools-vmsync \
+    progname=VMSync files="sync client" targetdir=$(AROS_C)
+%common

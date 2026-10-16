@@ -1,3 +1,6 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>
+ * This file is distributed under the AROS Public License, version 1.1.
+ */
 /*
     Copyright (C) 1995-2011, The AROS Development Team. All rights reserved.
 
@@ -33,11 +36,7 @@ static struct KeyMapNode *AddKeymap(char *name, struct KeyMap *data, struct Keym
         kmn->kn_Node.ln_Name = name;
         CopyMem(data, &kmn->kn_KeyMap, sizeof(struct KeyMap));
 
-        /*
-         * We are being called under Forbid(), so I don't have to arbitrate
-         * That notwithstanding, if keymap resource or exec library loading
-         * ever become semaphore based, there may be some problems.
-         */
+        /* The resource is not published until its built-in nodes are ready. */
         AddTail(&(LIBBASE->KeymapResource.kr_List), &kmn->kn_Node);
     }
     return kmn;
@@ -50,12 +49,17 @@ static int KeymapInit(LIBBASETYPEPTR LIBBASE)
 #endif
 
     LIBBASE->DefaultKeymap = &def_km;
+    LIBBASE->Switcher.Lock = 0;
+    LIBBASE->Switcher.Alternate = NULL;
+    LIBBASE->Switcher.Qualifier = KEYMAP_SWITCH_DISABLED;
+    LIBBASE->Switcher.Code = KEYMAP_SWITCH_NOKEY;
+    LIBBASE->Switcher.Active = FALSE;
 
     /* Initialize and add the keymap.resource */
     LIBBASE->KeymapResource.kr_Node.ln_Type = NT_RESOURCE;
     LIBBASE->KeymapResource.kr_Node.ln_Name = "keymap.resource";
     NEWLIST( &(LIBBASE->KeymapResource.kr_List) );
-    AddResource(&LIBBASE->KeymapResource);
+    InitSemaphore(&LIBBASE->KeymapResource.kr_Semaphore);
 
     /* AmigaOS default built-in keymap has "usa" name */
     if (!AddKeymap("usa", &def_km, LIBBASE))
@@ -68,6 +72,7 @@ static int KeymapInit(LIBBASETYPEPTR LIBBASE)
     AddKeymap("usa1", &def_km, LIBBASE);
 #endif
 
+    AddResource(&LIBBASE->KeymapResource);
     return TRUE;
 }
 

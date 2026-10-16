@@ -12,6 +12,7 @@
 
 #include "workbench_intern.h"
 #include "support.h"
+#include "tile.h"
 
 /*****************************************************************************
 
@@ -58,6 +59,43 @@
     {
         switch (tag->ti_Tag)
         {
+            case WBCTRLA_RefreshAppIconSnapshot:
+                if (!WBTileSnapshotRefresh((APTR)tag->ti_Data, WorkbenchBase)) rc = FALSE;
+                break;
+            case WBCTRLA_SnapshotAppIcons:
+                if (!WBTileSnapshot((struct AppIconSnapshotRequest *)tag->ti_Data, WorkbenchBase)) rc = FALSE;
+                break;
+            case WBCTRLA_FreeAppIconSnapshot:
+                if (!WBTileSnapshotFree((APTR)tag->ti_Data, WorkbenchBase)) rc = FALSE;
+                break;
+            case WBCTRLA_ActivateAppIconSnapshot:
+                if (!WBTileSnapshotActivate((struct AppIconSnapshotActivate *)tag->ti_Data, WorkbenchBase)) rc = FALSE;
+                break;
+            case WBCTRLA_QueryAppIconGeometry:
+                if (!WBTileQueryGeometry((struct AppIconGeometry *)tag->ti_Data, WorkbenchBase))
+                    rc = FALSE;
+                break;
+
+            case WBCTRLA_SuspendAppIcon:
+                if (!WBTileSuspend((struct AppIcon *)tag->ti_Data, WorkbenchBase))
+                    rc = FALSE;
+                break;
+
+            case WBCTRLA_QueryAppIcon:
+                if (!WBTileQuery((struct AppIconQuery *)tag->ti_Data, WorkbenchBase))
+                    rc = FALSE;
+                break;
+
+            case WBCTRLA_DetachAppIcon:
+                if (!WBTileDetach((struct AppIcon *)tag->ti_Data, WorkbenchBase))
+                    rc = FALSE;
+                break;
+
+            case WBCTRLA_PublishAppIcon:
+                if (!WBTilePublish((struct AppIconPublish *)tag->ti_Data, WorkbenchBase))
+                    rc = FALSE;
+                break;
+
             case WBCTRLA_IsOpen:
                 /* TODO: Do something... */
                 break;

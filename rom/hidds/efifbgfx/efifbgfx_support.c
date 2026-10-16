@@ -19,6 +19,18 @@
 #include "efifbgfx_intern.h"
 #include "efifbgfx_hidd.h"
 
+/* Transfer the inherited framebuffer from the kernel console before writing
+ * pixels. This is the same RawPutChar ownership protocol used by vesagfx. */
+static void OwnFramebuffer(struct HWData *data)
+{
+    if (!data->owned)
+    {
+        RawPutChar(0x03);
+        data->owned = TRUE;
+    }
+}
+
+#ifndef EFIFBGFX_EXTERNAL_HW
 BOOL initEFIFBGfxHW(struct HWData *data)
 {
     struct BootLoaderBase *BootLoaderBase;
@@ -87,6 +99,8 @@ BOOL initEFIFBGfxHW(struct HWData *data)
     return TRUE;
 }
 
+#endif
+
 /* Copy the (possibly partial) bitmap buffer to the visible framebuffer. */
 void efifbDoRefreshArea(struct HWData *hwdata, struct EFIFBGfxBitMapData *data,
                       LONG x1, LONG y1, LONG x2, LONG y2)
@@ -113,6 +127,8 @@ void efifbDoRefreshArea(struct HWData *hwdata, struct EFIFBGfxBitMapData *data,
 
     w = x2 - x1;
     h = y2 - y1;
+    if (w <= 0 || h <= 0)
+        return;
     sx = x1 - data->xoffset;
     sy = y1 - data->yoffset;
     w *= data->bytesperpix;
@@ -121,6 +137,8 @@ void efifbDoRefreshArea(struct HWData *hwdata, struct EFIFBGfxBitMapData *data,
     dstmod = hwdata->bytesperline;
     src = data->VideoData + sy * data->bytesperline + sx * data->bytesperpix;
     dst = (UBYTE *)hwdata->framebuffer + y1 * hwdata->bytesperline + x1 * hwdata->bytesperpixel;
+
+    OwnFramebuffer(hwdata);
 
     if ((srcmod != dstmod) || (srcmod != (ULONG)w))
     {
@@ -135,6 +153,8 @@ void efifbDoRefreshArea(struct HWData *hwdata, struct EFIFBGfxBitMapData *data,
     {
         CopyMem(src, dst, w * h);
     }
+    if (hwdata->present)
+        hwdata->present(hwdata->present_data, x1, y1, x2-x1, y2-y1);
 }
 
 /* The GOP framebuffer is truecolor: no hardware palette to load. */
@@ -146,5 +166,8 @@ void DACLoad(struct EFIFBGfx_staticdata *xsd, UBYTE *DAC, unsigned char first, i
 void ClearBuffer(struct HWData *data)
 {
     if (data->framebuffer)
+    {
+        OwnFramebuffer(data);
         SetMem(data->framebuffer, 0, data->height * data->bytesperline);
+    }
 }

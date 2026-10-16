@@ -1,0 +1,15 @@
+{
+  "result": "PASS",
+  "errors": [],
+  "workload_seconds": 0.051330958027392626,
+  "qemu_exit_code": 0,
+  "qmp_orderly_quit": true,
+  "timed_out": false,
+  "actual_aros_guest": true,
+  "backend": "hvf",
+  "cpus": 1,
+  "post_proof_observation_seconds": 3,
+  "bundle_sha256": "854ed020f6dcb6c388aa22c7f4898f4a33858615cbda3e3db0a325e5c4ce6966",
+  "firmware_sha256": "47765fe344818cbc464b1c14ae658fb4b854f5c2ceffa982411731eb4865594d",
+  "seconds": 9.09
+}

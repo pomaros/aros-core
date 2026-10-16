@@ -70,6 +70,21 @@ static struct PosixCIntBase *__fd_owner(struct PosixCIntBase *PosixCBase)
 #define FD_LOCK(base)   ObtainSemaphore(&__fd_owner(base)->fd_sem)
 #define FD_UNLOCK(base) ReleaseSemaphore(&__fd_owner(base)->fd_sem)
 
+void __fdesc_lock(void)
+{
+    struct PosixCIntBase *base =
+        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+    FD_LOCK(base);
+}
+
+void __fdesc_unlock(void)
+{
+    struct PosixCIntBase *base =
+        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+    FD_UNLOCK(base);
+}
+
+
 /* TODO: Add locking to make filedesc usage thread safe
    Using vfork()+exec*() filedescriptors may be shared between different
    tasks. Only one DOS file handle is used between shared file descriptors.

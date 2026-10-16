@@ -1,3 +1,6 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>
+ * This file is distributed under the AROS Public License, version 1.1.
+ */
 /*
     Copyright (C) 1995-2007, The AROS Development Team. All rights reserved.
 
@@ -111,11 +114,8 @@
     DEBUG_MAPANSI(bug("MapANSI: string 0x%lx count %ld buffer 0x%lx length %ld KeyMap 0x%lx\n",
                           string, count, buffer, length, keyMap));
 
-    if (keyMap == NULL)
-    {
-       keyMap = KMBase(KeymapBase)->DefaultKeymap;
-       DEBUG_MAPANSI(bug("MapANSI: KeyMap 0x%lx\n", keyMap));
-    }
+    keyMap = KeymapSelect(KMBase(KeymapBase), keyMap);
+    DEBUG_MAPANSI(bug("MapANSI: KeyMap 0x%lx\n", keyMap));
 
 
     /* First get the list of dead keys.

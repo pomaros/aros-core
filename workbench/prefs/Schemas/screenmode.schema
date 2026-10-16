@@ -1,0 +1,14 @@
+; Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+; Distributed under the AROS Public License, version 1.1.
+; SYS/screenmode.prefs: one SCRM chunk, struct ScreenModePrefs.
+schema   1
+file     SYS/screenmode.prefs
+layout   compiler/include/prefs/screenmode.h ScreenModePrefs
+chunk    SCRM size 28
+
+[screenmode/workbench]  level average  applier iprefs reboot
+  modeid      smp_DisplayID@16:4   type modeid
+  width       smp_Width@20:2       type int   range 0..16384  unit pixels
+  height      smp_Height@22:2      type int   range 0..16384  unit pixels
+  depth       smp_Depth@24:2       type int   range 1..32  unit bits
+  autoscroll  smp_Control@26:2     type flags  choices autoscroll=1

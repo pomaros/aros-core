@@ -21,7 +21,8 @@ typedef struct tls
 
 #define TLS_OFFSET(name) ((char *)&(((tls_t *)0)->name)-(char *)0)
 
-/* AArch64: Use TPIDR_EL1 system register for TLS pointer */
+/* Native default; EL0 platforms supply their own CPU-anchor accessor. */
+#ifndef TLS_PTR_GET
 
 #define TLS_PTR_GET() \
     ({ \
@@ -30,18 +31,18 @@ typedef struct tls
         __tls;  \
     })
 
+#endif /* TLS_PTR_GET */
+
 #define TLS_GET(name) \
     ({ \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         typeof(__tls -> name) __ret = (__tls -> name); \
         __ret;  \
     })
 
 #define TLS_SET(name, val) \
     do { \
-        tls_t *__tls; \
-        asm volatile("mrs %0, tpidr_el1":"=r"(__tls)); \
+        tls_t *__tls = TLS_PTR_GET(); \
         (__tls -> name) = val; \
     } while(0);
 

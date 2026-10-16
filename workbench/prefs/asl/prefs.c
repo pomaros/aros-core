@@ -80,7 +80,7 @@ BOOL Prefs_ImportFH(BPTR fh)
 
                 if (error < 0)
                 {
-                    printf("Error: ReadChunkBytes() returned %d!\n", (int)error);
+                    bug("Error: ReadChunkBytes() returned %d!\n", (int)error);
                 }
 
                 CopyMem(&loadprefs, &aslprefs, sizeof(struct AslPrefs));
@@ -89,13 +89,13 @@ BOOL Prefs_ImportFH(BPTR fh)
             }
             else
             {
-                printf("ParseIFF() failed, returncode %d!\n", (int)error);
+                bug("ParseIFF() failed, returncode %d!\n", (int)error);
                 success = FALSE;
             }
         }
         else
         {
-            printf("StopChunk() failed, returncode %d!\n", (int)error);
+            bug("StopChunk() failed, returncode %d!\n", (int)error);
             success = FALSE;
         }
 
@@ -147,7 +147,7 @@ BOOL Prefs_ExportFH(BPTR fh)
 
             if (error != 0) // TODO: We need some error checking here!
             {
-                printf("error: PushChunk() = %d\n", (int)error);
+                bug("error: PushChunk() = %d\n", (int)error);
             }
 
             CopyMem(&aslprefs, &saveprefs, sizeof(struct AslPrefs));
@@ -159,7 +159,7 @@ BOOL Prefs_ExportFH(BPTR fh)
 
             if (error != 0) // TODO: We need some error checking here!
             {
-                printf("error: PopChunk() = %d\n", (int)error);
+                bug("error: PopChunk() = %d\n", (int)error);
             }
 
             // Terminate the FORM

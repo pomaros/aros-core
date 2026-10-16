@@ -207,20 +207,11 @@ AROS_UFH3(void, virtio_PCIEnumerator_h,
     if ((UWORD)vendor != VIRTIO_PCI_VENDOR_ID)
         return;
 
-    /*
-     * Modern: device id 0x1040..0x107F. Subsystem ID indicates the device
-     *         class. We want only block (subsys = 2).
-     * Legacy: device id 0x1001 is virtio-blk.
-     */
-    if (((UWORD)product) == VIRTIO_PCI_DEVICEID_BLK_LEGACY) {
-        /* legacy virtio-blk */
-    } else if (((UWORD)product) >= VIRTIO_PCI_DEVICEID_MIN
-            && ((UWORD)product) <= VIRTIO_PCI_DEVICEID_MAX) {
-        if ((UWORD)sub_dev != VIRTIO_DEVICE_BLOCK)
-            return;
-    } else {
+    /* Modern type is encoded in the PCI device ID (0x1040 + type).
+     * Only transitional devices use the subsystem ID for their type. */
+    if ((UWORD)product != VIRTIO_PCI_DEVICEID_BLK_LEGACY &&
+        (UWORD)product != VIRTIO_PCI_DEVICEID_MIN + VIRTIO_DEVICE_BLOCK)
         return;
-    }
 
     dev = AllocPooled(VirtIOBase->virtio_MemPool, sizeof(*dev));
     if (dev == NULL)
@@ -303,7 +294,13 @@ static int VIRTIO_Probe(struct VirtIOBase *VirtIOBase)
         virtio_tags[VIRTIO_TAG_DATA].ti_Data = (IPTR)dev;
         OOP_GetAttr(dev->dev_Object, aHidd_PCIDevice_Driver,    (IPTR *)&dev->dev_PCIDriverObject);
 
-        HW_AddDriver(VirtIOBase->storageRoot, VirtIOBase->virtioClass, virtio_tags);
+        if (!HW_AddDriver(VirtIOBase->storageRoot, VirtIOBase->virtioClass, virtio_tags)) {
+            if (!dev->dev_Quarantined) {
+                HIDD_PCIDevice_Release(dev->dev_Object);
+                FreePooled(VirtIOBase->virtio_MemPool, dev, sizeof(*dev));
+            }
+            continue;
+        }
         D(
             if (dev->dev_Controller) {
                 bug("[VIRTIO:PCI] %s: VirtIO Controller Object @ 0x%p\n", __func__, dev->dev_Controller);

@@ -30,7 +30,7 @@ VOID ShowMessage(CONST_STRPTR msg)
         }
         else
         {
-            printf("ASL: %s\n", msg);
+            Printf((CONST_STRPTR)"ASL: %s\n", (IPTR)msg);
         }
     }
 }

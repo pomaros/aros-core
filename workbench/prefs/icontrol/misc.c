@@ -30,7 +30,7 @@ VOID ShowMessage(CONST_STRPTR msg)
         }
         else
         {
-            printf("IControl: %s\n", msg);
+            Printf((CONST_STRPTR)"IControl: %s\n", (IPTR)msg);
         }
     }
 }

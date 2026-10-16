@@ -1,0 +1,13 @@
+# Copyright (C) 2026 John Knipper. All rights reserved.
+# Licensed under the AROS Public License (APL) Version 1.1.
+
+include $(SRCDIR)/config/aros.cfg
+
+USER_INCLUDES := -I$(SRCDIR)/$(CURDIR) -I$(SRCDIR)/rom/timer
+
+%build_archspecific \
+  mainmmake=kernel-timer maindir=rom/timer \
+  arch=apple-aarch64 modname=timer \
+  files="abortio beginio timer_init ticks getsystime getuptime readeclock pauseuptime"
+
+%common

@@ -7,6 +7,7 @@
 #include <proto/workbench.h>
 #include <proto/exec.h>
 #include <proto/alib.h>
+#include <proto/utility.h>
 #include <aros/symbolsets.h>
 
 /*
@@ -17,6 +18,9 @@
  */
 
 #include "../../libs/workbench/workbench_intern.h"
+#include "../../libs/workbench/tile.h"
+#include <proto/graphics.h>
+#include <string.h>
 
 
 static struct MsgPort * replyport = NULL;
@@ -66,6 +70,12 @@ BOOL SendAppIconMenuMessage(struct AppIcon * appicon, UWORD class)
     if ((entry = FindAppIconByPtr(appicon)) != NULL)
     {
         struct MsgPort *port = entry->ai_MsgPort;
+        if (entry->ai_Tile)
+        {
+            success = AppIcon_SendTileMessage(entry, class, 0, 0, NULL);
+            UnlockWorkbench();
+            return success;
+        }
 
         msg = AllocVec(sizeof(struct AppMessage), MEMF_CLEAR);
 
@@ -179,7 +189,12 @@ CONST_STRPTR AppIcon_GetLabel(struct AppIcon * appicon)
 BOOL AppIcon_Supports(struct AppIcon * appicon, ULONG tag)
 {
     BOOL _return = FALSE;
-    /* This is a low-risk function, query passed object directly */
+    LockWorkbench();
+    appicon = FindAppIconByPtr(appicon);
+    if (!appicon) {
+        UnlockWorkbench();
+        return FALSE;
+    }
     switch(tag)
     {
     case(WBAPPICONA_SupportsOpen):          _return = !!(appicon->ai_Flags & WBAPPICONF_SupportsOpen); break;
@@ -196,26 +211,23 @@ BOOL AppIcon_Supports(struct AppIcon * appicon, ULONG tag)
     case(WBAPPICONA_PropagatePosition):     _return = !!(appicon->ai_Flags & WBAPPICONF_PropagatePosition); break;
     case(WBAPPICONA_RenderHook):            _return = (appicon->ai_RenderHook != NULL); break;
     }
+    UnlockWorkbench();
     return _return;
 }
 
 BOOL AppIcon_CallRenderHook(struct AppIcon * appicon, struct AppIconRenderMsg * msg)
 {
     struct AppIcon * entry = NULL;
+    BOOL called = FALSE;
 
     LockWorkbench();
-
     entry = FindAppIconByPtr(appicon);
-
-    if (entry && entry->ai_RenderHook)
+    if (entry && entry->ai_RenderHook) {
         CallHookA(entry->ai_RenderHook, NULL, msg);
-
+        called = TRUE;
+    }
     UnlockWorkbench();
-
-    if (entry && entry->ai_RenderHook)
-        return TRUE;
-    else
-        return FALSE;
+    return called;
 }
 
 LONG AppObjects_Init()
@@ -226,3 +238,227 @@ LONG AppObjects_Init()
 }
 
 ADD2INIT(AppObjects_Init, 0);
+
+/* Called with the Workbench registry mutex held; the task-exit hook and
+ * explicit detach invalidate the port under that same mutex before teardown. */
+BOOL AppIcon_SendTileMessage(struct AppIcon *icon, UWORD class, LONG x, LONG y,
+                             const char *region)
+{
+    struct WorkbenchBase *wb = LB(WorkbenchBase);
+    WBTileCollectReplies(wb);
+    return WBTileSendMessage(icon, class, x, y, region, wb) != NULL;
+}
+
+/* All tile reads stay under the registration lock, including the blit. */
+BOOL AppIcon_TileSize(struct AppIcon *icon, ULONG *width, ULONG *height)
+{
+    BOOL result = FALSE;
+    LockWorkbench();
+    icon = FindAppIconByPtr(icon);
+    if (icon && icon->ai_Tile) {
+        *width = icon->ai_Tile->state.width;
+        *height = icon->ai_Tile->state.height;
+        result = TRUE;
+    }
+    UnlockWorkbench();
+    return result;
+}
+
+BOOL AppIcon_DrawTile(struct AppIcon *icon, struct RastPort *rp, LONG x, LONG y)
+{
+    BOOL result = FALSE;
+    LockWorkbench();
+    icon = FindAppIconByPtr(icon);
+    if (icon && icon->ai_Tile && WBTileStateFresh(&icon->ai_Tile->state, WBTileClock(&icon->ai_Tile->timer))) {
+        struct WBTile *tile = icon->ai_Tile;
+        BltBitMapRastPort(tile->bitmap, 0, 0, rp, x, y,
+                         tile->state.width, tile->state.height, 0xc0);
+        WaitBlit();
+        result = TRUE;
+    }
+    UnlockWorkbench();
+    return result;
+}
+
+/* A hit query keeps SELECTUP armed for rapid clicks on a live region. */
+BOOL AppIcon_TileHit(struct AppIcon *icon, LONG x, LONG y)
+{
+    BOOL result = FALSE;
+    LockWorkbench();
+    icon = FindAppIconByPtr(icon);
+    if (icon && icon->ai_Tile) {
+        struct WBTile *tile = icon->ai_Tile;
+        result = WBTileStateFresh(&tile->state, WBTileClock(&tile->timer)) &&
+                 WBTileStateHit(&tile->state, x, y) >= 0;
+    }
+    UnlockWorkbench();
+    return result;
+}
+
+BOOL AppIcon_TileClick(struct AppIcon *icon, LONG x, LONG y)
+{
+    BOOL result = FALSE;
+    LockWorkbench();
+    icon = FindAppIconByPtr(icon);
+    if (icon && icon->ai_Tile) {
+        struct WBTile *tile = icon->ai_Tile;
+        LONG region = WBTileStateHit(&tile->state, x, y);
+        if (region >= 0 && WBTileStateFresh(&tile->state, WBTileClock(&tile->timer)))
+            result = AppIcon_SendTileMessage(icon, AMCLASSICON_Region, x, y,
+                         tile->state.regions.air_Regions[region].air_Name);
+    }
+    UnlockWorkbench();
+    return result;
+}
+
+/* Visibility observations remain authoritative when the bounded message pool
+ * is full. The owner also polls QueryAppIcon; missed messages allocate nothing. */
+BOOL AppIcon_TileVisibility(struct AppIcon *icon, BOOL visible)
+{
+    BOOL result = FALSE;
+    LockWorkbench();
+    icon = FindAppIconByPtr(icon);
+    if (icon && icon->ai_Tile) {
+        struct WBTile *tile = icon->ai_Tile;
+        BOOL changed = tile->visible != !!visible;
+        tile->visible = !!visible;
+        if (!visible) { tile->hovered = FALSE; tile->geometryValid = FALSE; }
+        tile->visibilityTick = WBTileClock(&tile->timer);
+        if (changed)
+            AppIcon_SendTileMessage(icon, AMCLASSICON_Visibility, !!visible, 0, NULL);
+        result = TRUE;
+    }
+    WBTileFlushPointers(LB(WorkbenchBase));
+    UnlockWorkbench();
+    return result;
+}
+
+/* Geometry is copied under the registry lock; no window or screen pointer
+ * crosses the presenter boundary. The full surface rectangle anchors panels,
+ * while the validity bit means at least one part is currently presented. */
+/* Placement survives occlusion, but not hidden/list/nonfront presentation.
+ * Screen is an identity only: callers hold its lifetime, no screen dereference
+ * occurs under the Workbench registry lock. */
+BOOL AppIcon_TilePlacement(struct AppIcon *icon, struct Screen *screen, BOOL valid,
+                           LONG left, LONG top, ULONG width, ULONG height)
+{
+    BOOL result=FALSE;
+    LockWorkbench();
+    icon=FindAppIconByPtr(icon);
+    if (icon && icon->ai_Tile) {
+        struct WBTile *tile=icon->ai_Tile;
+        valid=valid && screen && width==tile->state.width && height==tile->state.height;
+        tile->placementValid=!!valid;
+        tile->placementScreen=valid?screen:NULL;
+        tile->placementLeft=valid?left:0;tile->placementTop=valid?top:0;
+        tile->placementTick=WBTileClock(&tile->timer);
+        result=TRUE;
+    }
+    UnlockWorkbench();return result;
+}
+
+BOOL AppIcon_TileGeometry(struct AppIcon *icon, BOOL valid, LONG left, LONG top,
+                          ULONG width, ULONG height)
+{
+    BOOL result = FALSE;
+    LockWorkbench();
+    icon = FindAppIconByPtr(icon);
+    if (icon && icon->ai_Tile) {
+        struct WBTile *tile = icon->ai_Tile;
+        valid = valid && width == tile->state.width && height == tile->state.height;
+        tile->geometryValid = !!valid;
+        tile->geometryLeft = valid ? left : 0;
+        tile->geometryTop = valid ? top : 0;
+        tile->geometryWidth = valid ? width : 0;
+        tile->geometryHeight = valid ? height : 0;
+        tile->geometryTick = WBTileClock(&tile->timer);
+        result = TRUE;
+    }
+    UnlockWorkbench();
+    return result;
+}
+
+BOOL AppIcon_TilePointer(struct AppIcon *icon, BOOL inside, LONG x, LONG y)
+{
+    BOOL result = FALSE;
+    LockWorkbench();
+    WBTileCollectReplies(LB(WorkbenchBase));
+    icon = FindAppIconByPtr(icon);
+    if (icon && icon->ai_Tile && icon->ai_Tile->pointerEnabled) {
+        struct WBTile *tile = icon->ai_Tile;
+        ULONG now = WBTileClock(&tile->timer);
+        tile->hovered = inside && x >= 0 && y >= 0 &&
+            x < (LONG)tile->state.width && y < (LONG)tile->state.height && tile->visible &&
+            WBTileStateFresh(&tile->state, now);
+        tile->pointerX = x; tile->pointerY = y; tile->pointerTick = now;
+        result = TRUE;
+    }
+    WBTileFlushPointers(LB(WorkbenchBase));
+    UnlockWorkbench();
+    return result;
+}
+
+BOOL AppIcon_TilesChanged(void)
+{
+    struct AppIcon *icon;
+    BOOL changed = FALSE;
+    ULONG now;
+    LockWorkbench();
+    ForeachNode(&LB(WorkbenchBase)->wb_AppIcons, icon) {
+        struct WBTile *tile = icon->ai_Tile;
+        if (!tile) continue;
+        now = WBTileClock(&tile->timer);
+        /* Reserve two refresh intervals plus drawing time. A delayed task is
+         * not a hard real-time guarantee; guest tests measure completed blits. */
+        if (tile->state.fresh && (ULONG)(now - tile->state.lastAlive) >= 4250) {
+            tile->state.fresh = FALSE;
+            tile->dirty = TRUE;
+        }
+        if (tile->dirty) {
+            tile->dirty = FALSE;
+            changed = TRUE;
+        }
+    }
+    WBTileCollectReplies(LB(WorkbenchBase));
+    WBTileFlushPointers(LB(WorkbenchBase));
+    UnlockWorkbench();
+    return changed;
+}
+
+/* Copy metadata under the registry lock; no borrowed owner or icon strings. */
+BOOL AppIcon_CopyTileDefinition(struct AppIcon *icon,char *path,ULONG capacity)
+{
+    BOOL result=FALSE;
+    if(!path || !capacity)return FALSE;
+    path[0]=0;LockWorkbench();icon=FindAppIconByPtr(icon);
+    if(icon && icon->ai_Tile && icon->ai_Tile->definitionPath[0]) {
+        ULONG n=strlen(icon->ai_Tile->definitionPath);
+        if(n<capacity){memcpy(path,icon->ai_Tile->definitionPath,n+1);result=TRUE;}
+    }
+    UnlockWorkbench();return result;
+}
+BOOL AppIcon_TileAnchor(struct AppIcon *icon,ULONG *anchor)
+{
+    BOOL result=FALSE;if(!anchor)return FALSE;
+    *anchor=0;LockWorkbench();icon=FindAppIconByPtr(icon);
+    if(icon && icon->ai_Tile && icon->ai_Tile->group) {
+        *anchor=icon->ai_Tile->groupAnchor;result=TRUE;
+    }
+    UnlockWorkbench();return result;
+}
+
+/* Both paths are canonical volume paths: the service resolves the definition's
+ * parent with NameFromLock, and ParseBackdrop resolves its file/.info lock.
+ * Keep the comparison inside the registry lock: no owner/string escapes it.
+ * Freshness is deliberately irrelevant; a registered fallback is a presenter. */
+BOOL AppIcon_TileDefinitionRegistered(const char *canonicalPath)
+{
+    struct AppIcon *icon;BOOL found=FALSE;
+    if(!canonicalPath || !canonicalPath[0])return FALSE;
+    LockWorkbench();
+    ForeachNode(&LB(WorkbenchBase)->wb_AppIcons,icon) {
+        if(icon->ai_Tile && icon->ai_Tile->definitionPath[0] &&
+           !Stricmp(icon->ai_Tile->definitionPath,canonicalPath)) {found=TRUE;break;}
+    }
+    UnlockWorkbench();return found;
+}

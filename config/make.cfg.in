@@ -29,6 +29,26 @@ include $(GENDIR)/config/target.cfg
 include $(HOSTGENDIR)/config/host.cfg
 include $(GENDIR)/config/build.cfg
 
+# Reproducible command version strings. GNU make 3.81 does not propagate
+# makefile exports to $(shell), so pass the validated epoch explicitly.
+ifneq ($(origin SOURCE_DATE_EPOCH),undefined)
+ifeq ($(strip $(SOURCE_DATE_EPOCH)),)
+$(error SOURCE_DATE_EPOCH must be a nonnegative integer)
+endif
+_AROS_EPOCH_NON_DIGITS := $(subst 0,,$(subst 1,,$(subst 2,,$(subst 3,,$(subst 4,,$(subst 5,,$(subst 6,,$(subst 7,,$(subst 8,,$(subst 9,,$(SOURCE_DATE_EPOCH)))))))))))
+ifneq ($(_AROS_EPOCH_NON_DIGITS),)
+$(error SOURCE_DATE_EPOCH must be a nonnegative integer)
+endif
+_AROS_DATE_EPOCH_ARG := --epoch $(SOURCE_DATE_EPOCH)
+export SOURCE_DATE_EPOCH
+endif
+AROS_BUILD_DATES := $(shell $(PYTHON) "$(SRCDIR)/scripts/build-date.py" $(_AROS_DATE_EPOCH_ARG))
+ifneq ($(words $(AROS_BUILD_DATES)),2)
+$(error Could not determine AROS build dates)
+endif
+AROS_BUILD_DATE := $(word 1,$(AROS_BUILD_DATES))
+AROS_BUILD_ISODATE := $(word 2,$(AROS_BUILD_DATES))
+
 # Bootstrap ELF relocators cannot allocate SHN_COMMON symbols. Append the
 # feature-detected flag after USER_CFLAGS so -fcommon cannot leak into kernels.
 KERNEL_CFLAGS                += $(CFLAGS_NO_COMMON)
@@ -249,6 +269,22 @@ BASE_CFLAGS                   = $(CONFIG_BASE_CFLAGS)
 BASE_CXXFLAGS                 = $(CONFIG_BASE_CXXFLAGS)
 BASE_CPPFLAGS                 = $(CONFIG_BASE_CPPFLAGS)
 
+# Kickstart/ROM modules run before stdc.library is loaded, so they cannot use the
+# weak StdC library-call stubs (-lstdc) that compiler-emitted memset/memcpy/memmove/
+# memcmp/strlen/... resolve to -- those deref a still-NULL StdCBase and crash at
+# early boot. Link the strong, freestanding static C runtime *early* (before the
+# spec's weak -lstdc) so those references bind to base-free implementations.
+# libstdc.static.a is the freestanding subset (mem/str/ctype/math/formatting -- no
+# printf/malloc/I/O), so archive semantics pull only the referenced members; modules
+# that emit no such libcalls (most) pay nothing, and disk programs that pull e.g.
+# memset just get the same leaf function statically (printf/malloc stay shared).
+#
+# NOTE: in a *hosted* build every module compiles as compiler=target and links via
+# LDFLAGS/TARGET_LDFLAGS (see below); the kernel compiler type -- and KERNEL_LDFLAGS
+# -- is only used by *native* bare-metal kickstart builds. So the fix must be in
+# both places to cover hosted and native.
+KERNEL_LDFLAGS                += -lstdc.static
+
 # Was debugging enabled? Better set up the options.
 ifeq ($(DEBUG),yes)
     BASE_CFLAGS               += $(DEBUG_CFLAGS)
@@ -285,7 +321,22 @@ CFLAGS                        = $(strip $(TARGET_ISA_CFLAGS) $(TARGET_CFLAGS) $(
 CXXFLAGS                      = $(strip $(TARGET_ISA_CXXFLAGS) $(TARGET_CXXFLAGS))
 CPPFLAGS                      = $(strip $(TARGET_CPPFLAGS))
 AFLAGS                        = $(strip $(TARGET_ISA_AFLAGS) $(USER_AFLAGS) $(CONFIG_AFLAGS))
+# -lstdc.static: strong freestanding C runtime, force-linked before the spec's weak
+# -lstdc so compiler-emitted memset/memcpy/memmove/__vcformat/... bind to base-free
+# implementations. REQUIRED here (not just KERNEL_LDFLAGS): in a hosted build the
+# kickstart links as compiler=target via this general LDFLAGS, not KERNEL_LDFLAGS, so
+# without it kernel.resource's memset resolves to the weak StdCBase stub and derefs a
+# NULL StdCBase at early boot (SIGSEGV before [KRN]). Disk programs share this link
+# type, so __vcformat is un-gated to FULL_SPECIFIERS (see __vcformat.c) -- otherwise the
+# lean static __vcformat pulled here would print "%f" literally.
 LDFLAGS                       = $(strip $(USER_LDFLAGS) $(TARGET_LDFLAGS))
+
+# Darwin AArch64 runs inside the host process and follows its reserved-x18 ABI.
+ifeq ($(AROS_TARGET_ARCH)-$(AROS_TARGET_CPU),darwin-aarch64)
+CFLAGS                        += -mcmodel=large -ffixed-x18 -D__arm64__
+CXXFLAGS                      += -mcmodel=large -ffixed-x18 -D__arm64__
+LDFLAGS                       += -lstdc.static
+endif
 
 ifeq ($(AROS_TARGET_CPU),aarch64)
 # clang emits the weak __aros_libreq_<base> version marker as a non-weak

@@ -1,3 +1,6 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>
+ * This file is distributed under the AROS Public License, version 1.1.
+ */
 /*
     Copyright (C) 1995-2020, The AROS Development Team. All rights reserved.
         
@@ -72,9 +75,9 @@ libtable[] =
     {&GfxBase           , "graphics.library"            , 39, FALSE },
     {&UtilityBase       , "utility.library"             , 39, TRUE  },
     {&IFFParseBase      , "iffparse.library"            , 39, FALSE },
-    {&LocaleBase        , "locale.library"              , 39, TRUE  },
-    {&KeymapBase        , "keymap.library"              , 39, FALSE },
-    {&KMSBase           , "kms.library"                 , 3,  FALSE, TRUE },
+    {&LocaleBase        , "locale.library"              , 51, TRUE  },
+    {&KeymapBase        , "keymap.library"              , 43, FALSE },
+    {&KMSBase           , "kms.library"                 , 4,  FALSE, TRUE },
     {&LayersBase        , "layers.library"              , 39, FALSE },
     {&DataTypesBase     , "datatypes.library"           , 39, FALSE },
     {&DiskfontBase      , "diskfont.library"            , 39, FALSE },

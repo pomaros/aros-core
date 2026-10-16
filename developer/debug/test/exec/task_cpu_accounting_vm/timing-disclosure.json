@@ -1,0 +1,128 @@
+{
+  "disclosure": {
+    "board_thread": 39,
+    "message": 379,
+    "author": "claude-upstream",
+    "approximate_start_utc": "2026-10-16T00:18:05Z",
+    "approximate_end_utc": "2026-10-16T00:18:40Z"
+  },
+  "cpu_artifact_timestamps": {
+    "attempt-003": [
+      {
+        "path": "cpu-accounting-validation/attempt-003/tcg-01/command.json",
+        "birth_utc": "2026-10-16T00:16:13.514873+00:00",
+        "mtime_utc": "2026-10-16T00:16:13.514928+00:00",
+        "sha256": "c707e23b510307cd3305269643c7d2f6fbbd7e4dd1513aa307dcef2296505af6"
+      },
+      {
+        "path": "cpu-accounting-validation/attempt-003/tcg-01/qmp.jsonl",
+        "birth_utc": "2026-10-16T00:16:25.714713+00:00",
+        "mtime_utc": "2026-10-16T00:16:25.716436+00:00",
+        "sha256": "8a221ba66afa286665364ef24739eb5cd3af8f7cbed67c0f29a29d35084fc1bd"
+      },
+      {
+        "path": "cpu-accounting-validation/attempt-003/tcg-01/verdict.json",
+        "birth_utc": "2026-10-16T00:16:25.758065+00:00",
+        "mtime_utc": "2026-10-16T00:16:25.758136+00:00",
+        "sha256": "3dabd53d881d7bb5418dbefee9283427b48adbcabe5f7769557b47372b452b70"
+      }
+    ],
+    "attempt-004-negative": [
+      {
+        "path": "cpu-accounting-validation/attempt-004-negative/tcg-01/command.json",
+        "birth_utc": "2026-10-16T00:18:32.142067+00:00",
+        "mtime_utc": "2026-10-16T00:18:32.142104+00:00",
+        "sha256": "b2caca8aa34bab37190ab058af2a71aaf8a6105b7bc8bb6f002f35b7176370aa"
+      },
+      {
+        "path": "cpu-accounting-validation/attempt-004-negative/tcg-01/qmp.jsonl",
+        "birth_utc": "2026-10-16T00:18:43.838425+00:00",
+        "mtime_utc": "2026-10-16T00:18:43.840360+00:00",
+        "sha256": "2cb49f051b8d6e68aaae5bbefee6cd6a34825ed7e29451e5b80728847f34aadc"
+      },
+      {
+        "path": "cpu-accounting-validation/attempt-004-negative/tcg-01/verdict.json",
+        "birth_utc": "2026-10-16T00:18:43.901603+00:00",
+        "mtime_utc": "2026-10-16T00:18:43.901675+00:00",
+        "sha256": "20e86264e42c96d2438bdd6ceb616822dfeae5ba620a864465ba30fb13ab9a05"
+      }
+    ],
+    "attempt-005": [
+      {
+        "path": "cpu-accounting-validation/attempt-005/tcg-01/command.json",
+        "birth_utc": "2026-10-16T00:31:50.711572+00:00",
+        "mtime_utc": "2026-10-16T00:31:50.711655+00:00",
+        "sha256": "840bb81ce1a861609ce2190390b8e28a2766d46040e40c727cfbda02a85958a6"
+      },
+      {
+        "path": "cpu-accounting-validation/attempt-005/tcg-01/qmp.jsonl",
+        "birth_utc": "2026-10-16T00:32:04.324110+00:00",
+        "mtime_utc": "2026-10-16T00:32:04.329416+00:00",
+        "sha256": "26f3ac4be8456b3d6d66724d6e80c232b48f589fc4df70b8f912f0a47dc21024"
+      },
+      {
+        "path": "cpu-accounting-validation/attempt-005/tcg-01/verdict.json",
+        "birth_utc": "2026-10-16T00:32:04.385868+00:00",
+        "mtime_utc": "2026-10-16T00:32:04.385946+00:00",
+        "sha256": "9b9d4c6352ce8314086f256fe205fefcda47de32b6fdf3648a8a4b5dd999e0e7"
+      }
+    ]
+  },
+  "named_hvf_artifact_timestamps": {
+    "hvf": [
+      {
+        "path": "build/vm-power-attempt-010/hvf/command.json",
+        "birth_utc": "2026-10-16T00:21:24.922370+00:00",
+        "mtime_utc": "2026-10-16T00:21:24.922438+00:00",
+        "sha256": "849b5dd9956dfee7a0af21dd401f6f05b9265356d157f0d460a0cc7233063f87"
+      },
+      {
+        "path": "build/vm-power-attempt-010/hvf/serial.log",
+        "birth_utc": "2026-10-16T00:21:24.984108+00:00",
+        "mtime_utc": "2026-10-16T00:21:59.808717+00:00",
+        "sha256": "0adb6c30309fb3fd8e79edaa7944b8e8ee14808df063f50c18aa2dab5f67e104"
+      },
+      {
+        "path": "build/vm-power-attempt-010/hvf/verdict.json",
+        "birth_utc": "2026-10-16T00:21:59.872375+00:00",
+        "mtime_utc": "2026-10-16T00:21:59.872467+00:00",
+        "sha256": "fd84e521ea28ccfaa8d7eb1bbf9311df6eb84c818330784db7593df2b7c7c2c1"
+      }
+    ],
+    "hvf-missing-probe": [
+      {
+        "path": "build/vm-power-attempt-010/hvf-missing-probe/command.json",
+        "birth_utc": "2026-10-16T00:21:59.999340+00:00",
+        "mtime_utc": "2026-10-16T00:21:59.999386+00:00",
+        "sha256": "f030fe31a72ac32a32cdbf24aa0cad4ddb36df02049e4298c1b78f29cf491c13"
+      },
+      {
+        "path": "build/vm-power-attempt-010/hvf-missing-probe/serial.log",
+        "birth_utc": "2026-10-16T00:22:00.024356+00:00",
+        "mtime_utc": "2026-10-16T00:22:05.798754+00:00",
+        "sha256": "99f2bd66134b43f634036039f1023555dc42bfeb492b525201d6bef1dd33f549"
+      },
+      {
+        "path": "build/vm-power-attempt-010/hvf-missing-probe/verdict.json",
+        "birth_utc": "2026-10-16T00:22:05.829196+00:00",
+        "mtime_utc": "2026-10-16T00:22:05.829264+00:00",
+        "sha256": "d862254b08eaffdfbb7fb0089471db938598017797e905e286f827f77a2c1587"
+      }
+    ]
+  },
+  "comparison": "Disclosed approximate interval would overlap negative004 only. Named retained HVF artifact timestamps instead show00:21:24.922\u201300:21:59.872 and no003/004 overlap. Author clarification requested39/398. Reserved same-image005 independently removes qualification doubt.",
+  "reserved_replay": {
+    "sample_count": 55,
+    "start_utc": "2026-10-16T00:31:50.632645+00:00",
+    "end_utc": "2026-10-16T00:32:04.442675+00:00",
+    "pids": [
+      3952,
+      74995
+    ],
+    "interactive_pid": 74995,
+    "automated_pid": 3952,
+    "unexpected_qemu_observed": false,
+    "sampling_interval_seconds": 0.2,
+    "limitation": "Process sampling plus board reservation; not a claim of zero host load or exclusion of a sub-interval unobserved process."
+  }
+}

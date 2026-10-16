@@ -1,0 +1,7 @@
+group system
+order 60
+class SoftwareUpdateEditor.mcc
+name Software update
+description Installed and delivered system update status
+keywords software update snapshot depot pending version
+level novice

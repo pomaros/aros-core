@@ -1,0 +1,19 @@
+; Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+; Distributed under the AROS Public License, version 1.1.
+; SYS/serial.prefs: one SERL chunk, struct SerialPrefs (36 bytes with the
+; compiler's tail padding, which the editor writes).
+schema   1
+file     SYS/serial.prefs
+layout   compiler/include/prefs/serial.h SerialPrefs
+chunk    SERL size 36
+
+[serial/port]  level expert  applier iprefs live
+  unit             sp_Unit0Map@12:4          type int   range 0..255
+  baud             sp_BaudRate@16:4          type int   range 110..4000000  unit baud  default 19200
+  inputbuffer      sp_InputBuffer@20:4       type int   range 512..65536  unit bytes
+  outputbuffer     sp_OutputBuffer@24:4      type int   range 512..65536  unit bytes
+  inputhandshake   sp_InputHandshake@28:1    type enum  choices xon=0,rts=1,none=2
+  outputhandshake  sp_OutputHandshake@29:1   type enum  choices xon=0,rts=1,none=2
+  parity           sp_Parity@30:1            type enum  choices none=0,even=1,odd=2,mark=3,space=4
+  bits             sp_BitsPerChar@31:1       type int   range 5..8  unit bits
+  stopbits         sp_StopBits@32:1          type int   range 1..2

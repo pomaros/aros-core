@@ -1,0 +1,7 @@
+group devices
+order 10
+class ScreenModeEditor.mcc
+name Displays
+description Resolution and depth of the Workbench screen
+keywords resolution display displays monitor depth screen mode
+level novice

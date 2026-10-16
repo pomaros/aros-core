@@ -1,8 +1,11 @@
 #ifndef AROS_KERNEL_H
 #define AROS_KERNEL_H
 
+#include <stdint.h>
+
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER
     $Id$
 
     Desc: TagItems for the kernel.resource
@@ -77,6 +80,15 @@ typedef enum
 #define KRN_FrameBufferPitch    (KRN_Dummy + 37) /* Framebuffer bytes per line			*/
 #define KRN_PeripheralBase      (KRN_Dummy + 38) /* SoC peripheral IO physical base address */
 #define KRN_DebugUartBase       (KRN_Dummy + 39) /* CPU address of the boot debug UART */
+#define KRN_FrameBufferFormat   (KRN_Dummy + 60) /* KRN_FB_FORMAT_* pixel byte order		*/
+#define KRN_FrameBufferSize     (KRN_Dummy + 61) /* Framebuffer aperture size in bytes		*/
+
+#define KRN_FB_FORMAT_NONE      0 /* No framebuffer format supplied */
+#define KRN_FB_FORMAT_RGBX8888  1 /* Byte order in memory: R, G, B, ignored */
+#define KRN_FB_FORMAT_BGRX8888  2 /* Byte order in memory: B, G, R, ignored */
+#define KRN_FB_FORMAT_BITMASK   3 /* Explicit masks supplied by another contract */
+#define KRN_FB_FORMAT_X2R10G10B10 4 /* 10-bit R, G, B at bits 29-20, 19-10, 9-0 */
+
 /*
  * KRN_MEMLower/KRN_MEMUpper may appear more than once, one pair per physical
  * memory range the bootstrap found, lower first. The first pair describes the
@@ -119,6 +131,15 @@ typedef void (*irqhandler_t)(void *data, void *data2);
 #define KATTR_FrameBufferDepth  (KATTR_CPULoad_END + 6) /* [.G] (IPTR)    - Framebuffer bits per pixel                                  */
 #define KATTR_FrameBufferPitch  (KATTR_CPULoad_END + 7) /* [.G] (IPTR)    - Framebuffer bytes per line                                  */
 #define KATTR_PlatformTimer     (KATTR_CPULoad_END + 8) /* [.G] (APTR)    - Kernel tick timer shared with timer.device (platform specific) */
+#define KATTR_FrameBufferFormat (KATTR_CPULoad_END + 9) /* [.G] (IPTR)    - KRN_FB_FORMAT_* pixel byte order                           */
+#define KATTR_FrameBufferSize   (KATTR_CPULoad_END + 10) /* [.G] (IPTR)   - Framebuffer aperture size in bytes                         */
+/* Standalone W^X loaders require this checked, ordinary C-callable operation.
+ * Return 1 only after the complete range and remote synchronization succeed;
+ * return 0 on failure (a converted prefix is possible). Ownership stays with
+ * the caller. Unsupported KrnGetSystemAttr queries return -1. */
+typedef int (*KRN_PageProtect)(void *address, uint32_t length, uint32_t flags);
+#define KATTR_PageProtect (KATTR_CPULoad_END + 11) /* [.G] KRN_PageProtect */
+
 
 /* Tag IDs for KrnStatMemory() */
 #define KMS_Free		(TAG_USER + 0x04000000)

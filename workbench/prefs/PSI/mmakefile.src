@@ -1,4 +1,4 @@
-#
+# Copyright (C) 2026 John KNIPPER <code@jkn.me>
 #   Makefile for Public Screen Inspector
 
 include $(SRCDIR)/config/aros.cfg
@@ -10,7 +10,7 @@ EXEDIR := $(AROSDIR)/Prefs
 
 #MM- workbench-prefs : workbench-prefs-psi
 
-#MM workbench-prefs-psi : includes linklibs workbench-prefs-psi-catalogs
+#MM workbench-prefs-psi : includes linklibs linklibs-muiscreen workbench-prefs-psi-catalogs
 
 %build_prog mmake=workbench-prefs-psi \
     progname="PSI" targetdir=$(EXEDIR) \

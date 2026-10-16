@@ -30,7 +30,8 @@ void ___showerror(struct ExecBase *SysBase, const char *format, ...)
 {
     struct IntuitionBase *IntuitionBase;
     struct DosLibrary *DOSBase = NULL;
-    const char *name = FindTask(NULL)->tc_Node.ln_Name;
+    struct Task *task = FindTask(NULL);
+    const char *name = task != NULL ? task->tc_Node.ln_Name : NULL;
 
     AROS_SLOWSTACKFORMAT_PRE(format);
 
@@ -54,7 +55,12 @@ void ___showerror(struct ExecBase *SysBase, const char *format, ...)
 
     }
     else
-    if ((IntuitionBase = (struct IntuitionBase *)OpenLibrary("intuition.library", 0)))
+    /* Tasks have no Process window state and must never block on a requester. */
+    if
+    (
+        task != NULL && task->tc_Node.ln_Type == NT_PROCESS &&
+        (IntuitionBase = (struct IntuitionBase *)OpenLibrary("intuition.library", 0))
+    )
     {
         struct EasyStruct es =
         {

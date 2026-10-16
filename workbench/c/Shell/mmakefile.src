@@ -21,7 +21,7 @@ FILES := \
 	redirection \
 	readLine
 
-USER_CPPFLAGS += -DADATE="\"$(shell date "+%d.%m.%Y")\"" \
+USER_CPPFLAGS += -DADATE="\"$(AROS_BUILD_DATE)\"" \
 	       -D__DOS_NOLIBBASE__
 USER_LDFLAGS := -static
 

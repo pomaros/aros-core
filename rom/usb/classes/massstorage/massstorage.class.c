@@ -10,6 +10,7 @@
 
 #include "massstorage.class.h"
 #include <linklibs/fatbpb.h>
+#include <dos/exfat.h>
 
 #define DEF_NAKTIMEOUT  (600)
 
@@ -5206,6 +5207,8 @@ BOOL CheckFATPartition(struct NepClassMS *ncm, ULONG startblock)
     struct DriveGeometry *tddg = &ncm->ncm_Geometry;
     struct FATBPBInfo bpb;
     BOOL isfat = FALSE;
+    BOOL isexfat = FALSE;
+    BOOL isntfs = FALSE;
 
     mbr = (struct MasterBootRecord *) psdAllocVec(ncm->ncm_BlockSize<<1);
     if(!mbr)
@@ -5220,14 +5223,16 @@ BOOL CheckFATPartition(struct NepClassMS *ncm, ULONG startblock)
     stdIO->io_Data = mbr;
     if(!nIOCmdTunnel(ncm, stdIO))
     {
+        isexfat = IsExfatBootSector(mbr, ncm->ncm_BlockSize);
         /* do (super)floppy check */
-        if(FAT_ParseBPB((const UBYTE *)mbr, ncm->ncm_BlockSize,
+        if(isexfat || FAT_ParseBPB((const UBYTE *)mbr, ncm->ncm_BlockSize,
                         (UQUAD)ncm->ncm_Geometry.dg_TotalSectors *
                             ncm->ncm_Geometry.dg_SectorSize,
                         &bpb))
         {
-            psdAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname), "Media is FAT formatted!");
-            isfat = TRUE;
+            psdAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname),
+                isexfat ? "Media is exFAT formatted!" : "Media is FAT formatted!");
+            isfat = !isexfat;
             nh->nh_RDsk.rdsk_PART.pb_DevFlags = 0;
 
             if(*(ncm->ncm_CUC->cuc_FATDOSName))
@@ -5277,8 +5282,10 @@ BOOL CheckFATPartition(struct NepClassMS *ncm, ULONG startblock)
             }
             envec->de_BootBlocks = 0;
             envec->de_Interleave = 0;
-            envec->de_DosType = ncm->ncm_CDC->cdc_FATDosType; //0x46415401; // FAT1
-            if((ncm->ncm_CDC->cdc_FATDosType & 0xffffff00) == 0x46415400)
+            envec->de_DosType = isexfat
+                ? ID_EXFAT_DISK : ncm->ncm_CDC->cdc_FATDosType;
+            if(!isexfat
+                && (ncm->ncm_CDC->cdc_FATDosType & 0xffffff00) == 0x46415400)
             {
                 envec->de_DosType = bpb.dos_type;
             }
@@ -5289,14 +5296,14 @@ BOOL CheckFATPartition(struct NepClassMS *ncm, ULONG startblock)
 
             KPRINTF(5, ("building FAT95 style environment\n"));
 
-            strncpy((char *) nh->nh_RDsk.rdsk_FSHD.fhb_FileSysName, ncm->ncm_CDC->cdc_FATFSName, 84);
+            strncpy((char *) nh->nh_RDsk.rdsk_FSHD.fhb_FileSysName, isexfat ? EXFAT_HANDLER_NAME : ncm->ncm_CDC->cdc_FATFSName, 84);
             if(CheckPartition(ncm))
             {
                 psdFreeVec(mbr);
                 return(TRUE);
             }
         }
-        if(!isfat)
+        if(!(isfat || isexfat || isntfs))
         {
             psdAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname),
                            "Media does not seem to be FAT nor NTFS formatted.");

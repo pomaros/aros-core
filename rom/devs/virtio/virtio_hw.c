@@ -12,130 +12,100 @@
 #include "virtio_debug.h"
 #include "virtio_intern.h"
 #include "virtio_hw.h"
+#include "status.h"
 
-/* PCI config space basics */
-#define PCI_CAPABILITY_LIST     0x34
-#define PCI_STATUS              0x06
-#define PCI_STATUS_CAP_LIST     0x10
-
-/*
- * Read a base address out of the PCI device by index, masking off the
- * type bits (we only support memory BARs for modern virtio).
- */
-static APTR virtio_get_bar(struct VirtIOBase *VirtIOBase, OOP_Object *pciDev, UBYTE bar)
+static uint32_t pci_read(void *context,unsigned reg,unsigned width)
 {
-    static const ULONG base_attrs[6] = {
-        aoHidd_PCIDevice_Base0,
-        aoHidd_PCIDevice_Base1,
-        aoHidd_PCIDevice_Base2,
-        aoHidd_PCIDevice_Base3,
-        aoHidd_PCIDevice_Base4,
-        aoHidd_PCIDevice_Base5,
-    };
-    IPTR base = 0;
-
-    if (bar > 5) return NULL;
-
-    OOP_GetAttr(pciDev, HiddPCIDeviceAttrBase + base_attrs[bar], &base);
-
-    /* Mask off type bits, just in case. */
-    return (APTR)(base & ~(IPTR)0xF);
+    device_t dev=context;
+    struct VirtIOBase *VirtIOBase=dev->dev_VirtIOBase;
+    return width==1 ? HIDD_PCIDevice_ReadConfigByte(dev->dev_Object,reg) :
+        width==2 ? HIDD_PCIDevice_ReadConfigWord(dev->dev_Object,reg) :
+        HIDD_PCIDevice_ReadConfigLong(dev->dev_Object,reg);
 }
-
+static int pci_bar(void *context,unsigned bar,uint64_t *base,uint64_t *bytes)
+{
+    device_t dev=context;
+    struct VirtIOBase *VirtIOBase=dev->dev_VirtIOBase;
+    IPTR address=0,size=0;
+    /* Reject port I/O and upper halves of 64-bit BARs. */
+    for(unsigned i=0;i<=bar;++i) {
+        ULONG raw=HIDD_PCIDevice_ReadConfigLong(dev->dev_Object,0x10+4*i);
+        if(i==bar && (raw&1)) return 0;
+        if(!(raw&1) && (raw&6)==4) { if(i+1==bar) return 0; ++i; }
+    }
+    OOP_GetAttr(dev->dev_Object,HiddPCIDeviceAttrBase+aoHidd_PCIDevice_Base0+3*bar,&address);
+    OOP_GetAttr(dev->dev_Object,HiddPCIDeviceAttrBase+aoHidd_PCIDevice_Size0+3*bar,&size);
+    *base=address&~(IPTR)15;*bytes=size;
+    return *base && *bytes;
+}
+static void *pci_map(void *context,uint64_t bus,uint32_t bytes)
+{
+    device_t dev=context;
+    struct VirtIOBase *VirtIOBase=dev->dev_VirtIOBase;
+    if(bus>UINTPTR_MAX) return NULL;
+    return HIDD_PCIDriver_MapPCI(dev->dev_PCIDriverObject,(APTR)(IPTR)bus,bytes);
+}
+static void pci_unmap(void *context,void *cpu,uint32_t bytes)
+{
+    device_t dev=context;
+    struct VirtIOBase *VirtIOBase=dev->dev_VirtIOBase;
+    HIDD_PCIDriver_UnmapPCI(dev->dev_PCIDriverObject,cpu,bytes);
+}
+void virtio_hw_unmap(device_t dev)
+{
+    if(!dev || !dev->dev_VirtIOBase || !dev->dev_PCIDriverObject) return;
+    const struct VirtioPCIAccess io={dev,pci_read,pci_bar,pci_map,pci_unmap};
+    VirtioPCIUnmap(&io,&dev->dev_PCIMapping);
+    dev->dev_CommonCfg=NULL;dev->dev_NotifyBase=NULL;dev->dev_ISR=NULL;
+    dev->dev_DeviceCfg=NULL;dev->dev_NotifyOffMultiplier=0;dev->dev_IsModern=0;
+}
 BOOL virtio_hw_map(device_t dev)
 {
-    struct VirtIOBase *VirtIOBase = dev ? dev->dev_VirtIOBase : NULL;
-    OOP_Object *pdev = dev->dev_Object;
-    UBYTE cap_ptr;
-    UBYTE i;
-
-    if (!pdev || !VirtIOBase) return FALSE;
-
-    cap_ptr = HIDD_PCIDevice_ReadConfigByte(pdev, PCI_CAPABILITY_LIST);
-
-    /* Walk the cap chain. */
-    for (i = 0; cap_ptr && i < 64; i++) {
-        struct virtio_pci_cap cap;
-        APTR    bar_base;
-        UBYTE   *region;
-        UBYTE   ctype;
-        UBYTE   cur = cap_ptr;
-        UBYTE   id;
-
-        id = HIDD_PCIDevice_ReadConfigByte(pdev, cur + 0);
-        cap.cap_next = HIDD_PCIDevice_ReadConfigByte(pdev, cur + 1);
-
-        if (id != VIRTIO_PCI_CAP_VENDOR_CFG) {
-            cap_ptr = cap.cap_next;
-            continue;
-        }
-
-        cap.cap_len  = HIDD_PCIDevice_ReadConfigByte(pdev, cur + 2);
-        cap.cfg_type = HIDD_PCIDevice_ReadConfigByte(pdev, cur + 3);
-        cap.bar      = HIDD_PCIDevice_ReadConfigByte(pdev, cur + 4);
-        cap.offset   = HIDD_PCIDevice_ReadConfigLong(pdev, cur + 8);
-        cap.length   = HIDD_PCIDevice_ReadConfigLong(pdev, cur + 12);
-
-        bar_base = virtio_get_bar(VirtIOBase, pdev, cap.bar);
-        if (!bar_base) {
-            cap_ptr = cap.cap_next;
-            continue;
-        }
-        region = (UBYTE *)bar_base + cap.offset;
-        ctype  = cap.cfg_type;
-
-        switch (ctype) {
-        case VIRTIO_PCI_CAP_COMMON_CFG:
-            dev->dev_CommonCfg = (volatile struct virtio_pci_common_cfg *)region;
-            D(bug("[VIRTIO:HW] CommonCfg @ %p\n", region);)
-            break;
-        case VIRTIO_PCI_CAP_NOTIFY_CFG:
-            dev->dev_NotifyBase = region;
-            dev->dev_NotifyOffMultiplier = HIDD_PCIDevice_ReadConfigLong(pdev, cur + 16);
-            D(bug("[VIRTIO:HW] NotifyBase @ %p (mult %u)\n", region, dev->dev_NotifyOffMultiplier);)
-            break;
-        case VIRTIO_PCI_CAP_ISR_CFG:
-            dev->dev_ISR = region;
-            D(bug("[VIRTIO:HW] ISR @ %p\n", region);)
-            break;
-        case VIRTIO_PCI_CAP_DEVICE_CFG:
-            dev->dev_DeviceCfg = region;
-            D(bug("[VIRTIO:HW] DeviceCfg @ %p\n", region);)
-            break;
-        default:
-            break;
-        }
-
-        cap_ptr = cap.cap_next;
-    }
-
-    if (dev->dev_CommonCfg && dev->dev_NotifyBase && dev->dev_ISR && dev->dev_DeviceCfg) {
-        dev->dev_IsModern = 1;
-        return TRUE;
-    }
-
-    D(bug("[VIRTIO:HW] %s: missing one or more required capabilities (legacy device?)\n", __func__);)
-    return FALSE;
+    if(!dev || !dev->dev_VirtIOBase || !dev->dev_Object || !dev->dev_PCIDriverObject) return FALSE;
+    const struct VirtioPCIAccess io={dev,pci_read,pci_bar,pci_map,pci_unmap};
+    if(!VirtioPCIMap(&io,&dev->dev_PCIMapping,15)) return FALSE;
+    dev->dev_CommonCfg=dev->dev_PCIMapping.regions[0];
+    dev->dev_NotifyBase=dev->dev_PCIMapping.regions[1];
+    dev->dev_ISR=dev->dev_PCIMapping.regions[2];
+    dev->dev_DeviceCfg=dev->dev_PCIMapping.regions[3];
+    dev->dev_NotifyOffMultiplier=dev->dev_PCIMapping.notify_multiplier;
+    dev->dev_IsModern=1;
+    return TRUE;
 }
 
+static void status_barrier(void)
+{
+#if defined(__aarch64__)
+    __asm__ volatile("dsb sy" ::: "memory");
+#else
+    __sync_synchronize();
+#endif
+}
+static uint8_t status_read(void *context)
+{
+    device_t dev = context;
+    UBYTE value = dev->dev_CommonCfg->device_status;
+    status_barrier();
+    return value;
+}
+static void status_write(void *context, uint8_t value)
+{
+    device_t dev = context;
+    status_barrier();
+    dev->dev_CommonCfg->device_status = value;
+    status_barrier();
+}
+BOOL virtio_hw_stop(device_t dev)
+{
+    if (!dev || !dev->dev_CommonCfg) return FALSE;
+    const struct VirtioStatusAccess io = {dev, status_read, status_write};
+    return VirtioStatusReset(&io, 1000000);
+}
 BOOL virtio_hw_reset(device_t dev)
 {
-    if (!dev->dev_CommonCfg) return FALSE;
-
-    dev->dev_CommonCfg->device_status = 0;
-    /* Wait for status to read back as 0 */
-    {
-        ULONG spin = 1000000;
-        while (dev->dev_CommonCfg->device_status != 0 && spin--)
-            ;
-        if (!spin) return FALSE;
-    }
-
-    dev->dev_CommonCfg->device_status = VIRTIO_CONFIG_S_ACKNOWLEDGE;
-    dev->dev_CommonCfg->device_status =
-        VIRTIO_CONFIG_S_ACKNOWLEDGE | VIRTIO_CONFIG_S_DRIVER;
-
-    return TRUE;
+    if (!dev || !dev->dev_CommonCfg) return FALSE;
+    const struct VirtioStatusAccess io = {dev, status_read, status_write};
+    return VirtioStatusBegin(&io, 1000000);
 }
 
 UQUAD virtio_hw_get_device_features(device_t dev)
@@ -223,15 +193,46 @@ BOOL virtio_hw_setup_queue(device_t dev, UWORD qid, struct virtio_queue *vq)
     dev->dev_CommonCfg->queue_device = vq->q_UsedPhys;
 
     notify_off = dev->dev_CommonCfg->queue_notify_off;
-    vq->q_Notify = (volatile UWORD *)(dev->dev_NotifyBase +
-                                      (ULONG)notify_off * dev->dev_NotifyOffMultiplier);
+    vq->q_Notify = VirtioPCINotify(&dev->dev_PCIMapping,notify_off);
+    if(!vq->q_Notify) return FALSE;
 
-    /* No MSI-X for first version. */
+    /* Keep the queue unassigned until PCI interrupt registration succeeds. */
     dev->dev_CommonCfg->queue_msix_vector = 0xFFFF;
 
     /* Enable */
     dev->dev_CommonCfg->queue_enable = 1;
     return TRUE;
+}
+
+/* The PCI AddInterrupt contract supplies
+ * one shared MSI-X table entry (index zero), or the platform's legacy route.
+ * Route the queue only after the interrupt handler has been installed. */
+BOOL virtio_hw_route_queue_irq(device_t dev, UWORD queue)
+{
+    if (!dev || !dev->dev_CommonCfg || queue >= dev->dev_CommonCfg->num_queues) return FALSE;
+    struct VirtIOBase *VirtIOBase=dev->dev_VirtIOBase;
+    IPTR cap=0;
+    OOP_GetAttr(dev->dev_Object,aHidd_PCIDevice_CapabilityMSIX,&cap);
+    UWORD vector=0xffff;
+    if (cap) {
+        if (cap<0x40 || cap>0xf4 || (cap&3) ||
+            HIDD_PCIDevice_ReadConfigByte(dev->dev_Object,cap)!=0x11) return FALSE;
+        UWORD control=HIDD_PCIDevice_ReadConfigWord(dev->dev_Object,cap+2);
+        if (control&0x8000) {
+            if (control&0x4000) return FALSE;
+            vector=0;
+        }
+    }
+    dev->dev_CommonCfg->queue_select=queue;
+    status_barrier();
+    dev->dev_CommonCfg->queue_msix_vector=vector;
+    __sync_synchronize();
+    return dev->dev_CommonCfg->queue_msix_vector==vector;
+}
+
+BOOL virtio_hw_route_irq(device_t dev)
+{
+    return dev && dev->dev_VQ && virtio_hw_route_queue_irq(dev, 0);
 }
 
 BOOL virtio_hw_driver_ok(device_t dev)

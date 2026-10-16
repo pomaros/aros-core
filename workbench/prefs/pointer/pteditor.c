@@ -22,17 +22,8 @@
 #include "prefs.h"
 
 /*** Instance Data **********************************************************/
-struct PTEditor_DATA
-{
-    ULONG   pded_oldentry;
-    Object *pted_previewImage;
-    Object *pted_typeCycle;
-    Object *pted_fileString;
-    Object *pted_alphaSlider;
-    Object *pted_hotspotButton;
-    struct Hook pted_cycleHook;
-    struct Hook pted_filenameHook;
-};
+#define PTEDITOR_DATA_H_IN_SOURCE
+#include "pteditor_data.h"
 
 STATIC VOID PTPrefs2Gadgets(struct PTEditor_DATA *data);
 STATIC VOID Gadgets2PTPrefs(struct PTEditor_DATA *data);
@@ -165,6 +156,10 @@ Object *PTEditor__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
 
         data->pted_cycleHook.h_Entry = (HOOKFUNC)cycleFunction;
         data->pted_cycleHook.h_Data  = data;
+        /* Stable ids for the settings window's index and port. */
+        SET(typeCycle, MUIA_ObjectID, MAKE_ID('P','T','T','Y'));
+        SET(fileString, MUIA_ObjectID, MAKE_ID('P','T','F','S'));
+        SET(alphaSlider, MUIA_ObjectID, MAKE_ID('P','T','A','L'));
 
         data->pted_filenameHook.h_Entry = (HOOKFUNC)filenameFunction;
         data->pted_filenameHook.h_Data  = data;
@@ -291,6 +286,7 @@ IPTR PTEditor__MUIM_PrefsEditor_SetDefaults
 }
 
 /*** Setup ******************************************************************/
+#ifndef POINTEREDITOR_MCC
 ZUNE_CUSTOMCLASS_4
 (
     PTEditor, NULL, MUIC_PrefsEditor, NULL,
@@ -299,3 +295,4 @@ ZUNE_CUSTOMCLASS_4
     MUIM_PrefsEditor_ExportFH,    struct MUIP_PrefsEditor_ExportFH *,
     MUIM_PrefsEditor_SetDefaults, Msg
 );
+#endif /* POINTEREDITOR_MCC */

@@ -14,4 +14,14 @@ EXEDIR := $(AROSDIR)/Prefs
     progname=Asl targetdir=$(EXEDIR) \
     files=$(FILES)
 
+# The same editor as a shared class for the settings window.
+CLASSFILES := args aslstringify locale misc prefs asleditor_init asleditor_mcc
+
+#MM- workbench-prefs : workbench-prefs-asl-class
+#MM workbench-prefs-asl-class : includes linklibs workbench-prefs-asl-catalogs workbench-classes-zune-prefseditor
+
+%build_module mmake=workbench-prefs-asl-class \
+    modname=AslEditor modtype=mcc \
+    conffile=asleditor.conf files="$(CLASSFILES)"
+
 %common

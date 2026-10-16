@@ -1,0 +1,266 @@
+# Copyright (C) 2026 John Knipper. All rights reserved.
+# Licensed under the AROS Public License 1.1.
+
+include $(SRCDIR)/config/aros.cfg
+
+USER_INCLUDES := -I$(SRCDIR)/arch/aarch64-apple/include
+
+APPLE_TARGET_PROBE_DIR := $(GENDIR)/arch/aarch64-apple
+APPLE_TARGET_PROBE_FILES := target_probe bootinfo_validate
+APPLE_TARGET_PROBE_OBJS := $(addprefix $(APPLE_TARGET_PROBE_DIR)/, \
+    $(addsuffix .o,$(APPLE_TARGET_PROBE_FILES)))
+APPLE_TARGET_PROBE_DEPS := $(addprefix $(APPLE_TARGET_PROBE_DIR)/, \
+    $(addsuffix .d,$(APPLE_TARGET_PROBE_FILES)))
+
+AROS_EARLY_FDT_DIR := $(SRCDIR)/arch/aarch64-all/boot/fdt
+APPLE_STAGE2_SOURCE_DIR := $(SRCDIR)/arch/aarch64-apple/bootstrap
+APPLE_STAGE2_BUILD_DIR := $(GENDIR)/arch/aarch64-apple/bootstrap
+APPLE_STAGE2_INSTALL_DIR := $(AROSDIR)/boot/apple/Boot
+# The VM runtime saves x18 as ordinary task state.
+APPLE_STAGE2_X18_FLAGS := -DAROS_VM_GUEST=1
+APPLE_STAGE2_CFLAGS := --target=aarch64-none-elf -std=c11 -O2 \
+    -Wall -Wextra -Werror -ffreestanding -fpie -fno-builtin \
+    -fno-stack-protector $(APPLE_STAGE2_X18_FLAGS) -ffunction-sections -fdata-sections \
+    -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
+    -I$(SRCDIR)/arch/aarch64-apple/include \
+    -I$(APPLE_STAGE2_SOURCE_DIR) -I$(AROS_EARLY_FDT_DIR) \
+    -I$(AROS_EARLY_FDT_DIR)/libfdt -DAROS_FDT_FREESTANDING
+APPLE_STAGE2_PREPARE_OBJS := \
+    $(APPLE_STAGE2_BUILD_DIR)/early_fdt.o \
+    $(APPLE_STAGE2_BUILD_DIR)/pci_ecam.o \
+    $(APPLE_STAGE2_BUILD_DIR)/libfdt_fdt.o \
+    $(APPLE_STAGE2_BUILD_DIR)/libfdt_fdt_ro.o \
+    $(APPLE_STAGE2_BUILD_DIR)/libfdt_fdt_check.o \
+    $(APPLE_STAGE2_BUILD_DIR)/bootinfo_validate.o \
+    $(APPLE_STAGE2_BUILD_DIR)/boot_memory_map.o \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_loader.o \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_ownership.o \
+    $(APPLE_STAGE2_BUILD_DIR)/memory_plan_contract.o \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_memory_plan.o \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_fdt_map.o \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_tags.o \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_mmu.o \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_prepare.o
+APPLE_STAGE2_COMMON_OBJS := \
+    $(APPLE_STAGE2_PREPARE_OBJS) \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_probe.o \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_main.o
+APPLE_STAGE2_ENTRY_OBJ := $(APPLE_STAGE2_BUILD_DIR)/stage2_entry.o
+APPLE_STAGE2_TEST_ENTRY_OBJ := $(APPLE_STAGE2_BUILD_DIR)/stage2_entry_test.o
+APPLE_STAGE2_EXCEPTION_TEST_ENTRY_OBJ := $(APPLE_STAGE2_BUILD_DIR)/stage2_entry_exception_test.o
+APPLE_STAGE2_ELF := $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2.elf
+APPLE_STAGE2_TEST_ELF := $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2-test.elf
+APPLE_STAGE2_EXCEPTION_TEST_ELF := $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2-exception-test.elf
+APPLE_STAGE2_BIN := $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2.bin
+APPLE_STAGE2_TEST_BIN := $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2-test.bin
+APPLE_STAGE2_EXCEPTION_TEST_BIN := $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2-exception-test.bin
+
+#MM apple-core-modules: apple-target-probe kernel-kernel kernel-exec kernel-expansion kernel-utility kernel-aros kernel-bootloader kernel-task kernel-filesystem kernel-timer kernel-partition workbench-libs-locale compiler-stdc compiler-stdcio compiler-posixc kernel-fs-fat kernel-devs-appleboot kernel-dos workbench-libs-iffparse kernel-openfirmware kernel-lddemon
+#MM
+apple-core-modules:
+	$(Q)$(NOP)
+
+#MM apple-framebuffer-modules: apple-core-modules kernel-oop kernel-hidd kernel-hidd-gfx kernel-graphics kernel-hidd-efifbgfx
+#MM
+apple-framebuffer-modules:
+	$(Q)$(NOP)
+
+#MM apple-intuition-modules: apple-framebuffer-modules kernel-layers kernel-hidd-input kernel-hidd-kbd kernel-hidd-mouse kernel-keyboard kernel-gameport kernel-keymap kernel-input kernel-intuition
+#MM
+apple-intuition-modules:
+	$(Q)$(NOP)
+
+#MM apple-wanderer-modules: apple-intuition-modules kernel-console kernel-fs-con kernel-shell kernel-shellcommands workbench-libs-asl workbench-libs-commodities workbench-libs-rexxsyslib workbench-libs-gadtools workbench-libs-datatypes workbench-libs-diskfont workbench-libs-icon workbench-libs-cgfx workbench-libs-workbench workbench-libs-coolimages workbench-libs-muiscreen workbench-libs-muimaster workbench-system-wanderer-app kernel-lddemon kernel-fs-ram apple-keymaps
+#MM
+apple-wanderer-modules:
+	$(Q)$(NOP)
+
+#MM apple-boot-volume-device: kernel-devs-appleboot
+#MM
+apple-boot-volume-device:
+	$(Q)$(NOP)
+
+#MM apple-boot-payloads: apple-core-modules apple-stage2
+#MM
+apple-boot-payloads:
+	$(Q)$(NOP)
+
+#MM apple-wanderer-payloads: apple-boot-payloads apple-wanderer-modules
+#MM
+apple-wanderer-payloads:
+	$(Q)$(NOP)
+
+#MM
+apple-stage2: $(APPLE_STAGE2_BIN) $(APPLE_STAGE2_TEST_BIN) $(APPLE_STAGE2_EXCEPTION_TEST_BIN)
+
+APPLE_KEYMAP_SRC := $(SRCDIR)/workbench/devs/keymaps/old_c
+APPLE_KEYMAP_DIR := $(AROS_DEVS)/Keymaps-elf
+APPLE_KEYMAP_OBJDIR := $(GENDIR)/$(CURDIR)/keymaps
+APPLE_KEYMAPS := $(patsubst %.c,%,$(notdir $(wildcard $(APPLE_KEYMAP_SRC)/*.c)))
+
+#MM apple-keymaps : includes apple-keymaps-setup
+apple-keymaps : $(foreach f,$(APPLE_KEYMAPS),$(APPLE_KEYMAP_DIR)/$(f))
+	$(Q)$(NOP)
+
+$(APPLE_KEYMAP_DIR)/% : $(APPLE_KEYMAP_OBJDIR)/%.o
+	%link_q ldflags="$(LDFLAGS) $(NOSTARTUP_LDFLAGS)" libs=
+
+$(APPLE_KEYMAP_OBJDIR)/%.o : $(APPLE_KEYMAP_SRC)/%.c $(APPLE_KEYMAP_SRC)/common.h
+	%compile_q opt="-I$(APPLE_KEYMAP_SRC) $(CFLAGS) $(CPPFLAGS) -O0"
+
+#MM apple-keymaps-setup
+%rule_makedirs dirs="$(APPLE_KEYMAP_DIR) $(APPLE_KEYMAP_OBJDIR)" setuptarget=apple-keymaps-setup
+
+$(APPLE_STAGE2_BUILD_DIR)/bootinfo_validate.o: \
+    $(SRCDIR)/arch/aarch64-apple/bootinfo_validate.c \
+    $(SRCDIR)/arch/aarch64-apple/bootinfo_validate.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/bootinfo.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+$(APPLE_STAGE2_BUILD_DIR)/boot_memory_map.o: \
+    $(APPLE_STAGE2_SOURCE_DIR)/boot_memory_map.c \
+    $(APPLE_STAGE2_SOURCE_DIR)/boot_memory_map.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/bootinfo.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+$(APPLE_STAGE2_BUILD_DIR)/stage2_loader.o: \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_loader.c \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_loader.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/boot_memory_map.h \
+    $(SRCDIR)/arch/aarch64-apple/bootinfo_validate.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+$(APPLE_STAGE2_BUILD_DIR)/stage2_ownership.o: \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_ownership.c \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_ownership.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/boot_memory_map.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/bootinfo.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+$(APPLE_STAGE2_BUILD_DIR)/memory_plan_contract.o: \
+    $(SRCDIR)/arch/aarch64-apple/kernel/memory_plan_contract.c \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/startup.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+$(APPLE_STAGE2_BUILD_DIR)/stage2_memory_plan.o: \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_memory_plan.c \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_memory_plan.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_loader.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/boot_memory_map.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/startup.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+$(APPLE_STAGE2_BUILD_DIR)/stage2_fdt_map.o: \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_fdt_map.c \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_fdt_map.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_loader.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/bootinfo.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/startup.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/vmconsole.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+$(APPLE_STAGE2_BUILD_DIR)/stage2_tags.o: \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_tags.c \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_tags.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_loader.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/boot_memory_map.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/startup.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+$(APPLE_STAGE2_BUILD_DIR)/stage2_mmu.o: \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_mmu.c \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_mmu.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_loader.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/startup.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+$(APPLE_STAGE2_BUILD_DIR)/stage2_prepare.o: \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_prepare.c \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_prepare.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_fdt_map.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_loader.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_mmu.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+$(APPLE_STAGE2_BUILD_DIR)/stage2_sha256.o: \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_sha256.c \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_sha256.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+$(APPLE_STAGE2_BUILD_DIR)/stage2_probe.o: \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_probe.c \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_probe.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/startup.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+$(APPLE_STAGE2_BUILD_DIR)/stage2_main.o: \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_main.c \
+    $(SRCDIR)/arch/aarch64-apple/mmakefile.src \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_exception.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_fdt_map.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_loader.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_prepare.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_probe.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/runtime.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/startup.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+$(APPLE_STAGE2_ENTRY_OBJ): $(APPLE_STAGE2_SOURCE_DIR)/stage2_entry.S \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_exception.h
+	$(Q)$(TARGET_CC) --target=aarch64-none-elf -ffreestanding -fpie \
+	    -mgeneral-regs-only -c $< -o $@
+
+$(APPLE_STAGE2_TEST_ENTRY_OBJ): $(APPLE_STAGE2_SOURCE_DIR)/stage2_entry.S \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_exception.h
+	$(Q)$(TARGET_CC) --target=aarch64-none-elf -ffreestanding -fpie \
+	    -mgeneral-regs-only $(APPLE_STAGE2_X18_FLAGS) -DAROS_APPLE_STAGE2_QEMU_TEST=1 -c $< -o $@
+
+$(APPLE_STAGE2_EXCEPTION_TEST_ENTRY_OBJ): \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_entry.S \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_exception.h
+	$(Q)$(TARGET_CC) --target=aarch64-none-elf -ffreestanding -fpie \
+	    -mgeneral-regs-only $(APPLE_STAGE2_X18_FLAGS) -DAROS_APPLE_STAGE2_QEMU_TEST=1 \
+	    -DAROS_APPLE_STAGE2_EXCEPTION_TEST=1 -c $< -o $@
+
+$(APPLE_STAGE2_ELF): $(APPLE_STAGE2_ENTRY_OBJ) $(APPLE_STAGE2_COMMON_OBJS) \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2.ld
+	$(Q)$(KERNEL_LD) -T $(APPLE_STAGE2_SOURCE_DIR)/stage2.ld \
+	    --gc-sections -o $@ $(APPLE_STAGE2_ENTRY_OBJ) \
+	    $(APPLE_STAGE2_COMMON_OBJS)
+
+$(APPLE_STAGE2_TEST_ELF): $(APPLE_STAGE2_TEST_ENTRY_OBJ) \
+    $(APPLE_STAGE2_COMMON_OBJS) $(APPLE_STAGE2_SOURCE_DIR)/stage2.ld
+	$(Q)$(KERNEL_LD) -T $(APPLE_STAGE2_SOURCE_DIR)/stage2.ld \
+	    --gc-sections -o $@ $(APPLE_STAGE2_TEST_ENTRY_OBJ) \
+	    $(APPLE_STAGE2_COMMON_OBJS)
+
+$(APPLE_STAGE2_EXCEPTION_TEST_ELF): \
+    $(APPLE_STAGE2_EXCEPTION_TEST_ENTRY_OBJ) \
+    $(APPLE_STAGE2_COMMON_OBJS) $(APPLE_STAGE2_SOURCE_DIR)/stage2.ld
+	$(Q)$(KERNEL_LD) -T $(APPLE_STAGE2_SOURCE_DIR)/stage2.ld \
+	    --gc-sections -o $@ $(APPLE_STAGE2_EXCEPTION_TEST_ENTRY_OBJ) \
+	    $(APPLE_STAGE2_COMMON_OBJS)
+
+$(APPLE_STAGE2_BIN): $(APPLE_STAGE2_ELF)
+	$(Q)$(OBJCOPY) -O binary $< $@
+
+$(APPLE_STAGE2_TEST_BIN): $(APPLE_STAGE2_TEST_ELF)
+	$(Q)$(OBJCOPY) -O binary $< $@
+
+$(APPLE_STAGE2_EXCEPTION_TEST_BIN): $(APPLE_STAGE2_EXCEPTION_TEST_ELF)
+	$(Q)$(OBJCOPY) -O binary $< $@
+
+$(APPLE_STAGE2_BUILD_DIR)/early_fdt.o: $(AROS_EARLY_FDT_DIR)/early_fdt.c $(AROS_EARLY_FDT_DIR)/early_fdt.h $(AROS_EARLY_FDT_DIR)/freestanding.h | $(APPLE_STAGE2_BUILD_DIR)
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+$(APPLE_STAGE2_BUILD_DIR)/libfdt_%.o: $(AROS_EARLY_FDT_DIR)/libfdt/%.c $(AROS_EARLY_FDT_DIR)/libfdt/libfdt.h $(AROS_EARLY_FDT_DIR)/libfdt/libfdt_env.h $(AROS_EARLY_FDT_DIR)/freestanding.h | $(APPLE_STAGE2_BUILD_DIR)
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+$(APPLE_STAGE2_BUILD_DIR)/pci_ecam.o: $(AROS_EARLY_FDT_DIR)/pci_ecam.c $(AROS_EARLY_FDT_DIR)/pci_ecam.h $(AROS_EARLY_FDT_DIR)/early_fdt.h | $(APPLE_STAGE2_BUILD_DIR)
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+
+%rule_makedirs dirs="$(APPLE_TARGET_PROBE_DIR)" setuptarget="$(APPLE_TARGET_PROBE_OBJS) $(APPLE_TARGET_PROBE_DEPS)"
+%rule_makedirs dirs="$(APPLE_STAGE2_BUILD_DIR) $(APPLE_STAGE2_INSTALL_DIR)" setuptarget="$(APPLE_STAGE2_COMMON_OBJS) $(APPLE_STAGE2_ENTRY_OBJ) $(APPLE_STAGE2_TEST_ENTRY_OBJ) $(APPLE_STAGE2_EXCEPTION_TEST_ENTRY_OBJ) $(APPLE_STAGE2_ELF) $(APPLE_STAGE2_TEST_ELF) $(APPLE_STAGE2_EXCEPTION_TEST_ELF) $(APPLE_STAGE2_BIN) $(APPLE_STAGE2_TEST_BIN) $(APPLE_STAGE2_EXCEPTION_TEST_BIN)"
+%rule_compile_multi mmake=apple-target-probe basenames="$(APPLE_TARGET_PROBE_FILES)" targetdir=$(APPLE_TARGET_PROBE_DIR) compiler=kernel
+%include_deps depstargets=apple-target-probe deps=$(APPLE_TARGET_PROBE_DEPS)
+%common

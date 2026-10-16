@@ -1,0 +1,56 @@
+{
+  "status": "PASS",
+  "clean_exit": true,
+  "close_failure_consumed": true,
+  "transfer": true,
+  "raw_task_dos_transfer_rejected": true,
+  "signal_identity": true,
+  "wrong_context_rejected": true,
+  "backing_dependency": true,
+  "cycles_quarantined": true,
+  "mutation_abort_quarantined": true,
+  "pending_port_quarantined": true,
+  "remote_metadata_retained": true,
+  "remote_during_cleanup_retained": true,
+  "omitted_registration_leaks": 1,
+  "intentional_retained_allocations_before_test_teardown": 10,
+  "source_sha256": {
+    "rom/task/TaskResourceControl.c": "4ed2e764fe7487582f030a45cfbdd7d91bad3d36627de2a4a8e9560a3943d7bd",
+    "rom/task/task_rt.h": "b35a648707f3f46c74eb104d208231213bce50c13f603f9d0b8dece6a7ddb7e7",
+    "rom/task/task_execfuncs.c": "1ab66e3f917069ff407f8b6e9a8d904ed689c437cfc8d05cb4c6918f390eff9b",
+    "rom/dos/createnewproc.c": "2d6bcde6abdb5b59a592d5ae228d8f59a757c6bbf94f1af9d991bb575f563cc2"
+  },
+  "compiler_command": [
+    "clang",
+    "-std=gnu11",
+    "-g",
+    "-O1",
+    "-fsanitize=address,undefined",
+    "-fno-omit-frame-pointer",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-Wno-unused-parameter",
+    "<output>/fixture.generated.c",
+    "-o",
+    "<output>/fixture"
+  ],
+  "scope": "Exact production RT implementation and RemTask wrapper; extracted DOS early-exit block; mocked UP host Exec/DOS services, not a guest boot or multicore execution",
+  "native_build": {
+    "target": "apple-aarch64",
+    "toolchain": "canonical aros-crosstools Clang 20.1.0",
+    "commands": [
+      "gmake -j3 kernel-task",
+      "gmake -j3 kernel-dos"
+    ],
+    "exit_codes": [
+      0,
+      0
+    ],
+    "logs": [
+      "aros-build-resource-tracking/task-build-02.log",
+      "aros-build-resource-tracking/dos-build.log"
+    ],
+    "scope": "Native module compile/link, not guest execution"
+  }
+}

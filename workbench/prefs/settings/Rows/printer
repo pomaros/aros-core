@@ -1,0 +1,7 @@
+group devices
+order 20
+class PrinterEditor.mcc
+name Printer
+description The printer, its port, paper and graphics options
+keywords print paper port driver
+level average

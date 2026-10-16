@@ -119,8 +119,6 @@ void xhciScheduleIntTDs(struct PCIController *hc)
                 queued = xhciQueuePayloadTRBs(hc, ioreq, driprivate, epring, trbflags, TRUE);
 
                 if(queued != -1) {
-                    AddTail(&hc->hc_PeriodicTDQueue, (struct Node *) ioreq);
-                    pciusbXHCIDebugTRB("xHCI", DEBUGCOLOR_SET "Transaction queued in TRB #%u" DEBUGCOLOR_RESET" \n", driprivate->dpTxSTRB);
                     txdone = TRUE;
                 }
             }
@@ -130,17 +128,13 @@ void xhciScheduleIntTDs(struct PCIController *hc)
              * or queue the transaction, requeue it
              */
             if(!txdone) {
-                driprivate->dpSTRB = (UWORD)-1;
-                driprivate->dpTxSTRB = (UWORD)-1;
-                driprivate->dpTxETRB = (UWORD)-1;
-                driprivate->dpSttTRB = (UWORD)-1;
+                xhciRollbackUnsubmitted(unit, ioreq, driprivate, devadrep);
 
                 Disable();
                 pciusbError("xHCI", DEBUGWARNCOLOR_SET "xHCI: Failed to submit transaction" DEBUGCOLOR_RESET" \n");
                 AddHead(&hc->hc_IntXFerQueue, (struct Node *) ioreq);
                 Enable();
-            } else {
-                xhciRingDoorbell(hc, driprivate->dpDevice->dc_SlotID, driprivate->dpEPID);
+
             }
         }
     }

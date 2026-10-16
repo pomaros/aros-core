@@ -112,6 +112,31 @@ static void *copy_data(void *src, void *addr, uintptr_t len)
 }
 
 /* Perform relocations of given section */
+#ifdef __aarch64__
+/* AArch64 ELF static relocations (not in AROS dos/elf.h). S=symbol, A=addend,
+   P=place. NONE(0) is handled by the shared R_X86_64_NONE case (same value). */
+#define R_AARCH64_ABS64                 257
+#define R_AARCH64_ABS32                 258
+#define R_AARCH64_PREL64                260
+#define R_AARCH64_PREL32                261
+#define R_AARCH64_MOVW_UABS_G0          263
+#define R_AARCH64_MOVW_UABS_G0_NC       264
+#define R_AARCH64_MOVW_UABS_G1          265
+#define R_AARCH64_MOVW_UABS_G1_NC       266
+#define R_AARCH64_MOVW_UABS_G2          267
+#define R_AARCH64_MOVW_UABS_G2_NC       268
+#define R_AARCH64_MOVW_UABS_G3          269
+#define R_AARCH64_ADR_PREL_PG_HI21      275
+#define R_AARCH64_ADD_ABS_LO12_NC       277
+#define R_AARCH64_LDST8_ABS_LO12_NC     278
+#define R_AARCH64_JUMP26                282
+#define R_AARCH64_CALL26                283
+#define R_AARCH64_LDST16_ABS_LO12_NC    284
+#define R_AARCH64_LDST32_ABS_LO12_NC    285
+#define R_AARCH64_LDST64_ABS_LO12_NC    286
+#define R_AARCH64_LDST128_ABS_LO12_NC   299
+#endif
+
 static int relocate(struct elfheader *eh, struct sheader *sh, long shrel_idx, elf_uintptr_t DefSysBase)
 {
     struct sheader *shrel    = &sh[shrel_idx];

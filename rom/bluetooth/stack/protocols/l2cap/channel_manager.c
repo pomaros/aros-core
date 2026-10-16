@@ -907,3 +907,9 @@ void bt_l2cap_channel_manager_tick(struct bt_l2cap_channel_manager *mgr, uint64_
             finish_conn_param_request(mgr, mgr->conn_param_identifier, false);
     }
 }
+
+uint16_t bt_l2cap_channel_manager_remote_mtu(struct bt_l2cap_channel_manager *mgr, uint16_t local_cid)
+{
+    struct bt_l2cap_channel *chan = find_channel_by_local_cid(mgr, local_cid);
+    return chan ? chan->remote_mtu : 0;
+}

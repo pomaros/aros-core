@@ -14,6 +14,23 @@
 #include LC_LIBDEFS_FILE
 #include "handler.h"
 #include "support.h"
+#include "tile.h"
+#define __TASK_NOLIBBASE__
+#include <proto/task.h>
+#include <resources/task.h>
+
+AROS_UFH3(IPTR, TileOwnerHook,
+    AROS_UFHA(struct Hook *, hook, A0),
+    AROS_UFHA(struct Task *, task, A2),
+    AROS_UFHA(struct TaskNotifyMsg *, message, A1))
+{
+    AROS_USERFUNC_INIT
+    if (message->tnm_Action == TNA_REMOVED)
+        WBTileOwnerRemoved(task, hook->h_Data);
+    return 0;
+    AROS_USERFUNC_EXIT
+}
+
 
 static int WBInit(LIBBASETYPEPTR LIBBASE)
 {
@@ -36,6 +53,10 @@ static int WBInit(LIBBASETYPEPTR LIBBASE)
     WorkbenchBase->wb_HandlerPort.mp_SigBit  = SIGBREAKB_CTRL_F;
     WorkbenchBase->wb_HandlerPort.mp_Flags   = PA_IGNORE;
     NEWLIST(&(WorkbenchBase->wb_HandlerPort.mp_MsgList));
+
+    /* Tile replies outlive their application and Wanderer. No task signal. */
+    WorkbenchBase->wb_TileReplyPort.mp_Flags = PA_IGNORE;
+    NEWLIST(&WorkbenchBase->wb_TileReplyPort.mp_MsgList);
 
     /* Initialize miscellanous variables -----------------------------------*/
     WorkbenchBase->wb_DefaultStackSize = AROS_STACKSIZE;
@@ -113,6 +134,15 @@ static int WBOpen(LIBBASETYPEPTR LIBBASE)
             break;
         }
         
+        /* The resident handler pins this library before the hook is installed.
+         * Registration never holds wb_BaseSemaphore, avoiding notify-lock inversion. */
+        {
+            APTR TaskResBase = OpenResource("task.resource");
+            WorkbenchBase->wb_TileOwnerHook.h_Entry = (HOOKFUNC)TileOwnerHook;
+            WorkbenchBase->wb_TileOwnerHook.h_Data = WorkbenchBase;
+            if (TaskResBase && AddTaskNotifyHook(&WorkbenchBase->wb_TileOwnerHook))
+                WorkbenchBase->wb_TileTaskResource = TaskResBase;
+        }
         WorkbenchBase->wb_Initialized = TRUE;
     }
 

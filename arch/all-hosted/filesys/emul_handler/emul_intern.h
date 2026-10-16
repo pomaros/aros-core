@@ -1,7 +1,7 @@
 #ifndef __EMUL_INTERN_H
 #define __EMUL_INTERN_H
 /*
-    Copyright © 1995-2011, The AROS Development Team. All rights reserved.
+    Copyright ï¿½ 1995-2011, The AROS Development Team. All rights reserved.
     $Id$
 
     Desc: Internal header-file for emulation-handler.
@@ -23,6 +23,7 @@ struct filehandle
     char * hostname;		/* full host pathname (includes volume root prefix) */
     char * name;		/* full AROS name including pathname		    */
     int    type;		/* type flags, see below		       	    */
+    int    readonly;		/* volume mounted read-only (R-WRITE write guard)   */
     char * volumename;		/* volume name					    */
     void * fd;			/* Object itself				    */
     struct DosList *dl;		/* Volume node					    */
@@ -84,6 +85,7 @@ LONG DoSymLink(struct emulbase *emulbase, char *dest, char *src);
 LONG DoRename(struct emulbase *emulbase, char *filename, char *newfilename);
 int DoReadLink(struct emulbase *emulbase, char *filename, char *buffer, ULONG size, LONG *err);
 LONG DoSetDate(struct emulbase *emulbase, char *fullname, struct DateStamp *date);
+LONG DoSetComment(struct emulbase *emulbase, char *fullname, const char *comment);
 SIPTR DoSetSize(struct emulbase *emulbase, struct filehandle *fh, SIPTR offset, ULONG mode, SIPTR *err);
 LONG DoStatFS(struct emulbase *emulbase, char *path, struct InfoData *id);
 
@@ -93,7 +95,20 @@ LONG DoExamineNext(struct emulbase *emulbase,  struct filehandle *fh, struct Fil
 LONG DoExamineAll(struct emulbase *emulbase, struct filehandle *fh, struct ExAllData *ead,
                   struct ExAllControl *eac, ULONG size, ULONG type, struct DosLibrary *DOSBase);
 
+/*
+ * Mount a host folder while the system runs. dp_Arg1 is a plain C string of the
+ * same form the launcher's AROS_HOST_VOLUME uses, "<Vol>:<hostpath>[;WRITE]".
+ * Private to this handler, hence a name rather than a number in the DOS range.
+ */
+#define ACTION_ADD_HOSTVOLUME AROS_MAKE_ID('H','V','O','L')
+
+LONG EmulAddHostVolume(struct emulbase *emulbase, CONST_STRPTR spec);
+
 char *GetHomeDir(struct emulbase *emulbase, char *user);
+char *GetHostEnv(struct emulbase *emulbase, const char *name);
+/* Name bridge (R-CHARSET + R-NORM): AROS Latin-1 name -> host name (UTF-8 + NFC
+ * on Darwin; byte-for-byte elsewhere). Implemented per-overlay. */
+void NameToHost(const char *aros, char *dst, ULONG dstcap);
 ULONG GetCurrentDir(struct emulbase *emulbase, char *path, ULONG len);
 BOOL CheckDir(struct emulbase *emulbase, char *name);
 

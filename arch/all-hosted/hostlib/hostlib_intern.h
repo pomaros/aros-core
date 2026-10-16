@@ -4,6 +4,8 @@
 #include <exec/nodes.h>
 #include <exec/semaphores.h>
 
+#include "hostinterface.h"
+
 /*
  * Windows is a very harsh environment.
  * It requires us to Forbid() in order to call itself.

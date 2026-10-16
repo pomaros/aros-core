@@ -1,0 +1,11 @@
+{
+  "result": "PASS",
+  "allocation_failures": 4,
+  "read_failure": true,
+  "dim_to_30_percent": true,
+  "clipped_blits": true,
+  "hit_and_escape": true,
+  "outstanding_allocations": 0,
+  "source_sha256": "5d4d3cc318495b748c1c440be20c2676f3e3ca291b0efcadfd059fc9d6444b04",
+  "scope": "Exact production lift bodies; host allocation/graphics/window model, no native focus/input/timing proof"
+}

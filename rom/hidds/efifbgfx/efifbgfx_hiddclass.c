@@ -26,6 +26,12 @@
 
 #include LC_LIBDEFS_FILE
 
+#ifndef FB_DRIVER_NAME
+#define FB_DRIVER_NAME "efifbgfx.hidd"
+#define FB_HARDWARE_NAME "EFI Framebuffer"
+#define FB_PRODUCER_NAME "UEFI"
+#endif
+
 AROS_INTH1(ResetHandler, struct HWData *, hwdata)
 {
     AROS_INTFUNC_INIT
@@ -41,9 +47,9 @@ OOP_Object *EFIFBGfx__Root__New(OOP_Class *cl, OOP_Object *o, struct pRoot_New *
 {
     struct TagItem msgNewTags[] =
     {
-        { aHidd_Name            , (IPTR)"efifbgfx.hidd"                },
-        { aHidd_HardwareName    , (IPTR)"EFI Framebuffer"            },
-        { aHidd_ProducerName    , (IPTR)"UEFI"                       },
+        { aHidd_Name            , (IPTR)FB_DRIVER_NAME                },
+        { aHidd_HardwareName    , (IPTR)FB_HARDWARE_NAME            },
+        { aHidd_ProducerName    , (IPTR)FB_PRODUCER_NAME                       },
         {TAG_MORE, 0UL}
     };
     struct pRoot_New msgNew;

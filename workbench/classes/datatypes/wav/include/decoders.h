@@ -25,6 +25,7 @@ struct DecoderData {
 	struct RIFFChunk	chunk;
 	struct WaveFormatEx	*fmt;
 	LONG				blockFrames;
+	LONG				sampleBytes;	// what Decode writes per sample: 1 (BYTE) or 2 (WORD); 0 means 1
 	void *				state;	// decoder-specific data
 	DECODERPROTO((*Decode));
 	DECODERPROTO((*DecodeFrames));

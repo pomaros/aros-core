@@ -1,0 +1,9 @@
+# Copyright (C) 2026 John KNIPPER. SPDX-License-Identifier: APL-1.1
+include $(SRCDIR)/config/aros.cfg
+%get_archincludes modname=exec includeflag=TARGET_EXEC_INCLUDES maindir=rom/exec
+%get_archincludes modname=kernel includeflag=TARGET_KERNEL_INCLUDES maindir=rom/kernel
+# Architecture platforms must precede the generic exec_platform.h in rom/exec.
+USER_INCLUDES := $(TARGET_EXEC_INCLUDES) $(TARGET_KERNEL_INCLUDES) -I$(SRCDIR)/rom/task -I$(SRCDIR)/rom/exec -I$(SRCDIR)/rom/kernel -I$(GENINCDIR)
+%build_archspecific mainmmake=kernel-task maindir=rom/task modname=task \
+  files="QueryTaskTagList" arch=apple-aarch64
+%common

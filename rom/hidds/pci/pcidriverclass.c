@@ -24,6 +24,8 @@
 OOP_Object *PCIDrv__Root__New(OOP_Class *cl, OOP_Object *o, struct pRoot_New *msg)
 {
     o = (OOP_Object *)OOP_DoSuperMethod(cl, o, (OOP_Msg)msg);
+    if (!o)
+        return NULL;
     struct DrvInstData *instance = (struct DrvInstData *)OOP_INST_DATA(cl, o);
 
     instance->DirectBus = GetTagData(aHidd_PCIDriver_DirectBus, TRUE, msg->attrList);

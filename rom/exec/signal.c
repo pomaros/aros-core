@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
 
     Desc: Send some signal to a given task
 */
@@ -20,6 +21,9 @@
 
 #include "etask.h"
 #include "kernel_ipi.h"
+#include <exec/processmessage.h>
+#include <dos/dosextens.h>
+#include "exec_util.h"
 
 AROS_UFH3(IPTR, signal_hook,
     AROS_UFHA(struct IPIHook *, hook, A0),
@@ -103,6 +107,96 @@ void Exec_CancelSignalIPIs(struct Task *task, struct ExecBase *SysBase)
     EXEC_SPINLOCK_UNLOCK(&task->tc_SpinLock);
     core_CancelCallIPIs((APTR)signal_hook, (IPTR)task);
     Enable();
+#endif
+}
+
+/* No call to Signal here: its allocating IPI path may drain callbacks while
+ * waiting. Lock order is registry -> task -> port/notification queue; no
+ * callback or scheduler call executes under the registry read lock. */
+ULONG Exec_TryProcessMessage(struct Task *task, ULONG id,
+    struct Message *message, ULONG signals, struct ExecBase *SysBase)
+{
+#if defined(KERNEL_IPI_TRY_CLAIM)
+    struct KernelBase *KernelBase = __kernelBase;
+    struct MsgPort *port;
+    struct IntETask *et;
+    struct CallIPIEntry *entry;
+    struct Hook hook;
+    IPTR args[3];
+    ULONG result;
+    int cpu;
+
+    result = Exec_LockProcessIdentity(task, id, SysBase);
+    if (result != TPM_OK)
+        return result;
+    EXEC_SPINLOCK_LOCK(&task->tc_SpinLock, NULL, SPINLOCK_MODE_WRITE);
+    if (task->tc_State == TS_INVALID || task->tc_State == TS_REMOVED ||
+        task->tc_State == TS_TOMBSTONED)
+    {
+        result = TPM_BUSY;
+        goto done;
+    }
+    if (message == NULL && signals == 0)
+        goto done;
+
+    port = &((struct Process *)task)->pr_MsgPort;
+    if (message != NULL)
+    {
+        if ((port->mp_Flags & PF_ACTION) != PA_SIGNAL ||
+            port->mp_SigTask != task || port->mp_SigBit >= 32)
+        {
+            result = TPM_INVALID;
+            goto done;
+        }
+        signals |= 1UL << port->mp_SigBit;
+    }
+    et = GetIntETask(task);
+    cpu = KrnGetCPUNumber();
+    if (PrivExecBase(SysBase)->IntFlags & EXECF_CPUAffinity)
+    {
+        if (task->tc_State == TS_RUN)
+            cpu = et->iet_CpuNumber;
+        else
+        {
+            int count = KrnGetCPUCount();
+            for (cpu = 0; cpu < count; cpu++)
+                if (KrnCPUInMask(cpu, et->iet_CpuAffinity))
+                    break;
+            if (cpu == count)
+            {
+                result = TPM_BUSY;
+                goto done;
+            }
+        }
+    }
+    entry = core_TryClaimCallIPI(cpu);
+    if (entry == NULL)
+    {
+        result = TPM_BUSY;
+        goto done;
+    }
+
+    /* From here publication cannot fail. The message is untouched until
+     * capacity for its wakeup has been reserved. */
+    if (message != NULL)
+    {
+        EXEC_SPINLOCK_LOCK(&port->mp_SpinLock, NULL, SPINLOCK_MODE_WRITE);
+        message->mn_Node.ln_Type = NT_MESSAGE;
+        ADDTAIL(&port->mp_MsgList, &message->mn_Node);
+        EXEC_SPINLOCK_UNLOCK(&port->mp_SpinLock);
+    }
+    hook.h_Entry = signal_hook;
+    args[0] = (IPTR)SysBase;
+    args[1] = (IPTR)task;
+    args[2] = (IPTR)signals;
+    core_CommitCallIPI(entry, cpu, &hook, 3, args);
+done:
+    EXEC_SPINLOCK_UNLOCK(&task->tc_SpinLock);
+    Exec_UnlockProcessIdentity(SysBase);
+    return result;
+#else
+    (void)task; (void)id; (void)message; (void)signals; (void)SysBase;
+    return TPM_UNSUPPORTED;
 #endif
 }
 #endif
@@ -376,7 +470,8 @@ void Exec_SignalSlow(struct Task *task, ULONG signalSet, struct ExecBase *SysBas
                         D(bug("[Exec] %s: Signaling task on another CPU\n", __func__));
                         KrnScheduleCPU(targetCpuAffinity);
                     }
-                    else if ((targetPri > thisTask->tc_Node.ln_Pri) &&
+                    else if (thisTask != NULL &&
+                             (targetPri > thisTask->tc_Node.ln_Pri) &&
                              (thisTask->tc_State == TS_RUN))
                     {
                         D(bug("[Exec] %s: Task has higher priority ...\n", __func__);)
@@ -400,6 +495,7 @@ void Exec_SignalSlow(struct Task *task, ULONG signalSet, struct ExecBase *SysBas
                     (!(PrivExecBase(SysBase)->IntFlags & EXECF_CPUAffinity) ||
                     (KrnCPUInMask(cpunum, IntETask(task->tc_UnionETask.tc_ETask)->iet_CpuAffinity))) &&
 #endif
+                    thisTask != NULL &&
                     (task->tc_Node.ln_Pri > thisTask->tc_Node.ln_Pri))
                 {
                     D(bug("[Exec] %s: Task has higher priority ...\n", __func__);)

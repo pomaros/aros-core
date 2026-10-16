@@ -1,3 +1,6 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>
+ * This file is distributed under the AROS Public License, version 1.1.
+ */
 /*
     Copyright (C) 2011, The AROS Development Team. All rights reserved.
 */
@@ -13,12 +16,10 @@
 struct KMSLibrary
 {
     struct Library kms_Lib;
-    UWORD          kms_SwitchQual;	/* Switch hotkey qualifier  */
-    UWORD	   kms_SwitchCode;	/* Switch hotkey code	    */
-    struct KeyMap *kms_AltKeymap;	/* Alternate keymap pointer */
+    /* Configuration is owned by keymap.library, via ConfigureKeyMapSwitcher. */
 };
 
-#define KMS_QUAL_DISABLE 0xFFFF	/* Set kms_SwitchQual to this in order to turn off switcher */
-#define KMS_CODE_NOKEY   0xFFFF /* Set kms_SwitchCode to this if the hotkey consists only of qualifiers */
+#define KMS_QUAL_DISABLE 0xFFFF	/* Disabled switcher qualifier in preferences */
+#define KMS_CODE_NOKEY   0xFFFF /* Qualifier-only hotkey in preferences */
 
 #endif

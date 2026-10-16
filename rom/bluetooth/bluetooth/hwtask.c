@@ -3151,11 +3151,13 @@ AROS_UFH0(void, bHWTask)
                                        bth->bth_MsgCount);
                     }
                     if(cnt == 300) {
-                        btAddErrorMsg(RETURN_WARN, (STRPTR) GM_UNIQUENAME(libname),
-                                       "Okay, I've waited long enough, sod these %ld IORequests.",
-                                       bth->bth_MsgCount);
-                        bth->bth_MsgCount = 0;
-                        break;
+                        /* The driver still owns these requests: closing the
+                           device or freeing them now would let it write into
+                           freed memory. Keep waiting; a stuck driver keeps
+                           the stack loaded instead of corrupting it. */
+                        btAddErrorMsg(RETURN_FAIL, (STRPTR) GM_UNIQUENAME(libname),
+                                       "%ld IORequests still owned by %s/%ld after 30 s; waiting for the driver.",
+                                       bth->bth_MsgCount, bth->bth_DevName, bth->bth_Unit);
                     }
                     while((req = (struct IOBTHCIReq *) GetMsg(&bth->bth_DevMsgPort))) {
                         bHandleDevReply(hc, req);
@@ -3182,9 +3184,15 @@ AROS_UFH0(void, bHWTask)
 
     CloseLibrary((struct Library *) BluetoothBase);
     Forbid();
-    bth->bth_Task = NULL;
-    if(bth->bth_ReadySigTask) {
-        Signal(bth->bth_ReadySigTask, 1L<<bth->bth_ReadySignal);
+    {
+        /* btRemHardware() frees bth once it sees no task: read everything
+           first and touch nothing of bth after publishing. */
+        struct Task *ready = bth->bth_ReadySigTask;
+        ULONG mask = 1UL << bth->bth_ReadySignal;
+        bth->bth_Task = NULL;
+        if(ready) {
+            Signal(ready, mask);
+        }
     }
     AROS_USERFUNC_EXIT
 }

@@ -58,9 +58,9 @@ AROS_LH2(struct BtClass *, btAddClass,
         } while(*(++name));
     }
     if(cls) {
-        Forbid();
+        bGuard(BluetoothBase);
         if(FindName(&BluetoothBase->bt_Classes, cls->lib_Node.ln_Name)) {
-            Permit();
+            bUnguard(BluetoothBase);
             btAddErrorMsg(RETURN_WARN, (STRPTR) GM_UNIQUENAME(libname),
                            "Attempted to add class %s twice.",
                            name);
@@ -68,7 +68,7 @@ AROS_LH2(struct BtClass *, btAddClass,
             CloseLibrary(cls);
             return(NULL);
         }
-        Permit();
+        bUnguard(BluetoothBase);
         if((bc = btAllocVec(sizeof(struct BtClass)))) {
             bc->bc_Base = BluetoothBase;
             bc->bc_ClassBase = cls;
@@ -199,9 +199,9 @@ AROS_LH4(struct BtErrorMsg *, btAddErrorMsgA,
                     bem->bem_DateStamp.ds_Minute = (tr.tr_time.tv_secs / 60) % 60;
                     bem->bem_DateStamp.ds_Tick = (tr.tr_time.tv_secs % 60) * 50;
                 }
-                Forbid();
+                bGuard(BluetoothBase);
                 AddTail(&BluetoothBase->bt_ErrorMsgs, &bem->bem_Node);
-                Permit();
+                bUnguard(BluetoothBase);
                 btSendEvent(BEHMB_ADDERRORMSG, bem, NULL);
                 /* with the "btdebug" boot argument also mirror the line to the
                    boot volume, so a board without keyboard/shell still leaves a
@@ -233,9 +233,9 @@ AROS_LH1(void, btRemErrorMsg,
 {
     AROS_LIBFUNC_INIT
     KPRINTF(1, ("btRemErrorMsg()\n"));
-    Forbid();
+    bGuard(BluetoothBase);
     Remove(&bem->bem_Node);
-    Permit();
+    bUnguard(BluetoothBase);
     btFreeVec(bem->bem_Origin);
     btFreeVec(bem->bem_Msg);
     btFreeVec(bem);
@@ -804,9 +804,8 @@ BOOL bStartEventHandler(LIBBASETYPEPTR BluetoothBase)
         return(TRUE);
     }
 
-    bh->bh_ReadySignal = SIGB_SINGLE;
+    bh->bh_ReadySignal = bAllocReadySignal();
     bh->bh_ReadySigTask = FindTask(NULL);
-    SetSignal(0, SIGF_SINGLE); // clear single bit
 
     /*
      * Note: we must not hold bt_ReentrantLock here. The event broadcaster
@@ -819,6 +818,7 @@ BOOL bStartEventHandler(LIBBASETYPEPTR BluetoothBase)
         Wait(1UL<<bh->bh_ReadySignal);
     }
     bh->bh_ReadySigTask = NULL;
+    bFreeReadySignal(bh->bh_ReadySignal);
 
     if(bh->bh_Task) {
         btAddErrorMsg0(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname), "Event broadcaster started.");
@@ -990,9 +990,15 @@ AROS_UFH0(void, bEventHandlerTask)
         bh->bh_MsgPort = NULL;
     }
     Forbid();
-    bh->bh_Task = NULL;
-    if(bh->bh_ReadySigTask) {
-        Signal(bh->bh_ReadySigTask, 1L<<bh->bh_ReadySignal);
+    {
+        /* The waiter may free bh's owner as soon as it sees no task:
+           read everything first, publish last. */
+        struct Task *ready = bh->bh_ReadySigTask;
+        ULONG mask = 1UL << bh->bh_ReadySignal;
+        bh->bh_Task = NULL;
+        if(ready) {
+            Signal(ready, mask);
+        }
     }
     AROS_USERFUNC_EXIT
 }

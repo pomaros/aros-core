@@ -33,6 +33,10 @@ BOOL core_Schedule(void)
     if (task->tc_State == TS_REMOVED)
         return FALSE;
 
+    /* FreezeTasks() marked the running task from another CPU: park it now */
+    if (task->tc_State == TS_FROZEN)
+        return TRUE;
+
     /* If task has pending exception, reschedule it so that the dispatcher may handle the exception */
     if (!(task->tc_Flags & TF_EXCEPT))
     {
@@ -70,7 +74,8 @@ void core_Switch(void)
     if (task->tc_State != TS_RUN)
         Remove(&task->tc_Node);
 
-    if ((task->tc_State != TS_WAIT) && (task->tc_State != TS_REMOVED))
+    if ((task->tc_State != TS_WAIT) && (task->tc_State != TS_REMOVED) &&
+        (task->tc_State != TS_FROZEN))
         task->tc_State = TS_READY;
 
 #ifndef __mc68000

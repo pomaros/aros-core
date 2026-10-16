@@ -266,7 +266,7 @@ int dispcomp(const void *name, const void *dispentry)
     AROS_LIBFUNC_INIT
 
     struct Locale *locale =
-        (struct Locale *)IntLB(LocaleBase)->lb_CurrentLocale;
+        (struct Locale *)LocaleCurrentLoad(LocaleBase);
     struct dispentry *dispentry;
     LONG reslen;
     UBYTE resbuf[12];

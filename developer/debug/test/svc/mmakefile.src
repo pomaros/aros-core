@@ -1,0 +1,14 @@
+#
+#   [SMP13]: the service contract's synthetic service (host gate in run-host.sh)
+
+include $(SRCDIR)/config/aros.cfg
+
+EXEDIR := $(AROS_TESTS)/svc
+
+#MM test-svc : includes includes-copy linklibs linklibs-svc kernel-kernel-includes
+
+%build_prog mmake=test-svc \
+    files=svcvehicles targetdir=$(EXEDIR) progname=SvcVehicles \
+    uselibs="svc"
+
+%common

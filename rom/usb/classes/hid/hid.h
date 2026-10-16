@@ -547,7 +547,7 @@ struct NepClassHid
     LONG                nch_TabRotZ;      /* Tablet Z Rotation */
     BOOL                nch_TabProx;      /* Tablet Proximity */
 
-    ULONG               nch_TabTags[20];
+    struct TagItem      nch_TabTags[10];
 
     struct NepHidItem  *nch_RumbleMotors[2]; /* Rumble motor item cache */
     ULONG               nch_LLPortState[4]; /* Joypad port status */

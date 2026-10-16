@@ -1,0 +1,14 @@
+; Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+; Distributed under the AROS Public License, version 1.1.
+; SYS/locale.prefs: one LCLE chunk, struct LocalePrefs with the embedded
+; struct RegionPrefs (860 bytes).
+schema   1
+file     SYS/locale.prefs
+layout   compiler/include/prefs/locale.h LocalePrefs
+chunk    LCLE size 860
+
+[locale/language]  level novice  applier iprefs live
+  region     lp_RegionName@16:32          type country
+  preferred  lp_PreferredLanguages@48:30  type string  default english
+  gmtoffset  lp_GMTOffset@348:4           type int     range -720..720  unit minutes
+  flags      lp_Flags@352:4               type flags   choices gmtclock=1

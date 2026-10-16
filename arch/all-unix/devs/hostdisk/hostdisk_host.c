@@ -34,8 +34,9 @@
 #else
 
 /*
- * Use 32-bit inode_t on Darwin. Otherwise we are expected to use "stat$INODE64"
- * instead of "stat" function which is available only on MacOS 10.6.
+ * Use 32-bit inode_t on legacy Darwin. Otherwise we are expected to use
+ * "stat$INODE64" instead of "stat" function which is available only on
+ * MacOS 10.6.
  */
 #define _DARWIN_NO_64_BIT_INODE
 /* This enables struct stat64 definition */
@@ -114,10 +115,10 @@ ULONG Host_Open(struct unit *Unit)
     AROS_HOST_BARRIER
     err = *hdskBase->errnoPtr;
 
-    if (err == EBUSY || err == EROFS)
+    if (err == EBUSY || err == EROFS || err == EACCES || err == EPERM)
     {
         /* This allows to work on Darwin, at least in read-only mode */
-        D(bug("hostdisk: EBUSY, retrying with read-only access\n", Unit->filename, Unit->file, err));
+        D(bug("hostdisk: error %d, retrying with read-only access\n", err));
         Unit->flags = UNIT_READONLY;
 
         Unit->file = hdskBase->iface->open(Unit->filename, O_RDONLY, 0755);

@@ -13,4 +13,14 @@ EXEDIR      := $(AROSDIR)/Prefs
     progname=BoingIconBar targetdir=$(EXEDIR) \
     files=$(FILES)
 
+# The same editor as a shared class for the settings window.
+CLASSFILES := locale prefs args misc boingiconbareditor_init bibeditor_mcc
+
+#MM- workbench-prefs : workbench-prefs-iconbar-class
+#MM workbench-prefs-iconbar-class : includes linklibs workbench-prefs-iconbar-catalogs workbench-classes-zune-prefseditor
+
+%build_module mmake=workbench-prefs-iconbar-class \
+    modname=BoingIconBarEditor modtype=mcc \
+    conffile=boingiconbareditor.conf files="$(CLASSFILES)"
+
 %common

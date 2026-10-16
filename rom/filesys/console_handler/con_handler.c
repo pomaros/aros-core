@@ -34,6 +34,7 @@
 #include <workbench/workbench.h>
 #include <workbench/startup.h>
 #include <devices/conunit.h>
+#include <devices/rawkeycodes.h>
 
 #include <stddef.h>
 #include <string.h>
@@ -416,8 +417,11 @@ static LONG MakeConWindow(struct filehandle *fh)
               { NM_SUB,  "2",           "2",    0, 0, (APTR)MEN_CONSOLE_CLIP2   },
               { NM_SUB,  "3",           "3",    0, 0, (APTR)MEN_CONSOLE_CLIP3   },
              { NM_ITEM, NM_BARLABEL                                             },
-             { NM_ITEM,  "Copy",        "c",    0, 0, (APTR)MEN_CONSOLE_COPY    },
-             { NM_ITEM,  "Paste",       "v",    0, 0, (APTR)MEN_CONSOLE_PASTE   },
+             /* No CommKey: console.device's rawkey handler sits above intuition
+                and already acts on Right-Amiga+C/V, so a menu shortcut on the
+                same chord would run the copy/paste a second time. */
+             { NM_ITEM,  "Copy",        NULL,   0, 0, (APTR)MEN_CONSOLE_COPY    },
+             { NM_ITEM,  "Paste",       NULL,   0, 0, (APTR)MEN_CONSOLE_PASTE   },
             { NM_END                                                            }
         };
         if ((fh->winmenu = CreateMenusA(newconmenu, menu_tags))) {
@@ -1083,7 +1087,7 @@ LONG CONMain(struct ExecBase *SysBase)
                                                 struct InputEvent ie;
                                                 ie.ie_NextEvent = NULL;
                                                 ie.ie_Class     = IECLASS_RAWKEY;
-                                                ie.ie_Code      = 0x33;
+                                                ie.ie_Code      = RAWKEY_C;
                                                 ie.ie_Qualifier = IEQUALIFIER_RCOMMAND;
                                                 CDInputHandler(&ie, ConsoleDevice);
                                                 D(bug("[con:handler] %s: Menu: Copy sent\n", __func__));
@@ -1092,8 +1096,14 @@ LONG CONMain(struct ExecBase *SysBase)
                                         case MEN_CONSOLE_PASTE:
                                             {
                                                 D(bug("[con:handler] %s: Menu: Paste\n", __func__));
-                                                do_paste(fh);
-                                                process_input(fh);
+                                                struct Library *ConsoleDevice = (struct Library *)fh->conreadio->io_Device;
+                                                struct InputEvent ie;
+                                                ie.ie_NextEvent = NULL;
+                                                ie.ie_Class     = IECLASS_RAWKEY;
+                                                ie.ie_Code      = RAWKEY_V;
+                                                ie.ie_Qualifier = IEQUALIFIER_RCOMMAND;
+                                                CDInputHandler(&ie, ConsoleDevice);
+                                                D(bug("[con:handler] %s: Menu: Paste sent\n", __func__));
                                             }
                                             break;
                                         case MEN_CONSOLE_CLIP0:

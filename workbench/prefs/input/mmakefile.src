@@ -9,10 +9,20 @@ EXEDIR      := $(AROS_PREFS)
 #MM- workbench-prefs : workbench-prefs-input
 #MM workbench-prefs-input : workbench-prefs-input-catalogs
 
-USER_CFLAGS := -DADATE="\"$(shell date '+%d.%m.%Y')\""
+USER_CFLAGS := -DADATE="\"$(AROS_BUILD_DATE)\""
 
 %build_prog mmake=workbench-prefs-input \
     progname=Input targetdir=$(EXEDIR) \
     files=$(FILES)
+
+# The same editor as a shared class for the settings window.
+CLASSFILES := args keymap locale misc prefs stringify inputeditor_init ipeditor_mcc
+
+#MM- workbench-prefs : workbench-prefs-input-class
+#MM workbench-prefs-input-class : workbench-prefs-input-catalogs workbench-classes-zune-prefseditor
+
+%build_module mmake=workbench-prefs-input-class \
+    modname=InputEditor modtype=mcc \
+    conffile=inputeditor.conf files="$(CLASSFILES)"
 
 %common

@@ -81,7 +81,7 @@
     }
     while (p[0] != 0);
 
-    return GetCatalogStr(IntLB(LocaleBase)->lb_CurrentLocale->il_DosCatalog,
+    return GetCatalogStr(LocaleCurrentLoad(LocaleBase)->il_DosCatalog,
         stringNum, defstr);
 
     AROS_LIBFUNC_EXIT

@@ -68,6 +68,9 @@
 ******************************************************************************/
 {
     fdesc *oldfdesc, *newfdesc;
+    int result;
+
+    __fdesc_lock();
 
     /* Fail if old FD is invalid */
     oldfdesc = __getfdesc(oldfd);
@@ -82,31 +85,31 @@
         {
             LONG err = 0;
             if (oldfd == newfd)
-                return newfd;
+                { result = newfd; goto done; }
             /* Vacate newfd first (close a posixc file or free a reservation). */
             if (__getfdesc(newfd))
                 close(newfd);
             if (hooks->fdh_dup(data, oldfd, newfd, &err) < 0)
             {
                 errno = err;
-                return -1;
+                { result = -1; goto done; }
             }
-            return newfd;
+            { result = newfd; goto done; }
         }
         errno = EBADF;
-        return -1;
+        { result = -1; goto done; }
     }
 
     /* Do nothing if FDs are identical */
     if (oldfd == newfd)
-        return newfd;
+        { result = newfd; goto done; }
 
     /* Allocate new FD or fail */
     newfdesc = __alloc_fdesc();
     if (!newfdesc)
     {
         errno = ENOMEM;
-        return -1;
+        { result = -1; goto done; }
     }
 
     /* Initialise new FD */
@@ -120,7 +123,7 @@
         /* Reservation failed: release the descriptor we just allocated so it
            is not leaked. errno was set by __getfdslot(). */
         __free_fdesc(newfdesc);
-        return -1;
+        { result = -1; goto done; }
     }
 
     /* Bumping the shared fcb's reference count must be atomic against a
@@ -130,6 +133,9 @@
     __fcb_unlock(newfdesc->fcb);
     __setfdesc(gotfd, newfdesc);
 
-    return gotfd;
+    result = gotfd;
+done:
+    __fdesc_unlock();
+    return result;
 }
 

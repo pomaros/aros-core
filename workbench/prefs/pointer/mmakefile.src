@@ -15,4 +15,14 @@ EXEDIR      := $(AROSDIR)/Prefs
     progname=Pointer targetdir=$(EXEDIR) \
     files=$(FILES)
 
+# The same editor as a shared class for the settings window.
+CLASSFILES := locale ppreview prefs args misc pointereditor_init pteditor_mcc
+
+#MM- workbench-prefs : workbench-prefs-pointer-class
+#MM workbench-prefs-pointer-class : includes linklibs workbench-prefs-pointer-catalogs workbench-classes-zune-prefseditor
+
+%build_module mmake=workbench-prefs-pointer-class \
+    modname=PointerEditor modtype=mcc \
+    conffile=pointereditor.conf files="$(CLASSFILES)"
+
 %common

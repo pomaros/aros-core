@@ -25,6 +25,7 @@
 #include "support_messages.h"
 #include "handler.h"
 #include "handler_support.h"
+#include "tile.h"
 
 struct HandlerContext
 {
@@ -160,6 +161,10 @@ AROS_UFH3
                         D(bug("[WBLIB] WorkbenchHandler: Replying IntuiMessage because Type = "
                           "WBHM_TYPE_HIDE\n"));
                         ReplyMsg((struct Message *)iwbhm->iwbhm_Data.Hide.imsg);
+                    }
+                    if (message->wbhm_Type == WBHM_TYPE_TILES)
+                    {
+                        WBTileRefreshDone(WorkbenchBase);
                     }
                     DestroyWBHM(message);
                 }

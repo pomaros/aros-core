@@ -40,7 +40,9 @@ cname:                                          ; \
 	ldp	x2,  x3,  [sp, #16]            ; \
 	ldp	x0,  x1,  [sp], #160           ; \
 	ret                                    ; \
-1:	.quad	name
+	.balign 8                              ; \
+1:	.quad	name                           ; \
+	.size	cname, . - cname
 
 	.text
 

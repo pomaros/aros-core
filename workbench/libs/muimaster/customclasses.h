@@ -56,7 +56,11 @@ int name ## _Initialize(void)                                         \
 void name ## _Deinitialize(void);                                     \
 void name ## _Deinitialize(void)                                      \
 {                                                                     \
-    MUI_DeleteCustomClass(name ## _CLASS);                            \
+    /* A module's failed open runs every EXIT function, also when this \
+     * class was never created and muimaster was never opened. */     \
+    if (name ## _CLASS != NULL)                                       \
+        MUI_DeleteCustomClass(name ## _CLASS);                        \
+    name ## _CLASS = NULL;                                            \
 }                                                                     \
                                                                       \
 ADD2INIT(name ## _Initialize,   ZUNE_CUSTOMCLASS_PASS);               \

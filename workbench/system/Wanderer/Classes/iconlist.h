@@ -68,6 +68,30 @@ struct MUIP_IconList_MakeEntryVisible    {STACKED ULONG MethodID; STACKED struct
 struct MUIP_IconList_GetIconPrivate     {STACKED ULONG MethodID; STACKED struct IconList_Entry *entry;}; /* *entry must be a valid Icon */
 
 /* used by MUIM_IconList_NextIcon */
+/* Optional presenter method. The generic class does not link Wanderer code. */
+#define MUIM_IconList_Tile (MUIB_IconList | 0x00000025)
+#define ICONTILE_SIZE 1
+#define ICONTILE_DRAW 2
+#define ICONTILE_CLICK 3
+#define ICONTILE_HIT 4
+#define ICONTILE_VISIBILITY 5
+#define ICONTILE_POINTER 6 /* width=inside, x/y=unclipped surface-local coordinates */
+#define ICONTILE_DEFINITION 9 /* rp=owned caller buffer, width=capacity */
+#define ICONTILE_ANCHOR 10 /* width=group anchor0..4 */
+#define ICONTILE_PLACEMENT 8 /* rp carries Screen identity only; width=0 invalidates */
+#define ICONTILE_GEOMETRY 7 /* screen-relative full tile bounds; width=0 invalidates */
+#define MUIM_IconList_UpdateTileVisibility (MUIB_IconList | 0x00000026)
+struct IconTileRequest {
+    ULONG action, width, height;
+    struct RastPort *rp;
+    LONG x, y;
+};
+struct MUIP_IconList_Tile {
+    STACKED ULONG MethodID;
+    STACKED struct IconEntry *entry;
+    STACKED struct IconTileRequest *request;
+};
+
 struct IconList_Entry
 {
     struct IconEntry    *ile_IconEntry;
@@ -96,6 +120,7 @@ struct IconList_Drop_Event
     Object*     drop_TargetObj;        /* iconlist obj         */
     STRPTR      drop_TargetPath;       /* destination path     */
     Object*     drop_SourceObj;        /* source iconlist obj  */ 
+    struct TileDropRequest *drop_Tile; /* owned bounded transaction request */
     ULONG       drop_Mode;             /* iconlist drop mode   */
 };
 
@@ -121,6 +146,8 @@ struct IconEntry
                                                                         ie_IconWidth, AreaWidth = the icons label Width
                                                                         else it will be the same as ie_IconWidth */
 
+    /* Optional multi-cell reservation, excluding the outer spacing. */
+    ULONG                       ie_GridWidth, ie_GridHeight;
     ULONG                       ie_Flags;
 
     UBYTE                       *ie_TxtBuf_DisplayedLabel;

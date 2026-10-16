@@ -1,0 +1,16 @@
+; Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+; Distributed under the AROS Public License, version 1.1.
+; SYS/workbench.prefs: one WBNC chunk, struct WorkbenchPrefs.
+schema   1
+file     SYS/workbench.prefs
+layout   compiler/include/prefs/workbench.h WorkbenchPrefs
+chunk    WBNC size 32
+
+[workbench/general]  level average  applier self reboot
+  stacksize      wbp_DefaultStackSize@0:4  type int   range 4096..16777216  unit bytes
+  typerestart    wbp_TypeRestartTime@4:4   type int   range 0..60  unit seconds
+  iconprecision  wbp_IconPrecision@8:4     type int   level expert
+  borderless     wbp_Borderless@20:2       type bool
+  maxnamelength  wbp_MaxNameLength@24:4    type int   range 1..107  unit characters
+  newicons       wbp_NewIconsSupport@28:2  type bool  level expert
+  coloricons     wbp_ColorIconSupport@30:2 type bool  level expert

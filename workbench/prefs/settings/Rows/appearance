@@ -1,0 +1,7 @@
+group appearance
+order 10
+class AppearanceEditor.mcc
+name Appearance
+description The theme, decorations and window look
+keywords theme decoration skin look
+level novice

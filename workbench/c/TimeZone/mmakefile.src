@@ -1,0 +1,13 @@
+# Copyright (C) 2026 John KNIPPER. All rights reserved.
+# Licensed under the AROS Public License (APL) Version 1.1.
+
+include $(SRCDIR)/config/aros.cfg
+
+#MM- workbench-c : workbench-c-timezone
+#MM- workbench-c-quick : workbench-c-timezone-quick
+#MM workbench-c-timezone : includes linklibs
+
+%build_prog mmake=workbench-c-timezone progname=TimeZone \
+    files="TimeZone tz_rule" targetdir=$(AROS_C)
+
+%common

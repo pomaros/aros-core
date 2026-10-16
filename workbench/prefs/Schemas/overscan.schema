@@ -1,0 +1,14 @@
+; Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+; Distributed under the AROS Public License, version 1.1.
+; SYS/overscan.prefs: one OSCN chunk, struct OverscanPrefs as IPrefs reads it.
+schema   1
+file     SYS/overscan.prefs
+layout   compiler/include/prefs/overscan.h OverscanPrefs
+chunk    OSCN size 36
+
+[overscan/display]  level expert  applier iprefs reboot
+  modeid   os_DisplayID@16:4  type modeid
+  hstart   os_HStart@8:2      type int  range 0..65535  unit pixels
+  hstop    os_HStop@10:2      type int  range 0..65535  unit pixels
+  vstart   os_VStart@12:2     type int  range 0..65535  unit lines
+  vstop    os_VStop@14:2      type int  range 0..65535  unit lines

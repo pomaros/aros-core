@@ -18,8 +18,8 @@ USER_CPPFLAGS := \
 	-DVERSION23=1 \
 	-DNO_GUI=1 \
 	-DREVISION=19 \
-	-DREVDATE="\"$(shell date '+%d.%m.%Y')\"" \
-	-DADATE="\"$(shell date '+%d.%m.%Y')\""
+	-DREVDATE="\"$(AROS_BUILD_DATE)\"" \
+	-DADATE="\"$(AROS_BUILD_DATE)\""
 
 USER_INCLUDES := -I$(PFS3DIR)
 

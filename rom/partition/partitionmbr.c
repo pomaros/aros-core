@@ -4,6 +4,7 @@
 
 #include <exec/memory.h>
 #include <exec/types.h>
+#include <dos/exfat.h>
 #include <libraries/partition.h>
 #include <proto/exec.h>
 #include <proto/partition.h>
@@ -19,6 +20,85 @@
 struct MBRData {
     struct PCPartitionTable *entry;
     UBYTE position;
+};
+
+static void ProbeExfatPartition(struct Library *PartitionBase,
+    struct PartitionHandle *ph)
+{
+    ULONG size_longs = ph->de.de_SizeBlock;
+    ULONG size;
+    UBYTE *block;
+
+    /* DosEnvec geometry is external input.  Validate before shifting so a
+       malformed value cannot wrap, or request an unbounded allocation, on a
+       32-bit target. */
+    if (size_longs < 128 || size_longs > 8192
+        || (size_longs & (size_longs - 1)) != 0)
+        return;
+    size = size_longs << 2;
+    block = AllocMem(size, MEMF_ANY);
+    if (block == NULL)
+        return;
+    if (readBlock(PartitionBase, ph, 0, block) == 0
+        && IsExfatBootSector(block, size))
+        setDosType(&ph->de, ID_EXFAT_DISK);
+    FreeMem(block, size);
+}
+
+struct FATBootSector {
+    UBYTE bs_jmp_boot[3];
+    UBYTE bs_oem_name[8];
+    UWORD bpb_bytes_per_sect;
+    UBYTE bpb_sect_per_clust;
+    UWORD bpb_rsvd_sect_count;
+    UBYTE bpb_num_fats;
+    UWORD bpb_root_entries_count;
+    UWORD bpb_total_sectors_16;
+    UBYTE bpb_media;
+    UWORD bpb_fat_size_16;
+    UWORD bpb_sect_per_track;
+    UWORD bpb_num_heads;
+    ULONG bpb_hidden_sect;
+    ULONG bpb_total_sectors_32;
+
+    union {
+        struct {
+            UBYTE bs_drvnum;
+            UBYTE bs_reserved1;
+            UBYTE bs_bootsig;
+            ULONG bs_volid;
+            UBYTE bs_vollab[11];
+            UBYTE bs_filsystype[8];
+        } __packed fat16;
+
+        struct {
+            ULONG bpb_fat_size_32;
+            UWORD bpb_extflags;
+            UWORD bpb_fs_verion;
+            ULONG bpb_root_cluster;
+            UWORD bpb_fs_info;
+            UWORD bpb_back_bootsec;
+            UBYTE bpb_reserved[12];
+            UBYTE bs_drvnum;
+            UBYTE bs_reserved1;
+            UBYTE bs_bootsig;
+            ULONG bs_volid;
+            UBYTE bs_vollab[11];
+            UBYTE bs_filsystype[8];
+        } __packed fat32;
+    } type;
+    UBYTE pad[420];
+    UBYTE bpb_signature[2];
+} __packed;
+
+struct rootblock
+{
+    union
+    {
+        struct MBR mbr;
+        struct FATBootSector bs;
+    }
+    u;
 };
 
 LONG MBRCheckPartitionTable(struct Library *PartitionBase, struct PartitionHandle *root, void *buffer)
@@ -85,6 +165,7 @@ static struct PartitionHandle *PartitionMBRNewHandle(struct Library *PartitionBa
 
                 /* Map type ID to a DOSType */
                 setDosType(&ph->de, MBR_FindDosType(data->entry->type));
+                ProbeExfatPartition(PartitionBase, ph);
 
                 /* Set position as priority */
                 ph->ln.ln_Pri = MBR_MAX_PARTITIONS - 1 - position;

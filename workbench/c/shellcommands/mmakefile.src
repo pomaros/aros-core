@@ -42,7 +42,7 @@ FILES	:= \
     Why
 
 USER_INCLUDES := -I$(GENDIR)/workbench/c/shellcommands/shellsegs.h
-USER_CPPFLAGS := -DADATE="\"$(shell date "+%d.%m.%Y")\""
+USER_CPPFLAGS := -DADATE="\"$(AROS_BUILD_DATE)\""
 USER_LDFLAGS := -static
 
 #MM- workbench-c : workbench-c-shellcommands
@@ -60,7 +60,7 @@ USER_LDFLAGS := -static
 USER_CPPFLAGS := \
                -DUSE_EXEC_DEBUG \
                -D__NOLIBBASE__ \
-               -DADATE="\"$(shell date "+%d.%m.%Y")\""
+               -DADATE="\"$(AROS_BUILD_DATE)\""
 USER_CPPFLAGS += -DUSE_EMBEDDED_COMMANDS
 ifeq ($(AROS_TARGET_CPU),m68k)
 USER_CPPFLAGS   += -D__DOS_NOLIBINLINE__ 

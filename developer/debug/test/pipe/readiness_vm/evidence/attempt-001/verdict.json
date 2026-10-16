@@ -1,0 +1,20 @@
+{
+  "result": "FAIL",
+  "errors": [
+    "reserved failure token",
+    "missing or duplicate proof",
+    "unexpected QEMU termination",
+    "failure token or QEMU trace"
+  ],
+  "workload_seconds": null,
+  "qemu_exit_code": 0,
+  "qmp_orderly_quit": false,
+  "timed_out": false,
+  "actual_aros_guest": true,
+  "backend": "hvf",
+  "cpus": 1,
+  "post_proof_observation_seconds": 3,
+  "bundle_sha256": "a35b6f7f14ab5fd5969fa222e99e8cc06141f5addbb03dbba94ee7b87a4a7176",
+  "firmware_sha256": "47765fe344818cbc464b1c14ae658fb4b854f5c2ceffa982411731eb4865594d",
+  "seconds": 6.291
+}

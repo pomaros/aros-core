@@ -15,6 +15,30 @@
 #define VIRTIO_PAGE_SIZE        4096
 #define VIRTIO_PAGE_ALIGN(x)    (((x) + (VIRTIO_PAGE_SIZE - 1)) & ~(VIRTIO_PAGE_SIZE - 1))
 
+/* AllocPCIMem must provide coherent DMA memory. Native noncoherent platforms
+ * need an explicit cache ownership implementation before using this transport. */
+static void vq_barrier(void)
+{
+#if defined(__aarch64__)
+    __asm__ volatile("dsb sy" ::: "memory");
+#else
+    __sync_synchronize();
+#endif
+}
+static BOOL vq_address(device_t dev, APTR cpu, ULONG bytes, UQUAD *bus)
+{
+    struct VirtIOBase *VirtIOBase = dev->dev_VirtIOBase;
+    if (!cpu || !bytes || bytes - 1 > UINTPTR_MAX - (IPTR)cpu) return FALSE;
+    APTR first = HIDD_PCIDriver_CPUtoPCI(dev->dev_PCIDriverObject, cpu);
+    if (first == (APTR)-1 || bytes - 1 > UINTPTR_MAX - (IPTR)first) return FALSE;
+    /* AllocPCIMem provides a contiguous allocation. Verify its advertised end
+     * as well as its base; never turn the failure sentinel into a descriptor. */
+    APTR last = HIDD_PCIDriver_CPUtoPCI(dev->dev_PCIDriverObject, (UBYTE *)cpu + bytes - 1);
+    if ((IPTR)last != (IPTR)first + bytes - 1 || last == (APTR)-1) return FALSE;
+    *bus = (IPTR)first;
+    return TRUE;
+}
+
 static ULONG vq_alloc_size(int size, ULONG *avail_off, ULONG *used_off)
 {
     ULONG desc_bytes  = sizeof(struct virtq_desc) * size;
@@ -37,7 +61,7 @@ struct virtio_queue *virtio_alloc_queue(device_t dev, int qid, int size)
 
     if (!dev || !dev->dev_PCIDriverObject || !VirtIOBase)
         return NULL;
-    if (size <= 0 || (size & (size - 1)) != 0)
+    if (size <= 0 || size > 32768 || (size & (size - 1)) != 0)
         return NULL;
 
     vq = AllocMem(sizeof(*vq), MEMF_CLEAR);
@@ -64,18 +88,24 @@ struct virtio_queue *virtio_alloc_queue(device_t dev, int qid, int size)
     vq->q_Used  = (volatile struct virtq_used  *)((UBYTE *)vq->q_RingBase + used_off);
 
     {
-        UQUAD base = (UQUAD)(IPTR)HIDD_PCIDriver_CPUtoPCI(dev->dev_PCIDriverObject, vq->q_RingBase);
+        UQUAD base;
+        if (!vq_address(dev, vq->q_RingBase, bytes, &base)) {
+            virtio_free_queue(vq);
+            return NULL;
+        }
         vq->q_DescPhys  = base;
         vq->q_AvailPhys = base + avail_off;
         vq->q_UsedPhys  = base + used_off;
     }
 
-    vq->q_Reqs = AllocMem(sizeof(struct virtio_request) * size, MEMF_CLEAR);
+    vq->q_Reqs = HIDD_PCIDriver_AllocPCIMem(dev->dev_PCIDriverObject, sizeof(struct virtio_request) * size);
     if (!vq->q_Reqs) {
         HIDD_PCIDriver_FreePCIMem(dev->dev_PCIDriverObject, vq->q_RingBase);
         FreeMem(vq, sizeof(*vq));
         return NULL;
     }
+
+    memset(vq->q_Reqs, 0, sizeof(struct virtio_request) * size);
 
     for (i = 0; i < size; i++) {
         vq->q_Desc[i].next  = (i + 1 == size) ? 0 : (i + 1);
@@ -104,7 +134,10 @@ void virtio_free_queue(struct virtio_queue *vq)
         vq->q_RingBase = NULL;
     }
     if (vq->q_Reqs) {
-        FreeMem(vq->q_Reqs, sizeof(struct virtio_request) * vq->q_Size);
+        for (UWORD i = 0; i < vq->q_Size; ++i)
+            if (vq->q_Reqs[i].vr_DMABuffer)
+                HIDD_PCIDriver_FreePCIMem(vq->dev->dev_PCIDriverObject, vq->q_Reqs[i].vr_DMABuffer);
+        HIDD_PCIDriver_FreePCIMem(vq->dev->dev_PCIDriverObject, vq->q_Reqs);
         vq->q_Reqs = NULL;
     }
     FreeMem(vq, sizeof(*vq));
@@ -153,6 +186,7 @@ static void vq_free_chain(struct virtio_queue *vq, UWORD head)
 
 int virtio_submit_blk_request(struct virtio_queue *vq, struct virtio_request *templ)
 {
+    if (!vq || !templ) return -1;
     device_t dev = vq->dev;
     struct VirtIOBase *VirtIOBase = dev ? dev->dev_VirtIOBase : NULL;
     struct virtio_request *slot;
@@ -161,10 +195,12 @@ int virtio_submit_blk_request(struct virtio_queue *vq, struct virtio_request *te
     UQUAD hdr_phys, status_phys, data_phys = 0;
     UWORD avail_idx;
 
-    if (!dev || !dev->dev_PCIDriverObject || !VirtIOBase) return -1;
+    if (!dev || !dev->dev_PCIDriverObject || !VirtIOBase || !vq->q_Notify ||
+        (templ->vr_DataLength && !templ->vr_DataAddr) || templ->vr_DataLength == UINT32_MAX)
+        return -1;
 
     ObtainSemaphore(&vq->q_Lock);
-    if (vq_alloc_chain(vq, descs_needed, idxs) != 0) {
+    if (vq->q_Broken || vq_alloc_chain(vq, descs_needed, idxs) != 0) {
         ReleaseSemaphore(&vq->q_Lock);
         return -1;
     }
@@ -175,29 +211,16 @@ int virtio_submit_blk_request(struct virtio_queue *vq, struct virtio_request *te
     slot->vr_DescCount = descs_needed;
     slot->vr_InUse     = 1;
     slot->vr_Status    = 0xff;
+    slot->vr_DMABuffer = NULL;
 
-    /* Translate buffers to PCI-DMA addresses. */
-    {
-        ULONG l = sizeof(slot->vr_Header);
-        APTR p = CachePreDMA(&slot->vr_Header, &l, DMA_ReadFromRAM);
-        hdr_phys = (UQUAD)(IPTR)HIDD_PCIDriver_CPUtoPCI(dev->dev_PCIDriverObject, p);
-    }
-    if (templ->vr_DataLength > 0) {
-        ULONG l = templ->vr_DataLength;
-        ULONG f = templ->vr_IsWrite ? DMA_ReadFromRAM : 0;
-        APTR p = CachePreDMA(templ->vr_DataAddr, &l, f);
-        data_phys = (UQUAD)(IPTR)HIDD_PCIDriver_CPUtoPCI(dev->dev_PCIDriverObject, p);
-        if (l < templ->vr_DataLength) {
-            vq_free_chain(vq, idxs[0]);
-            slot->vr_InUse = 0;
-            ReleaseSemaphore(&vq->q_Lock);
-            return -1;
-        }
-    }
-    {
-        ULONG l = 1;
-        APTR p = CachePreDMA(&slot->vr_Status, &l, 0);
-        status_phys = (UQUAD)(IPTR)HIDD_PCIDriver_CPUtoPCI(dev->dev_PCIDriverObject, p);
+    if (!vq_address(dev, &slot->vr_Header, sizeof(slot->vr_Header), &hdr_phys) ||
+        !vq_address(dev, &slot->vr_Status, 1, &status_phys)) goto fail;
+    if (slot->vr_DataLength) {
+        slot->vr_DMABuffer = HIDD_PCIDriver_AllocPCIMem(dev->dev_PCIDriverObject, slot->vr_DataLength);
+        if (!slot->vr_DMABuffer ||
+            !vq_address(dev, slot->vr_DMABuffer, slot->vr_DataLength, &data_phys)) goto fail;
+        if (slot->vr_IsWrite) memcpy(slot->vr_DMABuffer, slot->vr_DataAddr, slot->vr_DataLength);
+        else memset(slot->vr_DMABuffer, 0, slot->vr_DataLength);
     }
 
     /* Build descriptors. */
@@ -229,9 +252,9 @@ int virtio_submit_blk_request(struct virtio_queue *vq, struct virtio_request *te
     avail_idx = vq->q_Avail->idx;
     vq->q_Avail->ring[avail_idx % vq->q_Size] = idxs[0];
     /* Memory barrier ensuring descriptors are visible before idx update */
-    __asm__ __volatile__("" ::: "memory");
+    vq_barrier();
     vq->q_Avail->idx = avail_idx + 1;
-    __asm__ __volatile__("" ::: "memory");
+    vq_barrier();
 
     ReleaseSemaphore(&vq->q_Lock);
 
@@ -241,57 +264,56 @@ int virtio_submit_blk_request(struct virtio_queue *vq, struct virtio_request *te
     }
 
     return idxs[0];
+fail:
+    if (slot->vr_DMABuffer) {
+        HIDD_PCIDriver_FreePCIMem(dev->dev_PCIDriverObject, slot->vr_DMABuffer);
+        slot->vr_DMABuffer = NULL;
+    }
+    slot->vr_InUse = 0;
+    vq_free_chain(vq, idxs[0]);
+    ReleaseSemaphore(&vq->q_Lock);
+    return -1;
 }
 
 ULONG virtio_process_used(struct virtio_queue *vq)
 {
     ULONG handled = 0;
-    UWORD used_idx;
-
+    struct VirtIOBase *VirtIOBase = vq->dev->dev_VirtIOBase;
     ObtainSemaphore(&vq->q_Lock);
-    used_idx = vq->q_Used->idx;
-
-    while (vq->q_LastUsedIdx != used_idx) {
-        UWORD slot_idx = vq->q_LastUsedIdx % vq->q_Size;
-        UWORD head     = vq->q_Used->ring[slot_idx].id;
-        ULONG ulen     = vq->q_Used->ring[slot_idx].len;
-        struct virtio_request *req;
-
-        if (head < vq->q_Size) {
-            req = &vq->q_Reqs[head];
-            if (req->vr_InUse) {
-                struct IORequest *io = req->vr_IORequest;
-
-                /* Translate virtio status into AROS error. */
-                if (io) {
-                    UBYTE st = req->vr_Status;
-                    if (st == VIRTIO_BLK_S_OK) {
-                        io->io_Error = 0;
-                        IOStdReq(io)->io_Actual = req->vr_DataLength;
-                    } else if (st == VIRTIO_BLK_S_UNSUPP) {
-                        io->io_Error = IOERR_NOCMD;
-                    } else {
-                        io->io_Error = IOERR_ABORTED;
-                    }
-                }
-
-                req->vr_InUse = 0;
-                vq_free_chain(vq, head);
-
-                /* Defer the ReplyMsg out of interrupt context.
-                 * The IO task signals owner. We do it inline as we run on
-                 * the IO task in our model. */
-                if (io) {
-                    ReplyMsg(&io->io_Message);
-                }
-                handled++;
-            }
+    UWORD used_idx = vq->q_Used->idx;
+    vq_barrier(); /* Observe device writes before consuming status/data. */
+    if ((UWORD)(used_idx - vq->q_LastUsedIdx) > vq->q_Size) vq->q_Broken = TRUE;
+    while (!vq->q_Broken && vq->q_LastUsedIdx != used_idx) {
+        UWORD ring_slot = vq->q_LastUsedIdx % vq->q_Size;
+        ULONG head = vq->q_Used->ring[ring_slot].id; /* id is 32 bits, never truncate. */
+        ULONG length = vq->q_Used->ring[ring_slot].len;
+        if (head >= vq->q_Size || !vq->q_Reqs[head].vr_InUse) {
+            /* Unknown ownership: stop submission, retain DMA until reset. */
+            vq->q_Broken = TRUE;
+            break;
         }
-
-        vq->q_LastUsedIdx++;
-        (void)ulen;
+        struct virtio_request *req = &vq->q_Reqs[head];
+        struct IORequest *io = req->vr_IORequest;
+        ULONG expected = 1 + (req->vr_IsWrite ? 0 : req->vr_DataLength);
+        UBYTE status = *(volatile UBYTE *)&req->vr_Status;
+        BOOL success = length == expected && status == VIRTIO_BLK_S_OK;
+        if (success && !req->vr_IsWrite && req->vr_DataLength)
+            memcpy(req->vr_DataAddr, req->vr_DMABuffer, req->vr_DataLength);
+        if (io) {
+            IOStdReq(io)->io_Actual = success ? req->vr_DataLength : 0;
+            io->io_Error = success ? 0 :
+                (length && length <= expected && status == VIRTIO_BLK_S_UNSUPP ? IOERR_NOCMD : IOERR_ABORTED);
+        }
+        if (req->vr_DMABuffer) {
+            HIDD_PCIDriver_FreePCIMem(vq->dev->dev_PCIDriverObject, req->vr_DMABuffer);
+            req->vr_DMABuffer = NULL;
+        }
+        req->vr_InUse = 0;
+        vq_free_chain(vq, (UWORD)head);
+        ++vq->q_LastUsedIdx;
+        ++handled;
+        if (io) ReplyMsg(&io->io_Message);
     }
     ReleaseSemaphore(&vq->q_Lock);
-
     return handled;
 }

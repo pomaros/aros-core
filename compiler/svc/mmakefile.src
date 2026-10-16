@@ -1,0 +1,11 @@
+include $(SRCDIR)/config/aros.cfg
+
+# The service contract (aros/svc.h): rings, SvcWake() and the shared-core
+# vehicles. Services link it; the rings and the accounting are plain C11.
+
+#MM- linklibs : linklibs-svc
+#MM linklibs-svc : includes
+
+%build_linklib mmake=linklibs-svc libname=svc files="svc_ring svc_exec"
+
+%common

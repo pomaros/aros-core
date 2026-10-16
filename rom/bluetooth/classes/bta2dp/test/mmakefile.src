@@ -1,0 +1,7 @@
+include $(SRCDIR)/config/aros.cfg
+
+#MM test-bta2dp : includes linklibs kernel-bluetooth-library-includes workbench-devs-AHI-subsystem
+%build_prog mmake=test-bta2dp progname=BTA2DPTest \
+    files="bta2dptest" targetdir=$(AROS_TESTS)/Bluetooth uselibs="m"
+
+%common

@@ -2,20 +2,18 @@
 #define _FPEDITOR_H_
 
 /*
-    Copyright © 2004, The AROS Development Team. All rights reserved.
-    $Id$
+    Copyright (C) 2004-2026, The AROS Development Team. All rights reserved.
 */
 
 #include <exec/types.h>
 #include <libraries/mui.h>
 
-/*** Identifier base ********************************************************/
-#define MUIB_FPEditor                  (TAG_USER | 0x10000000)
-
-/*** Variables **************************************************************/
-extern struct MUI_CustomClass *FPEditor_CLASS;
+/*** Name *******************************************************************/
+/* The Font editor's PrefsEditor subclass, a shared class: the Font program
+ * and the settings window both create it by name. */
+#define MUIC_FontEditor "FontEditor.mcc"
 
 /*** Macros *****************************************************************/
-#define FPEditorObject BOOPSIOBJMACRO_START(FPEditor_CLASS->mcc_Class)
+#define FontEditorObject MUIOBJMACRO_START(MUIC_FontEditor)
 
-#endif /* _FWPEDITOR_H_ */
+#endif /* _FPEDITOR_H_ */

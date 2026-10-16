@@ -6,6 +6,7 @@
 
 #include "workbench_intern.h"
 #include "notifyworkbench.h"
+#include "tile.h"
 #include <workbench/workbench.h>
 
 /*****************************************************************************
@@ -61,6 +62,7 @@
     Remove((struct Node *)appIcon);
     UnlockWorkbench();
 
+    WBTileFree(appIcon, WorkbenchBase);
     FreeVec(appIcon);
 
     NotifyWorkbench(WBNOTIFY_Delete, WBNOTIFY_AppIcon, WorkbenchBase);

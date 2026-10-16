@@ -204,6 +204,9 @@ OOP_Object *EFIFBGfxDisplay__Hidd_Display__Show(OOP_Class *cl, OOP_Object *o, st
     {
         /* Otherwise simply clear the framebuffer */
         ClearBuffer(&data->data);
+        if (data->data.present)
+            data->data.present(data->data.present_data, 0, 0,
+                               data->data.width, data->data.height);
     }
 
     data->visible = msg->bitMap;

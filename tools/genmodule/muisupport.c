@@ -166,8 +166,12 @@ void writemccinit(struct config *cfg, FILE *out, int inclass, struct classinfo *
         fprintf
         (
              out,
-             "    MUI_DeleteCustomClass(%s_CLASSPTR_FIELD(LIBBASE));\n",
-             cl->basename
+             "    if (%s_CLASSPTR_FIELD(LIBBASE) != NULL)\n"
+             "    {\n"
+             "        MUI_DeleteCustomClass(%s_CLASSPTR_FIELD(LIBBASE));\n"
+             "        %s_CLASSPTR_FIELD(LIBBASE) = NULL;\n"
+             "    }\n",
+             cl->basename, cl->basename, cl->basename
         );
     }
     else

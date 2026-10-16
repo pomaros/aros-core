@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>
     Copyright (C) 1995-2021, The AROS Development Team. All rights reserved.
 
     Desc: Internal definitions for the locale.library.
@@ -32,11 +33,9 @@
 /* aros_print_not_implemented() macro: */
 #include <aros/debug.h>
 #include <aros/asmcall.h>
-/* Should the Loc???() replacement functions lock the default locale.
-   1 = yes. 0 = no. If you set this to 0, then you must make sure that
-   a Locale which was once set as default Locale never gets freed from
-   memory. */
-   
+/* Published locales have process-independent readers, including RawDoFmt and
+   escaped DosGetString pointers. They are retained for the library lifetime.
+   Ordinary, never-published OpenLocale results remain reference counted. */
 #define REPLACEMENTFUNCS_LOCK_LOCALE    0
 
 /* [New]FormatString: Allow %width.limit formatting in all format
@@ -60,7 +59,8 @@ struct IntLocale
 {
     struct Locale                       il_Locale;
 
-    UWORD                               il_Count;
+    ULONG                               il_Count;
+    BOOL                                il_Published;
     struct Library                      *il_CurrentLanguage;
     struct Catalog                      *il_DosCatalog;
     APTR                                il_LanguageFunctions[32];
@@ -141,6 +141,26 @@ struct IntCatalog
 #define IntLB(lb)      ((struct IntLocaleBase *)(lb))
 #define IntL(locale)   ((struct IntLocale *)(locale))
 #define IntCat(cat)    ((struct IntCatalog *)(cat))
+
+/* Publication is shared across CPUs; all readers use the matching acquire.
+   No semaphore may be required by the RawDoFmt replacement path. */
+static inline struct IntLocale *LocaleCurrentLoad(struct LocaleBase *base)
+{
+#if defined(__AROSEXEC_SMP__)
+    return __atomic_load_n(&IntLB(base)->lb_CurrentLocale, __ATOMIC_ACQUIRE);
+#else
+    return IntLB(base)->lb_CurrentLocale;
+#endif
+}
+
+static inline void LocaleCurrentStore(struct LocaleBase *base, struct IntLocale *locale)
+{
+#if defined(__AROSEXEC_SMP__)
+    __atomic_store_n(&IntLB(base)->lb_CurrentLocale, locale, __ATOMIC_RELEASE);
+#else
+    IntLB(base)->lb_CurrentLocale = locale;
+#endif
+}
 
 #if REPLACEMENTFUNCS_LOCK_LOCALE
 #define REPLACEMENT_LOCK    ObtainSemaphore(&IntLB(LocaleBase)->lb_LocaleLock)

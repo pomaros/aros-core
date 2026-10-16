@@ -12,6 +12,7 @@
 #include <devices/usb_hub.h>
 
 #include "uhwcmd.h"
+#include "xhci_mmio.h"
 #include "xhciproto.h"
 
 #undef base
@@ -676,7 +677,7 @@ void xhciDumpIR(volatile struct xhci_ir *xhciir)
 #if defined(XHCI_ENABLEPORTDEBUG)
 void xhciDumpPort(volatile struct xhci_pr *xhcipr)
 {
-    ULONG portsc = AROS_LE2LONG(xhcipr->portsc);
+    ULONG portsc = xhciReadMMIO32(&xhcipr->portsc);
     KPrintF(DEBUGCOLOR_SET "xHCI: PR.PORTSC = $%08x" DEBUGCOLOR_RESET" \n", portsc);
     if(portsc & XHCIF_PR_PORTSC_PP)
         KPrintF(DEBUGCOLOR_SET "xHCI: > Powered" DEBUGCOLOR_RESET" \n");

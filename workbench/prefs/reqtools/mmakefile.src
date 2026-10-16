@@ -14,4 +14,14 @@ EXEDIR := $(AROSDIR)/Prefs
     progname=ReqTools targetdir=$(EXEDIR) \
     files=$(FILES)
 
+# The same editor as a shared class for the settings window.
+CLASSFILES := args reqtoolsstringify locale misc prefs reqtoolseditor_init reqtoolseditor_mcc
+
+#MM- workbench-prefs : workbench-prefs-reqtools-class
+#MM workbench-prefs-reqtools-class : includes linklibs workbench-prefs-reqtools-catalogs workbench-classes-zune-prefseditor
+
+%build_module mmake=workbench-prefs-reqtools-class \
+    modname=ReqToolsEditor modtype=mcc \
+    conffile=reqtoolseditor.conf files="$(CLASSFILES)"
+
 %common

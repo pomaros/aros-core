@@ -1,0 +1,7 @@
+group appearance
+order 50
+class IndicatorsEditor.mcc
+name Indicators
+description Enable desktop system indicators and their hotkeys
+keywords battery network bluetooth sound live icon commodity
+level average

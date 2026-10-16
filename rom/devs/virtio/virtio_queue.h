@@ -6,6 +6,7 @@
 #define VIRTIO_QUEUE_H
 
 struct virtio_queue *virtio_alloc_queue(device_t dev, int qid, int size);
+/* Device reset must be acknowledged and all software users stopped first. */
 void                 virtio_free_queue(struct virtio_queue *vq);
 
 /* Drain used ring; returns number of completions handled. */

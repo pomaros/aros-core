@@ -64,17 +64,17 @@ struct phony_segment
      * writable+executable mapping is refused -- so allocate a dedicated page
      * R/W, build the vector, then switch it to R/X. KrnAllocPages returns
      * page-granular memory, which keeps the protection change from affecting
-     * other allocations. Falls back to AllocMem if kernel.resource isn't up;
-     * UnLoadSeg tells the two allocation kinds apart via TypeOfMem().
+     * other allocations. AllocMem is used only before kernel.resource exists;
+     * once W^X is active, a failed page allocation must fail closed. UnLoadSeg
+     * tells the two allocation kinds apart via TypeOfMem().
      */
     struct KernelBase *KernelBase = OpenResource("kernel.resource");
 
     segtmp = NULL;
     if (KernelBase)
         segtmp = KrnAllocPages(NULL, segsize, MEMF_ANY);
-    if (segtmp == NULL)
+    else
     {
-        KernelBase = NULL;
         segtmp = AllocMem(segsize, MEMF_ANY);
     }
 #else

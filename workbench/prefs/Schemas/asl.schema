@@ -1,0 +1,17 @@
+; Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+; Distributed under the AROS Public License, version 1.1.
+; SYS/asl.prefs: one ASL chunk, struct AslPrefs as the editor writes it.
+schema   1
+file     SYS/asl.prefs
+layout   compiler/include/prefs/asl.h AslPrefs
+chunk    "ASL " size 26
+
+[asl/requester]  level average  applier self live
+  sortby        ap_SortBy@16:1          type enum  choices name=0,date=1,size=2
+  sortdrawers   ap_SortDrawers@17:1     type enum  choices first=0,mixed=1,last=2
+  sortorder     ap_SortOrder@18:1       type enum  choices ascending=0,descending=1
+  sizeposition  ap_SizePosition@19:1    type enum  choices default=0,relative=1,absolute=2
+  left          ap_RelativeLeft@20:2    type int   range -32768..32767  unit percent  level expert
+  top           ap_RelativeTop@22:2     type int   range -32768..32767  unit percent  level expert
+  width         ap_RelativeWidth@24:1   type int   range 0..100  unit percent  level expert
+  height        ap_RelativeHeight@25:1  type int   range 0..100  unit percent  level expert

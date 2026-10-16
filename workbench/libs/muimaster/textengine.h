@@ -56,9 +56,14 @@ enum {
 
 ZText *zune_text_new (CONST_STRPTR preparse, CONST_STRPTR content,
     int argtype, TEXT arg);
+STRPTR zune_text_plain(ZText *text);
 void zune_text_destroy (ZText *text);
 void zune_text_get_bounds (ZText *text, Object *obj);
 void zune_text_draw (ZText *text, Object *obj, WORD left, WORD right,
     WORD top);
+
+struct MUI_TextHighlight;
+void zune_text_draw_highlight(ZText *text, Object *obj, WORD left, WORD right,
+    WORD top, const struct MUI_TextHighlight *highlight);
 
 #endif

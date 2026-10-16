@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "uhwcmd.h"
+#include "xhci_mmio.h"
 #include "xhciproto.h"
 #include "pcixhci.h"
 
@@ -114,26 +115,26 @@ static BOOL XHCIController__Init(struct PCIController *hc)
         pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "Initializing hardware for controller @ 0x%p" DEBUGCOLOR_RESET" \n",
                         hc);
     }
-    pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  CAPLENGTH: 0x%02x" DEBUGCOLOR_RESET" \n", xhciregs->caplength);
-    pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  DBOFF: 0x%08x" DEBUGCOLOR_RESET" \n", AROS_LE2LONG(xhciregs->dboff));
-    pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  RRSOFF: 0x%08x" DEBUGCOLOR_RESET" \n", AROS_LE2LONG(xhciregs->rrsoff));
+    pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  CAPLENGTH: 0x%02x" DEBUGCOLOR_RESET" \n", xhciReadMMIO8(&xhciregs->caplength));
+    pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  DBOFF: 0x%08x" DEBUGCOLOR_RESET" \n", xhciReadMMIO32(&xhciregs->dboff));
+    pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  RRSOFF: 0x%08x" DEBUGCOLOR_RESET" \n", xhciReadMMIO32(&xhciregs->rrsoff));
 
-    xhcic->xhc_XHCIOpR   = (APTR)((IPTR)xhciregs + xhciregs->caplength);
+    xhcic->xhc_XHCIOpR   = (APTR)((IPTR)xhciregs + xhciReadMMIO8(&xhciregs->caplength));
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  Operational Registers @ 0x%p" DEBUGCOLOR_RESET" \n", xhcic->xhc_XHCIOpR);
-    xhcic->xhc_XHCIDB    = (APTR)((IPTR)xhciregs + AROS_LE2LONG(xhciregs->dboff));
+    xhcic->xhc_XHCIDB    = (APTR)((IPTR)xhciregs + xhciReadMMIO32(&xhciregs->dboff));
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  Doorbells @ 0x%p" DEBUGCOLOR_RESET" \n", xhcic->xhc_XHCIDB);
     xhcic->xhc_XHCIPorts = (APTR)((IPTR)xhcic->xhc_XHCIOpR + 0x400);
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  Port Registers @ 0x%p" DEBUGCOLOR_RESET" \n", xhcic->xhc_XHCIPorts);
-    xhcic->xhc_XHCIIntR  = (APTR)((IPTR)xhciregs + AROS_LE2LONG(xhciregs->rrsoff) + 0x20);
+    xhcic->xhc_XHCIIntR  = (APTR)((IPTR)xhciregs + xhciReadMMIO32(&xhciregs->rrsoff) + 0x20);
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  Interrupt Registers @ 0x%p" DEBUGCOLOR_RESET" \n", xhcic->xhc_XHCIIntR);
 
 
     /* Cache capability parameters once */
-    ULONG hcsparams1 = AROS_LE2LONG(xhciregs->hcsparams1);
-    ULONG hcsparams2 = AROS_LE2LONG(xhciregs->hcsparams2);
-    ULONG hcsparams3 = AROS_LE2LONG(xhciregs->hcsparams3);
-    ULONG hccparams1 = AROS_LE2LONG(xhciregs->hccparams1);
-    ULONG hccparams2 = AROS_LE2LONG(xhciregs->hccparams2);
+    ULONG hcsparams1 = xhciReadMMIO32(&xhciregs->hcsparams1);
+    ULONG hcsparams2 = xhciReadMMIO32(&xhciregs->hcsparams2);
+    ULONG hcsparams3 = xhciReadMMIO32(&xhciregs->hcsparams3);
+    ULONG hccparams1 = xhciReadMMIO32(&xhciregs->hccparams1);
+    ULONG hccparams2 = xhciReadMMIO32(&xhciregs->hccparams2);
     ULONG xhciMaxIntrs = (hcsparams1 >> 8) & 0x7FF;
     UWORD xhciPortLimit = (UWORD)((hcsparams1 >> 24) & 0xFF);
 
@@ -285,7 +286,7 @@ takeownership:
     }
 
     UWORD xhciversion;
-    xhciversion = AROS_LE2LONG(xhciregs->hciversion) & 0xFFFF;
+    xhciversion = xhciReadMMIO16(&xhciregs->hciversion);
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  HCIVERSION: 0x%04x" DEBUGCOLOR_RESET" \n", xhciversion);
     hc->hc_HCIVersionMajor = (UBYTE)((xhciversion >> 8) & 0xFF);
     hc->hc_HCIVersionMinor = (UBYTE)((xhciversion >> 4) & 0x0F);

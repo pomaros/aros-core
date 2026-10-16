@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
 
     Desc:
 */
@@ -69,7 +70,7 @@
 
 #include "run_handle.h"
 
-AROS_SH2H(Run, 41.3,                  "Start a program as a background process\n",
+AROS_SH2H(Run, 41.4,                  "Start a program as a background process\n",
 AROS_SHAH(BOOL  , ,QUIET  ,/S,FALSE,"\tDon't print the background CLI's number"),
 AROS_SHAH(STRPTR, ,COMMAND,/F,NULL ,  "The program (resp. script) to run (arguments allowed)\n") )
 {
@@ -83,14 +84,11 @@ AROS_SHAH(STRPTR, ,COMMAND,/F,NULL ,  "The program (resp. script) to run (argume
     CONST_STRPTR argbuff;
     STRPTR command = (STRPTR)SHArg(COMMAND);
     LONG cmdsize = 0;
+    LONG error = 0, result = RETURN_OK;
 
     if (!command)
         command = "";
 
-    cis = Open("NIL:", MODE_OLDFILE);
-    if (!cis)
-        goto error;
-    
     /* To support '+' style continuation, we're
      * going to need to be a little tricky. We
      * want to append *only* the buffered input
@@ -113,20 +111,29 @@ AROS_SHAH(STRPTR, ,COMMAND,/F,NULL ,  "The program (resp. script) to run (argume
 
         tmp = AllocMem(cmdsize+1+argsize+1, MEMF_ANY);
         if (tmp) {
+            CopyMem(command, tmp, cmdsize);
             command = tmp;
-            CopyMem(SHArg(COMMAND), command, cmdsize);
             command[cmdsize++]='\n';
             CopyMem(argbuff, &command[cmdsize], argsize);
             cmdsize += argsize;
             command[cmdsize++] = 0;
         } else {
             cmdsize = 0;
+            SetIoErr(ERROR_NO_FREE_STORE);
+            goto failed;
         }
     }
 
+    if (!command[0])
+        goto done;
+
+    cis = Open("NIL:", MODE_OLDFILE);
+    if (!cis)
+        goto failed;
+
     cos = DuplicateRunHandle(Output(), DOSBase);
     if (!cos)
-        goto error;
+        goto failed;
 
     /* All the 'noise' goes to cli_StandardError
      */
@@ -145,8 +152,9 @@ AROS_SHAH(STRPTR, ,COMMAND,/F,NULL ,  "The program (resp. script) to run (argume
         ces = DuplicateRunHandle(ces, DOSBase);
     else
         ces = Open("NIL:", MODE_OLDFILE);
+
     if (!ces)
-        goto error;
+        goto failed;
 
     if ( command[0] != 0)
     {
@@ -162,31 +170,33 @@ AROS_SHAH(STRPTR, ,COMMAND,/F,NULL ,  "The program (resp. script) to run (argume
 
         if ( SystemTagList((CONST_STRPTR)command,
                            tags                                ) == -1 )
-            goto error;
-    }
-    else
-    {
-        Close(cis);
-        Close(cos);
-        Close(ces);
+        {
+            goto failed;
+        }
+
+        /* CLI_RUN is asynchronous: the child owns these streams. */
+        cis = cos = ces = BNULL;
     }
 
+    goto done;
+
+failed:
+    error = IoErr();
+    result = RETURN_FAIL;
+
+done:
+    if (cis) Close(cis);
+    if (cos) Close(cos);
+    if (ces) Close(ces);
     if (cmdsize > 0)
         FreeMem(command, cmdsize);
 
-    return RETURN_OK;
-
-error:
+    if (result != RETURN_OK)
     {
-        LONG error = IoErr();
         PrintFault(error, "Run");
-        if (cis) Close(cis);
-        if (cos) Close(cos);
-        if (ces) Close(ces);
-        if (cmdsize > 0) FreeMem(command, cmdsize);
         SetIoErr(error);
     }
-    return RETURN_FAIL;
+    return result;
 
     AROS_SHCOMMAND_EXIT
 }

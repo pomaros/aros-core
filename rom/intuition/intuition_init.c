@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
     Copyright (C) 2001-2013, The MorphOS Development Team. All Rights Reserved.
 */
@@ -103,6 +104,16 @@ static CONST UWORD IntuitionBusyPointer[] =
     0x0000, 0x0000              /* sprite terminator words */
 };
 
+/* Keep failed startup observable even when verbose initialization is disabled. */
+static int IntuitionInitFailure(unsigned int line)
+{
+    bug("[intuition] initialization failed at intuition_init.c:%u chip-free=%lu chip-largest=%lu public-free=%lu\n",
+        line, (unsigned long)AvailMem(MEMF_CHIP),
+        (unsigned long)AvailMem(MEMF_CHIP | MEMF_LARGEST),
+        (unsigned long)AvailMem(MEMF_PUBLIC));
+    return FALSE;
+}
+
 static int IntuitionInit(LIBBASETYPEPTR LIBBASE)
 {
     struct Library *OOPBase;
@@ -124,25 +135,25 @@ static int IntuitionInit(LIBBASETYPEPTR LIBBASE)
 #endif
     /* Open our dependencies */
     if (!(GetPrivIBase(LIBBASE)->UtilityBase = TaggedOpenLibrary(TAGGEDOPEN_UTILITY))) {
-        return FALSE;
+        return IntuitionInitFailure(__LINE__);
     } else if (!(GfxBase = GetPrivIBase(LIBBASE)->GfxBase = (APTR)TaggedOpenLibrary(TAGGEDOPEN_GRAPHICS))) {
         CloseLibrary((APTR)GetPrivIBase(LIBBASE)->UtilityBase);
-        return FALSE;
+        return IntuitionInitFailure(__LINE__);
     } else if (!(GetPrivIBase(LIBBASE)->LayersBase = (APTR)TaggedOpenLibrary(TAGGEDOPEN_LAYERS))) {
         CloseLibrary((APTR)GetPrivIBase(LIBBASE)->GfxBase);
         CloseLibrary((APTR)GetPrivIBase(LIBBASE)->UtilityBase);
-        return FALSE;
+        return IntuitionInitFailure(__LINE__);
     } else if (!(GetPrivIBase(LIBBASE)->KeymapBase = (APTR)TaggedOpenLibrary(TAGGEDOPEN_KEYMAP))) {
         CloseLibrary((APTR)GetPrivIBase(LIBBASE)->LayersBase);
         CloseLibrary((APTR)GetPrivIBase(LIBBASE)->GfxBase);
         CloseLibrary((APTR)GetPrivIBase(LIBBASE)->UtilityBase);
-        return FALSE;
+        return IntuitionInitFailure(__LINE__);
     } else if (!(OOPBase = GetPrivIBase(LIBBASE)->OOPBase = (APTR)OpenLibrary("oop.library", 41))) {
         CloseLibrary((APTR)GetPrivIBase(LIBBASE)->KeymapBase);
         CloseLibrary((APTR)GetPrivIBase(LIBBASE)->LayersBase);
         CloseLibrary((APTR)GetPrivIBase(LIBBASE)->GfxBase);
         CloseLibrary((APTR)GetPrivIBase(LIBBASE)->UtilityBase);
-        return FALSE;
+        return IntuitionInitFailure(__LINE__);
     }
 
     LIBBASE->ib_HiddGfxBase = OOP_GetMethodID(IID_Hidd_Gfx, 0);
@@ -151,7 +162,7 @@ static int IntuitionInit(LIBBASETYPEPTR LIBBASE)
     LIBBASE->ib_HiddDMEnumBase = OOP_GetMethodID(IID_Hidd_DMEnum, 0);
 
     if (!OOP_ObtainAttrBases(attrbases))
-        return FALSE;
+        return IntuitionInitFailure(__LINE__);
 
     /* FIXME: This libInit is all broken if something should fail, but do we care? */
     /* FIXME: If something fails we're screwed anyway... */
@@ -164,7 +175,7 @@ static int IntuitionInit(LIBBASETYPEPTR LIBBASE)
     GetPrivIBase(LIBBASE)->IBaseLock = AllocMem (sizeof(struct SignalSemaphore), MEMF_PUBLIC|MEMF_CLEAR);
 
     if (!GetPrivIBase(LIBBASE)->IBaseLock)
-        return FALSE;
+        return IntuitionInitFailure(__LINE__);
 
     InitSemaphore(GetPrivIBase(LIBBASE)->IBaseLock);
 
@@ -246,11 +257,11 @@ static int IntuitionInit(LIBBASETYPEPTR LIBBASE)
 #ifdef SKINS
     if (!GetPrivIBase(LIBBASE)->SmallMenuPool)
     {
-        if (!(GetPrivIBase(LIBBASE)->SmallMenuPool = CreatePool(MEMF_SEM_PROTECTED,(sizeof (struct SmallMenuEntry))*20,(sizeof (struct SmallMenuEntry))*20))) return NULL;
+        if (!(GetPrivIBase(LIBBASE)->SmallMenuPool = CreatePool(MEMF_SEM_PROTECTED,(sizeof (struct SmallMenuEntry))*20,(sizeof (struct SmallMenuEntry))*20))) return IntuitionInitFailure(__LINE__);
     }
 #endif
 
-    if (!(GetPrivIBase(LIBBASE)->IDCMPPool = CreatePool(MEMF_SEM_PROTECTED,(sizeof (struct IntIntuiMessage)) * 100,sizeof (struct IntIntuiMessage)))) return FALSE;
+    if (!(GetPrivIBase(LIBBASE)->IDCMPPool = CreatePool(MEMF_SEM_PROTECTED,(sizeof (struct IntIntuiMessage)) * 100,sizeof (struct IntIntuiMessage)))) return IntuitionInitFailure(__LINE__);
 
 #ifdef SKINS
     strcpy(GetPrivIBase(LIBBASE)->IControlExtensions.ice_ClockFormat,"%X");
@@ -292,7 +303,7 @@ static int IntuitionInit(LIBBASETYPEPTR LIBBASE)
         || !GetPrivIBase(LIBBASE)->BusyPointer
     )
     {
-        return FALSE;
+        return IntuitionInitFailure(__LINE__);
     }
 
     NEWLIST(&GetPrivIBase(LIBBASE)->MonitorList);

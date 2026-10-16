@@ -76,6 +76,10 @@
 
     D(bug("[KRN] KrnAddIRQHandler(%02x, %012p, %012p, %012p):\n", irq, handler, handlerData, handlerData2));
 
+#ifdef ictl_valid_irq
+    /* Some platforms require a resolved source binding before registration. */
+    if (!ictl_valid_irq(irq, KernelBase)) return NULL;
+#endif
     if (irq < HW_IRQ_COUNT)
     {
         /* Go to supervisor mode */

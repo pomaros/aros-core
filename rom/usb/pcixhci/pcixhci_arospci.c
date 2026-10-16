@@ -77,82 +77,78 @@ AROS_UFH3(void, pciEnumerator,
 
     pciusbDebug("PCI", "Found PCI device 0x%lx of type %ld, Intline=%ld\n", devid, hcitype, intline);
 
-    if(intline == 255) {
-        // we can't work without the correct interrupt line
-        // BIOS needs plug & play os option disabled. Alternatively AROS must support ACPI reconfiguration
-        pciusbDebug("PCI", "ERROR: PCI card has no interrupt line assigned by BIOS, disable Plug & Play OS!\n");
-    } else {
-        switch(hcitype) {
-        case HCITYPE_XHCI:
-            pciusbDebug("PCI", "Setting up device...\n");
+    /* INTLine describes legacy INTx only. The owning PCI driver may route
+     * this controller through MSI/MSI-X; xhciInit must verify registration. */
+    switch(hcitype) {
+    case HCITYPE_XHCI:
+        pciusbDebug("PCI", "Setting up device...\n");
 
-            hc = AllocPooled(hd->hd_MemPool, sizeof(struct PCIController));
-            if(hc) {
-                hc->hc_IsoPTDCount = PCIUSB_ISO_PTD_COUNT;
-                hc->hc_Device = hd;
-                hc->hc_DevID = devid;
-                hc->hc_FunctionNum = sub;
-                hc->hc_PCIDeviceObject = pciDevice;
-                hc->hc_PCIIntLine = intline;
-                hc->hc_PCIMemIsExec = FALSE;
-                hc->hc_Quirks = 0;
-                OOP_GetAttr(pciDevice, aHidd_PCIDevice_VendorID, &vendorid);
-                OOP_GetAttr(pciDevice, aHidd_PCIDevice_ProductID, &productid);
-                hc->hc_VendID = (UWORD)vendorid & 0xFFFF;
-                hc->hc_ProdID = (UWORD)productid & 0xFFFF;
+        hc = AllocPooled(hd->hd_MemPool, sizeof(struct PCIController));
+        if(hc) {
+            hc->hc_IsoPTDCount = PCIUSB_ISO_PTD_COUNT;
+            hc->hc_Device = hd;
+            hc->hc_DevID = devid;
+            hc->hc_FunctionNum = sub;
+            hc->hc_PCIDeviceObject = pciDevice;
+            hc->hc_PCIIntLine = intline;
+            hc->hc_PCIMemIsExec = FALSE;
+            hc->hc_Quirks = 0;
+            OOP_GetAttr(pciDevice, aHidd_PCIDevice_VendorID, &vendorid);
+            OOP_GetAttr(pciDevice, aHidd_PCIDevice_ProductID, &productid);
+            hc->hc_VendID = (UWORD)vendorid & 0xFFFF;
+            hc->hc_ProdID = (UWORD)productid & 0xFFFF;
 
-                OOP_GetAttr(pciDevice, aHidd_PCIDevice_Driver, (IPTR *) &hc->hc_PCIDriverObject);
+            OOP_GetAttr(pciDevice, aHidd_PCIDevice_Driver, (IPTR *) &hc->hc_PCIDriverObject);
 
-                NewList(&hc->hc_PeriodicTDQueue);
+            NewList(&hc->hc_PeriodicTDQueue);
 
-                NewList(&hc->hc_CtrlXFerQueue);
-                NewList(&hc->hc_IntXFerQueue);
-                NewList(&hc->hc_IsoXFerQueue);
-                NewList(&hc->hc_BulkXFerQueue);
-                NewList(&hc->hc_TDQueue);
-                NewList(&hc->hc_AbortQueue);
+            NewList(&hc->hc_CtrlXFerQueue);
+            NewList(&hc->hc_IntXFerQueue);
+            NewList(&hc->hc_IsoXFerQueue);
+            NewList(&hc->hc_BulkXFerQueue);
+            NewList(&hc->hc_TDQueue);
+            NewList(&hc->hc_AbortQueue);
 
-                NewMinList(&hc->hc_RTIsoHandlers);
+            NewMinList(&hc->hc_RTIsoHandlers);
 
 #if defined(USE_FAST_PCICFG)
 # if !defined(__OOP_NOLIBBASE__) && !defined(__OOP_NOMETHODBASES__)
 #  define __obj hc->hc_PCIDeviceObject
 # endif
-                hc->hc_ReadConfigByte = OOP_GetMethod(hc->hc_PCIDeviceObject, HiddPCIDeviceBase + moHidd_PCIDevice_ReadConfigByte,
-                                                      &hc->hc_ReadConfigByte_Class);
-                hc->hc_ReadConfigWord = OOP_GetMethod(hc->hc_PCIDeviceObject, HiddPCIDeviceBase + moHidd_PCIDevice_ReadConfigWord,
-                                                      &hc->hc_ReadConfigWord_Class);
-                hc->hc_ReadConfigLong = OOP_GetMethod(hc->hc_PCIDeviceObject, HiddPCIDeviceBase + moHidd_PCIDevice_ReadConfigLong,
-                                                      &hc->hc_ReadConfigLong_Class);
-                hc->hc_WriteConfigByte = OOP_GetMethod(hc->hc_PCIDeviceObject, HiddPCIDeviceBase + moHidd_PCIDevice_WriteConfigByte,
-                                                       &hc->hc_WriteConfigByte_Class);
-                hc->hc_WriteConfigWord = OOP_GetMethod(hc->hc_PCIDeviceObject, HiddPCIDeviceBase + moHidd_PCIDevice_WriteConfigWord,
-                                                       &hc->hc_WriteConfigWord_Class);
-                hc->hc_WriteConfigLong = OOP_GetMethod(hc->hc_PCIDeviceObject, HiddPCIDeviceBase + moHidd_PCIDevice_WriteConfigLong,
-                                                       &hc->hc_WriteConfigLong_Class);
-                hc->hc_AllocPCIMem = OOP_GetMethod(hc->hc_PCIDriverObject, HiddPCIDriverBase + moHidd_PCIDriver_AllocPCIMem,
-                                                   &hc->hc_AllocPCIMem_Class);
-                hc->hc_FreePCIMem = OOP_GetMethod(hc->hc_PCIDriverObject, HiddPCIDriverBase + moHidd_PCIDriver_FreePCIMem,
-                                                  &hc->hc_FreePCIMem_Class);
-                hc->hc_MapPCI = OOP_GetMethod(hc->hc_PCIDriverObject, HiddPCIDriverBase + moHidd_PCIDriver_MapPCI,
-                                              &hc->hc_MapPCI_Class);
-                hc->hc_CPUtoPCI = OOP_GetMethod(hc->hc_PCIDriverObject, HiddPCIDriverBase + moHidd_PCIDriver_CPUtoPCI,
-                                                &hc->hc_CPUtoPCI_Class);
-                hc->hc_PCItoCPU = OOP_GetMethod(hc->hc_PCIDriverObject, HiddPCIDriverBase + moHidd_PCIDriver_PCItoCPU,
-                                                &hc->hc_PCItoCPU_Class);
+            hc->hc_ReadConfigByte = OOP_GetMethod(hc->hc_PCIDeviceObject, HiddPCIDeviceBase + moHidd_PCIDevice_ReadConfigByte,
+                                                  &hc->hc_ReadConfigByte_Class);
+            hc->hc_ReadConfigWord = OOP_GetMethod(hc->hc_PCIDeviceObject, HiddPCIDeviceBase + moHidd_PCIDevice_ReadConfigWord,
+                                                  &hc->hc_ReadConfigWord_Class);
+            hc->hc_ReadConfigLong = OOP_GetMethod(hc->hc_PCIDeviceObject, HiddPCIDeviceBase + moHidd_PCIDevice_ReadConfigLong,
+                                                  &hc->hc_ReadConfigLong_Class);
+            hc->hc_WriteConfigByte = OOP_GetMethod(hc->hc_PCIDeviceObject, HiddPCIDeviceBase + moHidd_PCIDevice_WriteConfigByte,
+                                                   &hc->hc_WriteConfigByte_Class);
+            hc->hc_WriteConfigWord = OOP_GetMethod(hc->hc_PCIDeviceObject, HiddPCIDeviceBase + moHidd_PCIDevice_WriteConfigWord,
+                                                   &hc->hc_WriteConfigWord_Class);
+            hc->hc_WriteConfigLong = OOP_GetMethod(hc->hc_PCIDeviceObject, HiddPCIDeviceBase + moHidd_PCIDevice_WriteConfigLong,
+                                                   &hc->hc_WriteConfigLong_Class);
+            hc->hc_AllocPCIMem = OOP_GetMethod(hc->hc_PCIDriverObject, HiddPCIDriverBase + moHidd_PCIDriver_AllocPCIMem,
+                                               &hc->hc_AllocPCIMem_Class);
+            hc->hc_FreePCIMem = OOP_GetMethod(hc->hc_PCIDriverObject, HiddPCIDriverBase + moHidd_PCIDriver_FreePCIMem,
+                                              &hc->hc_FreePCIMem_Class);
+            hc->hc_MapPCI = OOP_GetMethod(hc->hc_PCIDriverObject, HiddPCIDriverBase + moHidd_PCIDriver_MapPCI,
+                                          &hc->hc_MapPCI_Class);
+            hc->hc_CPUtoPCI = OOP_GetMethod(hc->hc_PCIDriverObject, HiddPCIDriverBase + moHidd_PCIDriver_CPUtoPCI,
+                                            &hc->hc_CPUtoPCI_Class);
+            hc->hc_PCItoCPU = OOP_GetMethod(hc->hc_PCIDriverObject, HiddPCIDriverBase + moHidd_PCIDriver_PCItoCPU,
+                                            &hc->hc_PCItoCPU_Class);
 # if !defined(__OOP_NOLIBBASE__) && !defined(__OOP_NOMETHODBASES__)
 #  undef __obj
 # endif
 #endif
-                AddTail(&hd->hd_TempHCIList, &hc->hc_Node);
-            } else {
-                pciusbDebug("PCI", "Failed to allocate storage for controller entry!\n");
-            }
-            break;
-
-        default:
-            break;
+            AddTail(&hd->hd_TempHCIList, &hc->hc_Node);
+        } else {
+            pciusbDebug("PCI", "Failed to allocate storage for controller entry!\n");
         }
+        break;
+
+    default:
+        break;
     }
 
     if(!hc)

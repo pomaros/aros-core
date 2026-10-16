@@ -1,0 +1,54 @@
+; Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+; Distributed under the AROS Public License, version 1.1.
+;
+; zune/global.prefs: Zune's own store, one MUIC chunk of dataspace items
+; (id, length, data), as muimaster's Configdata writes them. A record is
+; MUICFG_<name>@<id>:<size>: the define and value of
+; workbench/libs/muimaster/classes/configdata.h, four bytes big-endian for
+; a number, the maximum with its zero for a text. An item the file does
+; not hold is the record's default, which is muimaster's own.
+schema   1
+stem     zune
+file     zune/global.prefs
+layout   workbench/libs/muimaster/classes/configdata.h MUICFG
+chunk    MUIC  kind items
+
+[zune/window]  level expert  applier muimaster live
+  spacing-left    MUICFG_Window_Spacing_Left@0x01:4     type int  range 0..20  unit pixels  default 4
+  spacing-right   MUICFG_Window_Spacing_Right@0x02:4    type int  range 0..20  unit pixels  default 4
+  spacing-top     MUICFG_Window_Spacing_Top@0x03:4      type int  range 0..20  unit pixels  default 3
+  spacing-bottom  MUICFG_Window_Spacing_Bottom@0x04:4   type int  range 0..20  unit pixels  default 3
+  redraw          MUICFG_Window_Redraw@0x1d:4           type enum choices no-clear=0,clear=1  default clear
+  background      MUICFG_Background_Window@0x37:256     type string
+
+[zune/group]  level expert  applier muimaster live
+  hspacing        MUICFG_Group_HSpacing@0x07:4          type int  range 0..20  unit pixels  default 6
+  vspacing        MUICFG_Group_VSpacing@0x08:4          type int  range 0..20  unit pixels  default 3
+  title-position  MUICFG_GroupTitle_Position@0x0f:4     type enum choices left=0,centered=1  default centered
+  title-color     MUICFG_GroupTitle_Color@0x10:4        type int  range 0..3
+
+[zune/fonts]  level average  applier muimaster live
+  normal          MUICFG_Font_Normal@0x1e:128           type font
+  list            MUICFG_Font_List@0x1f:128             type font
+  tiny            MUICFG_Font_Tiny@0x20:128             type font
+  fixed           MUICFG_Font_Fixed@0x21:128            type font
+  title           MUICFG_Font_Title@0x22:128            type font
+  big             MUICFG_Font_Big@0x23:128              type font
+
+[zune/listview]  level expert  applier muimaster live
+  refresh         MUICFG_Listview_Refresh@0x0a:4        type enum choices linear=0,mixed=1  default mixed
+  font-leading    MUICFG_Listview_Font_Leading@0x0b:4   type int  range 0..20  unit pixels  default 1
+  multi-select    MUICFG_Listview_Multi@0x0d:4          type enum choices shifted=0,always=1  default shifted
+  smoothed        MUICFG_Listview_Smoothed@0x1b:4       type bool  default 0
+
+[zune/cycle]  level expert  applier muimaster live
+  menu-level      MUICFG_Cycle_MenuCtrl_Level@0x11:4    type int  range 0..20  default 2
+  menu-position   MUICFG_Cycle_MenuCtrl_Position@0x12:4 type enum choices below=0,on-active=1  default below
+  menu-speed      MUICFG_Cycle_MenuCtrl_Speed@0x1a:4    type int  range 0..50  unit ticks  default 0
+  menu-recessed   MUICFG_Cycle_Menu_Recessed@0x19:4     type bool  default 0
+
+[zune/scrollbar]  level expert  applier muimaster live
+  arrangement     MUICFG_Scrollbar_Arrangement@0x09:4   type enum choices top=0,middle=1,bottom=2  default top
+
+[zune/screen]  level expert  applier muimaster live
+  public-screen   MUICFG_PublicScreen@0x24:128          type string

@@ -56,6 +56,13 @@ extern const char GM_UNIQUENAME(libname)[];
 
 /* Protos (bluetooth.library.c) */
 
+void bGuard(struct BtBase *BluetoothBase);
+void bUnguard(struct BtBase *BluetoothBase);
+ULONG bGuardWait(struct BtBase *BluetoothBase, ULONG signals);
+void bGuardPoll(struct BtBase *BluetoothBase);
+BOOL bTakeReply(struct BtBase *BluetoothBase, struct MsgPort *port, struct Message *msg);
+BYTE bAllocReadySignal(void);
+void bFreeReadySignal(BYTE bit);
 void bInitSem(struct BtBase *BluetoothBase, struct BtLockSem *bls, STRPTR name);
 void bDeleteSem(struct BtBase *BluetoothBase, struct BtLockSem *bls);
 void bLockSemExcl(struct BtBase *BluetoothBase, struct BtLockSem *bls);

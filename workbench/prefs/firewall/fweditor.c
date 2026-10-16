@@ -39,38 +39,8 @@ static CONST_STRPTR pages[3];
 
 /*** Instance data **********************************************************/
 
-struct FWEditor_DATA
-{
-    /* Main window lists */
-    Object *filterList;
-    Object *natList;
-
-    /* Filter rule editing sub-window and its gadgets */
-    Object *filterEditWin;
-    Object *fActionCycle;
-    Object *fDirCycle;
-    Object *fProtoCycle;
-    Object *fIfStr;
-    Object *fSrcStr;
-    Object *fSrcPortStr;
-    Object *fDstStr;
-    Object *fDstPortStr;
-    Object *fQuickChk;
-    Object *fKeepStateChk;
-    Object *fLogChk;
-    BOOL    filterIsEdit;   /* TRUE = editing existing entry */
-
-    /* NAT rule editing sub-window and its gadgets */
-    Object *natEditWin;
-    Object *nTypeCycle;
-    Object *nProtoCycle;
-    Object *nIfStr;
-    Object *nSrcStr;
-    Object *nSrcPortStr;
-    Object *nNatStr;
-    Object *nNatPortStr;
-    BOOL    natIsEdit;      /* TRUE = editing existing entry */
-};
+#define FWEDITOR_DATA_H_IN_SOURCE
+#include "fweditor_data.h"
 
 /* ===== Filter list hooks ================================================ */
 
@@ -740,6 +710,27 @@ Object *FWEditor__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
     data->natList       = natList;
     data->filterEditWin = filterEditWin;
     data->natEditWin    = natEditWin;
+    /* Stable ids for the settings window's index and port. */
+    SET(filterList, MUIA_ObjectID, MAKE_ID('F','W','F','L'));
+    SET(natList, MUIA_ObjectID, MAKE_ID('F','W','N','L'));
+    SET(fActionCycle, MUIA_ObjectID, MAKE_ID('F','W','F','A'));
+    SET(fDirCycle, MUIA_ObjectID, MAKE_ID('F','W','F','D'));
+    SET(fProtoCycle, MUIA_ObjectID, MAKE_ID('F','W','F','P'));
+    SET(fIfStr, MUIA_ObjectID, MAKE_ID('F','W','F','I'));
+    SET(fSrcStr, MUIA_ObjectID, MAKE_ID('F','W','F','S'));
+    SET(fSrcPortStr, MUIA_ObjectID, MAKE_ID('F','W','F','R'));
+    SET(fDstStr, MUIA_ObjectID, MAKE_ID('F','W','F','T'));
+    SET(fDstPortStr, MUIA_ObjectID, MAKE_ID('F','W','F','O'));
+    SET(fQuickChk, MUIA_ObjectID, MAKE_ID('F','W','F','Q'));
+    SET(fKeepStateChk, MUIA_ObjectID, MAKE_ID('F','W','F','K'));
+    SET(fLogChk, MUIA_ObjectID, MAKE_ID('F','W','F','G'));
+    SET(nTypeCycle, MUIA_ObjectID, MAKE_ID('F','W','N','T'));
+    SET(nProtoCycle, MUIA_ObjectID, MAKE_ID('F','W','N','P'));
+    SET(nIfStr, MUIA_ObjectID, MAKE_ID('F','W','N','I'));
+    SET(nSrcStr, MUIA_ObjectID, MAKE_ID('F','W','N','S'));
+    SET(nSrcPortStr, MUIA_ObjectID, MAKE_ID('F','W','N','R'));
+    SET(nNatStr, MUIA_ObjectID, MAKE_ID('F','W','N','A'));
+    SET(nNatPortStr, MUIA_ObjectID, MAKE_ID('F','W','N','O'));
     data->filterIsEdit  = FALSE;
     data->natIsEdit     = FALSE;
 
@@ -1171,6 +1162,7 @@ IPTR FWEditor__MUIM_FWEditor_RemNAT(
 
 /* ==================== CLASS REGISTRATION ================================ */
 
+#ifndef FIREWALLEDITOR_MCC
 ZUNE_CUSTOMCLASS_19
 (
     FWEditor, NULL, MUIC_PrefsEditor, NULL,
@@ -1194,3 +1186,4 @@ ZUNE_CUSTOMCLASS_19
     MUIM_FWEditor_CancelNATEdit,        Msg,
     MUIM_FWEditor_RemNAT,               Msg
 );
+#endif /* FIREWALLEDITOR_MCC */

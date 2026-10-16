@@ -17,10 +17,11 @@ BOOL NotifyWorkbench(enum WBNOTIFY_Action action, enum WBNOTIFY_Target target,
     struct WBCommandMessage *wbcm     = NULL;
     struct WBHandlerMessage *wbhm     = NULL;
 
-    if ((target == WBNOTIFY_AppIcon) && ((action == WBNOTIFY_Create) || (action == WBNOTIFY_Delete)))
+    if ((target == WBNOTIFY_AppIcon) && ((action == WBNOTIFY_Create) || (action == WBNOTIFY_Delete) ||
+                                      (action == WBNOTIFY_RefreshTiles)))
     {
         if ((wbcm = CreateWBCM(WBCM_TYPE_RELAY)) != NULL
-                && (wbhm = CreateWBHM(WBHM_TYPE_UPDATE)) != NULL)
+                && (wbhm = CreateWBHM(action == WBNOTIFY_RefreshTiles ? WBHM_TYPE_TILES : WBHM_TYPE_UPDATE)) != NULL)
         {
             wbhm->wbhm_Data.Update.Name = NULL;
             wbhm->wbhm_Data.Update.Type = WBAPPICON;

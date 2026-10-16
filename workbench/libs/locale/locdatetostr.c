@@ -105,7 +105,7 @@ AROS_UFH3(void, LocDateToStrPutCharFunc,
 
     REPLACEMENT_LOCK;
 
-    loc = (struct Locale *)IntLB(LocaleBase)->lb_CurrentLocale;
+    loc = (struct Locale *)LocaleCurrentLoad(LocaleBase);
 
     if (datetime->dat_StrDay)
     {

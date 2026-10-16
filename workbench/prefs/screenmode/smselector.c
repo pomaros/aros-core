@@ -170,6 +170,8 @@ Object *ScreenModeSelector__OM_NEW(Class *CLASS, Object *self, struct opSet *mes
  
     data = INST_DATA(CLASS, self);
     data->mode_list = list;
+    /* Stable ids for the settings window's index and port. */
+    SET(list, MUIA_ObjectID, MAKE_ID('S','M','M','D'));
     data->modes_array = modes_array;
     data->ids_array   = ids_array;
 

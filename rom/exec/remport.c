@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2001, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
 
     Desc: Removes a port from the list of public ports.
 */
@@ -46,20 +47,20 @@
 {
     AROS_LIBFUNC_INIT
 
-    /* AddPort and FindPort use PortListSpinLock, so removal must take
-     * that same lock. */
+    /* Arbitrate for the list of message ports.*/
     Forbid();
+
+    /* Forbid only excludes this CPU. Match AddPort/FindPort arbitration. */
 #if defined(__AROSEXEC_SMP__)
     EXEC_SPINLOCK_LOCK(&PrivExecBase(SysBase)->PortListSpinLock, NULL, SPINLOCK_MODE_WRITE);
 #endif
-
     /* Remove the current port. */
     Remove(&port->mp_Node);
-
-    /* All done. */
 #if defined(__AROSEXEC_SMP__)
     EXEC_SPINLOCK_UNLOCK(&PrivExecBase(SysBase)->PortListSpinLock);
 #endif
+
+    /* All done. */
     Permit();
     AROS_LIBFUNC_EXIT
 } /* RemPort */

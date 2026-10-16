@@ -3,6 +3,7 @@
 
 /*
     Copyright © 1995-2017, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     $Id$
 
     Desc: Utility functions for exec.
@@ -58,12 +59,14 @@
 #define CALLER_FRAME NULL
 #endif
 
-
 #ifdef __aarch64__
 #define PC pc
 #define FP fp
 #define CALLER_FRAME NULL
 #endif
+
+
+
 
 #ifndef PC
 #error unsupported CPU type
@@ -114,6 +117,14 @@ struct IntETask *FindETask(struct List *, ULONG id, struct ExecBase *SysBase);
 BOOL Exec_CheckTask(struct Task *task, struct ExecBase *SysBase);
 
 #if defined(__AROSEXEC_SMP__)
+void Exec_RegisterTask(struct Task *task, struct ExecBase *SysBase);
+void Exec_RetireTask(struct Task *task, struct ExecBase *SysBase);
+ULONG Exec_LockProcessIdentity(struct Task *task, ULONG id, struct ExecBase *SysBase);
+void Exec_UnlockProcessIdentity(struct ExecBase *SysBase);
+ULONG Exec_TryProcessMessage(struct Task *task, ULONG id, struct Message *message, ULONG signals, struct ExecBase *SysBase);
+void Exec_PublishTask(struct Task *task, struct ExecBase *SysBase);
+void Exec_UnregisterTask(struct Task *task, struct ExecBase *SysBase);
+struct Task *Exec_FindRegisteredTask(ULONG id, struct ExecBase *SysBase);
 void Exec_CancelSignalIPIs(struct Task *task, struct ExecBase *SysBase);
 #define CancelSignalIPIs(t) Exec_CancelSignalIPIs(t,SysBase)
 #endif

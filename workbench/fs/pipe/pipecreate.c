@@ -1,3 +1,6 @@
+/* Readiness extensions Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * SPDX-License-Identifier: APL-1.1
+ */
 /****************************************************************************
 **  File:       pipecreate.c
 **  Program:    pipe-handler - an AmigaDOS handler for named pipes
@@ -182,6 +185,7 @@ OPENMEMERR1:
 
       pipekey->pipe=     pipe;
       pipekey->openmode= openmode;
+      pipekey->nonblock= 0;
 
       if (openmode == MODE_READONLY)
         { pipekey->iotype= PIPEREAD;
@@ -200,6 +204,8 @@ OPENMEMERR1:
       InitList (&pipe->writerlist);
 
       pipe->tapfh= tapfh;
+      pipe->rdnotify_task= NULL;
+      pipe->rdnotify_sig=  0;
 
 #if PIPEDIR
       pipe->lockct= 0;
@@ -221,6 +227,7 @@ OPENMEMERR1:
 
       pipekey->pipe=     pipe;
       pipekey->openmode= openmode;
+      pipekey->nonblock= 0;
 
       pkt->dp_Res2= ERROR_OBJECT_IN_USE;     /* in case of openmode error */
 
@@ -343,7 +350,10 @@ struct DosPacket  *pkt;
   pipe= pipekey->pipe;
 
   if ((pipekey->iotype == PIPEREAD) || (pipekey->iotype == PIPERW))
-    pipe->flags &= ~OPEN_FOR_READ;
+    { pipe->flags &= ~OPEN_FOR_READ;
+      pipe->rdnotify_task= NULL;     /* the reader is gone; drop its notify */
+      pipe->rdnotify_sig= 0;
+    }
 
   if ((pipekey->iotype == PIPEWRITE) || (pipekey->iotype == PIPERW))
     pipe->flags &= ~OPEN_FOR_WRITE;

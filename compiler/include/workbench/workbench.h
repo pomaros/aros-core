@@ -291,6 +291,130 @@ struct AppMenuItem;
 /*** Start of workbench.library tags ****************************************/
 #define WBA_BASE                          (TAG_USER+0xA000)
 
+/* Program-drawn tiles. Surfaces and regions are copied synchronously; their
+ * source memory is not read after AddAppIconA/WorkbenchControlA returns.
+ * Clicks are delivered immediately to the registering task's message port.
+ * Keep that port alive until RemoveAppIcon or WBCTRLA_DetachAppIcon returns;
+ * then drain/reply its messages before DeleteMsgPort. Task exit invalidates
+ * delivery automatically, but freeing a port early requires explicit detach.
+ * Publish a surface or NULL heartbeat regularly to keep the cached image live.
+ * Draws alone do not publish. Cadence is clamped to 250 milliseconds.
+ */
+#define WBAPPICONA_Cells       (WBA_BASE+0x100)
+#define WBAPPICONA_Surface     (WBA_BASE+0x101)
+#define WBAPPICONA_Regions     (WBA_BASE+0x102)
+#define WBAPPICONA_Cadence     (WBA_BASE+0x103)
+#define WBAPPICONA_Pointer     (WBA_BASE+0x104) /* BOOL: optional local pointer events */
+#define WBAPPICONA_HoverCadence (WBA_BASE+0x105) /* ms; 0 disables fast hover, minimum 33 */
+#define WBAPPICONA_DefinitionPath (WBA_BASE+0x106) /* copied absolute base path, <=511 bytes */
+#define WBAPPICONA_Group       (WBA_BASE+0x107) /* bounded aggregate, up to32x32 cells */
+#define WBAPPICONA_GroupAnchor (WBA_BASE+0x108) /* 0free,1top,2bottom,3left,4right */
+#define WBCTRLA_PublishAppIcon (WBA_BASE+0x110)
+#define WBCTRLA_DetachAppIcon  (WBA_BASE+0x111) /* AppIcon*: owner only, irreversible */
+#define WBCTRLA_QueryAppIcon   (WBA_BASE+0x112) /* AppIconQuery*: owner only */
+#define WBCTRLA_QueryAppIconGeometry (WBA_BASE+0x113) /* AppIconGeometry*: owner only */
+#define WBCTRLA_SuspendAppIcon (WBA_BASE+0x114) /* AppIcon*: owner only, reversible */
+#define WBCTRLA_SnapshotAppIcons (WBA_BASE+0x115) /* AppIconSnapshotRequest*: presenter */
+#define WBCTRLA_FreeAppIconSnapshot (WBA_BASE+0x116) /* APTR handle: creator only */
+#define WBCTRLA_ActivateAppIconSnapshot (WBA_BASE+0x117) /* AppIconSnapshotActivate* */
+#define WBCTRLA_RefreshAppIconSnapshot (WBA_BASE+0x118) /* APTR: update owned bitmap contents in place */
+#define WBAPPICON_CELLS(w,h)   (((ULONG)(w) << 16) | (ULONG)(h))
+#define WBAPPICON_CELL_PIXELS  64
+#define WBAPPICON_MAX_REGIONS  8
+#define WBAPPICON_REGION_NAME 32
+#define AMCLASSICON_Region    13
+#define AMCLASSICON_Visibility 14 /* am_MouseX: BOOL visible; ReplyMsg required */
+#define AMCLASSICON_PointerEnter 15
+#define AMCLASSICON_PointerMove  16
+#define AMCLASSICON_PointerLeave 17
+#define APPICONQF_VISIBLE      1
+#define APPICONQF_HOVERED      2
+#define WBAPPICON_HOVER_MIN_MS 33
+
+struct AppIconRegion
+{
+    UWORD air_Left, air_Top, air_Width, air_Height;
+    char air_Name[WBAPPICON_REGION_NAME]; /* nonempty, NUL-terminated */
+};
+struct AppIconRegions
+{
+    ULONG air_Count;
+    struct AppIconRegion air_Regions[WBAPPICON_MAX_REGIONS];
+};
+/* Region messages have am_Class AMCLASSICON_Region. ReplyMsg as usual;
+ * the inline name remains valid until reply. Check mn_Length before casting.
+ */
+struct AppIconTileMessage
+{
+    struct AppMessage atm_Message;
+    char atm_Region[WBAPPICON_REGION_NAME];
+};
+struct AppIconPublish
+{
+    struct AppIcon *aip_Icon;
+    struct BitMap *aip_Surface; /* NULL renews liveness without copying/drawing */
+};
+
+/* Pointer events use am_MouseX/Y in tile-local pixels and require ReplyMsg.
+ * At most one pointer message per tile is borrowed; newer moves/transitions
+ * coalesce to the latest state. QueryAppIcon recovers that authoritative state.
+ * Hover cadence applies only with fresh visible pointer reports; normal cadence
+ * resumes on leave/cover. Fast publications share a global minimum 33-ms slot.
+ * Visibility is reported by the presenter. An absent/stale report is hidden. */
+struct AppIconQuery
+{
+    struct AppIcon *aiq_Icon;
+    ULONG aiq_Flags; /* output: APPICONQF_*; cleared on failure */
+    LONG aiq_MouseX, aiq_MouseY; /* latest local coordinates; 0 on failure */
+};
+
+/* Full tile bounds in screen coordinates, not the clipped visible fragment.
+ * A registered owner's query succeeds even when hidden/stale; all outputs then
+ * remain zero. A NULL/foreign/removed icon fails with the same zero outputs.
+ * Bounds are valid only while the presenter's geometry and visibility reports
+ * are fresh (<1000 ms). Query does not expose a Screen or owner pointer. */
+#define APPICONGF_VALID 1UL
+/* Dedicated desktop-presenter API; these calls may copy other owners' tiles.
+ * Caller holds the Screen lock through snapshot Free. Entries/bitmaps are read
+ * only; bitmap lifetime belongs to the opaque handle, not the original owner.
+ * At most40 entries, four outstanding snapshots globally, one per task.
+ * Capacity failure is atomic. Stale/suspended/dead owners use cached static
+ * fallback images and are noninteractive. INCOMPLETE reports a missing cache. Never dereference
+ * ais_Icon: it is an identity token, paired with a unique generation. */
+#define APPICON_SNAPSHOT_MAX 40
+#define APPICON_SNAPSHOT_INCOMPLETE 1UL
+struct AppIconSnapshotEntry {
+    struct AppIcon *ais_Icon;
+    UQUAD ais_Generation;
+    LONG ais_Left, ais_Top;
+    ULONG ais_Width, ais_Height;
+    struct BitMap *ais_Bitmap;
+    char ais_Label[64];
+};
+struct AppIconSnapshotRequest {
+    struct Screen *aisr_Screen;
+    struct AppIconSnapshotEntry *aisr_Entries;
+    ULONG aisr_Capacity;
+    APTR aisr_Handle;
+    ULONG aisr_Count, aisr_Flags, aisr_Omitted;
+};
+struct AppIconSnapshotActivate {
+    APTR aisa_Handle;
+    ULONG aisa_Index;
+    LONG aisa_X, aisa_Y;
+};
+struct AppIconGeometry
+{
+    struct AppIcon *aig_Icon;
+    ULONG aig_Flags;
+    LONG aig_Left, aig_Top;
+    ULONG aig_Width, aig_Height;
+};
+/* Suspend selects the cached static fallback without removing the registration
+ * or reply port. Heartbeats cannot revive it. The next accepted valid surface
+ * resumes dynamic rendering subject to normal cadence; failed publication does
+ * not resume. The owner must still drain/reply borrowed messages on removal. */
+
 /*** Tags for use with AddAppIconA() ****************************************/
 /* The different menu items the AppIcon responds to (BOOL) */
 #define WBAPPICONA_SupportsOpen            (WBA_BASE+1)

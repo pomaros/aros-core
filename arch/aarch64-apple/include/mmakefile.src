@@ -1,0 +1,7 @@
+# Copyright (C) 2026 John Knipper. All rights reserved.
+# Licensed under the AROS Public License (APL) Version 1.1.
+
+include $(SRCDIR)/config/aros.cfg
+
+INCLUDE_FILES := $(call WILDCARD, aros/apple/*.h)
+%copy_includes mmake=compiler-includes path=aros/apple dir=aros/apple

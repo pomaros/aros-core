@@ -31,6 +31,7 @@ HAVE_ALSA       = @HAVE_ALSA@
 HAVE_OSS        = @HAVE_OSS@
 HAVE_PULSEAUDIO = @HAVE_PULSEAUDIO@
 HAVE_WASAPI     = @HAVE_WASAPI@
+HAVE_COREAUDIO  = @HAVE_COREAUDIO@
 
 #
 # Targets
@@ -39,6 +40,11 @@ HAVE_WASAPI     = @HAVE_WASAPI@
 .PHONY:		all clean distclean maintainer-clean bindist
 
 SUBDIRS		= Device Filesave Void
+
+# Bluetooth headsets through bta2dp.device, on every AROS target
+ifeq (@host_os@,aros)
+SUBDIRS		+= BTA2DP
+endif
 
 #
 # Add supported native drivers
@@ -84,6 +90,10 @@ ifneq ($(strip $(HAVE_WASAPI)),)
 SUBDIRS		+= WASAPI
 endif
 
+ifneq ($(strip $(HAVE_COREAUDIO)),)
+SUBDIRS		+= CoreAudio
+endif
+
 #
 # Raspberry Pi audio drivers (ARM targets, require the BCM2708 DMA resource includes)
 ifneq ($(strip $(HAVE_DMA_H)),)
@@ -93,6 +103,7 @@ SUBDIRS		+= RPiHDMI
 SUBDIRS		+= RPiI2S
 endif
 endif
+
 
 all:
 	@for i in $(SUBDIRS); do (cd $$i && $(MAKE) $@) || exit; done
@@ -129,4 +140,3 @@ Makefile: Makefile.in ../config.status
 #
 # Rules
 ########################################
-

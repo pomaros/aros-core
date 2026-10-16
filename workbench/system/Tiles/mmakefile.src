@@ -1,0 +1,24 @@
+# Copyright (C) 2026 John KNIPPER <code@jkn.me>. SPDX-License-Identifier: APL-1.1
+include $(SRCDIR)/config/aros.cfg
+#MM- workbench-system : workbench-system-tiles
+#MM workbench-system-tiles : includes linklibs
+%build_prog mmake=workbench-system-tiles \
+    files="main source tiles_config tiles_render tiles_group lift input" \
+    targetdir=$(AROSDIR)/System progname=Tiles
+#MM- workbench-system : workbench-system-tiles-examples
+#MM workbench-system-tiles-examples : includes linklibs
+%build_prog mmake=workbench-system-tiles-examples \
+    files="TilesExamples" \
+    targetdir=$(AROSDIR)/System progname=TilesExamples
+#MM- workbench-system : workbench-system-tiles-control
+#MM workbench-system-tiles-control : includes linklibs
+%build_prog mmake=workbench-system-tiles-control \
+    files="TilesControl" \
+    targetdir=$(AROSDIR)/System progname=TilesControl
+
+#MM- workbench-system : workbench-system-tilescontrolsource
+#MM workbench-system-tilescontrolsource : includes linklibs
+%build_prog mmake=workbench-system-tilescontrolsource \
+    files="TilesControlSource" \
+    targetdir=$(AROSDIR)/System progname=TilesControlSource
+%common

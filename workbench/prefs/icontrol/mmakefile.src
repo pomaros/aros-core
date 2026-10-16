@@ -24,7 +24,16 @@ C_IMAGES    := $(foreach f, $(IMAGES), $(f)_image.c)
 workbench-prefs-icontrol-images : $(C_IMAGES)
 
 ./%_image.c : images/%.ilbm
-	@$(ILBMTOC) $< >$@    	
+	@$(ILBMTOC) $< >$@
+
+# The same editor as a shared class for the settings window.
+CLASSFILES := args locale misc prefs icontroleditor_init icontroleditor_mcc
+
+#MM- workbench-prefs : workbench-prefs-icontrol-class
+#MM workbench-prefs-icontrol-class : includes linklibs workbench-prefs-icontrol-catalogs workbench-prefs-icontrol-images workbench-classes-zune-prefseditor
+
+%build_module mmake=workbench-prefs-icontrol-class \
+    modname=IControlEditor modtype=mcc \
+    conffile=icontroleditor.conf files="$(CLASSFILES)"
 
 %common
-

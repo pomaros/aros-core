@@ -18,6 +18,7 @@
 
 #include "locale.h"
 #include "wanderer.h"
+#include "tile_transaction.h"
 
 /* global variables */
 Object         *_WandererIntern_AppObj = NULL;
@@ -52,6 +53,8 @@ int main(void)
         retval = DoMethod(_WandererIntern_AppObj, MUIM_Application_Execute);
 
         D(bug("[Wanderer] %s: Returned from Zune's control .. \n", __PRETTY_FUNCTION__));
+        /* Worker entry and library globals live in this executable. */
+        TileDropFinish();
         MUI_DisposeObject(_WandererIntern_AppObj);
     }
 

@@ -1,3 +1,6 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>
+ * This file is distributed under the AROS Public License, version 1.1.
+ */
 /*
     Copyright (C) 1995-2007, The AROS Development Team. All rights reserved.
 
@@ -39,9 +42,9 @@
     EXAMPLE
 
     BUGS
-        When adding the keymap to the keymap.resource one must use
-        Forbid()/Permit() to arbitrate. Ideally one should use semaphores,
-        but the keymap.resource contains no semaphore for this purpose.
+        All keymap.resource list access must hold kr_Semaphore. Keymap
+        contents must be fully initialized before publication and immutable
+        afterwards; publishing another default does not retire the old one.
 
     SEE ALSO
         AskKeyMapDefault()
@@ -56,7 +59,7 @@
 {
     AROS_LIBFUNC_INIT
 
-    KMBase(KeymapBase)->DefaultKeymap = keyMap;
+    KeymapDefaultStore(KMBase(KeymapBase), keyMap);
     
     AROS_LIBFUNC_EXIT
 } /* SetKeyMapDefault */

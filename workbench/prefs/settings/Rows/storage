@@ -1,0 +1,7 @@
+group system
+order 40
+class StorageEditor.mcc
+name Storage
+description Mounted volumes and available space
+keywords storage volume disk free space capacity
+level novice

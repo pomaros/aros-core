@@ -23,14 +23,8 @@
 
 /*** Instance Data **********************************************************/
 
-struct BibEditor_DATA
-{
-    Object *dock_lst, *add_dock_btn, *del_dock_btn;
-    Object *dock_name_str;
-    Object *program_lst, *add_program_btn, *del_program_btn;
-    struct Hook add_dock_hook, del_dock_hook, change_dock_hook;
-    struct Hook add_program_hook, del_program_hook, change_program_hook;
-};
+#define BIBEDITOR_DATA_H_IN_SOURCE
+#include "bibeditor_data.h"
 
 STATIC VOID BibPrefs2Gadgets(struct BibEditor_DATA *data);
 STATIC VOID Gadgets2BibPrefs(struct BibEditor_DATA *data);
@@ -360,6 +354,10 @@ Object *BibEditor__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
         data->program_lst = program_lst;
         data->add_program_btn = add_program_btn;
         data->del_program_btn = del_program_btn;
+        /* Stable ids for the settings window's index and port. */
+        SET(dock_lst, MUIA_ObjectID, MAKE_ID('B','I','D','K'));
+        SET(program_lst, MUIA_ObjectID, MAKE_ID('B','I','P','G'));
+        SET(dock_name_str, MUIA_ObjectID, MAKE_ID('B','I','D','N'));
         data->dock_name_str = dock_name_str;
 
         data->add_dock_hook.h_Entry = (HOOKFUNC)add_dock_func;
@@ -529,6 +527,7 @@ IPTR BibEditor__MUIM_PrefsEditor_SetDefaults
 }
 
 /*** Setup ******************************************************************/
+#ifndef BOINGICONBAREDITOR_MCC
 ZUNE_CUSTOMCLASS_4
 (
     BibEditor, NULL, MUIC_PrefsEditor, NULL,
@@ -537,4 +536,5 @@ ZUNE_CUSTOMCLASS_4
     MUIM_PrefsEditor_ExportFH,    struct MUIP_PrefsEditor_ExportFH *,
     MUIM_PrefsEditor_SetDefaults, Msg
 );
+#endif /* BOINGICONBAREDITOR_MCC */
 

@@ -15,7 +15,7 @@ struct KernelBase;
 #include <kernel_debug.h>
 #include <kernel_scheduler.h>
 
-#include "kernel_cpu.h"
+#include <kernel_cpu.h>
 
 #define AROS_NO_ATOMIC_OPERATIONS
 #include <exec_platform.h>
@@ -27,9 +27,17 @@ struct KernelBase;
 #undef bug
 #include "exec_intern.h"
 #undef bug
-#include "kernel_intern.h"
+#include <kernel_intern.h>
 
 #define DSCHED(x)
+#ifndef CORE_SCHEDULER_BUG
+#define CORE_SCHEDULER_BUG(...) bug(__VA_ARGS__)
+#endif
+
+#ifndef CORE_SCHEDULER_TIME_US
+#define CORE_SCHEDULER_TIME_US() __arm_arosintern.ARMI_GetTime()
+#define CORE_SCHEDULER_TIME_AVAILABLE() (__arm_arosintern.ARMI_GetTime != NULL)
+#endif
 
 /* When the last CPU-usage window was closed (microseconds). */
 static ULONG core_TaskUsageStamp = 0;
@@ -106,7 +114,7 @@ BOOL core_Schedule(void)
             struct Task *nexttask;
 #if defined(__AROSEXEC_SMP__)
             int cpunum = GetCPUNumber();
-            uint32_t cpumask = (1 << cpunum);
+            uint32_t cpumask = (1U << cpunum);
 #endif
             /*
                     If there are tasks ready for this cpu that have equal or lower priority,
@@ -139,7 +147,7 @@ BOOL core_Schedule(void)
     DSCHED
         (
             if (corereschedule)
-                bug("[Kernel:%02d] '%s' @ 0x%p needs rescheduled ..\n", cpunum, task->tc_Node.ln_Name, task);
+                CORE_SCHEDULER_BUG("[Kernel:%02d] '%s' @ 0x%p needs rescheduled ..\n", cpunum, task->tc_Node.ln_Name, task);
         )
 
     return corereschedule;
@@ -184,8 +192,8 @@ void core_Switch(void)
         /* if the current task has gone out of stack bounds, suspend it to prevent further damage to the system */
         if (task->tc_SPReg <= task->tc_SPLower || task->tc_SPReg > task->tc_SPUpper)
         {
-            bug("[Kernel:%02d] '%s' @ 0x%p went out of stack limits\n", cpunum, task->tc_Node.ln_Name, task);
-            bug("[Kernel:%02d]  - Lower 0x%p, upper 0x%p, SP 0x%p\n", cpunum, task->tc_SPLower, task->tc_SPUpper, task->tc_SPReg);
+            CORE_SCHEDULER_BUG("[Kernel:%02d] '%s' @ 0x%p went out of stack limits\n", cpunum, task->tc_Node.ln_Name, task);
+            CORE_SCHEDULER_BUG("[Kernel:%02d]  - Lower 0x%p, upper 0x%p, SP 0x%p\n", cpunum, task->tc_SPLower, task->tc_SPUpper, task->tc_SPReg);
 
             task->tc_SigWait    = 0;
             task->tc_State      = TS_WAIT;
@@ -228,7 +236,7 @@ struct Task *core_Dispatch(void)
     (void)cpunum;
 #endif
 #if defined(__AROSEXEC_SMP__)
-    uint32_t cpumask = (1 << cpunum);
+    uint32_t cpumask = (1U << cpunum);
     BOOL sawContended;
     /* IRQ+FIQ off for the whole dispatch: it holds the scheduler list
      * locks and tc_SpinLock, which the IPI and the timer IRQ also take.
@@ -274,8 +282,12 @@ dispatch_rescan:
         goto dispatch_rescan;
 #endif
 
+#if !defined(__AROSEXEC_SMP__)
     if ((!newtask) && (task) && (task->tc_State != TS_WAIT))
         newtask = task;
+#else
+    (void)task;
+#endif
 
     if (newtask != NULL)
     {
@@ -310,8 +322,13 @@ dispatch_rescan:
 #endif
                 newtask->tc_State     = TS_WAIT;
             }
-            else
-                newtask->tc_State     = TS_RUN;
+            else {
+#if defined(__AROSEXEC_SMP__)
+                /* Publish ownership while tc_SpinLock still excludes Signal. */
+                GetIntETask(newtask)->iet_CpuNumber = cpunum;
+#endif
+                newtask->tc_State = TS_RUN;
+            }
         }
 
         BOOL launchtask = TRUE;
@@ -325,6 +342,7 @@ dispatch_rescan:
             }
 #endif
 #if defined(__AROSEXEC_SMP__)
+            exec_TaskRemoveRunning(newtask);
             KrnSpinLock(&PrivExecBase(SysBase)->TaskWaitSpinLock, NULL,
                         SPINLOCK_MODE_WRITE);
 #endif
@@ -431,10 +449,10 @@ void core_TaskCPUUsage(void)
     unsigned int __if;
 #endif
 
-    if (!SysBase || !__arm_arosintern.ARMI_GetTime)
+    if (!SysBase || !CORE_SCHEDULER_TIME_AVAILABLE())
         return;
 
-    now = (ULONG)__arm_arosintern.ARMI_GetTime();
+    now = (ULONG)CORE_SCHEDULER_TIME_US();
     if (core_TaskUsageStamp && ((now - core_TaskUsageStamp) < TASKUSAGE_WINDOW))
         return;
     core_TaskUsageStamp = now;

@@ -66,6 +66,10 @@ IPTR PrefsEditor__MUIM_Setup
     
     if (!DoSuperMethodA(CLASS, self, (Msg) message)) return FALSE;
     
+    /* Pages may be detached and attached while a search query changes.
+     * Import and the Revert snapshot belong to the editor instance. */
+    if (data->ped_Loaded) return TRUE;
+
     /*-- Load preferences --------------------------------------------------*/
     if (!DoMethod(self, MUIM_PrefsEditor_ImportFromDirectory, ENV))
     {
@@ -123,6 +127,7 @@ IPTR PrefsEditor__MUIM_Setup
         data->ped_CanSave = FALSE;
     }
 
+    data->ped_Loaded = TRUE;
     return TRUE;
 }
 
@@ -131,14 +136,6 @@ IPTR PrefsEditor__MUIM_Cleanup
     Class *CLASS, Object *self, struct MUIP_Cleanup *message
 )
 {
-    SETUP_INST_DATA;
-    
-    if (data->ped_BackupFH != BNULL)
-    {
-        Close(data->ped_BackupFH);
-        DeleteFile(data->ped_BackupPath);
-    }
-    
     return DoSuperMethodA(CLASS, self, (Msg) message);
 }
 
@@ -149,8 +146,17 @@ IPTR PrefsEditor__OM_DISPOSE
 {
     SETUP_INST_DATA;
 
+    if (data->ped_BackupFH != BNULL)
+    {
+        Close(data->ped_BackupFH);
+        DeleteFile(data->ped_BackupPath);
+        data->ped_BackupFH = BNULL;
+    }
     if (data->ped_Name != NULL) FreeVec(data->ped_Name);
     if (data->ped_Path != NULL) FreeVec(data->ped_Path);
+    /* Text objects own their highlight ranges and release them with the
+     * child tree. The mark arrays only borrow object pointers. */
+    data->ped_MarkedCount = 0;
     
     return DoSuperMethodA(CLASS, self, message);
 }

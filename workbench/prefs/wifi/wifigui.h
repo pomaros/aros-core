@@ -97,6 +97,9 @@ struct WifiMsg
 /* Set up by the worker before it signals the window that it is ready. */
 extern struct MsgPort *WifiWorkerPort;
 extern struct Task *WifiMainTask;
+/* Default reserved wake for synchronous Prefs startup; asynchronous clients
+ * must supply a privately allocated signal before creating the worker. */
+extern ULONG WifiMainSignal;
 
 VOID WifiWorker(VOID);
 

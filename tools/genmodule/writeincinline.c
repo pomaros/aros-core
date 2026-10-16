@@ -1,6 +1,8 @@
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
 
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>
+
     Function to write inline/modulename.h. Part of genmodule.
 */
 #include "genmodule.h"
@@ -79,16 +81,14 @@ void writeincinline(struct config *cfg)
             if ((!funclistit->novararg) && (funclistit->arguments))
             {
                 struct functionarg *arglistit = funclistit->arguments;
+                size_t namelen = strlen(funclistit->name);
 
                 while (arglistit->next != NULL) arglistit = arglistit->next;
 
                 lastname = arglistit->name;
                 assert(lastname != NULL);
 
-                /* Function names are duplicated by newfunctionhead() and are NUL-terminated. */
-                size_t namelen = strlen(funclistit->name); /* Flawfinder: ignore */
-
-                if (namelen > 0 && funclistit->name[namelen - 1] == 'A')
+                if (namelen >= 1 && funclistit->name[namelen - 1] == 'A')
                 {
                     funclistit->varargtype = 1;
                     varargname = strdup(funclistit->name);
@@ -226,7 +226,7 @@ writeinlineregister(FILE *out, struct functionhead *funclistit, struct config *c
 {
     struct functionarg *arglistit;
     int count, isvoid;
-    int argtypes[funclistit->argcount];
+    int argtypes[funclistit->argcount ? funclistit->argcount : 1];
 
     isvoid = strcmp(funclistit->type, "void") == 0
         || strcmp(funclistit->type, "VOID") == 0;

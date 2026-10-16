@@ -49,14 +49,19 @@
 ******************************************************************************/
 {
     fdesc *fdesc;
+    fcb *cblock;
+    BOOL lastclose;
 
+    __fdesc_lock();
     if (!(fdesc = __getfdesc(fd)))
     {
         /* Not a local posixc file descriptor: dispatch to the owning
            subsystem's close hook (e.g. a bsdsocket socket).  The owner
            releases its own fd.library reservation. */
         APTR data;
-        const struct fd_hooks *hooks = __getfdhooks(fd, &data);
+        const struct fd_hooks *hooks;
+        __fdesc_unlock();
+        hooks = __getfdhooks(fd, &data);
         if (hooks && hooks->fdh_close)
         {
             LONG err = 0;
@@ -72,50 +77,34 @@
         return -1;
     }
 
-    /* Serialise the reference-count decrement and the final teardown
-       against other Tasks sharing this fcb. When the count reaches zero
-       no other Task holds a reference, so releasing the lock immediately
-       before FreeVec() is safe. */
-    __fcb_lock(fdesc->fcb);
-    if (--fdesc->fcb->opencount == 0)
+    cblock = fdesc->fcb;
+    __fcb_lock(cblock);
+    lastclose = (--cblock->opencount == 0);
+    __setfdesc(fd, NULL);
+    __fdesc_unlock();
+    __free_fdesc(fdesc);
+
+    if (lastclose)
     {
-        /* Due to a *stupid* behaviour of the dos.library we cannot handle closing failures cleanly :-(
-        if (
-            !(fdesc->fcb->privflags & _FCB_DONTCLOSE_FH) &&
-            !Close(fdesc->fh)
-        )
-        {
-            fdesc->opencount++;
-            errno = __stdc_ioerr2errno(IoErr());
-
-            return -1;
-        }
-        */
-        /* FIXME: Damn dos.library! We cannot report the error code correctly! This oughta change someday... */
-        /* Since the dos.library destroys the file handle anyway, even if the closing fails, we cannot
-           report the error code correctly, so just close the file and get out of here */
-
-        if (!(fdesc->fcb->privflags & _FCB_DONTCLOSE_FH))
+        /* DOS releases the handle even when Close reports an error. */
+        if (!(cblock->privflags & _FCB_DONTCLOSE_FH))
         {
             // don't close directories because we don't Open() them.
-            if (fdesc->fcb->privflags & _FCB_ISDIR)
+            if (cblock->privflags & _FCB_ISDIR)
             {
-                UnLock(fdesc->fcb->handle);
+                UnLock(cblock->handle);
             }
             else
             {
-                Close(fdesc->fcb->handle);
+                Close(cblock->handle);
             }
         }
 
-        __fcb_unlock(fdesc->fcb);
-        FreeVec(fdesc->fcb);
+        __fcb_unlock(cblock);
+        FreeVec(cblock);
     }
     else
-        __fcb_unlock(fdesc->fcb);
-
-    __free_fdesc(fdesc);
-    __setfdesc(fd, NULL);
+        __fcb_unlock(cblock);
 
     return 0;
 } /* close */

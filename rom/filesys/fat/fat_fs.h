@@ -275,6 +275,10 @@ struct Globals
     ULONG max_transfer_bytes;   /* device's DE_MAXTRANSFER, 0xFFFFFFFF if none given */
     UWORD readcmd;
     UWORD writecmd;
+    /* TRUE when the device reports itself write protected: every packet
+     * that would change the medium answers ERROR_DISK_WRITE_PROTECTED
+     * before it can dirty a cache block. */
+    BOOL readonly;
     BOOL timer_active;
     BOOL restart_timer;
     UWORD timer_deferred;       /* flushes postponed by continuing activity */

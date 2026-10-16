@@ -28,6 +28,7 @@
 
 #include "bluetoothprefs.h"
 #include "ActionClass.h"
+#include "editor.h"
 #include "IconListClass.h"
 #include "ScanWinClass.h"
 #include "DevWinClass.h"
@@ -597,7 +598,7 @@ static void RefreshDevices(struct BtActionData *data)
             struct DevEntry *e = AllocVec(sizeof(struct DevEntry), MEMF_CLEAR);
             STRPTR name = NULL, addr = NULL;
             IPTR isc = 0, isl = 0, isreg = 0, isb = 0, isconn = 0, isdead = 0, cod = 0, appear = 0, pstate = 0;
-            LONG rssi = 127;
+            SIPTR rssi = 127;  /* btGetAttrs() stores an IPTR */
             if(!e) break;
             btGetAttrs(BGA_DEVICE, bd, BDA_Name, &name, BDA_AddressString, &addr, BDA_RSSI, &rssi,
                        BDA_IsClassic, &isc, BDA_IsLE, &isl, BDA_IsRegistered, &isreg, BDA_IsBonded, &isb,
@@ -852,6 +853,7 @@ static void RefreshConfig(struct BtActionData *data)
     set(data->cfglist, MUIA_List_Quiet, FALSE);
     btGetAttrs(BGA_STACK, NULL, BSA_CurrConfigHash, &curr, BSA_SavedConfigHash, &saved, TAG_END);
     set(data->bt_save, MUIA_Disabled, (curr == saved));
+    if(data->editor) DoMethod(data->editor, MUIM_BluetoothEditor_Sync);
 }
 
 static struct CfgEntry *SelectedCfg(struct BtActionData *data)
@@ -1163,11 +1165,24 @@ static void DoSaveLog(struct BtActionData *data)
 }
 static void DoPairReply(struct BtActionData *data, BOOL yes)
 {
-    if(data->pairdev) {
-        if(data->pairtype == BPRT_PASSKEYENTRY) btPairingReply(data->pairdev, BPRA_Passkey, 0, TAG_END);
-        else btPairingReply(data->pairdev, BPRA_Confirm, yes, TAG_END);
+    if(data->pairdev && data->pairtype != BPRT_PASSKEYDISPLAY) {
+        STRPTR input = NULL;
+        get(data->pairinput, MUIA_String_Contents, &input);
+        if(yes && data->pairtype == BPRT_PINCODE) {
+            if(!input || !input[0]) { SetStatus(data,"Enter the device PIN."); return; }
+            btPairingReply(data->pairdev, BPRA_PINCode, (IPTR)input, TAG_END);
+        } else if(yes && data->pairtype == BPRT_PASSKEYENTRY) {
+            ULONG value = 0, i;
+            if(!input || strlen((char *)input) != 6) { SetStatus(data,"Enter a six-digit passkey."); return; }
+            for(i = 0; i < 6; i++) {
+                if(input[i] < '0' || input[i] > '9') { SetStatus(data,"Enter a six-digit passkey."); return; }
+                value = value * 10 + input[i] - '0';
+            }
+            btPairingReply(data->pairdev, BPRA_Passkey, value, TAG_END);
+        } else btPairingReply(data->pairdev, BPRA_Confirm, yes, TAG_END);
     }
     data->pairdev = NULL;
+    set(data->pairinput, MUIA_String_Contents, (IPTR)"");
     set(data->pairwin, MUIA_Window_Open, FALSE);
 }
 
@@ -1185,6 +1200,10 @@ static void HandleEvents(struct BtActionData *data)
                 if((ev == BEHMB_REMHARDWARE) && data->hwwin) set(data->hwwin, MUIA_Window_Open, FALSE);
                 RefreshHardware(data); RefreshDevices(data); break;
             case BEHMB_ADDDEVICE: case BEHMB_REMDEVICE: case BEHMB_DEVICEUPDATE:
+                if(ev == BEHMB_REMDEVICE && data->pairdev == p1) {
+                    data->pairdev = NULL;
+                    if(data->pairwin) set(data->pairwin, MUIA_Window_Open, FALSE);
+                }
             case BEHMB_DEVICEREGISTERED: case BEHMB_DEVICEUNREGISTERED:
             case BEHMB_DEVICECONNECTED: case BEHMB_DEVICEDISCONNECTED:
             case BEHMB_DEVICEDEAD:
@@ -1218,12 +1237,20 @@ static void HandleEvents(struct BtActionData *data)
                     case BPRT_PASSKEYDISPLAY:
                         snprintf(buf, sizeof(buf), "Enter this passkey on '%s':\n%06lu", name ? name : "device", (unsigned long)passkey);
                         break;
+                    case BPRT_PINCODE:
+                        snprintf(buf, sizeof(buf), "Enter the PIN for '%s':", name ? (char *)name : "device");
+                        break;
+                    case BPRT_PASSKEYENTRY:
+                        snprintf(buf, sizeof(buf), "Enter the six-digit passkey for '%s':", name ? (char *)name : "device");
+                        break;
                     case BPRT_CONSENT:
                     default:
                         snprintf(buf, sizeof(buf), "Accept pairing with '%s'?", name ? name : "device");
                         break;
                 }
                 btUnlockBase();
+                set(data->pairinput, MUIA_String_Contents, (IPTR)"");
+                set(data->pairinput, MUIA_ShowMe, data->pairtype == BPRT_PINCODE || data->pairtype == BPRT_PASSKEYENTRY);
                 set(data->pairtext, MUIA_Text_Contents, (IPTR)buf);
                 set(data->pairwin, MUIA_Window_Open, TRUE);
                 break;
@@ -1296,6 +1323,25 @@ static IPTR mNew(struct IClass *cl, Object *obj, struct opSet *msg)
 
     data->scanwin = NewObject(ScanWinClass->mcc_Class, NULL, TAG_END);
     data->devwin  = NewObject(DevWinClass->mcc_Class, NULL, TAG_END);
+
+    data->pairwin = WindowObject,
+        MUIA_Window_Title, "Bluetooth pairing",
+        MUIA_Window_ID, MAKE_ID('B','T','P','R'),
+        WindowContents, VGroup,
+            Child, data->pairtext = TextObject, MUIA_Text_Contents, "Pairing request", End,
+            Child, data->pairinput = StringObject,
+                StringFrame, MUIA_String_MaxLen, 17, MUIA_String_Secret, TRUE,
+            End,
+            Child, HGroup,
+                Child, data->pairyes = SimpleButton("Accept"),
+                Child, data->pairno = SimpleButton("Cancel"),
+            End,
+        End,
+    End;
+    if(!data->pairwin) { CoerceMethod(cl, obj, OM_DISPOSE); return 0; }
+    DoMethod(data->pairyes, MUIM_Notify, MUIA_Pressed, FALSE, obj, 2, MUIM_BtA_PairReply, TRUE);
+    DoMethod(data->pairno, MUIM_Notify, MUIA_Pressed, FALSE, obj, 2, MUIM_BtA_PairReply, FALSE);
+    DoMethod(data->pairwin, MUIM_Notify, MUIA_Window_CloseRequest, TRUE, obj, 2, MUIM_BtA_PairReply, FALSE);
 
     /* radio information window (opened from the Hardware page) */
     data->hwwin = WindowObject,
@@ -1619,9 +1665,9 @@ AROS_UFH3(IPTR, ActionDispatcher,
     {
         case MUIM_BtA_Register:    { APTR b = SelectedDevice(data); if(b && btRegisterDevice(b)) SetStatus(data,"Device registered."); } return 0;
         case MUIM_BtA_Unregister:  { APTR b = SelectedDevice(data); if(b && btUnregisterDevice(b)) SetStatus(data,"Device unregistered."); } return 0;
-        case MUIM_BtA_Pair:        { APTR b = SelectedDevice(data); if(b && btPairDevice(b, TAG_END)) SetStatus(data,"Pairing started..."); else SetStatus(data,"Pairing failed to start."); } return 0;
-        case MUIM_BtA_Connect:     { APTR b = SelectedDevice(data); SetStatus(data,"Connecting..."); if(b) { if(btConnectDevice(b)) SetStatus(data,"Connected."); else SetStatus(data,"Connection failed."); } } return 0;
-        case MUIM_BtA_Disconnect:  { APTR b = SelectedDevice(data); if(b) btDisconnectDevice(b); SetStatus(data,"Disconnected."); } return 0;
+        case MUIM_BtA_Pair:        { APTR b = SelectedDevice(data); if(b && LaunchBluetoothAction(b, "pair")) SetStatus(data,"Pairing started..."); else SetStatus(data,"Pairing failed to start."); } return 0;
+        case MUIM_BtA_Connect:     { APTR b = SelectedDevice(data); SetStatus(data,"Connecting..."); if(b) { if(LaunchBluetoothAction(b, "connect")) SetStatus(data,"Connection requested."); else SetStatus(data,"Connection failed."); } } return 0;
+        case MUIM_BtA_Disconnect:  { APTR b = SelectedDevice(data); if(b && LaunchBluetoothAction(b, "disconnect")) SetStatus(data,"Disconnection requested."); } return 0;
         case MUIM_BtA_Forget:      DoForget(data); return 0;
         case MUIM_BtA_ClsScan:     btClassScan(); SetStatus(data,"Class scan requested."); return 0;
         case MUIM_BtA_HwAdd:       DoHwAdd(data); return 0;
@@ -1645,6 +1691,7 @@ AROS_UFH3(IPTR, ActionDispatcher,
             if(btSaveCfgToDisk("ENV:Sys/bluetooth.prefs", FALSE)) SetStatus(data,"Configuration in use (ENV: only, not saved permanently)."); else SetStatus(data,"Writing ENV:Sys/bluetooth.prefs failed.");
             RefreshConfig(data);
             return 0;
+        case MUIM_BtA_RefreshConfig: LoadOptions(data); RefreshConfig(data); RefreshHardware(data); RefreshDevices(data); return 0;
         case MUIM_BtA_OptChanged:  ApplyOptions(data); return 0;
         case MUIM_BtA_DevActive:   UpdateDevButtons(data); return 0;
         case MUIM_BtA_ClsActive:   UpdateClsButtons(data); return 0;
@@ -1662,6 +1709,7 @@ AROS_UFH3(IPTR, ActionDispatcher,
 
         case MUIM_Setup:
             if(!DoSuperMethodA(cl, obj, msg)) return FALSE;
+            if(data->pairwin) DoMethod(_app(obj), OM_ADDMEMBER, data->pairwin);
             if(data->scanwin) DoMethod(_app(obj), OM_ADDMEMBER, data->scanwin);
             if(data->devwin)  DoMethod(_app(obj), OM_ADDMEMBER, data->devwin);
             if(data->hwwin)   DoMethod(_app(obj), OM_ADDMEMBER, data->hwwin);
@@ -1689,12 +1737,17 @@ AROS_UFH3(IPTR, ActionDispatcher,
             }
             if(data->eventhandler) { btRemEventHandler(data->eventhandler); data->eventhandler = NULL; }
             if(data->eventport) { DeleteMsgPort(data->eventport); data->eventport = NULL; }
-            if(data->scanwin) DoMethod(_app(obj), OM_REMMEMBER, data->scanwin);
-            if(data->devwin)  DoMethod(_app(obj), OM_REMMEMBER, data->devwin);
+            if(data->pairwin) {
+                DoPairReply(data, FALSE);
+                DoMethod(_app(obj), OM_REMMEMBER, data->pairwin);
+            }
+            if(data->scanwin) { set(data->scanwin, MUIA_Window_Open, FALSE); DoMethod(_app(obj), OM_REMMEMBER, data->scanwin); }
+            if(data->devwin) { set(data->devwin, MUIA_Window_Open, FALSE); DoMethod(_app(obj), OM_REMMEMBER, data->devwin); }
             if(data->hwwin)   { set(data->hwwin, MUIA_Window_Open, FALSE); DoMethod(_app(obj), OM_REMMEMBER, data->hwwin); }
             break;
 
         case OM_DISPOSE:
+            if(data->pairwin) { MUI_DisposeObject(data->pairwin); data->pairwin = NULL; }
             if(data->scanwin) { MUI_DisposeObject(data->scanwin); data->scanwin = NULL; }
             if(data->devwin)  { MUI_DisposeObject(data->devwin);  data->devwin = NULL; }
             if(data->hwwin)   { MUI_DisposeObject(data->hwwin);   data->hwwin = NULL; }

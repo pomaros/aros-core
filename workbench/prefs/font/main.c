@@ -7,6 +7,7 @@
 #include <proto/alib.h>
 #include <proto/intuition.h>
 #include <proto/muimaster.h>
+#include <proto/exec.h>
 
 #include <libraries/mui.h>
 #include <zune/systemprefswindow.h>
@@ -16,6 +17,10 @@
 #include "fpeditor.h"
 #include "prefs.h"
 
+/* settings.library 1 when present: the editor then keeps ENV: and ENVARC:
+ * through it (fontsettings.c); without it the classic IFF path is used. */
+struct Library *SettingsBase;
+
 #define VERSION "$VER: Fonts 1.1 ("ADATE") \xa9 AROS Dev Team"
 
 int main(int argc, char **argv)
@@ -23,6 +28,7 @@ int main(int argc, char **argv)
     Object *application, *window;
 
     Locale_Initialize();
+    SettingsBase = OpenLibrary("settings.library", 1);
 
     if (ReadArguments(argc, argv))
     {
@@ -46,7 +52,7 @@ int main(int argc, char **argv)
                 SubWindow, (IPTR) (window = (Object *)SystemPrefsWindowObject,
                     MUIA_Window_Screen, (IPTR)pScreen,
                     MUIA_Window_ID, MAKE_ID('F','W','I','N'),
-                    WindowContents, (IPTR) FPEditorObject,
+                    WindowContents, (IPTR) FontEditorObject,
                     End,
                 End),
             End;
@@ -65,6 +71,8 @@ int main(int argc, char **argv)
         FreeArguments();
     }
 
+    if (SettingsBase != NULL)
+        CloseLibrary(SettingsBase);
     Locale_Deinitialize();
 
     return 0;

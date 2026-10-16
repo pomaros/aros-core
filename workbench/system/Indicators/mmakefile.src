@@ -1,0 +1,22 @@
+# Copyright (C) 2026 John KNIPPER <code@jkn.me>. SPDX-License-Identifier: APL-1.1
+include $(SRCDIR)/config/aros.cfg
+#MM- workbench-system : workbench-system-indicators
+#MM workbench-system-indicators : includes linklibs workbench-prefs-wifi-catalogs
+USER_INCLUDES := -I$(SRCDIR)/workbench/system/Tiles -I$(SRCDIR)/workbench/prefs/wifi -I$(TOP)/workbench/prefs/wifi
+%build_prog mmake=workbench-system-indicators \
+    files="main state consumers wifi_panel $(SRCDIR)/workbench/prefs/wifi/worker $(SRCDIR)/workbench/prefs/wifi/locale $(SRCDIR)/workbench/system/Tiles/source" targetdir=$(AROSDIR)/System progname=Indicator
+#MM- workbench-system : workbench-system-battery-source-$(AROS_TARGET_ARCH)
+#MM- workbench-system-battery-source-apple : workbench-system-battery-source
+#MM workbench-system-battery-source : includes linklibs
+USER_INCLUDES += -I$(SRCDIR)/arch/aarch64-apple/include
+%build_prog mmake=workbench-system-battery-source \
+    files="battery_source battery consumers cpu_tasks subscriptions $(SRCDIR)/workbench/system/Tiles/source" \
+    targetdir=$(AROSDIR)/System progname=BatterySource
+
+#MM- workbench-system : workbench-system-sound-source
+#MM workbench-system-sound-source : includes linklibs
+%build_prog mmake=workbench-system-sound-source \
+    files="sound_source state $(SRCDIR)/workbench/system/Tiles/source" \
+    targetdir=$(AROSDIR)/System progname=SoundSource
+
+%common

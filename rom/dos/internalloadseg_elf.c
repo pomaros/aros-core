@@ -5,6 +5,7 @@
 */
 
 #include <aros/debug.h>
+#include <aros/kernel.h>
 
 #include <proto/dos.h>
 #include <proto/arossupport.h>
@@ -30,7 +31,8 @@
 
 #define DATTR(x)
 
-#if defined(__x86_64__) || defined(__arm__) || defined(__aarch64__)
+#if (defined(__x86_64__) || defined(__arm__) || defined(__aarch64__)) && \
+    !defined(__AROSPLATFORM_WXSEG__)
 #define ELF_MODULE_ARENA 1
 #endif
 
@@ -43,6 +45,31 @@ struct hunk
 
 #define BPTR2HUNK(bptr) ((struct hunk *)((char *)bptr - offsetof(struct hunk, next)))
 #define HUNK2BPTR(hunk) MKBADDR(&hunk->next)
+
+#if defined(__AROSPLATFORM_WXSEG__) && AROS_FLAVOUR != AROS_FLAVOUR_STANDALONE
+/* The host protects mappings, not ELF payload addresses. Include the hunk's
+ * entry trampoline even when section alignment puts the payload on a later
+ * page. Every W^X hunk owns its mapping; other data hunks stay writable. */
+static BOOL protect_elf_code_hunk(BPTR hunks, APTR section, IPTR size,
+                                 struct KernelBase *KernelBase)
+{
+    while (hunks)
+    {
+        struct hunk *hunk = BPTR2HUNK(BADDR(hunks));
+        IPTR start = (IPTR)hunk;
+        IPTR offset = (IPTR)section - start;
+
+        if ((IPTR)section >= start && offset < hunk->size &&
+            size <= hunk->size - offset)
+        {
+            KrnSetProtection(hunk, hunk->size, MAP_Readable | MAP_Executable);
+            return TRUE;
+        }
+        hunks = hunk->next;
+    }
+    return FALSE;
+}
+#endif
 
 #define LOADSEG_SMALL_READ  4096 /* Size adjusted by profiling in Callgrind */
 
@@ -433,6 +460,7 @@ static int relocate
     struct elfheader  *eh,
     struct sheader    *sh,
     ULONG              shrel_idx,
+    ULONG              shnum,
     struct sheader    *symtab_shndx,
     BOOL              *reloc_out_of_range,
     struct DosLibrary *DOSBase
@@ -441,6 +469,13 @@ static int relocate
     struct sheader *shrel    = &sh[shrel_idx];
     struct sheader *shsymtab = &sh[shrel->link];
     struct sheader *toreloc  = &sh[shrel->info];
+
+    if (!shrel->entsize || shsymtab->link >= shnum ||
+        shsymtab->size < sizeof(struct symbol))
+    {
+        SetIoErr(ERROR_BAD_HUNK);
+        return 0;
+    }
 
     struct symbol *symtab   = (struct symbol *)shsymtab->addr;
     UBYTE         *relbase  = (UBYTE *)shrel->addr;
@@ -492,7 +527,24 @@ static int relocate
             continue;
 #endif
 
+        if (ELF_R_SYM(rel->info) >= shsymtab->size / sizeof(struct symbol))
+        {
+            SetIoErr(ERROR_BAD_HUNK);
+            return 0;
+        }
         sym = &symtab[ELF_R_SYM(rel->info)];
+#ifdef __aarch64__
+        {
+            ULONG type = ELF_R_TYPE(rel->info);
+            ULONG width = (type == R_AARCH64_ABS64 || type == R_AARCH64_PREL64) ? 8 :
+                          (type == R_AARCH64_NONE ? 0 : 4);
+            if (rel->offset > toreloc->size || width > toreloc->size - rel->offset)
+            {
+                SetIoErr(ERROR_BAD_HUNK);
+                return 0;
+            }
+        }
+#endif
         p = toreloc->addr + rel->offset;
 
         DB2(bug("[ELF Loader] Processing symbol %s\n", sh[shsymtab->link].addr + sym->name));
@@ -1806,16 +1858,73 @@ static BPTR load_seg_elf_int
          * An empty relocation section is valid ELF and has nothing to apply;
          * skip it, as load_block() can't allocate a block of size 0.
          */
-        if ((sh[i].type == SHT_REL || sh[i].type == SHT_RELA) && sh[i].size && sh[sh[i].info].addr)
+        if ((sh[i].type == SHT_REL || sh[i].type == SHT_RELA) && sh[i].size)
         {
+            if (sh[i].info >= int_shnum || sh[i].link >= int_shnum)
+            {
+                SetIoErr(ERROR_BAD_HUNK);
+                goto error;
+            }
+            if (!sh[sh[i].info].addr)
+                continue;
             sh[i].addr = load_block(file, sh[i].offset, sh[i].size, funcarray, &srb, DOSBase);
-            if (!sh[i].addr || !relocate(&eh, sh, i, symtab_shndx, reloc_out_of_range, DOSBase))
+            if (!sh[i].addr || !relocate(&eh, sh, i, int_shnum, symtab_shndx, reloc_out_of_range, DOSBase))
                 goto error;
 
             ilsFreeMem(sh[i].addr, sh[i].size);
             sh[i].addr = NULL;
         }
     }
+
+#if defined(__AROSPLATFORM_WXSEG__)
+    /*
+     * Every allocated section lives in page-granular KrnAllocPages() storage
+     * so AArch64 PC-relative relocations stay in range. Only executable
+     * sections become R/X; the independently allocated data pages remain R/W.
+     */
+    {
+        struct KernelBase *KernelBase = OpenResource("kernel.resource");
+
+#if AROS_FLAVOUR == AROS_FLAVOUR_STANDALONE
+        intptr_t operation = KernelBase ? KrnGetSystemAttr(KATTR_PageProtect) : -1;
+        if (operation == -1 || operation == 0)
+        {
+            SetIoErr(ERROR_NOT_IMPLEMENTED);
+            goto error;
+        }
+        KRN_PageProtect protect = (KRN_PageProtect)operation;
+#endif
+        if (KernelBase)
+        {
+            for (i = 0; i < int_shnum; i++)
+            {
+                if ((sh[i].flags & (SHF_ALLOC | SHF_EXECINSTR)) ==
+                        (SHF_ALLOC | SHF_EXECINSTR) &&
+                    sh[i].size != 0 && TypeOfMem(sh[i].addr) == 0)
+                {
+#if AROS_FLAVOUR == AROS_FLAVOUR_STANDALONE
+                    /* The void legacy API cannot reject a failed rendezvous.
+                     * Never register or run a segment lacking executable rights. */
+                    if (sh[i].size > UINT32_MAX ||
+                        !protect(sh[i].addr, (uint32_t)sh[i].size,
+                            MAP_Readable | MAP_Executable))
+                    {
+                        SetIoErr(ERROR_NOT_EXECUTABLE);
+                        goto error;
+                    }
+#else
+                    if (!protect_elf_code_hunk(hunks, sh[i].addr, sh[i].size,
+                            KernelBase))
+                    {
+                        SetIoErr(ERROR_BAD_HUNK);
+                        goto error;
+                    }
+#endif
+                }
+            }
+        }
+    }
+#endif
 
     register_elf(file, hunks, &eh, sh, DOSBase);
     goto end;
@@ -1839,33 +1948,15 @@ error:
 
 end:
 
-#if defined(DOCACHECLEAR) || defined(__AROSPLATFORM_WXSEG__)
+#if defined(DOCACHECLEAR)
+    /* Clear the caches to let the CPU see the new data and instructions. */
     curr = hunks;
 
     while (curr)
     {
         struct hunk *hunk = BPTR2HUNK(BADDR(curr));
 
-#if defined(DOCACHECLEAR)
-        /* Clear the caches to let the CPU see the new data and instructions. */
         ils_ClearCache(hunk->data, hunk->size, CACRF_ClearD | CACRF_ClearI);
-#endif
-#if defined(__AROSPLATFORM_WXSEG__)
-        /*
-         * Executable hunks were served by KrnAllocPages() as read/write pages
-         * outside any MemHeader (TypeOfMem() == 0, as in LoadSeg's FreeFunc
-         * and UnLoadSeg). Now that they are populated and relocated, flip
-         * them to read/execute. The base is the hunk itself, not hunk->data:
-         * the page-granular mapping starts at the struct.
-         */
-        if (hunk->size && TypeOfMem(hunk) == 0)
-        {
-            if (!KernelBase)
-                KernelBase = OpenResource("kernel.resource");
-            if (KernelBase)
-                KrnSetProtection(hunk, hunk->size, MAP_Readable | MAP_Executable);
-        }
-#endif
         curr = hunk->next;
     }
 #endif

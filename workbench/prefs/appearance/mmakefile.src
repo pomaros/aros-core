@@ -16,4 +16,14 @@ USER_CFLAGS := $(PARANOIA_CFLAGS)
     progname=Appearance targetdir=$(EXEDIR) \
     files=$(FILES) uselibs="mui"
 
+# The same editor as a shared class for the settings window.
+CLASSFILES := themepreview misc locale args appearanceeditor_init appearanceeditor_mcc
+
+#MM- workbench-prefs : workbench-prefs-appearance-class
+#MM workbench-prefs-appearance-class : includes linklibs workbench-prefs-appearance-catalogs \ workbench-classes-zune-prefseditor
+
+%build_module mmake=workbench-prefs-appearance-class \
+    modname=AppearanceEditor modtype=mcc \
+    conffile=appearanceeditor.conf files="$(CLASSFILES)"
+
 %common

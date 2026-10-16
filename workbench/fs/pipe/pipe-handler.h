@@ -1,3 +1,6 @@
+/* Readiness extensions Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * SPDX-License-Identifier: APL-1.1
+ */
 /****************************************************************************
 **  File:       pipe-handler.h
 **  Program:    pipe-handler - an AmigaDOS handler for named pipes
@@ -84,6 +87,8 @@ typedef struct pipedata
     PIPELISTHEADER    readerlist;            /* list of waiting read requests */
     PIPELISTHEADER    writerlist;            /* list of waiting write requests */
     BPTR              tapfh;                 /* file handle of tap, 0 if none */
+    struct Task       *rdnotify_task;        /* signal on read-readiness, 0 = none */
+    ULONG             rdnotify_sig;          /* the signal mask to send */
 #if    PIPEDIR
     ULONG             lockct;                /* number of extant locks */
     struct FileLock   *lock;                 /* this pipe's lock - see note above */
@@ -109,6 +114,7 @@ typedef struct pipekey
   { PIPEDATA  *pipe;
     int       openmode;     /* Type field of original open request */
     IOTYPE    iotype;       /* (somewhat redundant) see pipesched.h */
+    int       nonblock;     /* read returns at once instead of waiting */
   }
 PIPEKEY;
 
@@ -137,8 +143,13 @@ extern struct MsgPort     *TapReplyPort;
 
 #define   QuickReplyPkt(pkt)       PutMsg ((pkt)->dp_Port, (pkt)->dp_Link)
 
-extern void      handler   ( struct DosPacket *StartPkt );
-extern PIPEDATA  *FindPipe ( char *name );
+#include <dos/pipe.h>
+
+extern void      handler        ( struct DosPacket *StartPkt );
+extern PIPEDATA  *FindPipe      ( char *name );
+extern int       PipeReadable   ( PIPEDATA *pipe );
+extern void      PipeReadNotify ( struct DosPacket *pkt );
+extern void      PipeSetNonblock( struct DosPacket *pkt );
 
 
 

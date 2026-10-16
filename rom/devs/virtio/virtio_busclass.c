@@ -46,14 +46,13 @@ static AROS_INTH1(VIRTIO_IOIntCode, struct virtio_queue *, vq)
     if (vq->dev && vq->dev->dev_ISR) {
         (void) *vq->dev->dev_ISR;
     }
-    Signal(vq->q_IOTask, SIGBREAKF_CTRL_F);
+    if (vq->q_IOTask) Signal(vq->q_IOTask, SIGBREAKF_CTRL_F);
     return TRUE;
     AROS_INTFUNC_EXIT
 }
 
 static void virtio_iotask(struct virtio_queue *vq)
 {
-    SetSignal(0, SIGBREAKF_CTRL_F);
     for (;;) {
         Wait(SIGBREAKF_CTRL_F);
         virtio_process_used(vq);
@@ -69,7 +68,7 @@ OOP_Object *VirtIOBus__Root__New(OOP_Class *cl, OOP_Object *o, struct pRoot_New 
     char *devSer  = (char *)GetTagData(aHidd_StorageUnit_Serial, 0, msg->attrList);
     char *devFW   = (char *)GetTagData(aHidd_StorageUnit_Revision, 0, msg->attrList);
 
-    if (!dev || !dev->dev_VQ || maxUnits <= 0)
+    if (!dev || !dev->dev_VQ || maxUnits != 1)
         return NULL;
 
     o = (OOP_Object *)OOP_DoSuperMethod(cl, o, (OOP_Msg)msg);
@@ -94,6 +93,11 @@ OOP_Object *VirtIOBus__Root__New(OOP_Class *cl, OOP_Object *o, struct pRoot_New 
 
         data->ab_UnitMax = maxUnits;
         data->ab_Units = AllocMem(sizeof(OOP_Object *) * maxUnits, MEMF_CLEAR);
+        if (!data->ab_Units || (devName && !data->ab_DevName) ||
+            (devSer && !data->ab_DevSer) || (devFW && !data->ab_DevFW)) {
+            OOP_DisposeObject(o);
+            return NULL;
+        }
     }
     return o;
 }
@@ -101,7 +105,17 @@ OOP_Object *VirtIOBus__Root__New(OOP_Class *cl, OOP_Object *o, struct pRoot_New 
 void VirtIOBus__Root__Dispose(OOP_Class *cl, OOP_Object *o, OOP_Msg msg)
 {
     struct virtio_Bus *data = OOP_INST_DATA(cl, o);
+    struct VirtIOBase *VirtIOBase = cl->UserData;
 
+    /* Published buses cannot be hot-removed by the storage superclass yet. */
+    if (data->ab_UnitCnt) return;
+    if (data->ab_Units) {
+        for (unsigned i = 0; i < data->ab_UnitMax; ++i)
+            if (data->ab_Units[i]) OOP_DisposeObject(data->ab_Units[i]);
+        FreeMem(data->ab_Units, sizeof(OOP_Object *) * data->ab_UnitMax);
+    }
+    if (data->ab_IDNode)
+        HIDD_Storage_ReleaseID(VirtIOBase->storageRoot, data->ab_IDNode);
     if (data->ab_DevName) FreeVec(data->ab_DevName);
     if (data->ab_DevSer)  FreeVec(data->ab_DevSer);
     if (data->ab_DevFW)   FreeVec(data->ab_DevFW);
@@ -162,34 +176,6 @@ BOOL Hidd_VirtIOBus_Start(OOP_Object *o, struct VirtIOBase *VirtIOBase)
         return FALSE;
     }
 
-    /* Spin up IO completion task */
-    dev->dev_VQ->q_IOTask = NewCreateTask(TASKTAG_NAME, "VirtIO IO task",
-                                          TASKTAG_PC,   virtio_iotask,
-                                          TASKTAG_PRI,  21,
-                                          TASKTAG_ARG1, dev->dev_VQ,
-                                          TAG_END);
-    if (!dev->dev_VQ->q_IOTask) {
-        bug("[VIRTIO:Bus] %s: failed to spawn IO task\n", __func__);
-        return FALSE;
-    }
-
-    /* Hook the device's PCI INTx line to the IO interrupt handler. */
-    dev->dev_VQ->q_IntHandler.is_Node.ln_Name = "VirtIO Block IRQ";
-    dev->dev_VQ->q_IntHandler.is_Node.ln_Pri  = 0;
-    dev->dev_VQ->q_IntHandler.is_Code = (VOID_FUNC)VIRTIO_IOIntCode;
-    dev->dev_VQ->q_IntHandler.is_Data = dev->dev_VQ;
-    if (!HIDD_PCIDriver_AddInterrupt(dev->dev_PCIDriverObject, dev->dev_Object,
-                                     &dev->dev_VQ->q_IntHandler)) {
-        bug("[VIRTIO:Bus] %s: failed to register PCI interrupt handler\n", __func__);
-        return FALSE;
-    }
-
-    /* Mark the device as DRIVER_OK now we have everything wired up. */
-    if (!virtio_hw_driver_ok(dev)) {
-        bug("[VIRTIO:Bus] %s: device transition to DRIVER_OK failed\n", __func__);
-        return FALSE;
-    }
-
     /* Build & register the unit + its DOS bootnode. */
     ExpansionBase = (struct ExpansionBase *)TaggedOpenLibrary(TAGGEDOPEN_EXPANSION);
     if (!ExpansionBase)
@@ -212,7 +198,7 @@ BOOL Hidd_VirtIOBus_Start(OOP_Object *o, struct VirtIOBase *VirtIOBase)
         };
         struct DeviceNode *devnode;
         const ULONG IdDOS = AROS_MAKE_ID('D','O','S','\001');
-        IPTR pp[4 + DE_BOOTBLOCKS + 1];
+        IPTR pp[4 + DE_BOOTBLOCKS + 1] = {0};
         struct virtio_Unit *unit;
         ULONG sshift = 0;
         ULONG sz;
@@ -243,6 +229,54 @@ BOOL Hidd_VirtIOBus_Start(OOP_Object *o, struct VirtIOBase *VirtIOBase)
         if (unit->nu_Cyl == 0) unit->nu_Cyl = 1;
 
         data->ab_IDNode = HIDD_Storage_AllocateID(VirtIOBase->storageRoot, VIDTags);
+        if (!data->ab_IDNode) {
+            CloseLibrary((struct Library *)ExpansionBase);
+            return FALSE;
+        }
+
+        /* No requests are published yet. Create the worker only after all
+         * mandatory allocations and IRQ/DRIVER_OK checks have succeeded. */
+        /* Let the platform select its admitted PCI interrupt route. */
+        dev->dev_VQ->q_IntHandler.is_Node.ln_Name = "VirtIO Block IRQ";
+        dev->dev_VQ->q_IntHandler.is_Node.ln_Pri  = 0;
+        dev->dev_VQ->q_IntHandler.is_Code = (VOID_FUNC)VIRTIO_IOIntCode;
+        dev->dev_VQ->q_IntHandler.is_Data = dev->dev_VQ;
+        if (!HIDD_PCIDriver_AddInterrupt(dev->dev_PCIDriverObject, dev->dev_Object,
+                                         &dev->dev_VQ->q_IntHandler)) {
+            bug("[VIRTIO:Bus] %s: failed to register PCI interrupt handler\n", __func__);
+            CloseLibrary((struct Library *)ExpansionBase);
+            return FALSE;
+        }
+
+        if (!virtio_hw_route_irq(dev)) {
+            HIDD_PCIDriver_RemoveInterrupt(dev->dev_PCIDriverObject, dev->dev_Object,
+                                          &dev->dev_VQ->q_IntHandler);
+            CloseLibrary((struct Library *)ExpansionBase);
+            return FALSE;
+        }
+
+        /* Mark the device as DRIVER_OK now we have everything wired up. */
+        if (!virtio_hw_driver_ok(dev)) {
+            bug("[VIRTIO:Bus] %s: device transition to DRIVER_OK failed\n", __func__);
+            HIDD_PCIDriver_RemoveInterrupt(dev->dev_PCIDriverObject, dev->dev_Object,
+                                          &dev->dev_VQ->q_IntHandler);
+            CloseLibrary((struct Library *)ExpansionBase);
+            return FALSE;
+        }
+
+        /* Spin up IO completion task */
+        dev->dev_VQ->q_IOTask = NewCreateTask(TASKTAG_NAME, "VirtIO IO task",
+                                              TASKTAG_PC,   virtio_iotask,
+                                              TASKTAG_PRI,  21,
+                                              TASKTAG_ARG1, dev->dev_VQ,
+                                              TAG_END);
+        if (!dev->dev_VQ->q_IOTask) {
+            bug("[VIRTIO:Bus] %s: failed to spawn IO task\n", __func__);
+            HIDD_PCIDriver_RemoveInterrupt(dev->dev_PCIDriverObject, dev->dev_Object,
+                                          &dev->dev_VQ->q_IntHandler);
+            CloseLibrary((struct Library *)ExpansionBase);
+            return FALSE;
+        }
 
         pp[0]                   = (IPTR)data->ab_IDNode->ln_Name;
         pp[1]                   = (IPTR)MOD_NAME_STRING;

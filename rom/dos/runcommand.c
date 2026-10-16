@@ -16,6 +16,7 @@
 #include <dos/stdio.h>
 
 #include "dos_intern.h"
+#include "dos_emu68k.h"
 
 /*****************************************************************************
 
@@ -103,6 +104,54 @@
         D(bug("[DOS] %s: elfinfo == 0x%p\n", __func__, elfinfo);)
         if (!elfinfo)
         {
+#if (AROS_FLAVOUR & AROS_FLAVOUR_EMULATION)
+            if (hunkinfo)
+            {
+                /* A 68k hunk seglist: hand it to the 68k router with the CLI
+                 * launch context instead of rejecting it outright. */
+                struct CommandLineInterface *cli = BADDR(me->pr_CLI);
+                struct Emu68kLaunchCtx ctx;
+                LONG routed_result = -1;
+
+                ctx.elc_Version = EMU68K_CTX_VERSION;
+                ctx.elc_Origin  = EMU68K_LAUNCH_CLI;
+                ctx.elc_SegList = segList;
+                ctx.elc_Name    = cli ? (CONST_STRPTR)AROS_BSTR_ADDR(cli->cli_CommandName)
+                                      : (CONST_STRPTR)me->pr_Task.tc_Node.ln_Name;
+                ctx.elc_Args    = argptr;
+                ctx.elc_ArgSize = argsize;
+                ctx.elc_Process = me;
+                ctx.elc_Mode    = 0;
+
+                /* A routed hunk is still a command run by RunCommand, so it
+                 * must receive the requested native stack just like an ELF
+                 * command below.  Routing before NewStackSwap left every 68k
+                 * program on the shell task's 40 KiB stack; bridge calls and
+                 * nested JIT callbacks can legitimately need more, and the
+                 * CLI's Stack setting was silently ignored. */
+                if (stacksize < AROS_STACKSIZE)
+                    stacksize = AROS_STACKSIZE;
+                stack = (UBYTE *)AllocMem(stacksize, MEMF_ANY);
+                if (!stack)
+                    return -1;
+
+                sss.stk_Lower = stack;
+                sss.stk_Upper = stack + stacksize;
+                sss.stk_Pointer = sss.stk_Upper;
+                args.Args[0] = (IPTR)&ctx;
+                args.Args[1] = (IPTR)&routed_result;
+                args.Args[2] = (IPTR)DOSBase;
+
+                oldargs = me->pr_Arguments;
+                me->pr_Arguments = (STRPTR)argptr;
+                ret = (LONG)NewStackSwap(&sss, Emu68k_RouteSegList, &args);
+                me->pr_Arguments = oldargs;
+                FreeMem(stack, stacksize);
+
+                if (ret)
+                    return routed_result;
+            }
+#else
 #if !defined(__mc68000__)
             /* Route m68k hunk binaries through emulator */
             if (hunkinfo) {
@@ -115,6 +164,7 @@
             }
 #endif
 
+#endif
             /* Segment is tracked by LoadSeg but is not ELF.
              * Reject unsupported formats (e.g. 68k HUNK without emulator). */
             return -1;

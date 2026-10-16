@@ -11,7 +11,8 @@
 enum WBNOTIFY_Action
 {
     WBNOTIFY_Create,
-    WBNOTIFY_Delete
+    WBNOTIFY_Delete,
+    WBNOTIFY_RefreshTiles
 };
 
 enum WBNOTIFY_Target

@@ -18,6 +18,7 @@
 #include <dos/dos.h>
 #include <dos/dostags.h>
 #include <utility/utility.h>
+#include <utility/hooks.h>
 #include <intuition/intuition.h>
 
 #include <workbench/icon.h>
@@ -40,6 +41,14 @@ struct WorkbenchBase
 {
     struct Library          LibNode;
 
+    struct Hook             wb_TileOwnerHook;
+    APTR                    wb_TileTaskResource;
+    ULONG                   wb_TileSerial, wb_TileNotifiedSerial;
+    BOOL                    wb_TileNotifyPending;     /* at most one refresh relay outstanding */
+    ULONG                   wb_TileFastTick;
+    BOOL                    wb_TileHaveFastFrame;
+    ULONG                   wb_TileInflight;           /* global bound, independent of icon lifetime */
+    struct MsgPort          wb_TileReplyPort;          /* PA_IGNORE; never signals an owner */
     struct MsgPort          wb_HandlerPort;            /* The handler's message port */
     struct MsgPort         *wb_WorkbenchPort;          /* The workbench application's message port */
     struct SignalSemaphore  wb_WorkbenchPortSemaphore; /* Arbitrates initializetion access to the port above */
@@ -82,6 +91,7 @@ struct WorkbenchBase
  * Definition of internal structures.
  */
 
+struct WBTile;
 struct AppIcon
 {
     struct MinNode     ai_Node;
@@ -103,6 +113,7 @@ struct AppIcon
     CONST_STRPTR       ai_Text;
 
     struct Hook       *ai_RenderHook;
+    struct WBTile     *ai_Tile;
 };
 
 /* Valid values for ai_Flags. These correspond to the tag items

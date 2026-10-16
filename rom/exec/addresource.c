@@ -9,8 +9,6 @@
 #include <exec/rawfmt.h>
 #include <proto/exec.h>
 
-#include <string.h>
-
 #include "exec_intern.h"
 #include "exec_debug.h"
 #include "exec_locks.h"
@@ -19,6 +17,17 @@
 #ifndef KrnStatMemory
 #define KrnStatMemory(...)
 #endif
+
+/* kernel.resource is installed before stdc.library. */
+static BOOL resource_name_equal(CONST_STRPTR left, CONST_STRPTR right)
+{
+    while (*left && *left == *right)
+    {
+        left++;
+        right++;
+    }
+    return *left == *right;
+}
 
 /*****************************************************************************
 
@@ -80,7 +89,8 @@
      * To do this its startup code needs to be changed to call AddResource()
      * itself. Right after this exec's pool manager will be up and running.
      */
-    if (!strcmp(((struct Node *)resource)->ln_Name, "kernel.resource"))
+    if (resource_name_equal(((struct Node *)resource)->ln_Name,
+            "kernel.resource"))
     {
         KernelBase = resource;
         DINIT("Post-kernel init");

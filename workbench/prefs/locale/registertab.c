@@ -27,20 +27,7 @@
 
 /*** Instance Data **********************************************************/
 
-struct LocaleRegister_DATA
-{
-    int i;
-
-    Object *child;
-    Object *language;
-    Object *region;
-    Object *timezone;
-
-    const char *LocaleRegisterLabels[3];
-    char *tab_label;
-
-    BOOL save;
-};
+#include "registertab_private.h"
 
 STATIC VOID LocalePrefs2Gadgets(struct LocaleRegister_DATA *data);
 STATIC VOID Gadgets2LocalePrefs(struct LocaleRegister_DATA *data);
@@ -94,8 +81,19 @@ static Object *handle_New_error(Object *obj, struct IClass *cl, char *error)
     return NULL;
 }
 
+#ifdef LOCALE_EDITOR_MCC
+/* The editor's working state (prefs.c) is module-global: one live page. */
+static ULONG live_instances;
+static Object *live_object;      /* the instance counted, so a failed
+                                    construction never uncounts it */
+#endif
+
 Object *LocaleRegister__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
 {
+#ifdef LOCALE_EDITOR_MCC
+    if (live_instances != 0)
+        return NULL;
+#endif
     D(bug("[register class] LocaleRegister Class New\n"));
 
     /*
@@ -191,6 +189,13 @@ Object *LocaleRegister__OM_NEW(Class *CLASS, Object *self, struct opSet *message
 
     LocalePrefs2Gadgets(data);
 
+#ifdef LOCALE_EDITOR_MCC
+    if (self != NULL)
+    {
+        live_instances++;
+        live_object = self;
+    }
+#endif
     return self;
 }
 
@@ -379,6 +384,14 @@ IPTR LocaleRegister__OM_DISPOSE(Class *CLASS, Object *self, Msg message)
 {
     SETUP_INST_DATA;
 
+#ifdef LOCALE_EDITOR_MCC
+    if (self == live_object)
+    {
+        live_object = NULL;
+        live_instances--;
+    }
+#endif
+
     if(data->tab_label)
     {
         FreeVec(data->tab_label);
@@ -415,6 +428,7 @@ IPTR LocaleRegister__MUIM_PrefsEditor_Use(Class *cl, Object *obj, Msg msg)
 }
 
 /*** Setup ******************************************************************/
+#ifndef LOCALE_EDITOR_MCC
 ZUNE_CUSTOMCLASS_7
 (
     LocaleRegister, NULL, MUIC_PrefsEditor, NULL,
@@ -426,3 +440,4 @@ ZUNE_CUSTOMCLASS_7
     MUIM_PrefsEditor_Save,        Msg,
     MUIM_PrefsEditor_Use,         Msg
 );
+#endif

@@ -1,0 +1,7 @@
+group devices
+order 50
+class BatteryEditor.mcc
+name Battery
+description Charge, power source and battery estimate
+keywords battery charge power mains adapter estimate
+level novice

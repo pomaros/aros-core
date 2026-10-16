@@ -16,6 +16,11 @@
 
 #define D(x)
 
+/* Platforms may initially admit only the boot CPU to device softints. */
+#ifndef CPU_SOFTINT_ALLOWED
+#define CPU_SOFTINT_ALLOWED() 1
+#endif
+
 /*
  * Leave the interrupt. This function receives the interrupt register frame
  * and runs task scheduler if needed.
@@ -30,7 +35,7 @@
 void core_ExitInterrupt(regs_t *regs)
 {
     /* Soft interrupt requested? It's high time to do it */
-    if (SysBase->SysFlags & SFF_SoftInt)
+    if (CPU_SOFTINT_ALLOWED() && (SysBase->SysFlags & SFF_SoftInt))
         core_Cause(INTB_SOFTINT, 1L << INTB_SOFTINT);
 
     /* If task switching is disabled, do nothing */

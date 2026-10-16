@@ -1,5 +1,6 @@
 /*
     Copyright (C) 2015, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
 */
 
 #include <inttypes.h>
@@ -14,7 +15,7 @@
 #include <exec/tasks.h>
 #include <proto/exec.h>
 
-#include "kernel_base.h"
+#include <kernel_base.h>
 
 /* Pull in exec_platform.h ahead of etask.h so AROS_NO_ATOMIC_OPERATIONS
  * selects the non-atomic FLAG_SCHEDSWITCH_SET expansion (atomics aren't
@@ -24,8 +25,8 @@
 
 #include "etask.h"
 
-#include "kernel_cpu.h"
-#include "kernel_intern.h"
+#include <kernel_cpu.h>
+#include <kernel_intern.h>
 #include "kernel_debug.h"
 #include "kernel_scheduler.h"
 
@@ -51,20 +52,25 @@ struct CallIPIEntry
     struct IPIHook cie_IPIH;        /* h_Entry + ih_Args - passed as A0 to the hook */
 };
 
+#ifndef CORE_IPI_MAX_CPUS
+#define CORE_IPI_MAX_CPUS 4
+#define CORE_IPI_ONLINE_MASK() 0xfU
+#define CORE_IPI_SEND(msg, data, mask) __arm_arosintern.ARMI_SendIPI(msg, data, mask)
+#define CORE_IPI_AVAILABLE() (__arm_arosintern.ARMI_SendIPI != NULL)
+#endif
 #define IPI_CALL_POOL_PER_CPU   128
 
-static struct CallIPIEntry ipi_call_pool[4][IPI_CALL_POOL_PER_CPU];
-static struct MinList      ipi_call_free[4];
-static struct MinList      ipi_call_queue[4];
-static spinlock_t          ipi_call_queue_lock[4];   /* guards both lists for this target */
+static struct CallIPIEntry ipi_call_pool[CORE_IPI_MAX_CPUS][IPI_CALL_POOL_PER_CPU];
+static struct MinList      ipi_call_free[CORE_IPI_MAX_CPUS];
+static struct MinList      ipi_call_queue[CORE_IPI_MAX_CPUS];
+static spinlock_t          ipi_call_queue_lock[CORE_IPI_MAX_CPUS];   /* guards both lists for this target */
 static BOOL                ipi_call_inited = FALSE;
 
 /* IRQ/FIQ masked: a preempted holder deadlocks a Disable()d waiter */
 static inline uint64_t ipiq_lock(int cpu)
 {
-    uint64_t daif;
+    uint64_t daif = EXEC_IRQFIQ_DISABLE();
 
-    asm volatile("mrs %0, daif\n\tmsr daifset, #3" : "=r"(daif) :: "memory");
     EXEC_SPINLOCK_LOCK(&ipi_call_queue_lock[cpu], NULL, SPINLOCK_MODE_WRITE);
     return daif;
 }
@@ -72,13 +78,13 @@ static inline uint64_t ipiq_lock(int cpu)
 static inline void ipiq_unlock(int cpu, uint64_t daif)
 {
     EXEC_SPINLOCK_UNLOCK(&ipi_call_queue_lock[cpu]);
-    asm volatile("msr daif, %0" :: "r"(daif) : "memory");
+    EXEC_IRQFIQ_RESTORE(daif);
 }
 
 /* What the drain is running now, so a canceller can wait out a call it
  * can no longer find queued. Single writer per CPU. */
-static volatile APTR       ipi_call_exec_func[4];
-static volatile IPTR       ipi_call_exec_arg1[4];
+static volatile APTR       ipi_call_exec_func[CORE_IPI_MAX_CPUS];
+static volatile IPTR       ipi_call_exec_arg1[CORE_IPI_MAX_CPUS];
 
 static void core_HandleCallHookIPI(int cpu);
 
@@ -87,7 +93,7 @@ void core_IPIInit(void)
     int cpu, i;
     if (ipi_call_inited)
         return;
-    for (cpu = 0; cpu < 4; cpu++)
+    for (cpu = 0; cpu < CORE_IPI_MAX_CPUS; cpu++)
     {
         NewMinList(&ipi_call_free[cpu]);
         NewMinList(&ipi_call_queue[cpu]);
@@ -110,12 +116,28 @@ void core_IPIInit(void)
  *
  * Call with NO task spinlock held: the drain runs hooks that take them.
  */
-static inline int core_FIQMasked(void)
+/* The save token describes the interrupt state before taking the queue
+ * lock. Test it after restoring that state, without a privileged DAIF read:
+ * the Apple implementation is also called by Exec at EL0. Native IPIs use
+ * FIQ; platforms whose transport uses IRQ override this predicate. */
+#ifndef CORE_IPI_MASKED
+#define CORE_IPI_MASKED(mask) (((mask) & UINT64_C(0x40)) != 0)
+#endif
+
+/* Lifetime-protected senders cannot drain callbacks or wait on other CPUs
+ * while holding registry/task locks. Return NULL when the pool is empty. */
+struct CallIPIEntry *core_TryClaimCallIPI(int cpu)
 {
+    struct CallIPIEntry *cie;
     uint64_t daif;
 
-    asm volatile("mrs %0, daif" : "=r"(daif));
-    return (daif & (1 << 6)) != 0;
+    if (!ipi_call_inited || cpu < 0 || cpu >= CORE_IPI_MAX_CPUS ||
+        !(CORE_IPI_ONLINE_MASK() & (1U << cpu)) || !CORE_IPI_AVAILABLE())
+        return NULL;
+    daif = ipiq_lock(cpu);
+    cie = (struct CallIPIEntry *)REMHEAD((struct List *)&ipi_call_free[cpu]);
+    ipiq_unlock(cpu, daif);
+    return cie;
 }
 
 struct CallIPIEntry *core_ClaimCallIPI(int cpu)
@@ -132,7 +154,7 @@ struct CallIPIEntry *core_ClaimCallIPI(int cpu)
         if (cie)
             return cie;
 
-        if (IDNESTCOUNT_GET >= 0 || core_FIQMasked())
+        if (IDNESTCOUNT_GET >= 0 || CORE_IPI_MASKED(daif))
             core_HandleCallHookIPI(srcCpu);
     }
 }
@@ -155,9 +177,9 @@ void core_CommitCallIPI(struct CallIPIEntry *cie, int cpu,
     ADDTAIL((struct List *)&ipi_call_queue[cpu], (struct Node *)&cie->cie_Node);
     ipiq_unlock(cpu, daif);
 
-    if (__arm_arosintern.ARMI_SendIPI)
+    if (CORE_IPI_AVAILABLE())
     {
-        __arm_arosintern.ARMI_SendIPI(
+        CORE_IPI_SEND(
             (IPI_CALL_HOOK & 0x0fffffff) | (srcCpu << 28),
             0, 1U << cpu);
     }
@@ -184,7 +206,7 @@ void core_CancelCallIPIs(APTR hookEntry, IPTR matchArg)
     if (!ipi_call_inited)
         return;
 
-    for (cpu = 0; cpu < 4; cpu++)
+    for (cpu = 0; cpu < CORE_IPI_MAX_CPUS; cpu++)
     {
         struct MinNode *node, *next;
         uint64_t daif = ipiq_lock(cpu);
@@ -235,13 +257,14 @@ int core_DoCallIPI(struct Hook *hook, void *cpu_mask, int async,
      * buffer pointers - resolve them to bitmaps before dereference.
      */
     if ((IPTR)cpu_mask == TASKAFFINITY_ANY)
-        mask = 0xf;
+        mask = CORE_IPI_ONLINE_MASK();
     else if ((IPTR)cpu_mask == TASKAFFINITY_ALL_BUT_SELF)
-        mask = 0xf & ~(1U << srcCpu);
+        mask = CORE_IPI_ONLINE_MASK() & ~(1U << srcCpu);
     else
         mask = *(uint32_t *)cpu_mask;
+    mask &= CORE_IPI_ONLINE_MASK();
 
-    for (cpu = 0; cpu < 4; cpu++)
+    for (cpu = 0; cpu < CORE_IPI_MAX_CPUS; cpu++)
     {
         struct CallIPIEntry *cie;
 

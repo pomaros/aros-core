@@ -14,4 +14,14 @@ USER_CPPFLAGS := -DHAVE_STRLCPY
     progname=Firewall targetdir=$(EXEDIR) \
     files=$(FILES)
 
+# The same editor as a shared class for the settings window.
+CLASSFILES := args locale prefsdata filter nat firewalleditor_init fweditor_mcc
+
+#MM- workbench-prefs : workbench-prefs-firewall-class
+#MM workbench-prefs-firewall-class : includes linklibs workbench-prefs-firewall-catalogs workbench-classes-zune-prefseditor
+
+%build_module mmake=workbench-prefs-firewall-class \
+    modname=FirewallEditor modtype=mcc \
+    conffile=firewalleditor.conf files="$(CLASSFILES)"
+
 %common

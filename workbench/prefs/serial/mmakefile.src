@@ -15,4 +15,14 @@ EXEDIR      := $(AROSDIR)/Prefs
     progname=Serial targetdir=$(EXEDIR) \
     files=$(FILES)
 
+# The same editor as a shared class for the settings window.
+CLASSFILES := locale prefs args misc serialeditor_init sereditor_mcc
+
+#MM- workbench-prefs : workbench-prefs-serial-class
+#MM workbench-prefs-serial-class : includes linklibs workbench-prefs-serial-catalogs workbench-classes-zune-prefseditor
+
+%build_module mmake=workbench-prefs-serial-class \
+    modname=SerialEditor modtype=mcc \
+    conffile=serialeditor.conf files="$(CLASSFILES)"
+
 %common

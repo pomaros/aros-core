@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: APL-1.1
+# Copyright (C) 2026 John KNIPPER <code@jkn.me>
+include $(SRCDIR)/config/aros.cfg
+EXEDIR := $(AROS_TESTS)/workbench
+#MM test-workbench : includes linklibs
+%build_progs mmake=test-workbench files="appicon_tile tiles_service_probe tiles_hover_probe appicon_geometry_probe appicon_control_probe" targetdir=$(EXEDIR)
+%common
+
+#MM test-workbench-indicators : includes linklibs
+USER_INCLUDES := -I$(SRCDIR)/workbench/system/Tiles -I$(SRCDIR)/workbench/system/Indicators
+%build_prog mmake=test-workbench-indicators files="indicator_probe $(SRCDIR)/workbench/system/Tiles/source $(SRCDIR)/workbench/system/Indicators/consumers $(SRCDIR)/workbench/system/Indicators/cpu_tasks" \
+    targetdir=$(AROS_TESTS)/workbench progname=indicator_probe

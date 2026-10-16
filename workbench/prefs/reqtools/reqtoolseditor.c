@@ -19,29 +19,8 @@
 
 /*********************************************************************************************/
 
-struct ReqToolsEditor_DATA
-{
-    Object *poptofrontobj;
-    Object *usesysfontobj;
-    Object *usefunckeysobj;
-    Object *colorwheelstyleobj;
-
-    Object *immediatesortobj;
-    Object *drawersfirstobj;
-    Object *drawersmixedobj;
-    Object *diskactivityobj;
-    Object *mmbobj;
-
-    Object *defaultsforobj;
-    Object *sizepercentobj;
-    Object *minvisobj;
-    Object *maxvisobj;
-    Object *positionobj;
-    Object *offsetxobj;
-    Object *offsetyobj;
-
-    BOOL noupdatehook;
-};
+#define REQTOOLSEDITOR_DATA_H_IN_SOURCE
+#include "reqtoolseditor_data.h"
 
 /*********************************************************************************************/
 
@@ -107,7 +86,7 @@ static void UpdateDefaultsHook(struct Hook *hook, Object *self, struct ReqToolsE
     
     if (changed)
     {
-        SET( _parent(self), MUIA_PrefsEditor_Changed, TRUE);
+        SET(self, MUIA_PrefsEditor_Changed, TRUE);   /* the hook runs on the editor */
     }
 }
 
@@ -397,6 +376,23 @@ IPTR ReqToolsEditor__OM_NEW
 
         data->colorwheelstyleobj = colorwheelstyleobj;
         data->poptofrontobj = poptofrontobj;
+        /* Stable ids for the settings window's index and port. */
+        SET(poptofrontobj, MUIA_ObjectID, MAKE_ID('R','T','P','F'));
+        SET(usesysfontobj, MUIA_ObjectID, MAKE_ID('R','T','S','F'));
+        SET(usefunckeysobj, MUIA_ObjectID, MAKE_ID('R','T','F','K'));
+        SET(colorwheelstyleobj, MUIA_ObjectID, MAKE_ID('R','T','C','W'));
+        SET(immediatesortobj, MUIA_ObjectID, MAKE_ID('R','T','I','S'));
+        SET(drawersfirstobj, MUIA_ObjectID, MAKE_ID('R','T','D','F'));
+        SET(drawersmixedobj, MUIA_ObjectID, MAKE_ID('R','T','D','M'));
+        SET(diskactivityobj, MUIA_ObjectID, MAKE_ID('R','T','D','A'));
+        SET(mmbobj, MUIA_ObjectID, MAKE_ID('R','T','M','B'));
+        SET(defaultsforobj, MUIA_ObjectID, MAKE_ID('R','T','D','E'));
+        SET(positionobj, MUIA_ObjectID, MAKE_ID('R','T','P','O'));
+        SET(sizepercentobj, MUIA_ObjectID, MAKE_ID('R','T','S','P'));
+        SET(offsetxobj, MUIA_ObjectID, MAKE_ID('R','T','O','X'));
+        SET(offsetyobj, MUIA_ObjectID, MAKE_ID('R','T','O','Y'));
+        SET(minvisobj, MUIA_ObjectID, MAKE_ID('R','T','M','I'));
+        SET(maxvisobj, MUIA_ObjectID, MAKE_ID('R','T','M','A'));
         data->usesysfontobj = usesysfontobj;
         data->usefunckeysobj = usefunckeysobj;
 
@@ -574,6 +570,7 @@ IPTR ReqToolsEditor__MUIM_PrefsEditor_SetDefaults
 }
 
 /*** Setup ******************************************************************/
+#ifndef REQTOOLSEDITOR_MCC
 ZUNE_CUSTOMCLASS_4
 (
     ReqToolsEditor, NULL, MUIC_PrefsEditor, NULL,
@@ -582,4 +579,5 @@ ZUNE_CUSTOMCLASS_4
     MUIM_PrefsEditor_ExportFH,    struct MUIP_PrefsEditor_ExportFH *,
     MUIM_PrefsEditor_SetDefaults, Msg
 );
+#endif /* REQTOOLSEDITOR_MCC */
 

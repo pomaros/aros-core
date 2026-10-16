@@ -118,6 +118,10 @@ AROS_LH1(void, RemTask,
     if (!IsMinListEmpty(&TaskResBase->trb_NotifyHooks))
         taskres_NotifyTasks(TaskResBase, TNA_REMOVED, findTask, NULL, NULL);
 
+    /* Invalidate published endpoints first; no destructor runs after Exec
+     * marks the task terminal or destroys its context/stack. */
+    taskres_ResourceExit(findTask, TaskResBase);
+
     ForeachNodeSafe(&TaskResBase->trb_NewTasks, taskEntry, tmpEntry)
     {
         if (taskEntry->tle_Task == findTask)

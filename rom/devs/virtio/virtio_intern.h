@@ -20,6 +20,7 @@
 #include <hidd/storage.h>
 #include <hardware/virtio.h>
 #include <hidd/virtio.h>
+#include "pci_mapping.h"
 
 #if !defined(MIN)
 # define MIN(a,b)       (((a) < (b)) ? (a) : (b))
@@ -126,6 +127,9 @@ typedef struct {
     UWORD               dev_SubVendorID;
     UWORD               dev_SubsystemID;
     UBYTE               dev_IsModern;
+    UBYTE               dev_Quarantined; /* Reset failed: retain DMA and PCI ownership. */
+
+    struct VirtioPCIMapping dev_PCIMapping;
 
     /* Mapped capability windows (modern transport) */
     volatile struct virtio_pci_common_cfg *dev_CommonCfg;
@@ -159,6 +163,7 @@ struct virtio_request {
     UBYTE                   vr_InUse;
     UBYTE                   vr_IsWrite;
     APTR                    vr_DataAddr;
+    APTR                    vr_DMABuffer; /* owned bounce buffer, never caller memory */
     ULONG                   vr_DataLength;
 };
 
@@ -183,6 +188,7 @@ struct virtio_queue {
     UWORD                   q_FreeHead;
     UWORD                   q_NumFree;
     UWORD                   q_LastUsedIdx;
+    BOOL                    q_Broken;
 
     struct virtio_request   *q_Reqs;
 
@@ -202,6 +208,9 @@ struct virtio_Controller
     OOP_Object          *ac_Object;
     struct Interrupt    ac_ResetHandler;
     device_t            ac_dev;
+    OOP_Object          *ac_Bus;
+    UWORD               ac_PCICommand;
+    BOOL                ac_Activated;
 };
 
 struct virtio_Bus

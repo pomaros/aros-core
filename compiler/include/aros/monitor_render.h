@@ -1,0 +1,172 @@
+/*
+ * Copyright (C) 2026 John KNIPPER <code@jkn.me>
+ * Licensed under the AROS Public License (APL) Version 1.1
+ */
+#ifndef AROS_MONITOR_RENDER_H
+#define AROS_MONITOR_RENDER_H
+
+struct alive_glyph {
+    char ch;
+    uint8_t rows[ALIVE_GLYPH_H]; /* bit 4 is the leftmost pixel */
+};
+
+static const struct alive_glyph alive_font[] = {
+    {'0', {0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E}},
+    {'1', {0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E}},
+    {'2', {0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F}},
+    {'3', {0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E}},
+    {'4', {0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02}},
+    {'5', {0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E}},
+    {'6', {0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E}},
+    {'7', {0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08}},
+    {'8', {0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E}},
+    {'9', {0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C}},
+    {':', {0x00, 0x0C, 0x0C, 0x00, 0x0C, 0x0C, 0x00}},
+    {'u', {0x00, 0x00, 0x11, 0x11, 0x11, 0x13, 0x0D}},
+    {'p', {0x00, 0x00, 0x1E, 0x11, 0x1E, 0x10, 0x10}},
+    {'s', {0x00, 0x00, 0x0F, 0x10, 0x0E, 0x01, 0x1E}},
+    {' ', {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}},
+    {'-', {0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00}},
+    {'+', {0x00, 0x04, 0x04, 0x1F, 0x04, 0x04, 0x00}},
+    {'.', {0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C}},
+    {'%', {0x18, 0x19, 0x02, 0x04, 0x08, 0x13, 0x03}},
+    {'/', {0x01, 0x01, 0x02, 0x04, 0x08, 0x10, 0x10}},
+    {'A', {0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11}},
+    {'B', {0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E}},
+    {'C', {0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E}},
+    {'D', {0x1C, 0x12, 0x11, 0x11, 0x11, 0x12, 0x1C}},
+    {'E', {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F}},
+    {'F', {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10}},
+    {'G', {0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0F}},
+    {'H', {0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11}},
+    {'I', {0x0E, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E}},
+    {'J', {0x07, 0x02, 0x02, 0x02, 0x02, 0x12, 0x0C}},
+    {'K', {0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11}},
+    {'L', {0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F}},
+    {'M', {0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11}},
+    {'N', {0x11, 0x11, 0x19, 0x15, 0x13, 0x11, 0x11}},
+    {'O', {0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E}},
+    {'P', {0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10}},
+    {'Q', {0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D}},
+    {'R', {0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11}},
+    {'S', {0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E}},
+    {'T', {0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04}},
+    {'U', {0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E}},
+    {'V', {0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04}},
+    {'W', {0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0A}},
+    {'X', {0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11}},
+    {'Y', {0x11, 0x11, 0x11, 0x0A, 0x04, 0x04, 0x04}},
+    {'Z', {0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F}},
+};
+
+/* One glyph's pixels, foreground pen, at x, top. */
+static void alive_draw_glyph(struct RastPort *rp, LONG x0, LONG top, char ch,
+    LONG scale)
+{
+    const struct alive_glyph *glyph = NULL;
+    uint32_t entry;
+    uint32_t row;
+
+    for (entry = 0; entry < sizeof(alive_font) / sizeof(alive_font[0]); entry++) {
+        if (alive_font[entry].ch == ch) {
+            glyph = &alive_font[entry];
+            break;
+        }
+    }
+    if (glyph == NULL)
+        return;
+    for (row = 0; row < ALIVE_GLYPH_H; row++) {
+        uint32_t column;
+
+        for (column = 0; column < ALIVE_GLYPH_W; column++) {
+            LONG x;
+            LONG y;
+
+            if ((glyph->rows[row] & (0x10U >> column)) == 0)
+                continue;
+            x = x0 + (LONG)column * scale;
+            y = top + (LONG)row * scale;
+            RectFill(rp, x, y, x + scale - 1, y + scale - 1);
+        }
+    }
+}
+
+/*
+ * Every text the widget draws is remembered by its position, and a redraw
+ * only touches the cells whose character changed: each such cell is cleared
+ * to the background pen and its glyph drawn again. Clearing the whole widget
+ * and drawing every glyph pixel once a second made it flicker and cost
+ * thousands of RectFill calls; the window is smart-refresh, so what is not
+ * redrawn stays on screen. A shorter text clears the cells it no longer
+ * uses; a length of 0 clears the line.
+ */
+#define ALIVE_TEXT_SLOTS 40U
+#define ALIVE_SLOT_CHARS 64U
+struct alive_text_slot {
+    LONG left;
+    LONG top;
+    LONG scale;
+    uint32_t length;
+    uint32_t used;
+    char text[ALIVE_SLOT_CHARS];
+};
+static struct alive_text_slot alive_text_slots[ALIVE_TEXT_SLOTS];
+
+static void alive_draw_text(struct RastPort *rp, LONG left, LONG top,
+    const char *text, uint32_t length, LONG scale)
+{
+    const LONG advance = (ALIVE_GLYPH_W + 1) * scale;
+    struct alive_text_slot *slot = NULL;
+    uint32_t index;
+    uint32_t cells;
+    int fresh = 0;
+
+    if (length > ALIVE_SLOT_CHARS)
+        length = ALIVE_SLOT_CHARS;
+    for (index = 0; index < ALIVE_TEXT_SLOTS; index++) {
+        struct alive_text_slot *candidate = &alive_text_slots[index];
+
+        if (candidate->used && candidate->left == left &&
+                candidate->top == top && candidate->scale == scale) {
+            slot = candidate;
+            break;
+        }
+    }
+    if (slot == NULL) {
+        for (index = 0; index < ALIVE_TEXT_SLOTS; index++) {
+            if (!alive_text_slots[index].used) {
+                slot = &alive_text_slots[index];
+                slot->used = 1;
+                slot->left = left;
+                slot->top = top;
+                slot->scale = scale;
+                slot->length = 0;
+                fresh = 1;
+                break;
+            }
+        }
+    }
+    cells = length;
+    if (slot != NULL && slot->length > cells)
+        cells = slot->length;
+    for (index = 0; index < cells; index++) {
+        char now = index < length ? text[index] : ' ';
+        char was = (slot != NULL && index < slot->length) ? slot->text[index] : ' ';
+        LONG x0 = left + (LONG)index * advance;
+
+        if (slot != NULL && !fresh && now == was)
+            continue;
+        SetAPen(rp, 0);
+        RectFill(rp, x0, top, x0 + advance - 1, top + ALIVE_GLYPH_H * scale - 1);
+        SetAPen(rp, 1);
+        alive_draw_glyph(rp, x0, top, now, scale);
+    }
+    if (slot != NULL) {
+        for (index = 0; index < length; index++)
+            slot->text[index] = text[index];
+        slot->length = length;
+    }
+    SetAPen(rp, 1);
+}
+
+#endif

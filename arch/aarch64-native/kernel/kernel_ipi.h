@@ -2,6 +2,7 @@
 #define KERNEL_IPI_H_
 /*
     Copyright � 2015, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     $Id$
 */
 
@@ -44,6 +45,9 @@ extern int core_DoCallIPI(struct Hook *hook, void *cpu_mask, int async,
 struct CallIPIEntry;
 
 extern struct CallIPIEntry *core_ClaimCallIPI(int cpu);
+extern struct CallIPIEntry *core_TryClaimCallIPI(int cpu);
+#define KERNEL_IPI_TRY_CLAIM
+
 extern void core_CommitCallIPI(struct CallIPIEntry *cie, int cpu,
                                struct Hook *hook, int nargs, IPTR *args);
 extern void core_AbortCallIPI(struct CallIPIEntry *cie, int cpu);

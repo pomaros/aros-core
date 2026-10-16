@@ -1,3 +1,6 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>
+ * This file is distributed under the AROS Public License, version 1.1.
+ */
 /*
     Copyright (C) 1995-2020, The AROS Development Team. All rights reserved.
 
@@ -121,8 +124,7 @@ void InputPrefs_Handler(STRPTR filename)
          * This is done for backwards compatibility.
          * Without kms.library there is no switcher to set up.
          */
-        if (KMSBase)
-            KMSBase->kms_SwitchQual = KMS_QUAL_DISABLE;
+        ConfigureKeyMapSwitcher(NULL, KEYMAP_SWITCH_DISABLED, KEYMAP_SWITCH_NOKEY);
 
         while(ParseIFF(iff, IFFPARSE_SCAN) == 0)
         {
@@ -170,9 +172,9 @@ void InputPrefs_Handler(STRPTR filename)
 
                         if (alt_km)
                         {
-                            KMSBase->kms_SwitchQual = AROS_BE2WORD(kmsprefs->kms_SwitchQual);
-                            KMSBase->kms_SwitchCode = AROS_BE2WORD(kmsprefs->kms_SwitchCode);
-                            KMSBase->kms_AltKeymap  = &alt_km->kn_KeyMap;
+                            ConfigureKeyMapSwitcher(&alt_km->kn_KeyMap,
+                                AROS_BE2WORD(kmsprefs->kms_SwitchQual),
+                                AROS_BE2WORD(kmsprefs->kms_SwitchCode));
                         }
                     }
 

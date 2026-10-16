@@ -1,0 +1,52 @@
+# Copyright (C) 2026 John KNIPPER. All rights reserved.
+# Licensed under the AROS Public License (APL) Version 1.1.
+
+include $(SRCDIR)/config/aros.cfg
+
+# The Apple target owns its kernel-private declarations.  Priority 10 keeps
+# those declarations ahead of the CPU-generic and rom/kernel include roots.
+%set_archincludes mainmmake=kernel-kernel maindir=rom/kernel \
+  modname=kernel pri=10 arch=apple-aarch64 \
+  includes="-I$(SRCDIR)/$(CURDIR)"
+
+%get_archincludes modname=kernel \
+  includeflag=TARGET_KERNEL_INCLUDES maindir=rom/kernel
+
+%get_archincludes modname=exec \
+  includeflag=TARGET_EXEC_INCLUDES maindir=rom/exec
+
+USER_INCLUDES := $(TARGET_KERNEL_INCLUDES) \
+  -I$(SRCDIR)/rom/kernel \
+  $(TARGET_EXEC_INCLUDES) \
+  -I$(SRCDIR)/rom/exec \
+  -I$(GENINCDIR)
+USER_INCLUDES += -I$(SRCDIR)/arch/aarch64-all/irq -I$(SRCDIR)/arch/aarch64-all/boot/fdt -I$(SRCDIR)/arch/aarch64-all/boot/fdt/libfdt
+USER_CPPFLAGS := -D__AROS_EXEC_LIBRARY__ \
+  -DAROS_ARCHITECTURE="\"$(AROS_TARGET_PLATFORM)\""
+ifeq ($(AROS_VM_GUEST),1)
+USER_CPPFLAGS += -DAROS_VM_GUEST=1
+VM_SHARED_FILES := gic
+endif
+USER_CPPFLAGS += -DAROS_FDT_FREESTANDING=1
+USER_CFLAGS := $(CFLAGS_GENERAL_REGS_ONLY) -Werror=implicit-function-declaration
+
+%build_archspecific \
+  mainmmake=kernel-kernel maindir=rom/kernel modname=kernel \
+  files="_bug allocpages mapglobal cli coldstart_proof cpu_init createcontext dispatch_proof \
+  kernel_libc cpu_monitor cpu_probe cpu_topology cpu_accounting early_fdt fdt fdt_ro fdt_check \
+  freepages getsystemattr guarded_stack guard_proof issuper kernel_cpu kernel_debug memory_plan_contract page_allocator screen_log \
+  platform_timer platform_timer_core runtime setprotection startup_contract startup_prepare sti vm_irq modifyirq $(VM_SHARED_FILES)" \
+  asmfiles="dispatch_simd runtime_vectors cpu_probe_entry guard_probe" \
+  arch=apple-aarch64
+
+
+# The arch template compiles local C paths only. Compile these shared sources
+# as separate objects, retaining normal target flags and dependency files.
+$(BD_OBJDIR$(BDID))/%.o: $(SRCDIR)/arch/aarch64-all/irq/%.c
+	$(Q)$(TMP_CMD) $(TMP_CFLAGS) $(TMP_CPPFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+$(BD_OBJDIR$(BDID))/%.o: $(SRCDIR)/arch/aarch64-all/boot/fdt/%.c
+	$(Q)$(TMP_CMD) $(TMP_CFLAGS) $(TMP_CPPFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+$(BD_OBJDIR$(BDID))/%.o: $(SRCDIR)/arch/aarch64-all/boot/fdt/libfdt/%.c
+	$(Q)$(TMP_CMD) $(TMP_CFLAGS) $(TMP_CPPFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+
+%common

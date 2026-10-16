@@ -9,6 +9,9 @@
 #include <exec/memory.h>
 #include <exec/lists.h>
 #include <proto/exec.h>
+#define __TASK_NOLIBBASE__
+#include <proto/task.h>
+#include <resources/task_rt.h>
 #include <dos/dosextens.h>
 #include <dos/dostags.h>
 #include <dos/stdio.h>
@@ -23,6 +26,7 @@
 #include <proto/m68kemu.h>
 
 #include "dos_intern.h"
+#include "dos_emu68k.h"
 #include LC_LIBDEFS_FILE
 #include <string.h>
 
@@ -842,18 +846,35 @@ static void DosEntry(void)
     }
 
 #if !defined(__mc68000__)
-    /* Check if this is an m68k hunk binary and route through emulator */
     {
         IPTR hunkinfo = 0;
         struct TagItem htags[] = { { GSLI_68KHUNK, (IPTR)&hunkinfo }, { TAG_DONE, 0 } };
-        if (segArray[3] && GetSegListInfo(segArray[3], htags) && hunkinfo)
+        if (segArray && segArray[3] &&
+            initialPC == (APTR)((UBYTE *)BADDR(segArray[3]) + sizeof(BPTR)) &&
+            GetSegListInfo(segArray[3], htags) && hunkinfo)
         {
+#if (AROS_FLAVOUR & AROS_FLAVOUR_EMULATION)
+            struct Emu68kLaunchCtx ctx;
+            ctx.elc_Version = EMU68K_CTX_VERSION;
+            ctx.elc_Origin = EMU68K_LAUNCH_PROC;
+            ctx.elc_SegList = segArray[3];
+            ctx.elc_Name = (CONST_STRPTR)me->pr_Task.tc_Node.ln_Name;
+            ctx.elc_Args = (CONST_STRPTR)me->pr_Arguments;
+            ctx.elc_ArgSize = argSize;
+            ctx.elc_Process = me;
+            ctx.elc_Mode = 0;
+            result = -1;
+            Emu68k_RouteSegList(&ctx, &result, DOSBase);
+#else
             struct Library *M68KEmuBase = OpenLibrary("m68kemu.library", 0);
-            if (M68KEmuBase) {
+            result = -1;
+            if (M68KEmuBase)
+            {
                 result = RunHunk(segArray[3], me->pr_StackSize, me->pr_Arguments, argSize);
                 CloseLibrary(M68KEmuBase);
-                goto skip_native_entry;
             }
+#endif
+            goto skip_native_entry;
         }
     }
 #endif
@@ -893,6 +914,18 @@ skip_native_entry:
          void (*doExitCode)(IPTR, IPTR) = (void (*)(IPTR, IPTR))me->pr_ExitCode;
         doExitCode(result, me->pr_ExitData);
 #endif
+    }
+
+    /* Opt-in cleanup needs a live Process, current directory and DOS state.
+     * Do it before freeing streams, segments, CLI and the DOS library below.
+     * The later RemTask hook is a fallback for raw tasks/explicit removal. */
+    {
+        struct TaskResBase *TaskResBase = OpenResource("task.resource");
+        if (TaskResBase && ((struct Library *)TaskResBase)->lib_NegSize >=
+                22 * LIB_VECTSIZE) {
+            struct RTRequest request = { .size = sizeof(request), .action = RT_PREPARE_EXIT };
+            TaskResourceControl(&request);
+        }
     }
 
     D(bug("Deleting local variables\n"));

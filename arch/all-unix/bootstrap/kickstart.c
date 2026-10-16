@@ -7,18 +7,57 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-
 #ifdef __linux__
 #include <sys/prctl.h>
 #include <signal.h>
 #endif
 
-#if defined(__APPLE__) && defined(__aarch64__)
-/* Forward-declare pthread to avoid conflict with AROS pthread.h */
-typedef struct _opaque_pthread_t *pthread_t_host;
-typedef struct _opaque_pthread_attr_t *pthread_attr_t_host;
-int pthread_create(pthread_t_host *, const pthread_attr_t_host *, void *(*)(void *), void *);
-int pthread_detach(pthread_t_host);
+#if defined(__APPLE__)
+/*
+ * Host pthread/signal API declared by hand. <pthread.h>/<signal.h> in the
+ * bootstrap's include path resolve to AROS's own (pthread.library etc.), not
+ * the host's, so we cannot include them here. These prototypes/constants match
+ * the macOS/arm64 ABI: pthread_t is a pointer, pthread_attr_t is a 64-byte
+ * opaque blob, sigset_t is a 32-bit mask with bit (signo-1) set per signal.
+ */
+typedef void          *host_pthread_t;
+typedef unsigned int   host_sigset_t;
+extern int pthread_create(host_pthread_t *, const void *, void *(*)(void *), void *);
+extern int pthread_join(host_pthread_t, void **);
+extern int pthread_attr_init(void *);
+extern int pthread_attr_setstacksize(void *, unsigned long);
+extern int pthread_attr_destroy(void *);
+extern int pthread_sigmask(int, const host_sigset_t *, host_sigset_t *);
+#define HOST_SIG_BLOCK    1
+#define HOST_SIG_UNBLOCK  2
+#define HOST_SIGALRM     14
+#define HOST_SIGIO       23
+#define HOST_SIGVTALRM   26
+#define HOST_SIGUSR1     30
+#define HOST_SIGUSR2     31
+#if defined(__APPLE__)
+#define HOST_SIGINFO     29    /* BSD/darwin: the out-of-band task-dump signal */
+#endif
+static host_sigset_t aros_signal_mask(void)
+{
+    host_sigset_t m = (1u << (HOST_SIGALRM   - 1)) | (1u << (HOST_SIGVTALRM - 1)) |
+                      (1u << (HOST_SIGIO     - 1)) | (1u << (HOST_SIGUSR1   - 1)) |
+                      (1u << (HOST_SIGUSR2   - 1));
+#if defined(HOST_SIGINFO)
+    m |= (1u << (HOST_SIGINFO - 1));
+#endif
+    return m;
+}
+
+/* CoreFoundation run loop, declared by hand (link -framework CoreFoundation).
+ * The windowed shell pumps this on the main thread so cocoametal's NSWindow --
+ * created on the main thread via the cm_* main-thread hop -- is serviced and the
+ * main dispatch queue (which those hops use) runs. cocoametal itself owns all
+ * NSApplication/window setup; the shell only has to keep the run loop turning. */
+typedef const void *host_CFStringRef;
+extern host_CFStringRef kCFRunLoopDefaultMode;
+extern int CFRunLoopRunInMode(host_CFStringRef mode, double seconds,
+                              unsigned char returnAfterSourceHandled);
 #endif
 
 /* These macros are defined in both UNIX and AROS headers. Get rid of warnings. */
@@ -33,64 +72,6 @@ int pthread_detach(pthread_t_host);
 #include "kickstart.h"
 #include "platform.h"
 #include "hostinterface.h"
-
-#if defined(__APPLE__) && defined(__aarch64__)
-
-extern void *cocoa_display_init(int width, int height);
-extern int   cocoa_display_get_pitch(void);
-extern void  cocoa_runloop_step(void);
-extern void  cocoa_set_hiface(void *hiface);
-
-struct kick_args {
-    kernel_entry_fun_t addr;
-    struct TagItem *msg;
-    int result;
-};
-
-static void *kernel_thread(void *arg)
-{
-    struct kick_args *ka = (struct kick_args *)arg;
-    fprintf(stderr, "[Bootstrap] Kernel thread started, entering at %p...\n", ka->addr);
-    Host_PreBoot();
-    ka->result = ka->addr(ka->msg, AROS_BOOT_MAGIC);
-    fprintf(stderr, "[Bootstrap] Kernel returned %d\n", ka->result);
-    exit(ka->result);
-    return NULL;
-}
-
-int kick(kernel_entry_fun_t addr, struct TagItem *msg)
-{
-    struct kick_args ka = { addr, msg, 0 };
-    pthread_t_host tid;
-
-    /* Init Cocoa display FIRST (must happen on main thread) */
-    {
-        extern void *HostIFace;
-        struct HostInterface *hi = (struct HostInterface *)HostIFace;
-        void *fb = cocoa_display_init(640, 480);
-        hi->cocoa_fb_base = fb;
-        hi->cocoa_fb_width = 640;
-        hi->cocoa_fb_height = 480;
-        hi->cocoa_fb_pitch = cocoa_display_get_pitch();
-        cocoa_set_hiface(hi);
-        fprintf(stderr, "[Bootstrap] Framebuffer at %p, %dx%d pitch=%d\n",
-                fb, 640, 480, hi->cocoa_fb_pitch);
-    }
-
-    /* Start kernel on background thread */
-    fprintf(stderr, "[Bootstrap] Starting kernel on background thread...\n");
-    pthread_create(&tid, NULL, kernel_thread, &ka);
-    pthread_detach(tid);
-
-    /* Main thread: pump the Cocoa run loop forever */
-    for (;;)
-        cocoa_runloop_step();
-
-    /* Not reached */
-    return ka.result;
-}
-
-#else /* !darwin-aarch64 */
 
 #define D(x)
 
@@ -113,6 +94,33 @@ int kick(kernel_entry_fun_t addr, struct TagItem *msg)
  * Cold reboot is the same as before, re-running everything from scratch.
  * Shutdown is just plain exit.
  */
+#if defined(__APPLE__)
+/*
+ * The "engine" entry: run AROS's kernel. Which thread it runs ON is the host
+ * shell's choice -- the main thread (default no-fork) or a dedicated thread
+ * (AROS_DARWIN_THREADED, the model the Cocoa-app shell + a future libAROS use,
+ * so the host keeps the main thread for AppKit/Metal). AROS's scheduler/IO
+ * signals are masked on the host's threads so process-directed delivery (e.g.
+ * ITIMER_REAL's SIGALRM) can only land on AROS's thread, never a
+ * libdispatch/Metal worker.
+ */
+struct aros_engine_ctx { kernel_entry_fun_t addr; struct TagItem *msg; int ret; volatile int done; };
+
+static void *aros_engine_thread(void *p)
+{
+    struct aros_engine_ctx *c = p;
+    host_sigset_t mask = aros_signal_mask();
+    /* This is AROS's thread: accept AROS's signals here (the host blocked them
+     * on its threads, so process-directed delivery converges on us). */
+    pthread_sigmask(HOST_SIG_UNBLOCK, &mask, NULL);
+    fprintf(stderr, "[Bootstrap] AROS running on dedicated thread...\n");
+    Host_PreBoot();
+    c->ret = c->addr(c->msg, AROS_BOOT_MAGIC);
+    c->done = 1;
+    return NULL;
+}
+#endif
+
 int kick(kernel_entry_fun_t addr, struct TagItem *msg)
 {
     int i;
@@ -120,6 +128,68 @@ int kick(kernel_entry_fun_t addr, struct TagItem *msg)
     pid_t bootstrap_pid = getpid();
 #endif
 
+#if defined(__APPLE__)
+    /*
+     * Opt-in via the AROS_DARWIN_THREADED env var (set by the windowed host
+     * shell): run AROS on a dedicated thread while THIS (main) thread stays free
+     * for the shell to own (AppKit/Metal need the main thread). The main thread
+     * blocks AROS's scheduler signals so they are delivered only to AROS's
+     * thread -- the containment that lets AROS and Cocoa/Metal coexist in one
+     * process. No fork() => Metal's XPC services work; warm/cold reboot is
+     * unavailable. Default (env var unset) stays the known-good fork boot below.
+     */
+    if (getenv("AROS_DARWIN_THREADED"))
+    {
+        static struct aros_engine_ctx ctx;
+        host_pthread_t t;
+        unsigned char attr[64];                 /* opaque pthread_attr_t storage */
+        host_sigset_t mask = aros_signal_mask();
+
+        pthread_sigmask(HOST_SIG_BLOCK, &mask, NULL);  /* host thread: hands AROS's signals to AROS */
+
+        ctx.addr = addr; ctx.msg = msg; ctx.ret = -1;
+        pthread_attr_init(attr);
+        pthread_attr_setstacksize(attr, 32UL * 1024 * 1024);
+        if (pthread_create(&t, attr, aros_engine_thread, &ctx) != 0)
+        {
+            DisplayError("Failed to start AROS thread!");
+            return -1;
+        }
+        pthread_attr_destroy(attr);
+
+        /*
+         * Host shell: this (main) thread now drives the host run loop instead of
+         * blocking in a join. cocoametal opens its NSWindow on THIS thread (the
+         * cm_* main-thread hop dispatches onto the main run loop), so we must
+         * keep pumping it for the window to appear, draw and stay responsive --
+         * and to service the main dispatch queue the hops use. Pumping is also
+         * harmless headless (no window => nothing to service). Loop until AROS
+         * exits; if AROS runs forever (a live desktop), so do we.
+         */
+        while (!ctx.done)
+            CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, 1);
+        pthread_join(t, NULL);
+        return ctx.ret;
+    }
+#endif
+
+#if defined(__APPLE__) && defined(AROS_DARWIN_NOFORK)
+    /*
+     * Opt-in (build with -DAROS_DARWIN_NOFORK): run AROS in the bootstrap's own
+     * process rather than a fork()ed child. fork() without a following exec()
+     * leaves the Mach bootstrap/XPC ports unusable, so Metal's runtime shader
+     * compiler is unreachable ("Unable to reach MTLCompilerService ... No such
+     * process"). Running in the main process keeps Metal working -- BUT loading
+     * the Cocoa/Metal frameworks alongside the AROS-hosted kernel in one process
+     * currently faults (SIGBUS) once a display registers. Left here as a known,
+     * gated path; the preferred fix is a precompiled Metal shader host-side so
+     * the fork()ed child needs no MTLCompilerService.
+     * Trade-off: warm/cold reboot is also unavailable in this mode.
+     */
+    fprintf(stderr, "[Bootstrap] Entering kernel at %p (darwin: no-fork)...\n", addr);
+    Host_PreBoot();
+    return addr(msg, AROS_BOOT_MAGIC);
+#else
     do
     {
         pid_t child = fork();
@@ -172,6 +242,5 @@ int kick(kernel_entry_fun_t addr, struct TagItem *msg)
     }
 
     return WEXITSTATUS(i);
-}
-
 #endif
+}

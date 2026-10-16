@@ -12,6 +12,7 @@
 #include <devices/usb_hub.h>
 
 #include "uhwcmd.h"
+#include "xhci_mmio.h"
 #include "xhciproto.h"
 
 static const char strXhciPortTaskName[] = "xHCI port task";
@@ -101,10 +102,9 @@ static void xhciLogPortState(struct PCIController *hc,
                              UWORD hciport,
                              const char *context)
 {
-    ULONG portsc   = AROS_LE2LONG(xhciports[hciport].portsc);
+    ULONG portsc   = xhciReadMMIO32(&xhciports[hciport].portsc);
     ULONG portpmsc = AROS_LE2LONG(xhciports[hciport].portpmsc);
     ULONG portli   = AROS_LE2LONG(xhciports[hciport].portli);
-    ULONG hlpmc    = AROS_LE2LONG(xhciports[hciport].porthlpmc);
 
     ULONG linkState = xhciPortLinkState(portsc);
     ULONG speedBits = xhciPortSpeedBits(portsc);
@@ -143,11 +143,10 @@ static void xhciLogPortState(struct PCIController *hc,
                         portli);
     } else {
         pciusbXHCIDebug("xHCI",
-                        DEBUGCOLOR_SET "xHCI: Port %u %s PORTPMSC $%08lx PPM $%08lx" DEBUGCOLOR_RESET " \n",
+                        DEBUGCOLOR_SET "xHCI: Port %u %s PORTPMSC $%08lx" DEBUGCOLOR_RESET " \n",
                         hciport + 1,
                         context,
-                        portpmsc,
-                        hlpmc);
+                        portpmsc);
     }
 }
 
@@ -192,7 +191,7 @@ BOOL xhciSetFeature(struct PCIUnit *unit, struct PCIController *hc,
     volatile struct xhci_pr *xhciports =
         (volatile struct xhci_pr *)((IPTR)xhcic->xhc_XHCIPorts);
     BOOL  cmdgood = FALSE;
-    ULONG oldval  = AROS_LE2LONG(xhciports[hciport].portsc);
+    ULONG oldval  = xhciReadMMIO32(&xhciports[hciport].portsc);
     ULONG writeval = 0;
     ULONG tmpval;
     struct pciusbXHCIDevice *devCtx;
@@ -345,8 +344,8 @@ BOOL xhciSetFeature(struct PCIUnit *unit, struct PCIController *hc,
     }
 
     if(cmdgood && writeval) {
-        xhciports[hciport].portsc = AROS_LONG2LE(writeval);
-        tmpval = AROS_LE2LONG(xhciports[hciport].portsc);
+        xhciWriteMMIO32(&xhciports[hciport].portsc, writeval);
+        tmpval = xhciReadMMIO32(&xhciports[hciport].portsc);
 
         pciusbXHCIDebug("xHCI",
                         DEBUGCOLOR_SET "xHCI: Port %ld SET_FEATURE write $%08lx (old $%08lx, now $%08lx)"
@@ -370,7 +369,7 @@ BOOL xhciClearFeature(struct PCIUnit *unit, struct PCIController *hc,
     struct XhciHCPrivate *xhcic = xhciGetHCPrivate(hc);
     volatile struct xhci_pr *xhciports =
         (volatile struct xhci_pr *)((IPTR)xhcic->xhc_XHCIPorts);
-    ULONG oldval    = AROS_LE2LONG(xhciports[hciport].portsc);
+    ULONG oldval    = xhciReadMMIO32(&xhciports[hciport].portsc);
     ULONG writeval  = 0;
     ULONG clearbits = 0;
     BOOL  cmdgood   = FALSE;
@@ -494,7 +493,11 @@ BOOL xhciClearFeature(struct PCIUnit *unit, struct PCIController *hc,
          * PORTSC; use a masked write.
          */
         if(clearbits) {
-            ULONG rw1c = clearbits & XHCI_PORTSC_RW1C_MASK;
+            /* IRQ handling may already have acknowledged the hardware bit
+             * while retaining the software change map for the hub. Do not
+             * issue a redundant RW1C write for a bit absent in this snapshot.
+             * Some virtual controllers reject those writes. */
+            ULONG rw1c = clearbits & XHCI_PORTSC_RW1C_MASK & oldval;
             ULONG v = xhciPortscComposeWrite(oldval, 0, 0, rw1c);
             /* If we also had a direct writeval request, merge it (still masked). */
             if(writeval) {
@@ -507,8 +510,8 @@ BOOL xhciClearFeature(struct PCIUnit *unit, struct PCIController *hc,
         }
 
         if(writeval) {
-            xhciports[hciport].portsc = AROS_LONG2LE(writeval);
-            writeval = AROS_LE2LONG(xhciports[hciport].portsc);
+            xhciWriteMMIO32(&xhciports[hciport].portsc, writeval);
+            writeval = xhciReadMMIO32(&xhciports[hciport].portsc);
         }
 
         if(hc->hc_PortChangeMap[hciport]) {
@@ -534,7 +537,7 @@ BOOL xhciGetStatus(struct PCIController *hc, UWORD *mptr,
     struct XhciHCPrivate *xhcic = xhciGetHCPrivate(hc);
     volatile struct xhci_pr *xhciports =
         (volatile struct xhci_pr *)((IPTR)xhcic->xhc_XHCIPorts);
-    ULONG oldportsc = AROS_LE2LONG(xhciports[hciport].portsc);
+    ULONG oldportsc = xhciReadMMIO32(&xhciports[hciport].portsc);
 
     pciusbXHCIDebug("xHCI",
                     DEBUGFUNCCOLOR_SET "xHCI: %s(0x%p, 0x%p, %04x, %04x, 0x%p)"
@@ -725,7 +728,7 @@ AROS_UFH0(void, xhciPortTask)
             pciusbXHCIDebug("xHCI",
                             DEBUGCOLOR_SET "Port change detected" DEBUGCOLOR_RESET" \n");
             for(hciport = 0; hciport < hc->hc_NumPorts; hciport++) {
-                ULONG portsc  = AROS_LE2LONG(xhciports[hciport].portsc);
+                ULONG portsc  = xhciReadMMIO32(&xhciports[hciport].portsc);
                 devCtx = xhciFindPortDevice(hc, hciport);
 
                 /*

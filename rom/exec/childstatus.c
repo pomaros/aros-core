@@ -4,6 +4,7 @@
     Find out the status of a child task.
 */
 #include "exec_intern.h"
+#include "etask.h"
 #include <proto/exec.h>
 
 /*****************************************************************************
@@ -61,6 +62,14 @@
         /* Sigh... */
         Forbid();
 
+#if defined(__AROSEXEC_SMP__)
+        /* CleanupETask moves a child between these two lists while holding
+         * the parent's task lock, then the message-port lock. Keep the same
+         * order and cover both scans so the transfer cannot disappear
+         * between our active and exited observations. */
+        EXEC_SPINLOCK_LOCK(&IntETask(et)->iet_TaskLock, NULL, SPINLOCK_MODE_READ);
+#endif
+
         /* Search through the running tasks list */
         ForeachNode(&et->et_Children, child)
         {
@@ -84,6 +93,7 @@
         }
 #if defined(__AROSEXEC_SMP__)
         EXEC_SPINLOCK_UNLOCK(&et->et_TaskMsgPort.mp_SpinLock);
+        EXEC_SPINLOCK_UNLOCK(&IntETask(et)->iet_TaskLock);
 #endif
         Permit();
     }

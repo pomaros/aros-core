@@ -6,7 +6,7 @@ FILES	:= main cli gui locale
 
 EXEDIR  := $(AROS_SYSTEM)
 
-USER_CFLAGS := -DADATE="\"$(shell date '+%d.%m.%Y')\""
+USER_CFLAGS := -DADATE="\"$(AROS_BUILD_DATE)\""
 
 #MM- workbench-system : workbench-system-format
 #MM workbench-system-format : includes linklibs workbench-system-format-catalogs

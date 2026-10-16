@@ -392,9 +392,9 @@ AROS_LH1(struct BtIFFContext *, btAllocCfgForm,
         pic->bic_Chunks = NULL;
         pic->bic_ChunksLen = 0;
         pic->bic_BufferLen = 0;
-        Forbid();
+        bGuard(BluetoothBase);
         AddTail(&BluetoothBase->bt_AlienConfigs, &pic->bic_Node);
-        Permit();
+        bUnguard(BluetoothBase);
     }
     return(pic);
     AROS_LIBFUNC_EXIT
@@ -1281,13 +1281,13 @@ struct BtIFFContext * bAllocForm(LIBBASETYPEPTR BluetoothBase, struct BtIFFConte
         pic->bic_Chunks = NULL;
         pic->bic_ChunksLen = 0;
         pic->bic_BufferLen = 0;
-        Forbid();
+        bGuard(BluetoothBase);
         if(parent) {
             AddTail(&parent->bic_SubForms, &pic->bic_Node);
         } else {
             AddTail(&BluetoothBase->bt_ConfigRoot, &pic->bic_Node);
         }
-        Permit();
+        bUnguard(BluetoothBase);
     }
     return(pic);
 }

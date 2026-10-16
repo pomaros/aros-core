@@ -61,20 +61,23 @@ static AROS_UFH3(APTR, AllocFunc,
     /*
      * Executable hunks must live in executable memory. On a W^X host the general
      * AllocMem() pool is read/write only, so route executable allocations to
-     * KrnAllocPages(), which maps them appropriately (R/W/X). Plain data hunks
-     * keep using the pool. Falls back to AllocMem() if kernel.resource is absent.
+     * KrnAllocPages(), which supplies page-granular writable memory. The ELF
+     * loader changes populated executable hunks to R/X after relocation.
+     * Keep every ELF hunk in the same page arena, including non-executable
+     * data: AArch64 ADRP relocations can only span +/-4 GiB, while the Exec
+     * pool and the executable page arena need not be that close. The loader
+     * leaves data pages R/W and protects only executable sections R/X.
+     * Falls back to AllocMem() if kernel.resource is absent.
      */
-    if (flags & MEMF_EXECUTABLE)
+#if defined(__AROSPLATFORM_WXSEG__)
+    if (flags & (MEMF_EXECUTABLE | MEMF_PUBLIC))
     {
         struct KernelBase *KernelBase = OpenResource("kernel.resource");
 
         if (KernelBase)
-        {
-            APTR p = KrnAllocPages(NULL, length, flags);
-            if (p)
-                return p;
-        }
+            return KrnAllocPages(NULL, length, flags);
     }
+#endif
 
     return AllocMem(length, flags);
 

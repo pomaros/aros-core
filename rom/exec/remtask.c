@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2017, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
 
     Desc: Remove a task
 */
@@ -73,6 +74,10 @@
         (task->tc_State != TS_TOMBSTONED) &&
         (task->tc_State != TS_REMOVED))
     {
+#if defined(__AROSEXEC_SMP__)
+        /* Stop publishing the task before its context/ETask can disappear. */
+        Exec_RetireTask(task, SysBase);
+#endif
         /*
          * The task is being removed.
          * This is an important signal for Alert() which will not attempt to use

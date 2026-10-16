@@ -1,0 +1,14 @@
+include $(SRCDIR)/config/aros.cfg
+
+#MM workbench-devs-networks-virtionet : kernel-virtio-includes kernel-hidd-storage-includes kernel-hidd-pci-includes kernel-timer-includes
+
+USER_INCLUDES := -I$(SRCDIR)/rom/devs/virtio
+USER_CPPFLAGS := -D__OOP_NOLIBBASE__= -D__OOP_NOATTRBASES__= -D__OOP_NOMETHODBASES__=
+USER_LDFLAGS := -static
+%build_module mmake=workbench-devs-networks-virtionet \
+    modname=virtionet modtype=device files="device transport" \
+    moduledir=Devs/Networks uselibs="hiddstubs"
+
+SHARED_TRANSPORT := $(wildcard $(SRCDIR)/rom/devs/virtio/*.h) $(SRCDIR)/rom/devs/virtio/virtio_hw.c $(SRCDIR)/rom/devs/virtio/virtio_queue.c $(SRCDIR)/rom/devs/virtio/net_transport.c
+$(workbench-devs-networks-virtionet_OBJS): $(SHARED_TRANSPORT) $(SRCDIR)/$(CURDIR)/device.h
+%common

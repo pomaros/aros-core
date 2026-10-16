@@ -1,0 +1,5 @@
+{
+  "result": "PASS",
+  "source_sha256": "087d2153421146a2fa79d18d21b4cf6d6b4a90df52773881dabe14f419014ee6",
+  "scope": "Actual production provisioning helpers and main under ASan/UBSan; fake DOS/icon services, no native icon serialization proof"
+}

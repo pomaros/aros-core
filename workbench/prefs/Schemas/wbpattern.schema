@@ -1,0 +1,20 @@
+; Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+; Distributed under the AROS Public License, version 1.1.
+; SYS/wbpattern.prefs: PTRN chunks, struct WBPatternPrefs header followed by
+; the pattern data the header describes; the schema covers the header.
+schema   1
+file     SYS/wbpattern.prefs
+layout   compiler/include/prefs/wbpattern.h WBPatternPrefs
+chunk    PTRN  select wbp_Which@16:2
+
+[wbpattern/root]  select 0  level average  applier iprefs live
+  flags  wbp_Flags@18:2  type flags  choices pattern=1,noremap=16
+  depth  wbp_Depth@21:1  type int    range 1..8  unit bits
+
+[wbpattern/drawer]  select 1  level average  applier iprefs live
+  flags  wbp_Flags@18:2  type flags  choices pattern=1,noremap=16
+  depth  wbp_Depth@21:1  type int    range 1..8  unit bits
+
+[wbpattern/screen]  select 2  level average  applier iprefs live
+  flags  wbp_Flags@18:2  type flags  choices pattern=1,noremap=16
+  depth  wbp_Depth@21:1  type int    range 1..8  unit bits

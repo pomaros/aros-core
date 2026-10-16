@@ -219,6 +219,15 @@ static inline void xhciRingUnlock(void)
     Enable();
 }
 
+struct xhciCancelPlan {
+    UWORD first, last, next;
+    BOOL moveDequeue, cycle;
+};
+
+struct xhciControlTRBs {
+    UWORD setup, dataFirst, dataLast, status;
+};
+
 /* Derive the ring base from an in-ring TRB pointer (ring size is power-of-two). */
 #define XHCI_RING_BYTES   (sizeof(((struct pcisusbXHCIRing *)0)->ring))
 
@@ -270,7 +279,9 @@ struct pciusbXHCIIODevPrivate {
     APTR                                dpBounceData;
     ULONG                               dpBounceLen;
     UWORD                               dpBounceDir;
-    BYTE                                dpCC;
+    ULONG                               dpRemaining;                                // latched event residual
+    UBYTE                               dpCC;                                       // first terminal event
+    BOOL                                dpCompletionRetired;                        // task consumed payload/correlation
 };
 
 /* Misc Stuff */

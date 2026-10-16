@@ -1,3 +1,6 @@
+/* Readiness extensions Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * SPDX-License-Identifier: APL-1.1
+ */
 /****************************************************************************
 **  File:       pipe-handler.c
 **  Program:    pipe-handler - an AmigaDOS handler for named pipes
@@ -269,6 +272,14 @@ LOOP:
   OS (">>> Write packet received\n");
 #endif /* DEBUG */
             StartPipeIO (pkt, PIPEWRITE);
+            break;
+
+          case ACTION_PIPE_READ_NOTIFY:
+            PipeReadNotify (pkt);
+            break;
+
+          case ACTION_PIPE_SET_NONBLOCK:
+            PipeSetNonblock (pkt);
             break;
 
 #if PIPEDIR

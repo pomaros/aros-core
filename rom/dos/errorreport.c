@@ -1,6 +1,9 @@
 /*
     Copyright (C) 1995-2013, The AROS Development Team. All rights reserved.
 
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>
+    Licensed under the AROS Public License (APL) Version 1.1.
+
     Desc:
 */
 
@@ -277,6 +280,12 @@
     /* display it. idcmp is set further up to catch "disk insert" events if
      * we're waiting for them to insert something */
 
+    /* Keep a serial explanation before a requester can block an unattended
+     * boot. This does not dismiss it or change Retry/Cancel semantics. */
+    bug("[DOS] requester task=%s code=%d volume=%s device=%s\n",
+        me->pr_Task.tc_Node.ln_Name ? (char *)me->pr_Task.tc_Node.ln_Name : "?",
+        (int)code, volname ? (char *)volname : "-",
+        devname ? (char *)devname : "-");
     res = DisplayError(format, idcmp, &args);
 
     SetIoErr(code);

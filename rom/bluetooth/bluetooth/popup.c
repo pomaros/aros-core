@@ -260,8 +260,13 @@ AROS_UFH0(void, bPopupTask)
     if(IntuitionBase) CloseLibrary(IntuitionBase);
 
     Forbid();
-    bp->bp_Task = NULL;
-    if(bp->bp_ReadySigTask) Signal(bp->bp_ReadySigTask, 1L << bp->bp_ReadySignal);
+    {
+        /* read everything first: the waiter may go once it sees no task */
+        struct Task *ready = bp->bp_ReadySigTask;
+        ULONG mask = 1UL << bp->bp_ReadySignal;
+        bp->bp_Task = NULL;
+        if(ready) Signal(ready, mask);
+    }
     /* Permit() is implicit at task exit */
 
     AROS_USERFUNC_EXIT
@@ -279,9 +284,8 @@ static BOOL bStartPopup(struct BtBase *BluetoothBase)
         ReleaseSemaphore(&BluetoothBase->bt_ReentrantLock);
         return(bp->bp_Task != NULL);
     }
-    bp->bp_ReadySignal = SIGB_SINGLE;
+    bp->bp_ReadySignal = bAllocReadySignal();
     bp->bp_ReadySigTask = FindTask(NULL);
-    SetSignal(0, SIGF_SINGLE);
     /* Do NOT hold the lock across the wait - the popup task takes library
        locks while starting up (as the event broadcaster does). */
     ReleaseSemaphore(&BluetoothBase->bt_ReentrantLock);
@@ -290,6 +294,7 @@ static BOOL bStartPopup(struct BtBase *BluetoothBase)
         Wait(1UL << bp->bp_ReadySignal);
 
     bp->bp_ReadySigTask = NULL;
+    bFreeReadySignal(bp->bp_ReadySignal);
     return(bp->bp_Task != NULL);
 }
 /* \\\ */
@@ -331,13 +336,13 @@ void bStopPopup(struct BtBase *BluetoothBase)
 
     if(bp->bp_Task)
     {
-        bp->bp_ReadySignal = SIGB_SINGLE;
+        bp->bp_ReadySignal = bAllocReadySignal();
         bp->bp_ReadySigTask = FindTask(NULL);
-        SetSignal(0, SIGF_SINGLE);
         Signal(bp->bp_Task, SIGBREAKF_CTRL_C);
         while(bp->bp_Task)
             Wait(1UL << bp->bp_ReadySignal);
         bp->bp_ReadySigTask = NULL;
+        bFreeReadySignal(bp->bp_ReadySignal);
     }
 }
 /* \\\ */

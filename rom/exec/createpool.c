@@ -144,6 +144,9 @@
         else
         {
             /* Initialize the handle's MemHeader like AllocMemHeader() would */
+#if defined(__AROSEXEC_SMP__)
+            EXEC_SPINLOCK_INIT(&firstPuddle->mh_SpinLock);
+#endif
             firstPuddle->mh_Node.ln_Type = NT_MEMORY;
             firstPuddle->mh_Node.ln_Pri  = orig->mh_Node.ln_Pri;
             firstPuddle->mh_Attributes   = orig->mh_Attributes;

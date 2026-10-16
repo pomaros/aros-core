@@ -45,6 +45,7 @@ FILES := \
     SetLocale \
     SetPSM \
     Shutdown \
+    Sleep \
     Sort \
     StackSnoop \
     SymbolDump \
@@ -80,7 +81,7 @@ SH_FILES := \
     WaitX
 
 USER_INCLUDES    := -I$(OBJDIR)
-USER_CPPFLAGS    := -DADATE="\"$(shell date "+%d.%m.%Y")\""
+USER_CPPFLAGS    := -DADATE="\"$(AROS_BUILD_DATE)\""
 USER_CFLAGS      := -noposixc
 
 #MM- workbench : workbench-c
@@ -100,6 +101,7 @@ USER_CFLAGS      := -noposixc
 #MM        includes \
 #MM        kernel-task-includes \
 #MM        kernel-hidd-ipmi-includes \
+#MM        workbench-libs-power-includes \
 #MM        linklibs \
 #MM        workbench-c-adddatatypes \
 #MM        workbench-c-sh \
@@ -135,7 +137,66 @@ USER_LDFLAGS     := -static
 %build_prog mmake=workbench-c-requeststring progname=RequestString \
     files=RequestString targetdir=$(AROS_C) coverageinstr=no
 
+# Standalone targets for OS-introspection commands, so bring-up images can
+# build/deploy the small diagnostics without pulling the whole C: command set.
+%build_prog mmake=workbench-c-version progname=Version \
+    files=Version targetdir=$(AROS_C) coverageinstr=no
+
+%build_prog mmake=workbench-c-avail progname=Avail \
+    files=Avail targetdir=$(AROS_C) coverageinstr=no
+
+%build_prog mmake=workbench-c-info progname=Info \
+    files=Info targetdir=$(AROS_C) coverageinstr=no
+
+%build_prog mmake=workbench-c-which progname=Which \
+    files=Which targetdir=$(AROS_C) coverageinstr=no
+
+%build_prog mmake=workbench-c-date progname=Date \
+    files=Date targetdir=$(AROS_C) coverageinstr=no
+
+# Headless screenshot tool: dump the front screen to a PPM (for inspection/
+# recording/testing of the AROS display, headless or in a window).
+%build_prog mmake=workbench-c-grabscreen progname=GrabScreen \
+    files=GrabScreen targetdir=$(AROS_C) coverageinstr=no
+
+# Library load-tester: OpenLibrary() a named lib and report OK/version or FAIL
+# (distinguishes "file present" from "init/deps failed", unlike Version).
+%build_prog mmake=workbench-c-testlib progname=TestLib \
+    files=TestLib targetdir=$(AROS_C) coverageinstr=no
+
+# Native oracle for the emu68k OpenCatalogA object/tag bridge.
+%build_prog mmake=workbench-c-catalogprobe progname=CatalogProbe \
+    files=CatalogProbe targetdir=$(AROS_C) uselibs="locale" coverageinstr=no
+
+# Native control for the hosted screen + GadTools bevel-box sequence, so the
+# same drawing can be run with no 68k program in front of it.
+%build_prog mmake=workbench-c-bevelprobe progname=BevelProbe \
+    files=BevelProbe targetdir=$(AROS_C) uselibs="gadtools" coverageinstr=no
+
+%build_prog mmake=workbench-c-deviceprobe progname=DeviceProbe \
+    files=DeviceProbe targetdir=$(AROS_C) coverageinstr=no
+
+# Native oracle for the emu68k GetPrefs structure crossing.
+%build_prog mmake=workbench-c-prefsprobe progname=PrefsProbe \
+    files=PrefsProbe targetdir=$(AROS_C) coverageinstr=no
+
+# Batch loader smoke test for the desktop bring-up chain.
+%build_prog mmake=workbench-c-loadmatrix progname=LoadMatrix \
+    files=LoadMatrix targetdir=$(AROS_C) coverageinstr=no
+
+# Direct ahi.device/CoreAudio playback smoke test. This avoids sound datatypes
+# and file-backed samples so the audio path can be validated during port bring-up.
+%build_prog mmake=workbench-c-ahismoke progname=AHISmoke \
+    files=AHISmoke targetdir=$(AROS_C) coverageinstr=no
+
 %build_progs mmake=workbench-c \
+    files="$(FILES)" targetdir=$(AROS_C) \
+    uselibs="uuid debug" coverageinstr=no
+
+# Same core C: command programs, but as a standalone batch that does not pull in
+# optional subdirectories. Useful for hosted bring-up when we want the basic CLI
+# command set without also rebuilding larger GUI helpers.
+%build_progs mmake=workbench-c-tools \
     files="$(FILES)" targetdir=$(AROS_C) \
     uselibs="uuid debug" coverageinstr=no
 

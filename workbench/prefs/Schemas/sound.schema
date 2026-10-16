@@ -1,0 +1,16 @@
+; Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+; Distributed under the AROS Public License, version 1.1.
+; SYS/sound.prefs: one SOND chunk, struct SoundPrefs.
+schema   1
+file     SYS/sound.prefs
+layout   compiler/include/prefs/sound.h SoundPrefs
+chunk    SOND size 284
+
+[sound/alert]  level novice  applier self live
+  flash     sop_DisplayQueue@16:2    type bool
+  beep      sop_AudioQueue@18:2      type bool
+  type      sop_AudioType@20:2       type enum  choices beep=0,sample=1
+  volume    sop_AudioVolume@22:2     type int   range 0..64
+  period    sop_AudioPeriod@24:2     type int   range 127..2000  unit cycles  level expert
+  duration  sop_AudioDuration@26:2   type int   range 1..1000  unit ticks  level average
+  sample    sop_AudioFileName@28:256 type path

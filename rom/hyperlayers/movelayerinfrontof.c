@@ -69,6 +69,10 @@
   int toback = TRUE;
   LONG ret;
 
+  /* Protected overlays cannot be reordered across their priority class. */
+  if ((layer_to_move->priority == PROTECTEDPRIORITY || other_layer->priority == PROTECTEDPRIORITY) &&
+      layer_to_move->priority != other_layer->priority) return FALSE;
+
   if (layer_to_move->parent  != other_layer->parent ||
       layer_to_move->priority < other_layer->priority)
     return FALSE;

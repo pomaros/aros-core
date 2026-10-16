@@ -26,7 +26,28 @@
 
 #include LC_LIBDEFS_FILE
 
-static BOOL virtio_blk_rw(struct IORequest *io, UQUAD off64, BOOL is_write)
+/* Transfer ownership before publication: completion may run immediately. */
+static BOOL virtio_blk_submit(struct IORequest *io, struct virtio_request *templ,
+                              BOOL *pending)
+{
+    struct virtio_Unit *unit = (struct virtio_Unit *)io->io_Unit;
+    UBYTE flags = io->io_Flags;
+    ObtainSemaphore(&unit->au_Lock);
+    Remove(&io->io_Message.mn_Node);
+    ReleaseSemaphore(&unit->au_Lock);
+    *pending = FALSE;
+    io->io_Flags &= ~IOF_QUICK;
+    if (virtio_submit_blk_request(unit->au_Bus->ab_Dev->dev_VQ, templ) < 0) {
+        /* A rejected submission has not published or replied to the request. */
+        io->io_Flags = flags;
+        io->io_Error = IOERR_ABORTED;
+        return TRUE;
+    }
+    /* Do not touch io: the reply recipient may already have freed it. */
+    return FALSE;
+}
+
+static BOOL virtio_blk_rw(struct IORequest *io, UQUAD off64, BOOL is_write, BOOL *pending)
 {
     struct IOExtTD *iotd = (struct IOExtTD *)io;
     struct virtio_Unit *unit = (struct virtio_Unit *)io->io_Unit;
@@ -35,6 +56,7 @@ static BOOL virtio_blk_rw(struct IORequest *io, UQUAD off64, BOOL is_write)
     APTR data = iotd->iotd_Req.io_Data;
     ULONG len = iotd->iotd_Req.io_Length;
 
+    IOStdReq(io)->io_Actual = 0;
     if (!dev || !dev->dev_VQ) {
         io->io_Error = IOERR_OPENFAIL;
         return TRUE;
@@ -45,17 +67,24 @@ static BOOL virtio_blk_rw(struct IORequest *io, UQUAD off64, BOOL is_write)
         return TRUE;
     }
 
-    if ((off64 >> unit->au_SecShift) > unit->au_High) {
+    if (unit->au_SecShift < 9 || unit->au_SecShift >= 32) {
+        io->io_Error = IOERR_BADLENGTH;
+        return TRUE;
+    }
+    ULONG mask = (1UL << unit->au_SecShift) - 1;
+    if (!data || (off64 & mask)) {
         io->io_Error = IOERR_BADADDRESS;
         return TRUE;
     }
-    if (len == 0) {
+    if (!len || (len & mask)) {
         io->io_Error = IOERR_BADLENGTH;
         return TRUE;
     }
-    /* Length must be sector-multiple. */
-    if (len & ((1U << unit->au_SecShift) - 1)) {
-        io->io_Error = IOERR_BADLENGTH;
+    UQUAD first = off64 >> unit->au_SecShift;
+    UQUAD count = len >> unit->au_SecShift;
+    /* Subtraction avoids overflowing the end offset on large devices. */
+    if (first >= unit->au_SecCnt || count > unit->au_SecCnt - first) {
+        io->io_Error = IOERR_BADADDRESS;
         return TRUE;
     }
 
@@ -73,25 +102,16 @@ static BOOL virtio_blk_rw(struct IORequest *io, UQUAD off64, BOOL is_write)
     templ.vr_Header.ioprio = 0;
     templ.vr_Header.sector = off64 >> 9;        /* 512-byte units */
 
-    /* Remove from pending list while we own it (matches NVMe pattern) */
-    ObtainSemaphore(&unit->au_Lock);
-    Remove(&io->io_Message.mn_Node);
-    ReleaseSemaphore(&unit->au_Lock);
-
-    if (virtio_submit_blk_request(dev->dev_VQ, &templ) < 0) {
-        io->io_Error = IOERR_ABORTED;
-        return TRUE;
-    }
-
-    return FALSE;
+    return virtio_blk_submit(io, &templ, pending);
 }
 
-static BOOL virtio_blk_flush(struct IORequest *io)
+static BOOL virtio_blk_flush(struct IORequest *io, BOOL *pending)
 {
     struct virtio_Unit *unit = (struct virtio_Unit *)io->io_Unit;
     device_t dev = unit->au_Bus->ab_Dev;
     struct virtio_request templ;
 
+    IOStdReq(io)->io_Actual = 0;
     if (!dev || !dev->dev_VQ) {
         io->io_Error = IOERR_OPENFAIL;
         return TRUE;
@@ -110,15 +130,7 @@ static BOOL virtio_blk_flush(struct IORequest *io)
     templ.vr_Header.type = VIRTIO_BLK_T_FLUSH;
     templ.vr_Header.sector = 0;
 
-    ObtainSemaphore(&unit->au_Lock);
-    Remove(&io->io_Message.mn_Node);
-    ReleaseSemaphore(&unit->au_Lock);
-
-    if (virtio_submit_blk_request(dev->dev_VQ, &templ) < 0) {
-        io->io_Error = IOERR_ABORTED;
-        return TRUE;
-    }
-    return FALSE;
+    return virtio_blk_submit(io, &templ, pending);
 }
 
 AROS_LH1(void, BeginIO,
@@ -142,7 +154,8 @@ AROS_LH1(void, BeginIO,
     UQUAD off64;
     struct DriveGeometry *geom;
     struct NSDeviceQueryResult *nsqr;
-    BOOL done = (io->io_Flags & IOF_QUICK) ? TRUE : FALSE;
+    BOOL done = TRUE;
+    BOOL pending = TRUE;
 
     io->io_Message.mn_Node.ln_Type = NT_MESSAGE;
     io->io_Error = 0;
@@ -154,35 +167,35 @@ AROS_LH1(void, BeginIO,
     switch (io->io_Command) {
     case CMD_READ:
         off64 = iotd->iotd_Req.io_Offset;
-        done = virtio_blk_rw(io, off64, FALSE);
+        done = virtio_blk_rw(io, off64, FALSE, &pending);
         break;
     case TD_READ64:
     case NSCMD_TD_READ64:
         off64  = iotd->iotd_Req.io_Offset;
         off64 |= ((UQUAD)iotd->iotd_Req.io_Actual) << 32;
-        done = virtio_blk_rw(io, off64, FALSE);
+        done = virtio_blk_rw(io, off64, FALSE, &pending);
         break;
 
     case CMD_WRITE:
         off64 = iotd->iotd_Req.io_Offset;
-        done = virtio_blk_rw(io, off64, TRUE);
+        done = virtio_blk_rw(io, off64, TRUE, &pending);
         break;
     case TD_WRITE64:
     case NSCMD_TD_WRITE64:
         off64  = iotd->iotd_Req.io_Offset;
         off64 |= ((UQUAD)iotd->iotd_Req.io_Actual) << 32;
-        done = virtio_blk_rw(io, off64, TRUE);
+        done = virtio_blk_rw(io, off64, TRUE, &pending);
         break;
 
     case TD_FORMAT:
         off64 = iotd->iotd_Req.io_Offset;
-        done = virtio_blk_rw(io, off64, TRUE);
+        done = virtio_blk_rw(io, off64, TRUE, &pending);
         break;
     case TD_FORMAT64:
     case NSCMD_TD_FORMAT64:
         off64  = iotd->iotd_Req.io_Offset;
         off64 |= ((UQUAD)iotd->iotd_Req.io_Actual) << 32;
-        done = virtio_blk_rw(io, off64, TRUE);
+        done = virtio_blk_rw(io, off64, TRUE, &pending);
         break;
 
     case TD_SEEK:
@@ -235,6 +248,7 @@ AROS_LH1(void, BeginIO,
 
     case TD_ADDCHANGEINT:
         if (io->io_Flags & IOF_QUICK) goto bad_cmd;
+        done = FALSE;
         break;
     case TD_REMCHANGEINT:
         if (io->io_Flags & IOF_QUICK) goto bad_cmd;
@@ -250,7 +264,7 @@ AROS_LH1(void, BeginIO,
         done = TRUE;
         break;
     case CMD_UPDATE:
-        done = virtio_blk_flush(io);
+        done = virtio_blk_flush(io, &pending);
         break;
 
     default:
@@ -264,12 +278,10 @@ bad_length:
         break;
     }
 
-    if (done) {
+    if (done && pending) {
         ObtainSemaphore(&unit->au_Lock);
         Remove(&io->io_Message.mn_Node);
         ReleaseSemaphore(&unit->au_Lock);
-    } else {
-        io->io_Flags &= ~IOF_QUICK;
     }
 
     if (done && !(io->io_Flags & IOF_QUICK))

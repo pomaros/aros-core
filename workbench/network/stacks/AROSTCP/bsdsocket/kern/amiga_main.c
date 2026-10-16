@@ -3,6 +3,7 @@
  *                    Helsinki University of Technology, Finland.
  *                    All rights reserved.
  * Copyright (C) 2005-2026 The AROS Dev Team
+ * Copyright (C) 2026 John KNIPPER <code@jkn.me>.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -133,6 +134,7 @@ main(int argc, char *argv[])
     D(bug("[AROSTCP](amiga_main.c) main()\n"));
 #endif
 
+    bug("[AROSTCP] executable entered\n");
     TestSocketBase = OpenLibrary("bsdsocket.library", 0);
     if(TestSocketBase) {
         CloseLibrary(TestSocketBase);
@@ -243,6 +245,7 @@ main(int argc, char *argv[])
     /* Save pointer to this tasks old name */
     oldname = AROSTCP_Task->tc_Node.ln_Name;
 
+    bug("[AROSTCP] config=%s netdb=%s\n", config_path, netdb_path);
     if(init_all()) {
 #if defined(__AROS__)
         D(bug("[AROSTCP](amiga_main.c) main: preparing AROSTCP_Task\n"));
@@ -306,6 +309,8 @@ main(int argc, char *argv[])
 
             if((sig & breakmask) || ctrl_shutdown) {
                 int i;
+                ULONG open_count;
+                BOOL fd_busy;
 
                 ctrl_shutdown = FALSE;      /* consume: one stop attempt per request */
 
@@ -325,24 +330,26 @@ main(int argc, char *argv[])
 
                 api_sendbreaktotasks(); /* send brk to all tasks w/ SBase open */
 
-                /* Try three times with a short delay.  A stack-managed service
-                 * was signalled to stop above and closes its own base as it
-                 * shuts down, so the open count drops to the NETTRACE baseline
-                 * without any special accounting here. */
-                for(i = 0; i < 3 && MasterSocketBase->lib_OpenCnt > 1; i++) {
+                /* Services were stopped above; allow their library references
+                 * to drain, observing the count under its cross-CPU lock. */
+                for(i = 0; i < 3 && api_open_count() > 1; i++) {
                     Delay(50);		          /* give tasks time to close socket base */
                 }
 
-                if(MasterSocketBase->lib_OpenCnt > 1) {
+                open_count = api_open_count();
+                fd_busy = open_count <= 1 && !api_quiesce_fd();
+                if(open_count > 1 || fd_busy) {
 #if defined(__AROS__)
-                    D(bug("[AROSTCP](amiga_main.c) main: Got CTRL-C while %ld %s still open.\n",
-                          MasterSocketBase->lib_OpenCnt - 1,
-                          (MasterSocketBase->lib_OpenCnt == 2) ? "library" : "libraries"));
+                    D(bug("[AROSTCP](amiga_main.c) main: shutdown busy: open=%lu fd=%ld.\n",
+                          (unsigned long)open_count, (long)fd_busy));
 #endif
 
-                    __log(LOG_ERR, "Got CTRL-C while %d %s still open.\n",
-                          (MasterSocketBase->lib_OpenCnt - 1),
-                          (MasterSocketBase->lib_OpenCnt == 2) ? "library" : "libraries");
+                    if (fd_busy)
+                        __log(LOG_ERR, "Got CTRL-C while fd operations remain active.\n");
+                    else
+                        __log(LOG_ERR, "Got CTRL-C while %d %s still open.\n",
+                              (open_count - 1),
+                              (open_count == 2) ? "library" : "libraries");
 
                     api_logopeners(); /* name the task(s) still holding a base */
 
@@ -438,6 +445,7 @@ init_all(void)
     /*
      * Read command line arguments and configuration file
      */
+    bug("[AROSTCP] init readconfig()\n");
     if(!readconfig())
         return FALSE;
     D(Printf("readconfig() complete\n");)
@@ -445,6 +453,7 @@ init_all(void)
     /*
      * initialize logging system
      */
+    bug("[AROSTCP] init log_init()\n");
     if(!log_init())
         return FALSE;
     D(Printf("log_init() complete\n");)
@@ -452,6 +461,7 @@ init_all(void)
     /*
      * initialize the mbuf subsystem
      */
+    bug("[AROSTCP] init mbinit()\n");
     if(!mbinit())
         return FALSE;
     D(Printf("mbinit() complete\n");)
@@ -466,6 +476,7 @@ init_all(void)
     /*
      * initialize API
      */
+    bug("[AROSTCP] init api_init()\n");
     if(!api_init())
         return FALSE;
     D(Printf("api_init() complete\n");)
@@ -495,6 +506,7 @@ init_all(void)
     /*
      * Initialize NetDataBase
      */
+    bug("[AROSTCP] init netdb\n");
     if(init_netdb() != 0)
         return FALSE;
     D(Printf("init_netdb() complete\n");)
@@ -502,7 +514,10 @@ init_all(void)
     /*
      * Make API visible
      */
-    if(api_show() == FALSE)
+    bug("[AROSTCP] publish API\n");
+    /* No fallible initialization after public admission opens: an error
+       cleanup must not tear resources down under newly admitted clients. */
+    if(!Nettrace_Task || api_show() == FALSE)
         return FALSE;
     D(Printf("api_show() complete\n");)
 
@@ -521,8 +536,7 @@ init_all(void)
     if(Nettrace_Task) {
         D(Printf("Initialization complete, signalling NETTRACE\n");)
         Signal(Nettrace_Task, SIGBREAKF_CTRL_F);
-    } else
-        return FALSE;
+    }
 
     rc_start();
     D(Printf("rc_start() complete, initialization finished\n");)
@@ -554,6 +568,12 @@ deinit_all(void)
 
     api_hide();			/* hides the API from users */
     D(Printf("api_hide() completed\n");)
+
+    /* Leased fd operations and their finalizers must drain before pool,
+       interface, timer or log teardown. Normal shutdown already passed this
+       gate before leaving its service loop. */
+    while (!api_quiesce_fd())
+        Delay(1);
 
     /*
      * Remove the control port so no new RELOAD/SHUTDOWN arrives during

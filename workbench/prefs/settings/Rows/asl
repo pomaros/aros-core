@@ -1,0 +1,7 @@
+group system
+order 40
+class AslEditor.mcc
+name File requesters
+description Size, position and options of the file, font and screen mode requesters
+keywords asl requester file dialog
+level expert

@@ -269,6 +269,14 @@ AC_SUBST(CFLAG_RESIDENT)
 AC_SUBST(LDFLAG_RESIDENT)
 AC_SUBST(DISTDIR)
 
+dnl Darwin/aarch64 AROS link probes need the same no-startfiles shape as AHI
+dnl sub-drivers, otherwise the generic executable check pulls startup.o and
+dnl duplicates autoinit library-base request symbols.
+ahi_saved_LDFLAGS=$LDFLAGS
+case $host_os in
+ aros) LDFLAGS="$LDFLAGS -nostartfiles -Wl,--allow-multiple-definition" ;;
+esac
+
 AC_PROG_INSTALL
 #AC_PROG_CC
 AC_PROG_RANLIB
@@ -328,6 +336,7 @@ dnl Checks for Raspberry Pi (BCM2708) DMA resource driver support header files.
 AC_CHECK_HEADERS( proto/dma.h, [ AC_MSG_RESULT(DMA resource found - Raspberry Pi audio drivers will be built); HAVE_DMA_H=1],)
 AC_SUBST(HAVE_DMA_H)
 
+
 dnl Checks for AROS hosted driver header files.
 
 AC_CHECK_HEADERS( proto/oss.h, [ AC_MSG_RESULT(Hosted OSS Driver will be built); HAVE_OSS=1],)
@@ -338,9 +347,13 @@ dnl Check for AROS hosted driver support linklibs
 AC_CHECK_LIB(alsa-bridge, ALSA_Init,  [ AC_MSG_RESULT(Hosted Alsa Driver will be built); HAVE_ALSA=1],)
 AC_CHECK_LIB(pulseaudio-bridge, PULSEA_Init,  [ AC_MSG_RESULT(Hosted PulseAudio Driver will be built); HAVE_PULSEAUDIO=1],)
 AC_CHECK_LIB(WASAPI-bridge, WASAPI_Init,  [ AC_MSG_RESULT(Hosted WASAPI Driver will be built); HAVE_WASAPI=1],)
+AC_CHECK_LIB(coreaudio-bridge, COREAUDIO_Init,  [ AC_MSG_RESULT(Hosted CoreAudio Driver will be built); HAVE_COREAUDIO=1],)
 AC_SUBST(HAVE_ALSA)
 AC_SUBST(HAVE_PULSEAUDIO)
 AC_SUBST(HAVE_WASAPI)
+AC_SUBST(HAVE_COREAUDIO)
+
+LDFLAGS=$ahi_saved_LDFLAGS
 
 dnl Checks for typedefs, structures, and compiler characteristics.
 
@@ -361,6 +374,7 @@ AC_OUTPUT(Makefile
           Drivers/Device/Makefile
           Drivers/Filesave/Makefile
           Drivers/Void/Makefile
+          Drivers/BTA2DP/Makefile
           Drivers/ac97/Makefile
           Drivers/VIA-AC97/Makefile
           Drivers/HDAudio/Makefile
@@ -373,6 +387,7 @@ AC_OUTPUT(Makefile
           Drivers/OSS/Makefile
           Drivers/PulseAudio/Makefile
           Drivers/WASAPI/Makefile
+          Drivers/CoreAudio/Makefile
           Drivers/RPiPWM/Makefile
           Drivers/RPiHDMI/Makefile
           Drivers/RPiI2S/Makefile

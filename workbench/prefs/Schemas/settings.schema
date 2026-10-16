@@ -1,0 +1,13 @@
+; Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+; Distributed under the AROS Public License, version 1.1.
+;
+; SYS/settings.prefs: the settings window's own settings. The level is a
+; setting like any other, so a script or the automation agent can set it.
+schema   1
+file     SYS/settings.prefs
+layout   workbench/prefs/settings/settingsprefs.h SettingsWindowPrefs
+chunk    SETW  size 4
+
+[settings/window]  level novice  applier self live
+  level        swp_Level@0:1       type enum  choices novice=0,average=1,expert=2  default average
+  show-hidden  swp_ShowHidden@1:1  type bool  default 0

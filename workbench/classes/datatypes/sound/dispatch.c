@@ -3574,6 +3574,27 @@ void __interrupt SoundFunc( REG(a0, struct Hook *h),  REG(a2, struct AHIAudioCtr
 
 /****************************************************************************/
 
+/*
+ * One AHI voice for a stereo sample: turn the datatype's volume and pan into
+ * a balance (left = vol * min(1, 2(1 - pan)), right = vol * min(1, 2 pan)),
+ * then into AHI's linear pan law, whose voice volume is left + right and pan
+ * right / (left + right). Unity at the centre, a true balance at the sides,
+ * and AHI's products stay in range (volume x (1 - pan) is the left gain).
+ */
+static void StereoVoice( ULONG vol, LONG pan, ULONG *voice_vol, LONG *voice_pan )
+{
+    ULONG	l, r;
+
+    if( pan < 0 ) pan = 0;
+    if( pan > 0x10000 ) pan = 0x10000;
+    l = ( pan <= 0x8000 ) ? 0x10000 : (ULONG) ( 0x10000 - pan ) * 2;
+    r = ( pan >= 0x8000 ) ? 0x10000 : (ULONG) pan * 2;
+    l = (ULONG) ( ( (UQUAD) l * vol ) >> 16 );
+    r = (ULONG) ( ( (UQUAD) r * vol ) >> 16 );
+    *voice_vol = l + r;
+    *voice_pan = ( l + r ) ? (LONG) ( ( (UQUAD) r << 16 ) / ( l + r ) ) : 0x8000;
+}
+
 void PlayerProcAHI( void )
 {
 #if !defined(__MAXON__)
@@ -3592,6 +3613,8 @@ void PlayerProcAHI( void )
     struct InstanceData	*id = NULL;
     ULONG				mpmsk, numCh = 0, buffersize = 0;
     BOOL				stereo, paused = FALSE, failed;
+    /* a stereo sample on one AHI voice (volume and panning modes): StereoVoice() */
+    BOOL				onevoice = FALSE;
     static UBYTE			sdtst2ahist[] = { AHIST_M8S, AHIST_S8S, AHIST_M16S, AHIST_S16S };
     BYTE				*buffer = NULL;
     /* Play-position cursor support */
@@ -3804,6 +3827,12 @@ void PlayerProcAHI( void )
                         vol = ( id->Volume << 10 );
                         freq = id->Frequency;
                         ReleaseSemaphore( &id->Lock );
+                        if( onevoice ) {
+                            LONG	vpan;
+
+                            StereoVoice( vol, (LONG) pan, &vol, &vpan );
+                            pan = (ULONG) vpan;
+                        }
 
                         for( i = 0; i < numCh; i++ ) {
                             if( ! paused ) {
@@ -3940,6 +3969,12 @@ void PlayerProcAHI( void )
 
                                 if( cb->cb_ForceAHIMode ) {
                                     audioID = cb->cb_AHIModeID;
+                                } else if( cb->cb_AHIModeID == AHI_DEFAULT_ID ) {
+                                    /* no mode asked for: the one the user chose in the AHI
+                                     * preferences (AHI_AllocAudio resolves it, or picks the
+                                     * best realtime mode when there are none); a best-ID
+                                     * search here would override that choice */
+                                    audioID = AHI_DEFAULT_ID;
                                 } else {
                                     if( ( audioID = AHI_BestAudioID(
                                                         ( cb->cb_AHIModeID ? AHIDB_AudioID : TAG_IGNORE ), cb->cb_AHIModeID,
@@ -3954,6 +3989,31 @@ void PlayerProcAHI( void )
 
                                 ReleaseSemaphore( &cb->cb_LibLock );
 
+                                /*
+                                 * A stereo sample plays on one voice when the mode has
+                                 * volume and panning: AHI's linear pan gives each side
+                                 * half at the centre, so the voice runs at twice the
+                                 * volume for unity. Two centred voices instead each get
+                                 * a quarter once AHI divides by the channel count (pan
+                                 * modes), -6 dB in all and twice the mixing. Modes
+                                 * without panning keep two voices, forced to the left
+                                 * and right.
+                                 */
+                                onevoice = FALSE;
+                                if( stereo ) {
+                                    IPTR	has_vol = FALSE, has_pan = FALSE;
+
+                                    AHI_GetAudioAttrs( audioID, NULL,
+                                                       AHIDB_Volume, (IPTR) &has_vol,
+                                                       AHIDB_Panning, (IPTR) &has_pan,
+                                                       TAG_DONE );
+                                    onevoice = has_vol && has_pan;
+                                }
+                                numCh = ( stereo && ! onevoice ) ? 2 : 1;
+                                sfd->Channels = numCh;
+                                sfd->Cycles =
+                                    sfd->CyclesLeft = UMult( id->Cycles, numCh );
+
                                 if( ( actrl = AHI_AllocAudio(
                                                   AHIA_AudioID, audioID,
                                                   AHIA_Channels, numCh,
@@ -3963,9 +4023,13 @@ void PlayerProcAHI( void )
                                                   TAG_DONE ) ) != NULL) {
                                     struct AHISampleInfo	sample;
                                     ULONG				freq, vol;
+                                    LONG				playpan;
 
                                     freq = id->Frequency;
                                     vol = ( id->Volume << 10 );
+                                    playpan = id->Panning;
+                                    if( onevoice )
+                                        StereoVoice( vol, id->Panning, &vol, &playpan );
 
                                     D(bug( "[Sound.dt:AHI] %s: alloc audio okay\n", __func__); )
 
@@ -4015,10 +4079,10 @@ void PlayerProcAHI( void )
                                                       AHIP_BeginChannel, 0,
                                                       AHIP_Freq, freq,
                                                       AHIP_Vol, vol,
-                                                      AHIP_Pan, id->Panning,
+                                                      AHIP_Pan, playpan,
                                                       AHIP_Sound, 0,
                                                       AHIP_EndChannel, 0,
-                                                      ( stereo ? TAG_IGNORE : TAG_END ), 0L,
+                                                      ( numCh == 2 ? TAG_IGNORE : TAG_END ), 0L,
                                                       AHIP_BeginChannel, 1,
                                                       AHIP_Freq, freq,
                                                       AHIP_Vol, vol,

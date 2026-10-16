@@ -1,6 +1,24 @@
 
 include $(SRCDIR)/config/aros.cfg
 
+# The bounded, architecture-neutral reader is shared with the AArch64 boot
+# adapter. These sources contain no platform instructions or allocator.
+OF_FDT_DIR := $(SRCDIR)/arch/aarch64-all/boot/fdt
+USER_INCLUDES := -I$(OF_FDT_DIR) -I$(OF_FDT_DIR)/libfdt
+USER_CPPFLAGS := -DAROS_FDT_FREESTANDING=1
+OF_FDT_BUILD := $(GENDIR)/rom/openfirmware/fdt
+USER_OBJS := $(addprefix $(OF_FDT_BUILD)/,early_fdt.o fdt.o fdt_ro.o fdt_check.o)
+
 %build_module mmake=kernel-openfirmware 	\
   modname=openfirmware modtype=resource		\
-  cflags="$(CFLAGS)" files="of_init"
+  cflags="$(CFLAGS)" files="of_init of_fdt"
+
+$(OF_FDT_BUILD):
+	$(Q)$(MKDIR) -p $@
+$(OF_FDT_BUILD)/%.o: $(OF_FDT_DIR)/%.c | $(OF_FDT_BUILD) $(kernel-openfirmware_DEFLIBDEFSINC)
+	$(Q)$(TARGET_CC) $(TARGET_SYSROOT) $(kernel-openfirmware_CFLAGS) $(kernel-openfirmware_CPPFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+$(OF_FDT_BUILD)/%.o: $(OF_FDT_DIR)/libfdt/%.c | $(OF_FDT_BUILD) $(kernel-openfirmware_DEFLIBDEFSINC)
+	$(Q)$(TARGET_CC) $(TARGET_SYSROOT) $(kernel-openfirmware_CFLAGS) $(kernel-openfirmware_CPPFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+-include $(USER_OBJS:.o=.d)
+
+%common

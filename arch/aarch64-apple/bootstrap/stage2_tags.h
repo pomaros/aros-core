@@ -1,0 +1,21 @@
+/*
+ * Copyright (C) 2026 John KNIPPER
+ *
+ * Licensed under the AROS Public License (APL) Version 1.1
+ */
+
+#ifndef AROS_AARCH64_APPLE_STAGE2_TAGS_H
+#define AROS_AARCH64_APPLE_STAGE2_TAGS_H
+
+#include "stage2_loader.h"
+
+enum AROSAppleStage2Status AROSAppleStage2BuildTags(
+    const struct AROSBootInfo *boot_info,
+    uintptr_t stage2_image_start,
+    struct AROSAppleStage2Result *result,
+    uint64_t arena_end,
+    uint64_t *cursor);
+
+int AROSAppleStage2AppendDeviceTags(struct AROSAppleStage2Result *result);
+
+#endif /* AROS_AARCH64_APPLE_STAGE2_TAGS_H */

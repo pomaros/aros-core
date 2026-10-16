@@ -71,19 +71,8 @@ CONST_STRPTR BufferSizeLabels[] =
 
 /*** Instance Data **********************************************************/
 
-struct SerEditor_DATA
-{
-    int i;
-
-    CONST_STRPTR ParityLabels[6];
-    Object *child;
-    Object *baudrate;
-    Object *stopbits;
-    Object *databits;
-    Object *parity;
-    Object *inputbuffersize;
-    Object *outputbuffersize;
-};
+#define SEREDITOR_DATA_H_IN_SOURCE
+#include "sereditor_data.h"
 
 STATIC VOID SerPrefs2Gadgets(struct SerEditor_DATA *data);
 STATIC VOID Gadgets2SerPrefs(struct SerEditor_DATA *data);
@@ -144,26 +133,32 @@ Object *SerEditor__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
                 Child, (IPTR)Label1(_(MSG_GAD_BAUDRATE)),
                 Child, (IPTR)(data->baudrate = (Object *)CycleObject,
                     MUIA_Cycle_Entries, (IPTR)BaudrateLabels,
+                    MUIA_ObjectID, MAKE_ID('S','R','B','R'),
                 End),
                 Child, (IPTR)Label1(_(MSG_GAD_DATABITS)),
                 Child, (IPTR)(data->databits = (Object *)CycleObject,
                     MUIA_Cycle_Entries, (IPTR)DataBitsLabels,
+                    MUIA_ObjectID, MAKE_ID('S','R','D','B'),
                 End),
                 Child, (IPTR)Label1(_(MSG_GAD_PARITY)),
                 Child, (IPTR)(data->parity = (Object *)CycleObject,
                     MUIA_Cycle_Entries, (IPTR)data->ParityLabels,
+                    MUIA_ObjectID, MAKE_ID('S','R','P','A'),
                 End),
                 Child, (IPTR)Label1(_(MSG_GAD_STOPBITS)),
                 Child, (IPTR)(data->stopbits = (Object *)CycleObject,
                     MUIA_Cycle_Entries, (IPTR)StopBitsLabels,
+                    MUIA_ObjectID, MAKE_ID('S','R','S','B'),
                 End),
                 Child, (IPTR)Label1(_(MSG_GAD_INPUTBUFFERSIZE)),
                 Child, (IPTR)(data->inputbuffersize = (Object *)CycleObject,
                     MUIA_Cycle_Entries, (IPTR)BufferSizeLabels,
+                    MUIA_ObjectID, MAKE_ID('S','R','I','B'),
                 End),
                 Child, (IPTR)Label1(_(MSG_GAD_OUTPUTBUFFERSIZE)),
                 Child, (IPTR)(data->outputbuffersize = (Object *)CycleObject,
                     MUIA_Cycle_Entries, (IPTR)BufferSizeLabels,
+                    MUIA_ObjectID, MAKE_ID('S','R','O','B'),
                 End),
             End, /* ColGroup */
 #if SHOWPIC
@@ -321,6 +316,7 @@ IPTR SerEditor__MUIM_PrefsEditor_SetDefaults
 }
 
 /*** Setup ******************************************************************/
+#ifndef SERIALEDITOR_MCC
 ZUNE_CUSTOMCLASS_4
 (
     SerEditor, NULL, MUIC_PrefsEditor, NULL,
@@ -329,4 +325,5 @@ ZUNE_CUSTOMCLASS_4
     MUIM_PrefsEditor_ExportFH,    struct MUIP_PrefsEditor_ExportFH *,
     MUIM_PrefsEditor_SetDefaults, Msg
 );
+#endif /* SERIALEDITOR_MCC */
 

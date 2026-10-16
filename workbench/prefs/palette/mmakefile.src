@@ -15,4 +15,14 @@ EXEDIR  := $(AROSDIR)/Prefs
     progname=Palette targetdir=$(EXEDIR) \
     files=$(FILES)
 
+# The same editor as a shared class for the settings window.
+CLASSFILES := locale palette prefs args misc paletteeditor_init paleditor_mcc
+
+#MM- workbench-prefs : workbench-prefs-palette-class
+#MM workbench-prefs-palette-class : includes linklibs workbench-prefs-palette-catalogs workbench-prefs-palette-icons workbench-classes-zune-prefseditor
+
+%build_module mmake=workbench-prefs-palette-class \
+    modname=PaletteEditor modtype=mcc \
+    conffile=paletteeditor.conf files="$(CLASSFILES)"
+
 %common

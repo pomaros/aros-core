@@ -104,51 +104,8 @@ STATIC CONST_STRPTR ui_Dithering[] = {NULL,NULL,NULL,NULL};
 
 /*** Instance Data **********************************************************/
 
-struct PrinterEditor_DATA
-{
-    STRPTR UnitLabels[UNIT_COUNT];
-    int PrinterDeviceUnit;
-
-    Object *child;
-
-    Object *pd_UnitNum;         /* Cycle */
-    Object *pd_UnitName;        /* String */
-
-    Object *pt_DriverList;      /* Dirlist */
-    Object *pt_Driver;          /* Text */
-    Object *pt_Port;            /* Cycle */
-    Object *pt_PaperType;       /* Cycle */
-    Object *pt_PaperSize;       /* Cycle */
-    Object *pt_PaperLength;     /* String (integer) */
-    Object *pt_Pitch;           /* Cycle */
-    Object *pt_Spacing;         /* Cycle */
-    Object *pt_LeftMargin;      /* String (integer) */
-    Object *pt_RightMargin;     /* String (integer) */
-    Object *pt_Quality;         /* Cycle */
-
-    Object *pu_UnitNum;         /* String (integer) */
-    Object *pu_DeviceName;      /* String */
-    Object *pu_DeviceNameCustom;/* CheckMark */
-
-    Object *pg_Aspect;          /* Cycle */
-    Object *pg_Shade;           /* Cycle */
-    Object *pg_Image;           /* Cycle */
-    Object *pg_Threshold;       /* Slider */
-    Object *pg_Dimensions;      /* Cycle */
-    Object *pg_Dithering;       /* Cycle */
-    Object *pg_GraphicFlags_Center;     /* CheckMark */
-    Object *pg_GraphicFlags_AntiAlias;  /* CheckMark */
-    Object *pg_GraphicFlags_IntScaling; /* CheckMark */
-    Object *pg_PrintDensity;    /* Slider */
-
-    Object *pg_MaxUnits;        /* Cycle */
-    Object *pg_PrintMaxWidth;   /* String (integer) */
-    Object *pg_PrintMaxHeight;  /* String (integer) */
-
-    Object *pg_OffsetUnits;     /* Label */
-    Object *pg_PrintXOffset;    /* String (integer) */
-    Object *pg_PrintYOffset;    /* String (integer) */
-};
+#define EDITOR_DATA_H_IN_SOURCE
+#include "editor_data.h"
 
 STATIC VOID PrinterPrefs2Gadgets(Class *CLASS, Object *self);
 STATIC VOID Gadgets2PrinterPrefs(Class *CLASS, Object *self);
@@ -454,6 +411,37 @@ Object *PrinterEditor__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
 
 
         DoMethod(self, OM_ADDMEMBER, (IPTR) data->child);
+        /* Stable ids for the settings window's index and port. */
+        SET(data->pd_UnitNum, MUIA_ObjectID, MAKE_ID('P','R','U','N'));
+        SET(data->pd_UnitName, MUIA_ObjectID, MAKE_ID('P','R','N','M'));
+        SET(data->pt_DriverList, MUIA_ObjectID, MAKE_ID('P','R','D','L'));
+        SET(data->pt_Port, MUIA_ObjectID, MAKE_ID('P','R','P','T'));
+        SET(data->pu_UnitNum, MUIA_ObjectID, MAKE_ID('P','R','P','U'));
+        SET(data->pu_DeviceNameCustom, MUIA_ObjectID, MAKE_ID('P','R','D','C'));
+        SET(data->pu_DeviceName, MUIA_ObjectID, MAKE_ID('P','R','D','N'));
+        SET(data->pt_PaperType, MUIA_ObjectID, MAKE_ID('P','R','T','Y'));
+        SET(data->pt_PaperSize, MUIA_ObjectID, MAKE_ID('P','R','S','Z'));
+        SET(data->pg_MaxUnits, MUIA_ObjectID, MAKE_ID('P','R','M','U'));
+        SET(data->pg_PrintMaxWidth, MUIA_ObjectID, MAKE_ID('P','R','M','W'));
+        SET(data->pg_PrintMaxHeight, MUIA_ObjectID, MAKE_ID('P','R','M','H'));
+        SET(data->pt_Quality, MUIA_ObjectID, MAKE_ID('P','R','Q','U'));
+        SET(data->pt_Pitch, MUIA_ObjectID, MAKE_ID('P','R','P','I'));
+        SET(data->pt_Spacing, MUIA_ObjectID, MAKE_ID('P','R','S','P'));
+        SET(data->pt_LeftMargin, MUIA_ObjectID, MAKE_ID('P','R','L','M'));
+        SET(data->pt_RightMargin, MUIA_ObjectID, MAKE_ID('P','R','R','M'));
+        SET(data->pt_PaperLength, MUIA_ObjectID, MAKE_ID('P','R','P','L'));
+        SET(data->pg_PrintDensity, MUIA_ObjectID, MAKE_ID('P','R','D','E'));
+        SET(data->pg_Aspect, MUIA_ObjectID, MAKE_ID('P','R','A','S'));
+        SET(data->pg_Shade, MUIA_ObjectID, MAKE_ID('P','R','S','H'));
+        SET(data->pg_Image, MUIA_ObjectID, MAKE_ID('P','R','I','M'));
+        SET(data->pg_Threshold, MUIA_ObjectID, MAKE_ID('P','R','T','H'));
+        SET(data->pg_Dithering, MUIA_ObjectID, MAKE_ID('P','R','D','I'));
+        SET(data->pg_Dimensions, MUIA_ObjectID, MAKE_ID('P','R','D','M'));
+        SET(data->pg_PrintXOffset, MUIA_ObjectID, MAKE_ID('P','R','X','O'));
+        SET(data->pg_PrintYOffset, MUIA_ObjectID, MAKE_ID('P','R','Y','O'));
+        SET(data->pg_GraphicFlags_Center, MUIA_ObjectID, MAKE_ID('P','R','G','C'));
+        SET(data->pg_GraphicFlags_AntiAlias, MUIA_ObjectID, MAKE_ID('P','R','G','A'));
+        SET(data->pg_GraphicFlags_IntScaling, MUIA_ObjectID, MAKE_ID('P','R','G','I'));
 
 #define PREF_NOTIFY(x, field)   DoMethod(data->x, MUIM_Notify, field, MUIV_EveryTime, \
                                          (IPTR)self, 3, MUIM_Set, MUIA_PrefsEditor_Changed, TRUE)
@@ -891,6 +879,7 @@ IPTR PrinterEditor__MUIM_PrinterEditor_Refresh(Class *CLASS, Object *self, Msg m
 }
 
 /*** Setup ******************************************************************/
+#ifndef PRINTEREDITOR_MCC
 ZUNE_CUSTOMCLASS_7
 (
     PrinterEditor, NULL, MUIC_PrefsEditor, NULL,
@@ -902,4 +891,5 @@ ZUNE_CUSTOMCLASS_7
     MUIM_PrinterEditor_Sync, Msg,
     MUIM_PrinterEditor_Refresh, Msg
 );
+#endif /* PRINTEREDITOR_MCC */
 

@@ -1,3 +1,6 @@
+/* Readiness extensions Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * SPDX-License-Identifier: APL-1.1
+ */
 /****************************************************************************
 **  File:       pipesched.c
 **  Program:    pipe-handler - an AmigaDOS handler for named pipes
@@ -91,6 +94,19 @@ SPIOEXIT:
   pipekey= (PIPEKEY *) pkt->dp_Arg1;
   pipe= pipekey->pipe;
 
+  /* Validate before allocating a waiting request, including zero-length I/O. */
+  if ((iotype == PIPEREAD && pipekey->iotype != PIPEREAD && pipekey->iotype != PIPERW) ||
+      (iotype == PIPEWRITE && pipekey->iotype != PIPEWRITE && pipekey->iotype != PIPERW))
+    { pkt->dp_Res2= ERROR_INVALID_LOCK;
+      goto SPIOEXIT;
+    }
+  if (pkt->dp_Arg3 == 0)
+    { pkt->dp_Res1= 0;
+      pkt->dp_Res2= 0;
+      QuickReplyPkt (pkt);
+      return;
+    }
+
   if ((wd= (WAITINGDATA *) AllocMem (sizeof (WAITINGDATA), ALLOCMEM_FLAGS)) == NULL)
     { pkt->dp_Res2= ERROR_NO_FREE_STORE;
       goto SPIOEXIT;
@@ -100,16 +116,22 @@ SPIOEXIT:
   pkt->dp_Res2= ERROR_INVALID_LOCK;     /* in case not open for iotype */
 
   if (iotype == PIPEREAD)
-    { if ((pipekey->iotype != PIPEREAD) && (pipekey->iotype != PIPERW))
-        goto SPIOEXIT;
+    { /* Non-blocking read on an empty pipe that still has a writer returns
+         would-block at once instead of waiting. (Empty with no writer is EOF,
+         handled by CheckWaiting, which returns 0.) */
+      if (pipekey->nonblock && PipebufEmpty (pipe->buf) &&
+          ((pipe->flags & OPEN_FOR_WRITE) || (FirstItem (&pipe->writerlist) != NULL)))
+        { FreeMem (wd, sizeof (WAITINGDATA));
+          pkt->dp_Res1= -1;
+          pkt->dp_Res2= ERROR_PIPE_WOULD_BLOCK;
+          QuickReplyPkt (pkt);
+          return;
+        }
 
       InsertTail (&pipe->readerlist, (PIPELISTNODE *)wd);
     }
   else     /* PIPEWRITE */
-    { if ((pipekey->iotype != PIPEWRITE) && (pipekey->iotype != PIPERW))
-        goto SPIOEXIT;
-
-      InsertTail (&pipe->writerlist, (PIPELISTNODE *)wd);
+    { InsertTail (&pipe->writerlist, (PIPELISTNODE *)wd);
     }
 
 
@@ -138,6 +160,82 @@ SPIOEXIT:
 ** will be discarded.
 */
 
+/*---------------------------------------------------------------------------
+** TRUE if a new reader could make progress right now: the buffer holds data,
+** or the pipe is at EOF (empty, no writer, not open for write) so a read would
+** return 0 immediately. This is the readiness the notify signal reports.
+*/
+
+int  PipeReadable (pipe)
+
+PIPEDATA  *pipe;
+
+{
+  return (! PipebufEmpty (pipe->buf)) ||
+         ((! (pipe->flags & OPEN_FOR_WRITE)) && (FirstItem (&pipe->writerlist) == NULL));
+}
+
+
+
+/*---------------------------------------------------------------------------
+** ACTION_PIPE_READ_NOTIFY: register (or clear) the signal a reader wants when
+** the pipe becomes readable. Level-triggered, so if the pipe is already readable
+** the signal is sent at once (no lost wakeup for data that arrived first).
+*/
+
+void  PipeReadNotify (pkt)
+
+struct DosPacket  *pkt;
+
+{ PIPEKEY   *pipekey;
+  PIPEDATA  *pipe;
+
+  pkt->dp_Res1= 0;
+  pkt->dp_Res2= ERROR_INVALID_LOCK;
+
+  if ((pipekey= (PIPEKEY *) pkt->dp_Arg1) != NULL && (pipe= pipekey->pipe) != NULL &&
+      (pipekey->iotype == PIPEREAD || pipekey->iotype == PIPERW) &&
+      (pkt->dp_Arg2 == 0 || pkt->dp_Arg3 != 0))
+    { pipe->rdnotify_sig  = (ULONG) pkt->dp_Arg2;
+      pipe->rdnotify_task = pkt->dp_Arg2 ? (struct Task *) pkt->dp_Arg3 : NULL;
+
+      pkt->dp_Res1= 1;
+      pkt->dp_Res2= 0;
+
+      if (pipe->rdnotify_task && PipeReadable (pipe))
+        Signal (pipe->rdnotify_task, pipe->rdnotify_sig);
+    }
+
+  QuickReplyPkt (pkt);
+}
+
+
+
+/*---------------------------------------------------------------------------
+** ACTION_PIPE_SET_NONBLOCK: set (Arg2 != 0) or clear non-blocking mode on a
+** pipe handle -- the pipe analogue of IoctlSocket(FIONBIO).
+*/
+
+void  PipeSetNonblock (pkt)
+
+struct DosPacket  *pkt;
+
+{ PIPEKEY  *pipekey;
+
+  pkt->dp_Res1= 0;
+  pkt->dp_Res2= ERROR_INVALID_LOCK;
+
+  if ((pipekey= (PIPEKEY *) pkt->dp_Arg1) != NULL)
+    { pipekey->nonblock= (pkt->dp_Arg2 != 0);
+      pkt->dp_Res1= 1;
+      pkt->dp_Res2= 0;
+    }
+
+  QuickReplyPkt (pkt);
+}
+
+
+
 void  CheckWaiting (pipe)
 
 PIPEDATA  *pipe;
@@ -163,7 +261,10 @@ PIPEDATA  *pipe;
               change= TRUE;
             }
 
-          if (wd->pktinfo.pipewait.len == 0L)     /* then finished with request */
+          /* Return as soon as any data was read (POSIX/stream semantics): the
+             request finishes when it is full OR the buffer has drained, rather
+             than blocking until the whole requested length is available. */
+          if ((wd->pktinfo.pipewait.len == 0L) || PipebufEmpty (pipe->buf))
             EndPipeIO (pipe, wd);
         }     /* end of readerlist loop */
 
@@ -182,6 +283,13 @@ PIPEDATA  *pipe;
             EndPipeIO (pipe, wd);
         }     /* end of writerlist loop */
     }
+
+
+  /* Read-readiness notify (level-triggered): if a reader registered a signal and
+     a would-be reader could make progress now -- data buffered, or EOF -- send it.
+     Done here so it fires after any write, open or close that changes the state. */
+  if (pipe->rdnotify_task && PipeReadable (pipe))
+    Signal (pipe->rdnotify_task, pipe->rdnotify_sig);
 
 
   if ( PipebufEmpty (pipe->buf)                &&

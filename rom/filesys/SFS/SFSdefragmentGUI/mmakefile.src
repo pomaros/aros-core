@@ -2,7 +2,7 @@
 
 include $(SRCDIR)/config/aros.cfg
     
-USER_CFLAGS := -I $(SRCDIR)/$(CURDIR)/../FS -DADATE="\"$(shell date '+%d.%m.%Y')\""
+USER_CFLAGS := -I $(SRCDIR)/$(CURDIR)/../FS -DADATE="\"$(AROS_BUILD_DATE)\""
 
 %build_prog mmake=workbench-devs-sfs-c-sfsdefragmentgui \
     files=SFSdefragmentGUI progname=SFSdefragmentGUI targetdir=$(AROS_C)

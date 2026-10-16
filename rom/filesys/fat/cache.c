@@ -1,5 +1,6 @@
 /*
     Copyright (C) 2010-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>
 
     Disk cache.
  */
@@ -352,4 +353,3 @@ BOOL Cache_Flush(APTR cache)
     SetIoErr(error);
     return error == 0;
 }
-

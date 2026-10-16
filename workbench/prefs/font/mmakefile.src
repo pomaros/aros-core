@@ -1,18 +1,25 @@
 #
-# Makefile to build Font Prefs program.
+# Makefile to build Font Prefs program and its shared editor class.
 
 include $(SRCDIR)/config/aros.cfg
 
-FILES       := main args prefs locale misc fpeditor
+FILES       := main args prefs locale misc fontsettings
+CLASSFILES  := fpeditor prefs locale misc fontsettings
 EXEDIR      := $(AROS_PREFS)
 
 #MM- workbench-prefs : workbench-prefs-font
-#MM workbench-prefs-font : workbench-prefs-font-catalogs
+#MM workbench-prefs-font : workbench-prefs-font-catalogs workbench-prefs-font-class workbench-libs-settings-includes workbench-libs-settings
+#MM workbench-prefs-font-class : workbench-prefs-font-catalogs workbench-classes-zune-prefseditor includes workbench-libs-settings-includes workbench-libs-settings
 
-USER_CFLAGS := -DADATE="\"$(shell date '+%d.%m.%Y')\""
+USER_CFLAGS := -DADATE="\"$(AROS_BUILD_DATE)\""
+USER_LDFLAGS := -static
 
 %build_prog mmake=workbench-prefs-font \
     progname=Font targetdir=$(EXEDIR) \
     files=$(FILES)
+
+%build_module mmake=workbench-prefs-font-class \
+    modname=FontEditor modtype=mcc \
+    conffile=fpeditor.conf files=$(CLASSFILES)
 
 %common

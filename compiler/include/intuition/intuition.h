@@ -690,6 +690,8 @@ struct ExtNewWindow
 #define WA_Priority 	     (WA_Dummy + 100)
 #define WA_Parent   	     (WA_Dummy + 101)
 #define WA_Behind   	     (WA_Dummy + 103)
+/* BOOL: protected top layer, only borderless nonactivating top-level ToolBox. */
+#define WA_TileOverlay       (WA_Dummy + 104)
 
 /* Flags */
 #define WFLG_SIZEGADGET     (1L<<0)

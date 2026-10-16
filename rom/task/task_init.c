@@ -11,9 +11,6 @@
 #include <resources/task.h>
 
 #include "etask.h"
-#if defined(__AROSEXEC_SMP__)
-#include "kernel_debug.h"
-#endif
 #include "task_intern.h"
 
 extern APTR AROS_SLIB_ENTRY(NewAddTask, Task, 176)();
@@ -45,7 +42,8 @@ static LONG taskres_Init(struct TaskResBase *TaskResBase)
     ExecLockBase = TaskResBase->trb_ExecLock;
     if (!ExecLockBase)
     {
-        krnPanic(KernelBase,"Failed to open Exec's private locking resource!");
+        bug("[TaskRes] FAIL: cannot open Exec's private locking resource!\n");
+        return FALSE;
     }
 #endif
 
@@ -57,6 +55,13 @@ static LONG taskres_Init(struct TaskResBase *TaskResBase)
     NEWLIST(&TaskResBase->trb_NewTasks);
     NEWLIST(&TaskResBase->trb_NotifyHooks);
     InitSemaphore(&TaskResBase->trb_NotifySem);
+#if defined(__AROSEXEC_SMP__)
+    EXEC_SPINLOCK_INIT(&TaskResBase->trb_RTLock);
+#endif
+    NEWLIST(&TaskResBase->trb_RTContexts);
+    NEWLIST(&TaskResBase->trb_RTRecords);
+    NEWLIST(&TaskResBase->trb_RTPins);
+    TaskResBase->trb_RTNext = 1;
     NEWLIST(&TaskResBase->trb_LockedLists);
 
     SysBase->lb_TaskResBase = (struct Library *)TaskResBase;

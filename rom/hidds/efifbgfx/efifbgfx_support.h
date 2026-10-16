@@ -6,6 +6,9 @@
 
 struct HWData
 {
+    /* Optional task-context presentation after copying into the surface. */
+    void (*present)(APTR, ULONG, ULONG, ULONG, ULONG);
+    APTR present_data;
     APTR	 framebuffer;
     ULONG	 fbsize;
     ULONG	 width;
@@ -21,6 +24,7 @@ struct HWData
     ULONG	 blueshift;
     ULONG	 bytesperline;
     UBYTE	 palettewidth;
+    BOOL     owned;
 };
 
 struct EFIFBGfx_staticdata;

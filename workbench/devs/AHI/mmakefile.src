@@ -11,6 +11,7 @@ include $(SRCDIR)/config/aros.cfg
 #MM- AHI-raspi-armhf :  kernel-dma-bcm2708-includes kernel-mbox-bcm2708-includes
 #MM- AHI-raspi-arm :  kernel-dma-bcm2708-includes kernel-mbox-bcm2708-includes
 #MM- AHI-raspi-aarch64 :  kernel-dma-bcm2708-includes kernel-mbox-bcm2708-includes
+#MM- AHI-apple-aarch64 :
 
 #MM- AHI-standalone-prereqs : \
 #MM                         AHI-$(AROS_TARGET_ARCH)-$(AROS_TARGET_CPU)
@@ -18,7 +19,8 @@ include $(SRCDIR)/config/aros.cfg
 #MM- AHI-emulation-prereqs : \
 #MM                         AHI-alsa-bridge-$(AROS_TARGET_ARCH) \
 #MM                         AHI-pulseaudio-bridge-$(AROS_TARGET_ARCH) \
-#MM                         AHI-WASAPI-bridge-$(AROS_TARGET_ARCH)
+#MM                         AHI-WASAPI-bridge-$(AROS_TARGET_ARCH) \
+#MM                         AHI-coreaudio-bridge-$(AROS_TARGET_ARCH)
 
 #MM workbench-devs-AHI-subsystem : includes \
 #MM                         linklibs \
@@ -35,7 +37,27 @@ AHI_OPTIONS=--with-os-includedir=$(AROS_INCLUDES)
 # AHI's configure script will not set the needed preprocessor
 # flags if cppflags is already defined, so we pass them using
 # the configure option.
-USER_CFLAGS := $(CFLAGS_NO_BUILTIN_FLOOR) 
+#
+# AHI is an autotools subsystem: %build_with_configure feeds it USER_CFLAGS /
+# USER_LDFLAGS via the configure environment (its Makefiles use @CFLAGS@ /
+# @LDFLAGS@), but NOT the tree-wide LDFLAGS/make.cfg flags. So the two aarch64
+# host-port build requirements have to be re-stated here or every AHI link
+# breaks the same way a stale-object module would:
+#   -Wl,--allow-multiple-definition : clang emits the weak __aros_libreq_<base>
+#     version marker as a non-weak block-scope static, so it collides across a
+#     module's objects (see config/make.cfg.in). Without this every AHI binary
+#     (ahi.device, coreaudio.audio, AddAudioModes, AHI_MUI) fails to link with
+#     "duplicate symbol __aros_libreq_SysBase".
+#   -ffixed-x18 : x18 is the Darwin platform register; AROS-hosted preempts via
+#     signals that clobber it, so a value left live in x18 is lost. AHI's
+#     configure predates the flag being in make.cfg.
+USER_CFLAGS := $(CFLAGS_NO_BUILTIN_FLOOR)
+ifeq ($(AROS_TARGET_ARCH)-$(AROS_TARGET_CPU),darwin-aarch64)
+USER_CFLAGS += -ffixed-x18
+endif
+ifeq ($(AROS_TARGET_CPU),aarch64)
+USER_LDFLAGS := -Wl,--allow-multiple-definition
+endif
 AHI_OPTIONS+=--with-target-cppflags="$(TARGET_CPPFLAGS)"
 
 #
