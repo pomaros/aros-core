@@ -131,7 +131,7 @@ void RefreshBoolGadget (struct Gadget * gadget, struct Window * window,
     rp = ObtainGIRPort(&gi);
     if (!rp) return;
 
-    dri = GetScreenDrawInfo(window->WScreen);
+    dri = WindowDrawInfo(window->WScreen, window);
 
     SetDrMd (rp, JAM1);
 
@@ -200,8 +200,6 @@ void RefreshBoolGadget (struct Gadget * gadget, struct Window * window,
 
     } /* if ((bbox.Width >= 1) && (bbox.Height >= 1)) */
 
-    FreeScreenDrawInfo(window->WScreen, dri);
-
     ReleaseGIRPort(rp);
 
 } /* RefreshBoolGadget */
@@ -237,7 +235,7 @@ void RefreshBoolGadgetState(struct Gadget * gadget, struct Window * window,
     rp = ObtainGIRPort(&gi);
     if (!rp) return;
 
-    dri = GetScreenDrawInfo(window->WScreen);
+    dri = WindowDrawInfo(window->WScreen, window);
 
     SetDrMd (rp, JAM1);
 
@@ -281,8 +279,6 @@ void RefreshBoolGadgetState(struct Gadget * gadget, struct Window * window,
         } /* switch (gadget->Flags & GFLG_GADGHIGHBITS) */
 
     } /* if ((bbox.Width >= 1) && (bbox.Height >= 1)) */
-
-    FreeScreenDrawInfo(window->WScreen, dri);
 
     ReleaseGIRPort(rp);
 }

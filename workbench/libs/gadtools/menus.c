@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
 
     Desc: GadTools menu creation functions
@@ -551,7 +552,7 @@ static WORD MyIntuiTextLength(struct VisualInfo *vi, struct IntuiText *it,
     }
     else
     {
-        width = TextLength(&vi->vi_screen->RastPort, it->IText, strlen(it->IText));
+        width = GT_TextLength(vi, it->IText, strlen(it->IText), (struct Library *)GadToolsBase);
     }
 
     return width;
@@ -867,7 +868,7 @@ BOOL layoutmenuitems(struct MenuItem * firstitem,
         }
         
         menuwidth = maxx - minx + 1;
-        titlewidth = TextLength(&vi->vi_screen->RastPort, menu->MenuName, strlen(menu->MenuName));
+        titlewidth = GT_TextLength(vi, menu->MenuName, strlen(menu->MenuName), (struct Library *)GadToolsBase);
         
         if (titlewidth > menuwidth)
         {

@@ -1,0 +1,51 @@
+AFSCommands: command-level backup, snapshot and restore qualification
+
+Run only as "C:AFSCommands DISPOSABLEVM" on the disposable AFSPROBE: image
+with BACKUP/RESTORE authorized by its handler configuration. Required actual
+programs in C: are AFSPlusBackup, AFSPlusSnapshot, AFSPlusRestore, AFSPlusClone and AFSPlusReclaim. These
+come from afsplus/native/aros/tools and its client library. This probe uses
+SystemTags to launch them; it does not call extended-packet functions.
+Before writing, the shared identity guard resolves the explicit AFSPROBE
+device entry, matches its handler port to GetDeviceProc, and requires
+fdsk.device unit91. An assign or other device is refused even when the
+DISPOSABLEVM argument was supplied. A same-named volume entry is accepted
+only through that separately verified device; its union is never treated
+as a startup message.
+
+The probe exclusively creates AFSPROBE:AFSCommands and refuses an existing
+root. It captures three files (9000 bytes, 139 bytes and an empty file),
+lists the capture through both programs, then changes the live source.
+Snapshot VIEW must return the captured binary bytes and directory names.
+Restore publishes a fresh file and tree on the same volume; the file's
+protection, comment, owner IDs, date and size must match the captured file.
+Existing file/tree destinations must be refused without altering their data.
+Both decimal and explicit hexadecimal IDs are exercised. Successful deletion
+after VIEW and Restore proves their reader leases were closed. A private
+AFSCMD assign points to the probe directory. The actual Clone command must
+clone its assigned source into its assigned destination, preserve data and
+metadata of same-named volume-root shadows, and refuse an existing target.
+The assign and root shadows are created only when absent and removed during
+the owned cleanup. Reclaim refuses a scope on another handler, drives one-entry maintenance calls
+through an in-memory cursor to completion without writing cursor files, and preserves
+the published restored descendants and metadata. These command checks do not
+inject a retained stage; interrupted-stage reclamation has separate host tests.
+
+Both stdout and stderr are captured in RAM:AFSCommands-output. Expected
+refusal diagnostics remain there, while semantic assertions are mirrored to
+the console and kernel debug output. The final unique marker is:
+ [AFSCOMMANDS] result=PASS files=3 large-bytes=9000 real-cli=5 metadata=1 fresh-targets=1 failures=0
+It is emitted only after deleting both captures and all known probe-owned
+files/directories. Unexpected remaining children cause cleanup to fail.
+AFS-local probes protect already formatted debug records of at most 384 bytes
+against local timer interrupts with Disable/RawPutChar/Enable. Formatting and
+DOS output remain outside that region; an oversized record emits an explicit
+FAIL marker. This is a single-CPU guest guarantee, not cross-CPU serialization.
+
+The source helper's full64-bit capture/list parsing is checked by:
+ python3 developer/debug/test/test_afscommands_parse.py
+The host check uses ASan/UBSan and rejects overflow, signs, trailing text,
+duplicate IDs and malformed records. These are parser checks, not a CLI or
+VM runtime PASS. The guest run additionally requires the strict VM harness
+normal-termination and fault/provenance checks. It proves neither native M1
+behavior nor off-volume archives or system-root rollback. A backup capture
+remains on its source volume; restore copies into fresh storage there.

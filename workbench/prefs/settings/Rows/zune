@@ -1,0 +1,7 @@
+group appearance
+order 60
+class ZuneEditor.mcc
+name Zune
+description How every Zune program draws: fonts, backgrounds, frames, buttons, lists and keys
+keywords zune mui gadgets look windows groups buttons cycles sliders listviews strings navigation frames fonts backgrounds spacing
+level average

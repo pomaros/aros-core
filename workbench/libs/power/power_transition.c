@@ -412,7 +412,8 @@ static ULONG run_burst(struct PowerBase *PowerBase, struct timerequest *request,
 }
 
 LONG power_Transition(struct PowerBase *PowerBase, ULONG depth, ULONG seconds, ULONG source,
-                      ULONG coalesce, ULONG grid_seconds, struct PowerSleepResult *result)
+                      ULONG coalesce, ULONG grid_seconds, struct Hook *wake_hook, ULONG check_ms,
+                      struct PowerSleepResult *result)
 {
     struct MsgPort *port;
     struct timerequest *request;
@@ -534,19 +535,40 @@ LONG power_Transition(struct PowerBase *PowerBase, ULONG depth, ULONG seconds, U
     end.tv_secs += seconds;
     for (;;)
     {
-        struct timeval next;
+        struct timeval next, check;
+        BOOL limited = seconds != 0;
+
+        /* The hook's next question, or the end of the hold if sooner. */
+        GetSysTime(&check);
+        if (limited && !time_before(&check, &end))
+            break;
+        add_ms(&check, check_ms);
+        if (wake_hook == NULL || (limited && time_before(&end, &check)))
+            check = end;
 
         request->tr_node.io_Command = TR_ADDREQUEST;
-        if (next_wake(PowerBase, grid, &next) && time_before(&next, &end))
+        if (next_wake(PowerBase, grid, &next) && time_before(&next, &check))
         {
             request->tr_time = next;
             DoIO(&request->tr_node);
             awake_ms += run_burst(PowerBase, request, port, signal, grid, result);
             continue;
         }
-        request->tr_time = end;
+        request->tr_time = check;
         DoIO(&request->tr_node);
-        break;
+        if (wake_hook != NULL)
+        {
+            ULONG woken_by = (ULONG)CallHookPkt(wake_hook, NULL, NULL);
+
+            if (woken_by != 0)
+            {
+                result->psr_WokenBy = woken_by;
+                source = woken_by;
+                break;
+            }
+        }
+        if (wake_hook == NULL)
+            break;
     }
 
     /* 4. Release and thaw. */

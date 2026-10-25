@@ -109,6 +109,9 @@ struct MUI_ApplicationData
     struct MsgPort          *app_CfgNotifyPort;   /* notification of changes to the prefs file */
     struct NotifyRequest    app_CfgNotifyRequest;
     STRPTR                  app_CfgNotifyName;
+    struct NotifyRequest    app_GlobalCfgNotifyRequest;
+    BOOL                    app_CfgNotifyStarted;
+    BOOL                    app_GlobalCfgNotifyStarted;
 };
 
 struct timerequest_ext
@@ -321,7 +324,7 @@ static Object *find_application_by_base(struct IClass *cl, Object *obj,
 /**************************************************************************
  Config file notification
 
- ENV:zune/<appbase>.prefs is watched. Whenever it is written (e.g. by the
+ ENV:zune/<appbase>.prefs and ENV:zune/global.prefs are watched. Whenever either is written (e.g. by the
  MUI Settings window, sys:prefs/Zune) a fresh Configdata is built from it
  and handed to the application, so the new settings are applied
  immediately without restarting the application.
@@ -341,20 +344,27 @@ static void Application_SetupConfigNotify(struct IClass *cl, Object *obj)
     struct MUI_ApplicationData *data = INST_DATA(cl, obj);
     char name[255];
 
-    if (!data->app_Base)
-        return;
-
     data->app_CfgNotifyName = NULL;
     data->app_CfgNotifyPort = CreateMsgPort();
     if (!data->app_CfgNotifyPort)
+        return;
+
+    /* Configdata falls back to global prefs when no application file
+     * exists. Reload through the same event loop when that file changes;
+     * Configdata retains application-file precedence. */
+    memset(&data->app_GlobalCfgNotifyRequest, 0, sizeof(struct NotifyRequest));
+    data->app_GlobalCfgNotifyRequest.nr_Name = "ENV:zune/global.prefs";
+    data->app_GlobalCfgNotifyRequest.nr_Flags = NRF_SEND_MESSAGE;
+    data->app_GlobalCfgNotifyRequest.nr_stuff.nr_Msg.nr_Port = data->app_CfgNotifyPort;
+    data->app_GlobalCfgNotifyStarted = StartNotify(&data->app_GlobalCfgNotifyRequest);
+
+    if (!data->app_Base)
         return;
 
     snprintf(name, sizeof(name), "ENV:zune/%s.prefs", data->app_Base);
     data->app_CfgNotifyName = StrDup(name);
     if (!data->app_CfgNotifyName)
     {
-        DeleteMsgPort(data->app_CfgNotifyPort);
-        data->app_CfgNotifyPort = NULL;
         return;
     }
 
@@ -364,12 +374,11 @@ static void Application_SetupConfigNotify(struct IClass *cl, Object *obj)
     data->app_CfgNotifyRequest.nr_stuff.nr_Msg.nr_Port =
         data->app_CfgNotifyPort;
 
-    if (!StartNotify(&data->app_CfgNotifyRequest))
+    data->app_CfgNotifyStarted = StartNotify(&data->app_CfgNotifyRequest);
+    if (!data->app_CfgNotifyStarted)
     {
         FreeVec(data->app_CfgNotifyName);
         data->app_CfgNotifyName = NULL;
-        DeleteMsgPort(data->app_CfgNotifyPort);
-        data->app_CfgNotifyPort = NULL;
     }
 }
 
@@ -956,7 +965,10 @@ static IPTR Application__OM_DISPOSE(struct IClass *cl, Object *obj,
 
     if (data->app_CfgNotifyPort)
     {
-        EndNotify(&data->app_CfgNotifyRequest);
+        if (data->app_CfgNotifyStarted)
+            EndNotify(&data->app_CfgNotifyRequest);
+        if (data->app_GlobalCfgNotifyStarted)
+            EndNotify(&data->app_GlobalCfgNotifyRequest);
         DeleteMsgPort(data->app_CfgNotifyPort);
     }
 

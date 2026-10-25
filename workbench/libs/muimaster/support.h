@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 2002-2013, The AROS Development Team. All rights reserved.
 */
 
@@ -59,6 +60,19 @@ ULONG ConvertKey(struct IntuiMessage *imsg);
 #ifndef __GNUC__
 IPTR XGET(Object * obj, Tag attr);
 #endif
+
+const struct ScreenRenderContext *zune_screen_context(struct Screen *);
+APTR zune_visualinfo(struct MUI_RenderInfo *);
+
+BOOL zune_set_class_capabilities(Class *cl, ULONG caps, struct Library *base);
+BOOL zune_class_scale_aware(Class *cl, struct Library *base);
+BOOL zune_object_scale_aware(Object *obj, struct Library *base);
+BOOL zune_text_scale_supported(CONST_STRPTR text);
+ULONG zune_render_scale(const struct MUI_RenderInfo *mri);
+ULONG zune_screen_scale(struct Screen *screen);
+ULONG zune_legacy_factor(struct Screen *screen);
+LONG zune_scale(Object *obj, LONG points);
+LONG zune_scale_value(LONG points, ULONG scale);
 
 IPTR DoSetupMethod(Object * obj, struct MUI_RenderInfo *info);
 IPTR DoShowMethod(Object * obj);

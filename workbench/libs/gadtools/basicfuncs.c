@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2011, The AROS Development Team. All rights reserved.
 
     Desc: Basic help functions needed by gadtools.library.
@@ -32,8 +33,8 @@ struct GTIText
 {
     struct IntuiText it;
     struct IntuiText it2;
-    struct TextAttr  ta;
-    struct TextAttr  ta2;
+    struct TTextAttr ta;
+    struct TTextAttr ta2;
     UBYTE            text[0];
 };
 
@@ -42,7 +43,13 @@ struct GTIText
 void freeitext(struct GadToolsBase_intern *GadToolsBase,
                struct IntuiText *itext)
 {
-    if (itext) FreeVec(itext);
+    if (itext)
+    {
+        struct GTIText *gtit = (struct GTIText *)itext;
+        /* Both underline runs share this one owned clone. */
+        if (gtit->ta.tta_Tags) FreeTagItems(gtit->ta.tta_Tags);
+        FreeVec(gtit);
+    }
 }
 
 /**********************************************************************************************/
@@ -66,6 +73,7 @@ struct IntuiText *makeitext(struct GadToolsBase_intern *GadToolsBase,
     WORD                underscorelen;
     WORD                alloclen;
     BOOL                fontopened = FALSE;
+    struct TagItem     *fonttags = NULL;
     UBYTE               underscore = 1; /* default for GT_Underscore = a char which hopefully a normal
                                            string never contains */
 
@@ -84,6 +92,8 @@ struct IntuiText *makeitext(struct GadToolsBase_intern *GadToolsBase,
         fontysize = ng->ng_TextAttr->ta_YSize;
         fontstyle = ng->ng_TextAttr->ta_Style;
         fontflags = ng->ng_TextAttr->ta_Flags;
+        if (fontstyle & FSF_TAGGED)
+            fonttags = ((struct TTextAttr *)ng->ng_TextAttr)->tta_Tags;
     } else {
         font = dri->dri_Font;
         
@@ -91,9 +101,15 @@ struct IntuiText *makeitext(struct GadToolsBase_intern *GadToolsBase,
         fontysize = dri->dri_Font->tf_YSize;
         fontstyle = dri->dri_Font->tf_Style;
         fontflags = dri->dri_Font->tf_Flags;
+        if ((fontstyle & FSF_TAGGED) && font->tf_Extension)
+            fonttags = ((struct TextFontExtension *)font->tf_Extension)->tfe_Tags;
     }
     
-    if (!fontname) return NULL;
+    if (!fontname)
+    {
+        if (fontopened) CloseFont(font);
+        return NULL;
+    }
     
     fontnamelen = strlen(fontname);
     
@@ -106,19 +122,33 @@ struct IntuiText *makeitext(struct GadToolsBase_intern *GadToolsBase,
         return NULL;
     }
 
+    /* The source TextAttr may be on a caller's stack, and the opened font
+     * may close before rendering. Keep our own terminated tag list for the
+     * complete gadget lifetime, shared by the normal and underline runs. */
+    if (fonttags)
+    {
+        gtit->ta.tta_Tags = CloneTagItems(fonttags);
+        if (!gtit->ta.tta_Tags)
+        {
+            if (fontopened) CloseFont(font);
+            FreeVec(gtit);
+            return NULL;
+        }
+    }
+
     CopyMem(fontname, gtit->text, fontnamelen);
 
-    gtit->ta.ta_Name  = gtit->text;
-    gtit->ta.ta_YSize = fontysize;
-    gtit->ta.ta_Style = fontstyle;
-    gtit->ta.ta_Flags = fontflags;
+    gtit->ta.tta_Name  = gtit->text;
+    gtit->ta.tta_YSize = fontysize;
+    gtit->ta.tta_Style = fontstyle;
+    gtit->ta.tta_Flags = fontflags;
     
     gtit->it.FrontPen  = dri->dri_Pens[(ng->ng_Flags & NG_HIGHLABEL) ? HIGHLIGHTTEXTPEN : TEXTPEN];
     gtit->it.BackPen   = dri->dri_Pens[BACKGROUNDPEN];
     gtit->it.DrawMode  = JAM1;
     gtit->it.LeftEdge  = 0;
     gtit->it.TopEdge   = 0;
-    gtit->it.ITextFont = &gtit->ta;
+    gtit->it.ITextFont = (struct TextAttr *)&gtit->ta;
     
     if (!underscorepos)
     {
@@ -145,7 +175,7 @@ struct IntuiText *makeitext(struct GadToolsBase_intern *GadToolsBase,
         gtit->it.NextText = &gtit->it2;
         
         gtit->it2 = gtit->it;
-        gtit->it2.ITextFont = &gtit->ta2;
+        gtit->it2.ITextFont = (struct TextAttr *)&gtit->ta2;
         gtit->it2.IText = gtit->it.IText + gadgettextlen + 1;
         gtit->it2.NextText = NULL;
 
@@ -154,7 +184,7 @@ struct IntuiText *makeitext(struct GadToolsBase_intern *GadToolsBase,
 #if HIGH_COLOR
         gtit->it2.FrontPen = dri->dri_Pens[(ng->ng_Flags & NG_HIGHLABEL) ? TEXTPEN : HIGHLIGHTTEXTPEN];
 #else
-        gtit->ta2.ta_Style |= FSF_UNDERLINED;
+        gtit->ta2.tta_Style |= FSF_UNDERLINED;
 #endif
         
 
@@ -330,3 +360,13 @@ void DoDisabledPattern(struct RastPort *rp, WORD x1, WORD y1, WORD x2, WORD y2,
 }
 
 /**********************************************************************************************/
+
+/* Text measurement follows the VisualInfo coordinate domain, rather than
+ * inheriting the physical screen raster font for a logical legacy layout. */
+ULONG GT_TextLength(struct VisualInfo *vi, CONST_STRPTR text, ULONG length,
+    struct Library *GadToolsBase)
+{
+    struct RastPort rp = vi->vi_screen->RastPort;
+    SetFont(&rp, vi->vi_dri->dri_Font);
+    return TextLength(&rp, text, length);
+}

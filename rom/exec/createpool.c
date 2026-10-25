@@ -175,6 +175,7 @@
 
         /* Initialize pool header */
         NEWLIST((struct List *)&pool->pool.PuddleList);
+        NEWLIST((struct List *)&pool->pool.LargeList);
         pool->pool.Requirements = requirements;
         pool->pool.PuddleSize   = puddleSize;
         pool->pool.PoolMagic   = POOL_MAGIC;

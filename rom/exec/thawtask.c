@@ -15,6 +15,7 @@
 
 #include "exec_intern.h"
 #include "etask.h"
+#include "freeze_smp.h"
 
 /*****************************************************************************
 
@@ -50,7 +51,7 @@
     AROS_LIBFUNC_INIT
 
 #if defined(__AROSEXEC_SMP__)
-    return FALSE;
+    return exec_ThawOneSMP(task);
 #else
     struct IntETask *iet;
     BOOL thawed = FALSE;

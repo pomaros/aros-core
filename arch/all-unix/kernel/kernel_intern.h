@@ -56,8 +56,22 @@ struct KernelInterface
     /* Used by core_IRQ to FORWARD a mis-delivered tick to AROS's thread
      * (thread-directed signal). Async-signal-safe per POSIX. */
     int     (*pthread_kill)(void *thread, int sig);
+    /* Masks interrupts in AROS's thread only (see KRN_SIGMASK) */
+    int     (*pthread_sigmask)(int how, const sigset_t *set, sigset_t *oldset);
 #endif
 };
+
+/*
+ * darwin's sigprocmask() changes the mask of every thread in the process.
+ * darwin-aarch64 runs AROS on its own host thread, so mask only that
+ * thread and leave the others free to take a tick (core_IRQ forwards it).
+ * With a single host thread both calls do the same.
+ */
+#ifdef HOST_OS_darwin
+#define KRN_SIGMASK pthread_sigmask
+#else
+#define KRN_SIGMASK sigprocmask
+#endif
 
 /*
  * Android's Bionic doesn't have these functions.

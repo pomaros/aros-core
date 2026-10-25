@@ -112,6 +112,7 @@ struct AROSAppleStage2Result {
     uintptr_t kernel_prove_runtime;
     uintptr_t kernel_prove_dispatch;
     uintptr_t kernel_prove_core_coldstart;
+    uintptr_t module_map;
     uint64_t ramdisk_size;
     uint64_t page_arena_size;
     struct AROSAppleKernelBSS *bss;

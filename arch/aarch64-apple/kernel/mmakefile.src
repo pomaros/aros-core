@@ -25,18 +25,40 @@ USER_CPPFLAGS := -D__AROS_EXEC_LIBRARY__ \
   -DAROS_ARCHITECTURE="\"$(AROS_TARGET_PLATFORM)\""
 ifeq ($(AROS_VM_GUEST),1)
 USER_CPPFLAGS += -DAROS_VM_GUEST=1
-VM_SHARED_FILES := gic
+VM_SHARED_FILES := gic vm_platform_irq vm_platform_debug vm_platform_cpu
+else
+USER_CPPFLAGS += -DAROS_COLDSTART_PLATFORM=NativeColdStartPlatform
+USER_INCLUDES += -I$(SRCDIR)/arch/aarch64-apple/native
+NATIVE_PLATFORM_FILES := native_platform_irq native_platform_debug native_platform_cpu native_timer_fdt coldstart_native aic aic_fdt aic_kernel uart_fdt uart_irq
 endif
 USER_CPPFLAGS += -DAROS_FDT_FREESTANDING=1
 USER_CFLAGS := $(CFLAGS_GENERAL_REGS_ONLY) -Werror=implicit-function-declaration
 
+ifeq ($(AROS_TARGET_VARIANT),smp)
+SMP_ASM := smp_entry
+SMP_FILES := kernel_scheduler kernel_ipi spininit spinislocked spintrylock spinlock spinunlock alloccpumask freecpumask clearcpumask cpuinmask getcpumask getcpucount getcpunumber schedulecpu smp smp_proof
+ifeq ($(AROS_VM_GUEST),1)
+SMP_FILES += vm_platform_smp
+else
+SMP_FILES += native_platform_smp
+SMP_ASM += native_smp_entry
+endif
+endif
+
+# coldstart_proof.c includes the generated proto headers of these resources;
+# a fresh tree must generate them before the kernel compiles.
+#MM kernel-kernel-apple-aarch64 : kernel-bootloader-includes kernel-task-includes kernel-timer-includes
+ifneq ($(AROS_VM_GUEST),1)
+#MM kernel-kernel-apple-aarch64 : kernel-smc-includes kernel-spmi-includes kernel-rtkit-includes kernel-pmgr-includes
+endif
+
 %build_archspecific \
   mainmmake=kernel-kernel maindir=rom/kernel modname=kernel \
-  files="_bug allocpages mapglobal cli coldstart_proof cpu_init createcontext dispatch_proof \
+  files="_bug allocpages code_window code_window_kernel mapglobal cli coldstart_proof cpu_init createcontext dispatch_proof \
   kernel_libc cpu_monitor cpu_probe cpu_topology cpu_accounting early_fdt fdt fdt_ro fdt_check \
-  freepages getsystemattr guarded_stack guard_proof issuper kernel_cpu kernel_debug memory_plan_contract page_allocator screen_log \
-  platform_timer platform_timer_core runtime setprotection startup_contract startup_prepare sti vm_irq modifyirq $(VM_SHARED_FILES)" \
-  asmfiles="dispatch_simd runtime_vectors cpu_probe_entry guard_probe" \
+  freepages getsystemattr guarded_stack guard_proof issuper jit_protect kernel_cpu kernel_debug memory_plan_contract page_allocator screen_log \
+  platform_timer platform_timer_core runtime task_crash setprotection startup_contract startup_prepare sti virtualtophysical vm_irq modifyirq $(VM_SHARED_FILES) $(NATIVE_PLATFORM_FILES) $(SMP_FILES)" \
+  asmfiles="dispatch_simd runtime_vectors cpu_probe_entry guard_probe $(SMP_ASM)" \
   arch=apple-aarch64
 
 
@@ -48,5 +70,11 @@ $(BD_OBJDIR$(BDID))/%.o: $(SRCDIR)/arch/aarch64-all/boot/fdt/%.c
 	$(Q)$(TMP_CMD) $(TMP_CFLAGS) $(TMP_CPPFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 $(BD_OBJDIR$(BDID))/%.o: $(SRCDIR)/arch/aarch64-all/boot/fdt/libfdt/%.c
 	$(Q)$(TMP_CMD) $(TMP_CFLAGS) $(TMP_CPPFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+
+$(BD_OBJDIR$(BDID))/%.o: $(SRCDIR)/arch/aarch64-apple/native/%.c
+	$(Q)$(TMP_CMD) $(TMP_CFLAGS) $(TMP_CPPFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+
+$(BD_OBJDIR$(BDID))/%.o: $(SRCDIR)/arch/aarch64-apple/native/%.S
+	$(Q)$(CC) $(TARGET_SYSROOT) $(AFLAGS) $(CPPFLAGS) -c $< -o $@
 
 %common

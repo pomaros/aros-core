@@ -89,6 +89,11 @@
                  * Remember that initial puddle containing the pool structure is also in this list.
                  * We do not need to free it until everything else is freed.
                  */
+                for (p = (struct Node *)pool->LargeList.mlh_Head; p->ln_Succ; p = p2)
+                {
+                    p2 = p->ln_Succ;
+                    FreeMemHeader(p, &tp, SysBase);
+                }
                 for (p = (struct Node *)pool->PuddleList.mlh_Head; p->ln_Succ; p = p2)
                 {
                     p2 = p->ln_Succ;

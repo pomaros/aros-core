@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2020, The AROS Development Team. All rights reserved.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
 */
@@ -90,6 +91,7 @@
                 {
                     struct msSetPointerShape pmsg;
                     pmsg.MethodID = MM_SetPointerShape;
+                    pmsg.screen = window->WScreen;
                     pmsg.pointer = NULL;
 
                     if (pointer == NULL)

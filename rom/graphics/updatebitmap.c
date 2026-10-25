@@ -1,5 +1,6 @@
 /*
     Copyright (C) 2011-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
 
     Desc: Update specified region of the bitmap, taking software composition into account.
           Private function for cybergraphics.library support.
@@ -10,6 +11,7 @@
 #include "gfxfuncsupport.h"
 
 #include <hidd/gfx.h>
+#include <proto/utility.h>
 
 AROS_LH5(void, UpdateBitMap,
          AROS_LHA(struct BitMap *, bitmap, A0),
@@ -36,4 +38,10 @@ void update_bitmap(struct BitMap *bitmap, OOP_Object *bm, UWORD x, UWORD y, UWOR
         compositor_UpdateBitMap(mdd->mdisplay.display_compositor, bm, x, y, width, height, GfxBase);
     else
         HIDD_BM_UpdateRect(bm, x, y, width, height);
+
+    if (IS_HIDD_BM(bitmap) && width && height && HIDD_BM_UPDATEHOOK(bitmap))
+    {
+        struct BitMapUpdateMessage message = {x, y, width, height};
+        CallHookPkt(HIDD_BM_UPDATEHOOK(bitmap), bitmap, &message);
+    }
 }

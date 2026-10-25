@@ -1,0 +1,14 @@
+# Copyright (C) 2026 John KNIPPER. All rights reserved.
+# Licensed under the AROS Public License (APL) Version 1.1.
+include $(SRCDIR)/config/aros.cfg
+
+# entropy_hw.c needs entropy.resource's private headers and the Apple
+# kernel attribute that carries the boot loader's seed.
+USER_INCLUDES := -I$(SRCDIR)/rom/entropy -I$(SRCDIR)/arch/aarch64-apple/include
+
+%build_archspecific \
+  mainmmake=kernel-entropy modname=entropy maindir=rom/entropy \
+  arch=apple-aarch64 \
+  files="entropy_hw"
+
+%common

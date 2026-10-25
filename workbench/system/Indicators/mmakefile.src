@@ -8,9 +8,15 @@ USER_INCLUDES := -I$(SRCDIR)/workbench/system/Tiles -I$(SRCDIR)/workbench/prefs/
 #MM- workbench-system : workbench-system-battery-source-$(AROS_TARGET_ARCH)
 #MM- workbench-system-battery-source-apple : workbench-system-battery-source
 #MM workbench-system-battery-source : includes linklibs
-USER_INCLUDES += -I$(SRCDIR)/arch/aarch64-apple/include
+USER_INCLUDES += -I$(SRCDIR)/arch/aarch64-apple/include -I$(SRCDIR)/workbench/system/Indicators
+BATTERY_PROVIDER := battery_unavailable
+ifeq ($(AROS_TARGET_ARCH),apple)
+ifneq ($(AROS_VM_GUEST),1)
+BATTERY_PROVIDER := $(SRCDIR)/arch/aarch64-apple/native/indicator_battery
+endif
+endif
 %build_prog mmake=workbench-system-battery-source \
-    files="battery_source battery consumers cpu_tasks subscriptions $(SRCDIR)/workbench/system/Tiles/source" \
+    files="battery_source battery $(BATTERY_PROVIDER) consumers cpu_tasks subscriptions $(SRCDIR)/workbench/system/Tiles/source" \
     targetdir=$(AROSDIR)/System progname=BatterySource
 
 #MM- workbench-system : workbench-system-sound-source

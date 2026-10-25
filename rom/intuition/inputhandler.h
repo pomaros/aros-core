@@ -3,6 +3,7 @@
 
 /*
     Copyright © 1995-2011, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright © 2001-2003, The MorphOS Development Team. All Rights Reserved.
     $Id$
 */
@@ -46,6 +47,7 @@ struct IIHData
     struct InputEvent      **EndInputEventChain;
     struct Task             *InputDeviceTask;
     struct Window           *MenuWindow; /* The window for which the menus are actually active (on screen) */
+    struct Task             *OrphanMenuTask; /* abandoned menu handler whose popups are still to be closed */
     struct Window           *NewActWindow;
     struct IENewTablet      *ActEventTablet; /* not cacheable, valid when processing a single event */
 #ifdef PROPHACK

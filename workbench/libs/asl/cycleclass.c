@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2011, The AROS Development Team. All rights reserved.
 
     Desc:
@@ -76,19 +77,15 @@ static void RenderObject_Update(Class *cl, Object *o, struct GadgetInfo *gi)
 
 /***********************************************************************************/
 
-static void DrawArrow(Class *cl, struct RastPort *rp, WORD x1, WORD y1, WORD type)
+static void DrawArrow(Class *cl, struct LayoutData *ld, struct RastPort *rp, WORD x1, WORD y1, WORD type)
 {
-    WORD dy = 1;
-
-    if (type == ARROW_UP)
+    LONG row;
+    for (row = 0; row < 4; ++row)
     {
-        y1 += 3; dy = -1;
+        LONG y = type == ARROW_UP ? 3 - row : row;
+        RectFill(rp, x1 + AslScaleValue(ld, row), y1 + AslScaleValue(ld, y),
+            x1 + AslScaleValue(ld, 7 - row) - 1, y1 + AslScaleValue(ld, y + 1) - 1);
     }
-
-    RectFill(rp, x1, y1, x1 + 6, y1); y1 += dy;
-    RectFill(rp, x1 + 1, y1, x1 + 5, y1); y1 += dy;
-    RectFill(rp, x1 + 2, y1, x1 + 4, y1); y1 += dy;
-    WritePixel(rp, x1 + 3, y1);
 }
 
 /***********************************************************************************/
@@ -107,9 +104,9 @@ static void DrawUpArrow(Class *cl, struct AslCycleData *data, struct DrawInfo *d
 
         SetAPen(data->rp, dri->dri_Pens[black ? SHADOWPEN : BACKGROUNDPEN]);
 
-        x = data->borderleft + (data->itemwidth - ARROWWIDTH) / 2;
+        x = data->borderleft + (data->itemwidth - AslScaleValue(data->ld, ARROWWIDTH)) / 2;
 
-        DrawArrow(cl, data->rp, data->menuleft + x, data->menutop + data->menuy1 - ARROWHEIGHT - 1, ARROW_UP);
+        DrawArrow(cl, data->ld, data->rp, data->menuleft + x, data->menutop + data->menuy1 - AslScaleValue(data->ld, ARROWHEIGHT) - 1, ARROW_UP);
     }
 }
 
@@ -129,9 +126,9 @@ static void DrawDownArrow(Class *cl, struct AslCycleData *data, struct DrawInfo 
 
         SetAPen(data->rp, dri->dri_Pens[black ? SHADOWPEN : BACKGROUNDPEN]);
 
-        x = data->borderleft + (data->itemwidth - ARROWWIDTH) / 2;
+        x = data->borderleft + (data->itemwidth - AslScaleValue(data->ld, ARROWWIDTH)) / 2;
 
-        DrawArrow(cl, data->rp, data->menuleft + x, data->menutop + data->menuy2 + 2, ARROW_DOWN);
+        DrawArrow(cl, data->ld, data->rp, data->menuleft + x, data->menutop + data->menuy2 + AslScaleValue(data->ld, 2), ARROW_DOWN);
     }
 }
 
@@ -160,7 +157,7 @@ static void DrawItem(Class *cl, struct AslCycleData *data, struct DrawInfo *dri,
         }
 
         x = (x + x + data->itemwidth - item->pixellen) / 2;
-        y += data->font->tf_Baseline + 1;
+        y += data->font->tf_Baseline + AslScaleValue(data->ld, 1);
 
         SetAPen(data->rp, dri->dri_Pens[(num == data->selected) ? SHINEPEN : TEXTPEN]);
         Move(data->rp, x, y);
@@ -174,6 +171,7 @@ static void DrawItem(Class *cl, struct AslCycleData *data, struct DrawInfo *dri,
 static void DrawMenu(Class *cl, struct AslCycleData *data, struct DrawInfo *dri)
 {
     WORD                 i, x1, y1, x2, y2;
+    LONG stroke = AslScaleValue(data->ld, 1);
 
     x1 = data->menuleft;
     y1 = data->menutop;
@@ -182,13 +180,13 @@ static void DrawMenu(Class *cl, struct AslCycleData *data, struct DrawInfo *dri)
     y2 = y1 + data->menuheight - 1;
 
     SetAPen(data->rp, dri->dri_Pens[SHADOWPEN]);
-    RectFill(data->rp, x1, y1, x2, y1);
-    RectFill(data->rp, x2, y1 + 1, x2, y2);
-    RectFill(data->rp, x1, y2, x2 - 1, y2);
-    RectFill(data->rp, x1, y1 + 1, x1, y2 - 1);
+    RectFill(data->rp, x1, y1, x2, y1 + stroke - 1);
+    RectFill(data->rp, x2 - stroke + 1, y1 + stroke, x2, y2);
+    RectFill(data->rp, x1, y2 - stroke + 1, x2 - stroke, y2);
+    RectFill(data->rp, x1, y1 + stroke, x1 + stroke - 1, y2 - stroke);
 
     SetAPen (data->rp, dri->dri_Pens[SHINEPEN]);
-    RectFill(data->rp, x1 + 1, y1  + 1, x2  - 1, y2 - 1);
+    RectFill(data->rp, x1 + stroke, y1 + stroke, x2 - stroke, y2 - stroke);
 
     for(i = data->top;i < data->top + data->visible;i++)
     {
@@ -226,19 +224,22 @@ IPTR AslCycle__OM_NEW(Class * cl, Object * o, struct opSet *msg)
     if (g)
     {
         data = INST_DATA(cl, g);
+        data->ld = (struct LayoutData *)GetTagData(GA_UserData, 0, msg->ops_AttrList);
 
         /* We want to get a GM_LAYOUT message, no matter if gadget is GFLG_RELRIGHT/RELBOTTOM/
            RELWIDTH/RELHEIGHT or not */
         g->Flags |= GFLG_RELSPECIAL;
 
-        data->frame = NewObjectA(NULL, FRAMEICLASS, fitags);
+        data->frame = AslFrame((struct LayoutData *)GetTagData(GA_UserData, 0, msg->ops_AttrList), fitags, AslBase);
         if (data->frame)
         {
             AslCycle__OM_SET(cl, (Object *)g, msg);
+            if (GetTagData(ASLCY_Labels, 0, msg->ops_AttrList) && !data->itemmemory)
+            { CoerceMethod(cl, (Object *)g, OM_DISPOSE); g = NULL; }
         } else {
 
             CoerceMethod(cl, (Object *)g, OM_DISPOSE);
-
+            g = NULL;
         }
     };
 
@@ -383,7 +384,8 @@ IPTR AslCycle__GM_LAYOUT(Class * cl, struct Gadget * g, struct gpLayout *msg)
 
     getgadgetcoords(g, msg->gpl_GInfo, &x, &y, &w, &h);
 
-    if (!data->font) data->font = msg->gpl_GInfo->gi_DrInfo->dri_Font;
+    data->popupcontext = AslPopupContext(data->ld);
+    if (!data->font) data->font = ((struct LayoutData *)g->UserData)->ld_Dri->dri_Font;
 
     item = data->itemmemory;
     len = 0;
@@ -397,16 +399,16 @@ IPTR AslCycle__GM_LAYOUT(Class * cl, struct Gadget * g, struct gpLayout *msg)
         if (item->pixellen > len) len = item->pixellen;
     }
 
-    data->itemwidth = len + 2;
-    i = w - CYCLEIMAGEWIDTH - BORDERCYCLESPACINGX;
+    data->itemwidth = len + AslScaleValue(data->ld, 1) * 2;
+    i = w - AslScaleValue(data->ld, CYCLEIMAGEWIDTH) - AslScaleValue(data->ld, BORDERCYCLESPACINGX);
     if (data->itemwidth < i) data->itemwidth = i;
 
-    data->itemheight = data->font->tf_YSize + 2;
+    data->itemheight = data->font->tf_YSize + AslScaleValue(data->ld, 1) * 2;
 
-    data->borderleft   = 4;
-    data->borderright  = 4;
-    data->bordertop    = 4;
-    data->borderbottom = 4;
+    data->borderleft   = AslScaleValue(data->ld, 4);
+    data->borderright  = AslScaleValue(data->ld, 4);
+    data->bordertop    = AslScaleValue(data->ld, 4);
+    data->borderbottom = AslScaleValue(data->ld, 4);
 
     data->menuwidth = data->itemwidth + data->borderleft + data->borderright;
 
@@ -418,12 +420,12 @@ IPTR AslCycle__GM_LAYOUT(Class * cl, struct Gadget * g, struct gpLayout *msg)
 
     data->maypopup = TRUE;
 
-    if (data->menuheight > msg->gpl_GInfo->gi_Screen->Height)
+    if (data->menuheight > (msg->gpl_GInfo->gi_Screen->Height / (data->ld->ld_ScaleAware ? 1 : (data->popupcontext ? data->popupcontext : data->ld->ld_RenderContext)->src_LegacyScaleFactor)))
     {
-        data->visible = (msg->gpl_GInfo->gi_Screen->Height -
+        data->visible = ((msg->gpl_GInfo->gi_Screen->Height / (data->ld->ld_ScaleAware ? 1 : (data->popupcontext ? data->popupcontext : data->ld->ld_RenderContext)->src_LegacyScaleFactor)) -
                          data->bordertop -
                          data->borderbottom -
-                         (ARROWHEIGHT + 2) * 2) / data->itemheight;
+                         (AslScaleValue(data->ld, ARROWHEIGHT + 2)) * 2) / data->itemheight;
 
         if (data->visible < 2)
         {
@@ -432,9 +434,9 @@ IPTR AslCycle__GM_LAYOUT(Class * cl, struct Gadget * g, struct gpLayout *msg)
             data->menuheight = data->bordertop +
                                data->visible * data->itemheight +
                                data->borderbottom +
-                               (ARROWHEIGHT + 2) * 2;
+                               (AslScaleValue(data->ld, ARROWHEIGHT + 2)) * 2;
 
-            data->menuy1 = data->bordertop + ARROWHEIGHT + 2;
+            data->menuy1 = data->bordertop + AslScaleValue(data->ld, ARROWHEIGHT + 2);
         }
     } else {
         data->visible = data->numitems;
@@ -453,7 +455,7 @@ IPTR AslCycle__GM_RENDER(Class * cl, struct Gadget * g, struct gpRender *msg)
 {
     struct AslCycleData *data = INST_DATA(cl, g);
     struct RastPort     *rp   = msg->gpr_RPort;
-    struct DrawInfo     *dri  = msg->gpr_GInfo->gi_DrInfo;
+    struct DrawInfo     *dri  = ((struct LayoutData *)g->UserData)->ld_Dri;
     struct CycleItem    *item;
     WORD                gadx, gady, gadw, gadh, x, y, y2, a1, a2;
 
@@ -480,7 +482,7 @@ IPTR AslCycle__GM_RENDER(Class * cl, struct Gadget * g, struct gpRender *msg)
                        gadx,
                        gady,
                        (g->Flags & GFLG_SELECTED) ? IDS_SELECTED : IDS_NORMAL,
-                       msg->gpr_GInfo->gi_DrInfo);
+                       ((struct LayoutData *)g->UserData)->ld_Dri);
 
 
         if (data->labels)
@@ -490,8 +492,8 @@ IPTR AslCycle__GM_RENDER(Class * cl, struct Gadget * g, struct gpRender *msg)
 
             item = &data->itemmemory[data->active];
 
-            a1 = gadx + BORDERCYCLESPACINGX;
-            a2 = gadx + gadw - CYCLEIMAGEWIDTH - BORDERCYCLESPACINGX;
+            a1 = gadx + AslScaleValue(data->ld, BORDERCYCLESPACINGX);
+            a2 = gadx + gadw - AslScaleValue(data->ld, CYCLEIMAGEWIDTH) - AslScaleValue(data->ld, BORDERCYCLESPACINGX);
             x  = (a1 + a2 - item->pixellen) / 2;
 
             y  = gady + (gadh - data->font->tf_YSize) / 2 + data->font->tf_Baseline;
@@ -502,21 +504,21 @@ IPTR AslCycle__GM_RENDER(Class * cl, struct Gadget * g, struct gpRender *msg)
             Text(rp, item->string, item->charlen);
         }
 
-        x = gadx + gadw - CYCLEIMAGEWIDTH;
-        y = gady + 2;
-        y2 = gady + gadh - 1 - 2;
+        x = gadx + gadw - AslScaleValue(data->ld, CYCLEIMAGEWIDTH);
+        y = gady + AslScaleValue(data->ld, 2);
+        y2 = gady + gadh - 1 - AslScaleValue(data->ld, 2);
 
         /* separator bar */
 
         SetAPen(rp, dri->dri_Pens[SHINEPEN]);
-        RectFill(rp, x + 1, y , x + 1, y2);
+        RectFill(rp, x + AslScaleValue(data->ld, 1), y, x + AslScaleValue(data->ld, 2) - 1, y2);
         SetAPen(rp, dri->dri_Pens[SHADOWPEN]);
-        RectFill(rp, x, y, x, y2);
+        RectFill(rp, x, y, x + AslScaleValue(data->ld, 1) - 1, y2);
 
-        y = gady + (gadh - 4) / 2;
-        x += 6;
+        y = gady + (gadh - AslScaleValue(data->ld, 4)) / 2;
+        x += AslScaleValue(data->ld, 6);
 
-        DrawArrow(cl, rp, x, y, ARROW_DOWN);
+        DrawArrow(cl, data->ld, rp, x, y, ARROW_DOWN);
 
     } /* if (rp) */
 
@@ -535,6 +537,11 @@ IPTR AslCycle__GM_GOACTIVE(Class * cl, struct Gadget * g, struct gpInput *msg)
     if (!data->labels || !msg->gpi_IEvent) return GMR_NOREUSE;
 
     data->popup = FALSE;
+    {
+        struct gpLayout layout = {GM_LAYOUT, msg->gpi_GInfo, FALSE};
+        DoMethodA((Object *)g, (Msg)&layout);
+    }
+    if (!data->popupcontext) return GMR_NOREUSE;
     data->sentgadgetup = FALSE;
     data->turbocountdown = TURBOCOUNTDOWN;
 
@@ -542,21 +549,21 @@ IPTR AslCycle__GM_GOACTIVE(Class * cl, struct Gadget * g, struct gpInput *msg)
 
     x = msg->gpi_GInfo->gi_Window->MouseX;
 
-    if (data->maypopup && (data->numitems > 2) && (x < gadx + gadw - CYCLEIMAGEWIDTH))
+    if (data->maypopup && (data->numitems > 2) && (x < gadx + gadw - AslScaleValue(data->ld, CYCLEIMAGEWIDTH)))
     {
         x = msg->gpi_GInfo->gi_Window->LeftEdge + gadx;
         y = msg->gpi_GInfo->gi_Window->TopEdge + gady + gadh;
 
         if (x < 0) x = 0;
-        if ((x + data->menuwidth) > msg->gpi_GInfo->gi_Screen->Width)
+        if ((x + data->menuwidth) > (msg->gpi_GInfo->gi_Screen->Width / (data->ld->ld_ScaleAware ? 1 : (data->popupcontext ? data->popupcontext : data->ld->ld_RenderContext)->src_LegacyScaleFactor)))
         {
-            x = msg->gpi_GInfo->gi_Screen->Width - data->menuwidth;
+            x = (msg->gpi_GInfo->gi_Screen->Width / (data->ld->ld_ScaleAware ? 1 : (data->popupcontext ? data->popupcontext : data->ld->ld_RenderContext)->src_LegacyScaleFactor)) - data->menuwidth;
         }
 
         if (y < 0) y = 0;
-        if ((y + data->menuheight) > msg->gpi_GInfo->gi_Screen->Height)
+        if ((y + data->menuheight) > (msg->gpi_GInfo->gi_Screen->Height / (data->ld->ld_ScaleAware ? 1 : (data->popupcontext ? data->popupcontext : data->ld->ld_RenderContext)->src_LegacyScaleFactor)))
         {
-            y = msg->gpi_GInfo->gi_Screen->Height - data->menuheight;
+            y = (msg->gpi_GInfo->gi_Screen->Height / (data->ld->ld_ScaleAware ? 1 : (data->popupcontext ? data->popupcontext : data->ld->ld_RenderContext)->src_LegacyScaleFactor)) - data->menuheight;
         }
 
         x2 = x + data->menuwidth - 1;
@@ -568,6 +575,9 @@ IPTR AslCycle__GM_GOACTIVE(Class * cl, struct Gadget * g, struct gpInput *msg)
                                                   WA_Width, data->menuwidth,
                                                   WA_Height, data->menuheight,
                                                   WA_Flags, WFLG_BORDERLESS,
+                                                  WA_ScaleAware, data->ld->ld_ScaleAware,
+                                                  WA_RenderContext, (IPTR)data->popupcontext,
+                                                  WA_Hidden, TRUE,
                                                   WA_BackFill, (IPTR) LAYERS_NOBACKFILL,
                                                   TAG_DONE)))
         {
@@ -588,10 +598,15 @@ IPTR AslCycle__GM_GOACTIVE(Class * cl, struct Gadget * g, struct gpInput *msg)
             SetFont(data->rp, data->font);
 
             data->popup = TRUE;
-            DrawMenu(cl, data, msg->gpi_GInfo->gi_DrInfo);
+            DrawMenu(cl, data, data->ld->ld_Dri);
+            if (!ShowWindow(data->popupwindow, NULL))
+            {
+                CloseWindow(data->popupwindow); data->popupwindow = NULL;
+                data->popup = FALSE; rc = GMR_NOREUSE;
+            }
         }
 
-    } /* if (data->maypopup && (data->numitems > 2) && (x < gadx + gadw - CYCLEIMAGEWIDTH)) */
+    } /* if (data->maypopup && (data->numitems > 2) && (x < gadx + gadw - AslScaleValue(data->ld, CYCLEIMAGEWIDTH))) */
     else
     {
          g->Flags |= GFLG_SELECTED;
@@ -634,13 +649,13 @@ IPTR AslCycle__GM_HANDLEINPUT(Class * cl, struct Gadget * g, struct gpInput *msg
 
         if ((x < data->menux1) || (x > data->menux2))
         {
-            UnselectActiveItem(cl, data, msg->gpi_GInfo->gi_DrInfo);
+            UnselectActiveItem(cl, data, ((struct LayoutData *)g->UserData)->ld_Dri);
         } else {
             i = (y - data->menuy1) / data->itemheight;
 
             if ((i >= data->visible) || (y < data->menuy1))
             {
-                UnselectActiveItem(cl, data, msg->gpi_GInfo->gi_DrInfo);
+                UnselectActiveItem(cl, data, ((struct LayoutData *)g->UserData)->ld_Dri);
 
                 if (data->turbocountdown && (msg->gpi_IEvent->ie_Class == IECLASS_TIMER))
                 {
@@ -657,9 +672,9 @@ IPTR AslCycle__GM_HANDLEINPUT(Class * cl, struct Gadget * g, struct gpInput *msg
                             ClipBlit(data->rp, data->menux1 + data->menuleft, data->menuy1 + data->menutop + data->itemheight,
                                      data->rp, data->menux1 + data->menuleft, data->menuy1 + data->menutop, data->itemwidth, data->itemheight * (data->visible - 1), 192);
                             data->top++;
-                            DrawItem(cl, data, msg->gpi_GInfo->gi_DrInfo, data->top + data->visible - 1, FALSE);
-                            DrawUpArrow(cl, data, msg->gpi_GInfo->gi_DrInfo, FALSE);
-                            DrawDownArrow(cl, data, msg->gpi_GInfo->gi_DrInfo, FALSE);
+                            DrawItem(cl, data, ((struct LayoutData *)g->UserData)->ld_Dri, data->top + data->visible - 1, FALSE);
+                            DrawUpArrow(cl, data, ((struct LayoutData *)g->UserData)->ld_Dri, FALSE);
+                            DrawDownArrow(cl, data, ((struct LayoutData *)g->UserData)->ld_Dri, FALSE);
                         }
                     } else {
                         // scroll up
@@ -668,9 +683,9 @@ IPTR AslCycle__GM_HANDLEINPUT(Class * cl, struct Gadget * g, struct gpInput *msg
                             ClipBlit(data->rp, data->menux1 + data->menuleft, data->menuy1 + data->menutop,
                                      data->rp, data->menux1 + data->menuleft, data->menuy1 + data->menutop + data->itemheight, data->itemwidth, data->itemheight * (data->visible - 1), 192);
                             data->top--;
-                            DrawItem(cl, data, msg->gpi_GInfo->gi_DrInfo, data->top, FALSE);
-                            DrawUpArrow(cl, data, msg->gpi_GInfo->gi_DrInfo, FALSE);
-                            DrawDownArrow(cl, data, msg->gpi_GInfo->gi_DrInfo, FALSE);
+                            DrawItem(cl, data, ((struct LayoutData *)g->UserData)->ld_Dri, data->top, FALSE);
+                            DrawUpArrow(cl, data, ((struct LayoutData *)g->UserData)->ld_Dri, FALSE);
+                            DrawDownArrow(cl, data, ((struct LayoutData *)g->UserData)->ld_Dri, FALSE);
                         }
                     }
                 } /* if (!data->turbocountdown || (msg->gpi_IEvent->ie_Class == IECLASS_TIMER)) */
@@ -682,8 +697,8 @@ IPTR AslCycle__GM_HANDLEINPUT(Class * cl, struct Gadget * g, struct gpInput *msg
                 data->selected = data->top + i;
                 if (data->selected != x)
                 {
-                    DrawItem(cl, data, msg->gpi_GInfo->gi_DrInfo, x, FALSE);
-                    DrawItem(cl, data, msg->gpi_GInfo->gi_DrInfo, data->selected, FALSE);
+                    DrawItem(cl, data, ((struct LayoutData *)g->UserData)->ld_Dri, x, FALSE);
+                    DrawItem(cl, data, ((struct LayoutData *)g->UserData)->ld_Dri, data->selected, FALSE);
                 }
             }
         }

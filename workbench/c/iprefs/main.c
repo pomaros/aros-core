@@ -96,13 +96,14 @@ static struct prefinfo
 }
 preftable[] =
 {
+    /* Scale/mode must be known before font or pattern handlers open WB. */
+    {"screenmode"   , screenmodeprefsname, ScreenModePrefs_Handler },
     {"input"        , inputprefsname     , InputPrefs_Handler      },
     {"locale"       , localeprefsname    , LocalePrefs_Handler     }, /* Keep before font */
     {"font"         , fontprefsname      , FontPrefs_Handler       },
     {"palette"      , paletteprefsname   , PalettePrefs_Handler    },
     {"wbpattern"    , patternprefsname   , WBPatternPrefs_Handler  },
     {"icontrol"     , icontrolprefsname  , IControlPrefs_Handler   },
-    {"screenmode"   , screenmodeprefsname, ScreenModePrefs_Handler },
     {"serial"       , serialprefsname    , SerialPrefs_Handler     },
     {"printer"      , printerprefsname   , PrinterPrefs_Handler    },
     {"pointer"      , pointerprefsname   , PointerPrefs_Handler    },
@@ -237,7 +238,7 @@ static void StartNotifications(void)
 
         preftable[i].nr.nr_Name                 = preftable[i].filenamebuffer;
         preftable[i].nr.nr_UserData             = i;
-        preftable[i].nr.nr_Flags                = NRF_SEND_MESSAGE | NRF_NOTIFY_INITIAL;
+        preftable[i].nr.nr_Flags                = NRF_SEND_MESSAGE;
         preftable[i].nr.nr_stuff.nr_Msg.nr_Port = notifyport;
         
         D(bug("\nTrying to start notification for file \"%s\".\n", preftable[i].filenamebuffer));
@@ -316,6 +317,14 @@ static void PreparePatches(void)
 
 /*********************************************************************************************/
 
+static void ReadInitialPreferences(void)
+{
+    WORD i;
+    for (i = 0; preftable[i].filename; ++i)
+        if (preftable[i].func)
+            preftable[i].func(preftable[i].filenamebuffer);
+}
+
 static void HandleNotify(void)
 {
     struct NotifyMessage *msg;
@@ -372,15 +381,16 @@ int main(void)
     StartNotifications();
     PreparePatches();
 
-    Detach();  // No more console I/O beyond this point.
-
-    /* The initial load runs from the startup sequence, where there is
-       nobody to answer a requester yet. Suppress them for its duration;
-       live preference changes get them back. */
+    /* Register first, then read explicitly: changes during the initial pass
+       remain queued. Initial notification delivery has no synchronous order. */
     oldwindowptr = myproc->pr_WindowPtr;
     myproc->pr_WindowPtr = (APTR)-1;
+    ReadInitialPreferences();
     HandleNotify();
     myproc->pr_WindowPtr = oldwindowptr;
+
+    /* The startup Shell may proceed to G4Ready only after initial prefs. */
+    Detach();  // No more console I/O beyond this point.
 
     HandleAll();
     Cleanup(NULL);

@@ -14,6 +14,7 @@
 #include <kernel_objects.h>
 
 #include "kernel_cpu.h"
+#include "task_tls.h"
 
 AROS_LH0(void *, KrnCreateContext,
     struct KernelBase *, KernelBase, 18, Kernel)
@@ -27,6 +28,8 @@ AROS_LH0(void *, KrnCreateContext,
             AROS_APPLE_DISPATCH_SIMD_OFFSET);
         context->Flags = ECF_FPU;
         context->cpsr = 0;
+        /* Never inherit a creator's TCB, even for an OOP/library task. */
+        AROSAppleTaskTLSInit(context);
     }
     return context;
 

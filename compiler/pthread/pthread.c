@@ -36,6 +36,45 @@
 #include "pthread_intern.h"
 #include "debug.h"
 
+#include <stddef.h>
+
+/*
+ * Programs see the pthread types with layout twins of the exec structures
+ * (aros/types/pthread_types.h); this library sees the exec structures
+ * themselves. Prove that both lay out every pthread object identically.
+ */
+#define TWIN_SAME(real, twin) \
+    _Static_assert(sizeof(real) == sizeof(twin) && __alignof__(real) == __alignof__(twin), \
+                   #twin " differs from " #real)
+#define TWIN_FIELD(real, rf, twin, tf) \
+    _Static_assert(offsetof(real, rf) == offsetof(twin, tf), #twin "." #tf " is misplaced")
+
+TWIN_SAME(struct Node, struct __pthread_twin_node);
+TWIN_FIELD(struct Node, ln_Succ, struct __pthread_twin_node, __succ);
+TWIN_FIELD(struct Node, ln_Pred, struct __pthread_twin_node, __pred);
+TWIN_FIELD(struct Node, ln_Type, struct __pthread_twin_node, __type);
+TWIN_FIELD(struct Node, ln_Pri, struct __pthread_twin_node, __pri);
+TWIN_FIELD(struct Node, ln_Name, struct __pthread_twin_node, __name);
+TWIN_SAME(struct MinNode, struct __pthread_twin_minnode);
+TWIN_SAME(struct MinList, struct __pthread_twin_minlist);
+TWIN_FIELD(struct MinList, mlh_Head, struct __pthread_twin_minlist, __head);
+TWIN_FIELD(struct MinList, mlh_Tail, struct __pthread_twin_minlist, __tail);
+TWIN_FIELD(struct MinList, mlh_TailPred, struct __pthread_twin_minlist, __tailpred);
+#if defined(__AROSPLATFORM_SMP__)
+TWIN_SAME(spinlock_t, __pthread_twin_spinlock_t);
+TWIN_FIELD(spinlock_t, s_Owner, __pthread_twin_spinlock_t, __owner);
+#endif
+TWIN_SAME(struct SemaphoreRequest, struct __pthread_twin_semaphorerequest);
+TWIN_FIELD(struct SemaphoreRequest, sr_Link, struct __pthread_twin_semaphorerequest, __link);
+TWIN_FIELD(struct SemaphoreRequest, sr_Waiter, struct __pthread_twin_semaphorerequest, __waiter);
+TWIN_SAME(struct SignalSemaphore, struct __pthread_twin_signalsemaphore);
+TWIN_FIELD(struct SignalSemaphore, ss_Link, struct __pthread_twin_signalsemaphore, __link);
+TWIN_FIELD(struct SignalSemaphore, ss_NestCount, struct __pthread_twin_signalsemaphore, __nestcount);
+TWIN_FIELD(struct SignalSemaphore, ss_WaitQueue, struct __pthread_twin_signalsemaphore, __waitqueue);
+TWIN_FIELD(struct SignalSemaphore, ss_MultipleLink, struct __pthread_twin_signalsemaphore, __multiplelink);
+TWIN_FIELD(struct SignalSemaphore, ss_Owner, struct __pthread_twin_signalsemaphore, __owner);
+TWIN_FIELD(struct SignalSemaphore, ss_QueueCount, struct __pthread_twin_signalsemaphore, __queuecount);
+
 
 //#define USE_ASYNC_CANCEL
 
@@ -2687,10 +2726,37 @@ int __pthread_Init_Func(void)
     return TRUE;
 }
 
+// A worker that never reaches a cancellation point (a loop over nanosleep,
+// a DoIO on a device) cannot be ended at program exit: its stack may hold
+// an I/O request a device will still reply to, so its task and stack must
+// stay allocated, and it must never run program code again once the
+// segment is unloaded. This task exception parks it: it runs in the
+// worker's own context, the next time the worker is dispatched or as soon
+// as it waits, and never returns.
+AROS_UFH3S(ULONG, ParkHandler,
+    AROS_UFHA(APTR, data, A1),
+    AROS_UFHA(ULONG, flags, D0),
+    AROS_UFHA(struct ExecBase *, sysbase, A6))
+{
+    AROS_USERFUNC_INIT
+
+    for (;;)
+        Wait(0);
+
+    AROS_USERFUNC_EXIT
+}
+
+// How long program exit waits for cancelled workers to finish, in ticks
+// (TICKS_PER_SECOND = 50): long enough for a worker at a cancellation
+// point to unwind, short enough that a parked one does not hang the exit.
+#define EXIT_WAIT_TICKS 100
+
 void __pthread_Exit_Func(void)
 {
     pthread_t i;
     ThreadInfo *inf;
+    ULONG waited = 0;
+    BOOL parked = FALSE;
 
     DB2(bug("%s()\n", __FUNCTION__));
 
@@ -2711,10 +2777,44 @@ void __pthread_Exit_Func(void)
         if (inf->task && !inf->finished)
             pthread_cancel(i);
         ReleaseSemaphore(&thread_sem);
-        // wait for it to end, but leave the join to the program: a thread
-        // still tearing down may be about to join it
-        while (inf->task && !inf->finished)
+    }
+
+    // wait for them to end, but leave the join to the program: a thread
+    // still tearing down may be about to join it. The wait is bounded:
+    // deferred cancellation only reaches a worker at a cancellation point,
+    // and one that never gets there would otherwise hold the exit forever
+    for (i = 1; i < threads_used; i++)
+    {
+        inf = threads[i];
+        while (inf->task && !inf->finished && waited < EXIT_WAIT_TICKS)
+        {
             Delay(1);
+            waited++;
+        }
+    }
+
+    // park the survivors: their tasks and stacks are leaked on purpose
+    for (i = 1; i < threads_used; i++)
+    {
+        inf = threads[i];
+        ObtainSemaphore(&thread_sem);
+        if (inf->task && !inf->finished)
+        {
+            struct Task *task = inf->task;
+
+            Disable();
+            task->tc_ExceptCode = &AROS_ASMSYMNAME(ParkHandler);
+            task->tc_ExceptData = NULL;
+            task->tc_SigExcept |= SIGBREAKF_CTRL_C;
+            Enable();
+            Signal(task, SIGBREAKF_CTRL_C);
+            bug("[pthread] exit: worker %u (%s) never reached a cancellation point; parked\n",
+                (unsigned)i, task->tc_Node.ln_Name ? task->tc_Node.ln_Name : "");
+            // the parked task still points at this record
+            inf->task = NULL;
+            parked = TRUE;
+        }
+        ReleaseSemaphore(&thread_sem);
     }
 
     // the main thread's slot stays usable for later exit code
@@ -2723,8 +2823,19 @@ void __pthread_Exit_Func(void)
         FreeVec(threads[i]);
     threads_used = 1;
     ReleaseSemaphore(&thread_sem);
+
+    if (parked)
+    {
+        // give every parked task a chance to take its exception before the
+        // segment goes: a worker that was running on another core keeps
+        // executing until it is dispatched again or waits
+        Delay(2);
+    }
+
 #if !defined(__AMIGA__) || defined(__MORPHOS__)
-    if (timer_shared_ok)
+    // a parked worker may still have a request on the shared timer unit;
+    // like its task and stack, the opener is then left behind
+    if (timer_shared_ok && !parked)
     {
         CloseDevice((struct IORequest *)&timer_shared_io);
         timer_shared_ok = FALSE;

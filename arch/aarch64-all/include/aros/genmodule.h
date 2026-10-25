@@ -27,7 +27,7 @@
 #define __AROS_GM_LIBFUNCSTUB(fname, libbasename, lvo)                     \
     void __ ## fname ## _ ## libbasename ## _wrapper(void)                 \
     {                                                                      \
-        asm volatile(                                                      \
+        __asm__ volatile(                                                      \
             ".weak " #fname "\n"                                           \
             ".type " #fname ", %%function\n"                               \
             #fname " :\n"                                                  \
@@ -52,7 +52,7 @@
 #define __AROS_GM_RELLIBFUNCSTUB(fname, libbasename, lvo)                  \
     void __ ## fname ## _ ## libbasename ## _relwrapper(IPTR args)         \
     {                                                                      \
-        asm volatile(                                                      \
+        __asm__ volatile(                                                      \
             ".weak " #fname "\n"                                           \
             ".type " #fname ", %%function\n"                               \
             #fname " :\n"                                                  \
@@ -98,7 +98,7 @@
    Generates a weak alias 'alias' for 'functionname' (CPU-independent).
 */
 #define __AROS_GM_LIBFUNCALIAS(fname, alias) \
-    asm(".weak " #alias "\n" \
+    __asm__(".weak " #alias "\n" \
         "\t.set " #alias "," #fname \
     );
 #define AROS_GM_LIBFUNCALIAS(fname, alias) \
@@ -114,7 +114,7 @@
     void libfuncname(void);                                                \
     void __ ## fname ## _stackcall(void)                                   \
     {                                                                      \
-        asm volatile(                                                      \
+        __asm__ volatile(                                                      \
             "\t" __GM_STRINGIZE(libfuncname) " :\n"                        \
             /* Preserve x0-x7, q0-q7, x8 (indirect result) and lr --      \
              * AAPCS64 lets the callee clobber all of them. */            \
@@ -149,7 +149,7 @@
 */
 #define __AROS_GM_STACKALIAS(fname, alias) \
     void alias(void); \
-    asm(".weak " __GM_STRINGIZE(alias) "\n" \
+    __asm__(".weak " __GM_STRINGIZE(alias) "\n" \
         "\t.set " __GM_STRINGIZE(alias) "," #fname \
     );
 #define AROS_GM_STACKALIAS(fname, libbasename, lvo) \

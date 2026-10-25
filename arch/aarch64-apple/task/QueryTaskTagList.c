@@ -11,6 +11,7 @@ static struct IntETask *apple_cpu_query(struct TaskResBase *base,struct Task *ta
 {
     struct IntETask *et=NULL;
     sample->seconds=sample->micros=sample->usage=0;
+#if !defined(__AROSEXEC_SMP__)
     struct timerequest request={0};struct timeval awake;
     struct Device *TimerBase;
     struct TaskListEntry *entry;
@@ -32,12 +33,17 @@ static struct IntETask *apple_cpu_query(struct TaskResBase *base,struct Task *ta
     et=et?snapshot:NULL;
     Enable();
     CloseDevice((struct IORequest *)&request);
+#else
+    (void)base;(void)snapshot;et=GetIntETask(task); /* Preserve non-CPU tags; CPU snapshot stays unavailable. */
+#endif
     return et;
 }
 #define TASK_CPU_QUERY_PREPARE struct AppleTaskSample cpu_sample; struct IntETask cpu_snapshot={0}; \
     struct IntETask *task_et=apple_cpu_query(TaskResBase,task,&cpu_sample,&cpu_snapshot)
 #define TASK_CPU_QUERY_TIME(out) do { if(out){(out)->tv_secs=cpu_sample.seconds;(out)->tv_micro=cpu_sample.micros;} } while(0)
 #define TASK_CPU_QUERY_USAGE(out) do { if(out)*(out)=cpu_sample.usage; } while(0)
+#if !defined(__AROSEXEC_SMP__)
 /* Apple has no generic register implementation; do not touch a retired task. */
 #define TASK_QUERY_SKIP_TAG(tag) ((tag)!=TaskTag_CPUNumber && (tag)!=TaskTag_CPUAffinity && (tag)!=TaskTag_CPUTime && (tag)!=TaskTag_CPUUsage && (tag)!=TaskTag_StartTime)
+#endif
 #include "../../../rom/task/QueryTaskTagList.c"

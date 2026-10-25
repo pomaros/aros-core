@@ -966,6 +966,9 @@ VOID CBM__Root__Get(OOP_Class *cl, OOP_Object *o, struct pRoot_Get *msg)
     {
         switch (idx)
         {
+        case aoHidd_ChunkyBM_StorageSize:
+            *msg->storage = data->own_buffer ? data->bufsize : 0;
+            return;
         case aoHidd_ChunkyBM_Buffer:
             *msg->storage = (IPTR)data->buffer;
             return;
@@ -1064,4 +1067,57 @@ VOID CBM__Root__Set(OOP_Class *cl, OOP_Object *o, struct pRoot_Set *msg)
             data->bytesperrow = bpr;
         }
     }
+}
+
+static BOOL cbm_refuse(struct HIDD_PixelMap *m, ULONG cause, LONG v0, LONG v1)
+{
+    m->refusal = cause;
+    m->refusalValue[0] = v0; m->refusalValue[1] = v1;
+    m->refusalClass = CLID_Hidd_ChunkyBM;
+    return FALSE;
+}
+
+/* Prepared storage is intentionally restricted to this exact audited class.
+ * A subclass may change storage or method semantics and must opt in itself. */
+BOOL CBM__Hidd_BitMap__PreparePixels(OOP_Class *cl, OOP_Object *o,
+    struct pHidd_BitMap_PreparePixels *msg)
+{
+    struct Library *OOPBase = CSD(cl)->cs_OOPBase;
+    struct chunkybm_data *data = OOP_INST_DATA(cl, o);
+    struct HIDD_PixelMap *m = msg->map;
+    OOP_Object *pf = NULL;
+    IPTR value;
+    if (!m) return FALSE;
+    if (OOP_OCLASS(o) != cl) return cbm_refuse(m, HIDD_PIXELS_REFUSE_SUBCLASS, 0, 0);
+    if (!data->buffer || data->bytesperpixel != 4)
+        return cbm_refuse(m, HIDD_PIXELS_REFUSE_STORAGE, data->bytesperpixel, data->buffer != NULL);
+    OOP_GetAttr(o, aHidd_BitMap_PixFmt, (IPTR *)&pf);
+    if (!pf) return cbm_refuse(m, HIDD_PIXELS_REFUSE_COLORMODEL, -1, 0);
+    OOP_GetAttr(pf, aHidd_PixFmt_ColorModel, &value);
+    if (value != vHidd_ColorModel_TrueColor)
+        return cbm_refuse(m, HIDD_PIXELS_REFUSE_COLORMODEL, (LONG)value, 0);
+    OOP_GetAttr(pf, aHidd_PixFmt_SwapPixelBytes, &value);
+    if (value) return cbm_refuse(m, HIDD_PIXELS_REFUSE_SWAPPED, 0, 0);
+    OOP_GetAttr(o, aHidd_BitMap_Width, &value); m->width = value;
+    OOP_GetAttr(o, aHidd_BitMap_Height, &value); m->height = value;
+    m->stride = data->bytesperrow;
+    if (!m->height || m->stride > (~(ULONG)0) / m->height)
+        return cbm_refuse(m, HIDD_PIXELS_REFUSE_GEOMETRY, (LONG)m->stride, (LONG)m->height);
+    m->size = m->stride * m->height;
+    if (!data->own_buffer || data->bufsize < m->size)
+        return cbm_refuse(m, HIDD_PIXELS_REFUSE_STORAGE_SIZE,
+            data->own_buffer ? (LONG)data->bufsize : 0, (LONG)m->size);
+    OOP_GetAttr(pf, aHidd_PixFmt_RedMask, &value); m->red = value;
+    OOP_GetAttr(pf, aHidd_PixFmt_GreenMask, &value); m->green = value;
+    OOP_GetAttr(pf, aHidd_PixFmt_BlueMask, &value); m->blue = value;
+    OOP_GetAttr(pf, aHidd_PixFmt_AlphaMask, &value); m->alpha = value;
+    m->pixels = data->buffer;
+    m->driverCookie = o;
+    return TRUE;
+}
+VOID CBM__Hidd_BitMap__ReleasePixels(OOP_Class *cl, OOP_Object *o,
+    struct pHidd_BitMap_ReleasePixels *msg)
+{
+    (void)cl; (void)o;
+    msg->map->driverCookie = NULL;
 }

@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+# Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+# Licensed under the AROS Public License (APL), Version 1.1.
+"""Link a module that dlopen() loads.
+
+The module is linked as an AROS program (collect-aros, LoadSeg-loadable
+relocatable ELF) with dlmodule-startup.o in place of the program startup,
+plus a generated table of the symbols it exports, which dlsym() searches.
+
+    dlmodule-link --cc CLANG [--cc-arg ARG]... --startup dlmodule-startup.o \
+        --nm LLVM-NM -o MODULE [--export NAME | --export-prefix PREFIX]... \
+        INPUT...
+
+INPUTs are objects, archives and linker flags passed to the compiler driver.
+Without --export or --export-prefix the module exports every global symbol
+that its own object files define; archives contribute none. Names that start
+with "__" are reserved to the implementation and never exported unless named
+with --export.
+"""
+import argparse
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+
+def run(command):
+    result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    if result.returncode:
+        sys.stderr.write(' '.join(command) + '\n' + result.stdout)
+        raise SystemExit(result.returncode)
+    return result.stdout
+
+
+def defined_globals(nm, path):
+    """Names of the global symbols path defines, from llvm-nm's POSIX output."""
+    names = set()
+    for line in run([nm, '--extern-only', '--defined-only', '--format=posix', str(path)]).splitlines():
+        fields = line.split()
+        if len(fields) >= 2 and not line.endswith(':'):
+            names.add(fields[0])
+    return names
+
+
+def c_string(name):
+    return '"' + ''.join(c if c.isalnum() or c in '_.$' else '\\%03o' % ord(c) for c in name) + '"'
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--cc', required=True, help='AROS C compiler driver')
+    parser.add_argument('--cc-arg', action='append', default=[], help='argument for every driver call')
+    parser.add_argument('--startup', required=True, type=Path, help='dlmodule-startup.o')
+    parser.add_argument('--nm', required=True, help='llvm-nm')
+    parser.add_argument('-o', dest='output', required=True, type=Path)
+    parser.add_argument('--export', action='append', default=[], help='export this symbol')
+    parser.add_argument('--export-prefix', action='append', default=[], help='export symbols with this prefix')
+    parser.add_argument('inputs', nargs='+')
+    args = parser.parse_args()
+
+    driver = [args.cc, *args.cc_arg, '-nostartfiles']
+    objects = [Path(i) for i in args.inputs if i.endswith('.o') and Path(i).is_file()]
+    with tempfile.TemporaryDirectory() as work:
+        work = Path(work)
+        # First link: proves the module closes and lists what it defines.
+        first = work / 'first'
+        run(driver + [str(args.startup), *args.inputs, '-o', str(first)])
+        defined = defined_globals(args.nm, first)
+        own = set()
+        for path in objects:
+            own |= defined_globals(args.nm, path)
+        if args.export or args.export_prefix:
+            missing = [n for n in args.export if n not in defined]
+            if missing:
+                raise SystemExit('dlmodule-link: not defined by the module: ' + ', '.join(missing))
+            exports = set(args.export) | {n for n in defined if any(n.startswith(p) for p in args.export_prefix)}
+        else:
+            exports = {n for n in own & defined if not n.startswith('__')}
+        exports = sorted(exports, key=lambda n: n.encode())
+
+        table = work / 'exports.c'
+        # Self-contained: the layout of struct AROSDLExport in <aros/dlmodule.h>.
+        lines = ['struct AROSDLExport { const char *de_Name; void *de_Address; };', '']
+        for i, name in enumerate(exports):
+            lines.append('extern char __aros_dlx%d[] __asm__(%s);' % (i, c_string(name)))
+        lines += ['', 'const struct AROSDLExport __aros_dlmodule_exports[%d] =' % max(len(exports), 1), '{']
+        lines += ['    { %s, __aros_dlx%d },' % (c_string(n), i) for i, n in enumerate(exports)]
+        if not exports:
+            lines.append('    { 0, 0 }')
+        lines += ['};', 'const unsigned int __aros_dlmodule_export_count = %d;' % len(exports), '']
+        table.write_text('\n'.join(lines))
+        table_object = work / 'exports.o'
+        run(driver + ['-c', str(table), '-o', str(table_object)])
+        # Final link, with the table.
+        run(driver + [str(args.startup), *args.inputs, str(table_object), '-o', str(args.output)])
+    undefined = run([args.nm, '--undefined-only', str(args.output)]).split()
+    if undefined:
+        raise SystemExit('dlmodule-link: undefined symbols in the module: ' + ' '.join(undefined))
+    print('%s: %d exports' % (args.output, len(exports)))
+
+
+if __name__ == '__main__':
+    main()

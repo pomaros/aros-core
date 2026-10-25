@@ -14,7 +14,8 @@ PRIV_EXEC_INCLUDES = \
 	$(TARGET_KERNEL_INCLUDES) \
 	-I$(SRCDIR)/rom/kernel
 
-INCSUBDIRS :=	aros				\
+INCSUBDIRS :=	filesystems			\
+		aros				\
 		aros/preprocessor		\
 		aros/preprocessor/variadic	\
 		aros/preprocessor/array		\

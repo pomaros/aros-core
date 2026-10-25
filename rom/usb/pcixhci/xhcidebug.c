@@ -12,7 +12,6 @@
 #include <devices/usb_hub.h>
 
 #include "uhwcmd.h"
-#include "xhci_mmio.h"
 #include "xhciproto.h"
 
 #undef base
@@ -640,14 +639,14 @@ void xhciDumpStatus(ULONG status)
 #if defined(XHCI_ENABLEOPRDEBUG)
 void xhciDumpOpR(volatile struct xhci_hcopr *hcopr)
 {
-    KPrintF(DEBUGCOLOR_SET "xHCI: OPR.COMMAND: %08x" DEBUGCOLOR_RESET" \n", AROS_LE2LONG(hcopr->usbcmd));
-    xhciDumpStatus(AROS_LE2LONG(hcopr->usbsts));
-    KPrintF(DEBUGCOLOR_SET "xHCI: OPR.PAGESIZE: %08x" DEBUGCOLOR_RESET" \n", AROS_LE2LONG(hcopr->pagesize));
-    KPrintF(DEBUGCOLOR_SET "xHCI: OPR.DNCTRL: %08x" DEBUGCOLOR_RESET" \n", AROS_LE2LONG(hcopr->dnctl));
-    KPrintF(DEBUGCOLOR_SET "xHCI: OPR.CRCR: %08x%08x" DEBUGCOLOR_RESET" \n", hcopr->crcr.addr_hi, hcopr->crcr.addr_lo);
-    KPrintF(DEBUGCOLOR_SET "xHCI: OPR.DCBAAP: %08x%08x" DEBUGCOLOR_RESET" \n", hcopr->dcbaap.addr_hi,
-            hcopr->dcbaap.addr_lo);
-    KPrintF(DEBUGCOLOR_SET "xHCI: OPR.CONFIG: %08x" DEBUGCOLOR_RESET" \n", AROS_LE2LONG(hcopr->config));
+    KPrintF(DEBUGCOLOR_SET "xHCI: OPR.COMMAND: %08x" DEBUGCOLOR_RESET" \n", XHCI_RD32(hcopr->usbcmd));
+    xhciDumpStatus(XHCI_RD32(hcopr->usbsts));
+    KPrintF(DEBUGCOLOR_SET "xHCI: OPR.PAGESIZE: %08x" DEBUGCOLOR_RESET" \n", XHCI_RD32(hcopr->pagesize));
+    KPrintF(DEBUGCOLOR_SET "xHCI: OPR.DNCTRL: %08x" DEBUGCOLOR_RESET" \n", XHCI_RD32(hcopr->dnctl));
+    KPrintF(DEBUGCOLOR_SET "xHCI: OPR.CRCR: %08x%08x" DEBUGCOLOR_RESET" \n", mmio_inl(&hcopr->crcr.addr_hi), mmio_inl(&hcopr->crcr.addr_lo));
+    KPrintF(DEBUGCOLOR_SET "xHCI: OPR.DCBAAP: %08x%08x" DEBUGCOLOR_RESET" \n", mmio_inl(&hcopr->dcbaap.addr_hi),
+            mmio_inl(&hcopr->dcbaap.addr_lo));
+    KPrintF(DEBUGCOLOR_SET "xHCI: OPR.CONFIG: %08x" DEBUGCOLOR_RESET" \n", XHCI_RD32(hcopr->config));
 }
 #endif
 
@@ -665,19 +664,19 @@ void xhciDumpIMAN(ULONG iman)
 #if defined(XHCI_ENABLEIRDEBUG)
 void xhciDumpIR(volatile struct xhci_ir *xhciir)
 {
-    xhciDumpIMAN(xhciir->iman);
-    KPrintF(DEBUGCOLOR_SET "xHCI: IR.IMOD: %08x" DEBUGCOLOR_RESET" \n", xhciir->imod);
-    KPrintF(DEBUGCOLOR_SET "xHCI: IR.ERSTSZ: %08x" DEBUGCOLOR_RESET" \n", xhciir->erstsz);
-    KPrintF(DEBUGCOLOR_SET "xHCI: IR.ERDP: %08x%08x" DEBUGCOLOR_RESET" \n", xhciir->erdp.addr_hi, xhciir->erdp.addr_lo);
-    KPrintF(DEBUGCOLOR_SET "xHCI: IR.ERSTBA: %08x%08x" DEBUGCOLOR_RESET" \n", xhciir->erstba.addr_hi,
-            xhciir->erstba.addr_lo);
+    xhciDumpIMAN(mmio_inl(&xhciir->iman));
+    KPrintF(DEBUGCOLOR_SET "xHCI: IR.IMOD: %08x" DEBUGCOLOR_RESET" \n", mmio_inl(&xhciir->imod));
+    KPrintF(DEBUGCOLOR_SET "xHCI: IR.ERSTSZ: %08x" DEBUGCOLOR_RESET" \n", mmio_inl(&xhciir->erstsz));
+    KPrintF(DEBUGCOLOR_SET "xHCI: IR.ERDP: %08x%08x" DEBUGCOLOR_RESET" \n", mmio_inl(&xhciir->erdp.addr_hi), mmio_inl(&xhciir->erdp.addr_lo));
+    KPrintF(DEBUGCOLOR_SET "xHCI: IR.ERSTBA: %08x%08x" DEBUGCOLOR_RESET" \n", mmio_inl(&xhciir->erstba.addr_hi),
+            mmio_inl(&xhciir->erstba.addr_lo));
 }
 #endif
 
 #if defined(XHCI_ENABLEPORTDEBUG)
 void xhciDumpPort(volatile struct xhci_pr *xhcipr)
 {
-    ULONG portsc = xhciReadMMIO32(&xhcipr->portsc);
+    ULONG portsc = AROS_LE2LONG(xhcipr->portsc);
     KPrintF(DEBUGCOLOR_SET "xHCI: PR.PORTSC = $%08x" DEBUGCOLOR_RESET" \n", portsc);
     if(portsc & XHCIF_PR_PORTSC_PP)
         KPrintF(DEBUGCOLOR_SET "xHCI: > Powered" DEBUGCOLOR_RESET" \n");

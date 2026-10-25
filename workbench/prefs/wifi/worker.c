@@ -19,6 +19,7 @@
 #include <dos/dostags.h>
 #include <devices/newstyle.h>
 #include <utility/tagitem.h>
+#include <rexx/storage.h>
 
 /*
  * The address has to come from the stack, and the stack may not be there: open
@@ -37,6 +38,7 @@
 #include <proto/dos.h>
 #include <proto/utility.h>
 #include <proto/alib.h>
+#include <proto/rexxsyslib.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -44,20 +46,37 @@
 
 #include "wifigui.h"
 #include "locale.h"
+#include "../../devs/networks/bwfm/wireless_prefs.h"
+#include <libraries/wifi_keyring.h>
+
+APTR WifiKeyringModule; /* Set by the MCC initializer; standalone uses executable. */
+APTR WifiKeyringContext; /* Opened by the standalone program's main process. */
+static LONG WifiKeyring(unsigned operation, CONST_STRPTR ssid, struct wifi_secret *secret)
+{
+    if (WifiKeyringContext)
+        return wifi_keyring_context(WifiKeyringContext, operation, ssid, secret);
+    return wifi_keyring(WifiKeyringModule, operation, ssid, secret);
+}
 
 #define WIRELESS_VAR    "AROSTCP/WirelessDevice"
+#define AUTORUN_VAR     "AROSTCP/AutoRun"
+#define WIRELESS_AUTORUN_VAR "AROSTCP/WirelessAutoRun"
+#define SAVE_VAR_FLAGS  (GVF_GLOBAL_ONLY | GVF_SAVE_VAR)
 #define STACK_VAR       "SYS/Packages/AROSTCP"
 #define PREFS_ENVARC    "ENVARC:Sys/Wireless.prefs"
 #define PREFS_ENV       "ENV:Sys/Wireless.prefs"
 #define PUDDLE_SIZE     4096
 #define ETH_ALEN        6
-#define ASSOC_TIMEOUT   20          /* half-seconds to wait for an association */
+#define ASSOC_TIMEOUT   60          /* half-seconds to wait for an association:
+                                     * the supplicant scans before it joins */
+#define ADDR_TIMEOUT    20          /* half-seconds to wait for a lease */
 
 struct MsgPort *WifiWorkerPort = NULL;
 struct Task *WifiMainTask = NULL;
 ULONG WifiMainSignal = SIGF_SINGLE;
 
 struct Library *SocketBase = NULL;      /* open only while an address is read */
+struct RxsLib *RexxSysBase = NULL;      /* open only while the stack is told */
 
 /* SANA-II expects copy hooks even from an opener that never moves a frame. */
 static BOOL copy_buff(UBYTE *dst, UBYTE *src, ULONG size)
@@ -220,100 +239,32 @@ static STRPTR ReadPrefs(CONST_STRPTR name, LONG *lenp)
     return buf;
 }
 
-/* TRUE if the stored configuration already has a key for this network. */
-static BOOL PrefsHaveNetwork(CONST_STRPTR ssid)
+/* A successful fetch also verifies that the vault is unlocked. */
+static LONG PrefsNetworkKey(CONST_STRPTR ssid, struct wifi_secret *secret)
 {
-    LONG len;
-    STRPTR buf = ReadPrefs(PREFS_ENVARC, &len);
-    STRPTR p;
-    TEXT needle[WIFI_SSID_MAX + 8];
-    BOOL found = FALSE;
-
-    if (buf == NULL)
-        return FALSE;
-
-    snprintf(needle, sizeof(needle), "ssid=\"%s\"", ssid);
-    for (p = buf; (p = strstr(p, needle)) != NULL; p += 1)
-    {
-        /* A psk belongs to the same block, i.e. before the closing brace. */
-        STRPTR end = strstr(p, "}");
-        STRPTR psk = strstr(p, "psk=");
-
-        if (psk != NULL && (end == NULL || psk < end))
-        {
-            found = TRUE;
-            break;
-        }
-    }
-
-    FreeVec(buf);
-    return found;
+    return WifiKeyring(0, ssid, secret);
 }
 
-/*
- * Write the configuration with this network added or replaced, keeping every
- * other block byte for byte. Rewriting the whole file from a parsed view is
- * what loses the networks a user set up elsewhere.
- */
-static BOOL MergePrefs(CONST_STRPTR name, CONST_STRPTR ssid, CONST_STRPTR key)
+static BOOL PrefsHaveNetwork(CONST_STRPTR ssid)
 {
-    LONG len;
-    STRPTR buf = ReadPrefs(name, &len);
-    TEXT needle[WIFI_SSID_MAX + 8];
+    struct wifi_secret secret;
+    LONG result = PrefsNetworkKey(ssid, &secret);
+    wifi_secret_wipe(&secret, sizeof(secret));
+    return result == KR_SUCCESS;
+}
+
+/* The selected auto-join network is metadata only. */
+static BOOL MergePrefs(CONST_STRPTR name, CONST_STRPTR ssid, BOOL protected_network)
+{
+    char text[160];
+    size_t size = wireless_prefs_format((const char *)ssid, protected_network,
+                                       text, sizeof(text));
     BPTR fh;
-    STRPTR p;
-
-    snprintf(needle, sizeof(needle), "ssid=\"%s\"", ssid);
-
-    fh = Open(name, MODE_NEWFILE);
-    if (fh == BNULL)
-    {
-        FreeVec(buf);
-        return FALSE;
-    }
-
-    /* Copy the old file, skipping any block that names the same network. */
-    p = buf;
-    while (p != NULL && *p != '\0')
-    {
-        STRPTR blockstart, blockend, hit;
-
-        blockstart = strstr(p, "network={");
-        if (blockstart == NULL)
-        {
-            FPuts(fh, p);
-            break;
-        }
-
-        if (blockstart > p)
-            Write(fh, p, blockstart - p);
-
-        blockend = strstr(blockstart, "}");
-        if (blockend == NULL)
-            break;                          /* truncated file: drop the rest */
-        blockend++;
-
-        hit = (STRPTR)strstr((const char *)blockstart, (const char *)needle);
-        if (hit == NULL || hit > blockend)
-            Write(fh, blockstart, blockend - blockstart);
-        p = blockend;
-    }
-
-    /* And append ours. */
-    FPuts(fh, "network={\n");
-    FPrintf(fh, "\tssid=\"%s\"\n", (IPTR)ssid);
-    if (key != NULL && key[0] != '\0')
-    {
-        FPrintf(fh, "\tpsk=\"%s\"\n", (IPTR)key);
-        FPuts(fh, "\tkey_mgmt=WPA-PSK\n");
-    }
-    else
-        FPuts(fh, "\tkey_mgmt=NONE\n");
-    FPuts(fh, "}\n\n");
-
-    Close(fh);
-    FreeVec(buf);
-    return TRUE;
+    BOOL ok;
+    if (!size || !(fh = Open(name, MODE_NEWFILE))) return FALSE;
+    ok = Write(fh, text, size) == size;
+    if (!Close(fh)) ok = FALSE;
+    return ok;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -389,7 +340,7 @@ static STRPTR FindNoCase(STRPTR haystack, CONST_STRPTR needle)
 
 static BOOL StackDBDir(STRPTR out, ULONG size);
 static BOOL ScanInterfaces(CONST_STRPTR path, CONST_STRPTR device,
-    STRPTR name, ULONG size, ULONG *used);
+    STRPTR name, ULONG size, ULONG *used, STRPTR entry, ULONG entrysize);
 
 /*
  * The stack knows the device as "net0" or whatever the preferences called it,
@@ -403,7 +354,7 @@ static BOOL InterfaceName(CONST_STRPTR device, STRPTR name, ULONG size)
         return FALSE;
     snprintf((char *)path, sizeof(path), "%s/interfaces", (const char *)db);
 
-    return ScanInterfaces(path, device, name, size, NULL);
+    return ScanInterfaces(path, device, name, size, NULL, NULL, 0);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -450,7 +401,7 @@ static BOOL StackDBDir(STRPTR out, ULONG size)
  * the interface name.
  */
 static BOOL ScanInterfaces(CONST_STRPTR path, CONST_STRPTR device,
-    STRPTR name, ULONG size, ULONG *used)
+    STRPTR name, ULONG size, ULONG *used, STRPTR entry, ULONG entrysize)
 {
     LONG len;
     STRPTR buf = ReadPrefs(path, &len);
@@ -493,6 +444,8 @@ static BOOL ScanInterfaces(CONST_STRPTR path, CONST_STRPTR device,
         if (!found && FindNoCase(line, device) != NULL)
         {
             snprintf((char *)name, size, "%s", (const char *)first);
+            if (entry != NULL)
+                snprintf((char *)entry, entrysize, "%s", (const char *)line);
             found = TRUE;
             if (used == NULL)
                 break;
@@ -522,7 +475,7 @@ static BOOL EnsureInterface(struct WifiMsg *m, BOOL *created)
     snprintf((char *)path, sizeof(path), "%s/interfaces", (const char *)db);
 
     if (ScanInterfaces(path, m->wm_Device, m->wm_Interface,
-            sizeof(m->wm_Interface), &usednames))
+            sizeof(m->wm_Interface), &usednames, NULL, 0))
         return TRUE;
 
     for (index = 0; index < 32; index++)
@@ -561,6 +514,20 @@ static BOOL StackRunning(void)
     return FindTask("bsdsocket.library") != NULL;
 }
 
+/* S/Package-Startup starts the stack, and the supplicant with it, on these. */
+static BOOL VarIsTrue(CONST_STRPTR name)
+{
+    TEXT val[8];
+
+    return GetVar(name, val, sizeof(val), GVF_GLOBAL_ONLY) > 0 &&
+           strncmp((const char *)val, "True", 4) == 0;
+}
+
+static BOOL AutoRunEnabled(void)
+{
+    return VarIsTrue(AUTORUN_VAR) && VarIsTrue(WIRELESS_AUTORUN_VAR);
+}
+
 /*
  * Associating is not the same as having a network: without the stack nobody
  * runs DHCP. A stack that is already up needs no help - the driver reports the
@@ -595,6 +562,78 @@ static BOOL StartStack(void)
         Delay(25);
     }
     return FALSE;
+}
+
+/* A running stack read its interfaces file at start; is ours in it? */
+static BOOL StackHasInterface(CONST_STRPTR name)
+{
+    struct ifreq ifr;
+    BOOL has = FALSE;
+    int sock;
+
+    if ((SocketBase = OpenLibrary("bsdsocket.library", 0)) == NULL)
+        return FALSE;
+    if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) >= 0)
+    {
+        memset(&ifr, 0, sizeof(ifr));
+        snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "%s", name);
+        has = (IoctlSocket(sock, SIOCGIFFLAGS, (char *)&ifr) == 0);
+        CloseSocket(sock);
+    }
+    CloseLibrary(SocketBase);
+    SocketBase = NULL;
+    return has;
+}
+
+/*
+ * Hand the stack our interfaces line through its ARexx port, so it brings the
+ * interface up without a restart. A program may send the RexxMsg itself: only
+ * running a script needs RexxMast, and this system has none.
+ */
+static BOOL AddStackInterface(struct WifiMsg *m)
+{
+    TEXT db[192], path[224], entry[192], cmd[224];
+    struct MsgPort *port = NULL, *stack;
+    struct RexxMsg *rm = NULL;
+    BOOL ok = FALSE;
+
+    if (!StackDBDir(db, sizeof(db)))
+        return FALSE;
+    snprintf((char *)path, sizeof(path), "%s/interfaces", (const char *)db);
+    if (!ScanInterfaces(path, m->wm_Device, m->wm_Interface,
+            sizeof(m->wm_Interface), NULL, entry, sizeof(entry)))
+        return FALSE;
+    snprintf((char *)cmd, sizeof(cmd), "ADD INTERFACE %s", (const char *)entry);
+
+    if ((RexxSysBase = (struct RxsLib *)OpenLibrary("rexxsyslib.library", 0)) == NULL)
+        return FALSE;
+    if ((port = CreateMsgPort()) != NULL &&
+        (rm = CreateRexxMsg(port, NULL, NULL)) != NULL &&
+        (rm->rm_Args[0] = (IPTR)CreateArgstring(cmd, strlen((const char *)cmd))) != 0)
+    {
+        rm->rm_Action = RXCOMM;
+        Forbid();
+        if ((stack = FindPort("AROSTCP")) != NULL)
+            PutMsg(stack, &rm->rm_Node);
+        Permit();
+        if (stack != NULL)
+        {
+            WaitPort(port);
+            GetMsg(port);
+            ok = (rm->rm_Result1 == 0);
+        }
+    }
+    if (rm != NULL)
+    {
+        if (rm->rm_Args[0] != 0)
+            DeleteArgstring((UBYTE *)rm->rm_Args[0]);
+        DeleteRexxMsg(rm);
+    }
+    if (port != NULL)
+        DeleteMsgPort(port);
+    CloseLibrary((struct Library *)RexxSysBase);
+    RexxSysBase = NULL;
+    return ok;
 }
 
 /* One address out of an ioctl reply, or "" when it is unset. */
@@ -862,8 +901,10 @@ static BOOL DoStatus(struct WifiMsg *m)
 
     m->wm_Associated = FALSE;
     m->wm_Wireless = FALSE;
+    m->wm_AutoRun = AutoRunEnabled();
     m->wm_SSID[0] = '\0';
     m->wm_BSSID[0] = '\0';
+    m->wm_Signal[0] = '\0';
     m->wm_MAC[0] = '\0';
 
     if (!WifiDevice(m))
@@ -908,6 +949,18 @@ static BOOL DoStatus(struct WifiMsg *m)
                 snprintf(m->wm_BSSID, sizeof(m->wm_BSSID),
                     "%02x:%02x:%02x:%02x:%02x:%02x",
                     bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5]);
+        }
+
+        /* The list shows lamps; the number is for the details window. */
+        if (m->wm_Associated)
+        {
+            struct Sana2SignalQuality q;
+
+            dev.wd_Req->ios2_Req.io_Command = S2_GETSIGNALQUALITY;
+            dev.wd_Req->ios2_StatData = &q;
+            if (DoIO((struct IORequest *)dev.wd_Req) == 0)
+                snprintf(m->wm_Signal, sizeof(m->wm_Signal), "%ld dBm",
+                    (long)q.SignalLevel);
         }
         DeletePool(pool);
     }
@@ -1057,61 +1110,6 @@ static void DoScan(struct WifiMsg *m)
 }
 
 /*
- * A failed attempt should leave the stored configuration exactly as it was:
- * the supplicant reads the passphrase from the file, so trying one means
- * writing it, and a typo would otherwise overwrite a passphrase that worked.
- */
-struct PrefsBackup
-{
-    STRPTR  pb_Env;
-    LONG    pb_EnvLen;
-    STRPTR  pb_Envarc;
-    LONG    pb_EnvarcLen;
-    BOOL    pb_Taken;
-};
-
-static void SavePrefs(struct PrefsBackup *b)
-{
-    b->pb_Env = ReadPrefs(PREFS_ENV, &b->pb_EnvLen);
-    b->pb_Envarc = ReadPrefs(PREFS_ENVARC, &b->pb_EnvarcLen);
-    b->pb_Taken = TRUE;
-}
-
-static void WriteWhole(CONST_STRPTR name, STRPTR buf, LONG len)
-{
-    BPTR fh;
-
-    /* No file before the attempt means the network was unknown, and unknown is
-     * what it has to go back to - or the next Connect trusts a bad key. */
-    if (buf == NULL)
-    {
-        DeleteFile(name);
-        return;
-    }
-    if ((fh = Open(name, MODE_NEWFILE)) == BNULL)
-        return;
-    Write(fh, buf, len);
-    Close(fh);
-}
-
-static void RestorePrefs(struct PrefsBackup *b)
-{
-    if (!b->pb_Taken)
-        return;
-    WriteWhole(PREFS_ENV, b->pb_Env, b->pb_EnvLen);
-    WriteWhole(PREFS_ENVARC, b->pb_Envarc, b->pb_EnvarcLen);
-}
-
-static void FreePrefsBackup(struct PrefsBackup *b)
-{
-    FreeVec(b->pb_Env);
-    FreeVec(b->pb_Envarc);
-    b->pb_Env = NULL;
-    b->pb_Envarc = NULL;
-    b->pb_Taken = FALSE;
-}
-
-/*
  * Was this network on the air the last time we looked? What is not there
  * cannot be blamed on the passphrase, and the answer is already in the scan
  * results the window is showing - no need to spend seconds scanning again.
@@ -1170,9 +1168,10 @@ static void RunConnect(struct WifiMsg *m, CONST_STRPTR wanted,
                 return;
             }
 
-            /* A running stack read the interfaces file when it started, so a
-             * line added now means nothing to it until it is restarted. */
-            if (created && StackRunning())
+            /* A running stack read the interfaces file when it started:
+             * hand it the line, and only ask for a restart if that fails. */
+            if (StackRunning() && !StackHasInterface(m->wm_Interface) &&
+                !AddStackInterface(m))
             {
                 snprintf(m->wm_Status, sizeof(m->wm_Status),
                     (const char *)_(MSG_ST_RESTART_STACK), wanted,
@@ -1189,7 +1188,7 @@ static void RunConnect(struct WifiMsg *m, CONST_STRPTR wanted,
 
             /* Associating is quicker than DHCP, so give the lease a moment to
              * arrive - the address is the answer the user is waiting for. */
-            for (tries = 0; tries < ASSOC_TIMEOUT; tries++)
+            for (tries = 0; tries < ADDR_TIMEOUT; tries++)
             {
                 if (m->wm_Address[0] != '\0')
                     return;
@@ -1234,7 +1233,6 @@ static void RunConnect(struct WifiMsg *m, CONST_STRPTR wanted,
 
 static void DoConnect(struct WifiMsg *m)
 {
-    struct PrefsBackup backup = { NULL, 0, NULL, 0, FALSE };
     TEXT wanted[WIFI_SSID_MAX];
     BOOL inrange;
 
@@ -1259,42 +1257,79 @@ static void DoConnect(struct WifiMsg *m)
         return;
     }
 
-    /*
-     * A protected network needs a passphrase, but not if we already stored one
-     * for it - that is what "remembered" means. Asking the window for it is a
-     * separate round trip.
-     */
-    if (m->wm_Protected && m->wm_Key[0] == '\0' &&
-        !PrefsHaveNetwork(m->wm_SSID))
-    {
-        m->wm_Result = WRES_NEEDKEY;
-        snprintf(m->wm_Status, sizeof(m->wm_Status),
-            (const char *)_(MSG_ST_ENTER_PASSWORD), m->wm_SSID);
-        return;
-    }
-
-    /* Only rewrite the stored configuration when we were given something new
-     * to put in it, so a reconnect to a remembered network keeps its key. */
-    if (!m->wm_Protected || m->wm_Key[0] != '\0')
-    {
-        SavePrefs(&backup);
-        if (!MergePrefs(PREFS_ENVARC, m->wm_SSID, m->wm_Key) ||
-            !MergePrefs(PREFS_ENV, m->wm_SSID, m->wm_Key))
-        {
-            strcpy(m->wm_Status, (const char *)_(MSG_ST_CANNOT_WRITE_PREFS));
-            RestorePrefs(&backup);
-            FreePrefsBackup(&backup);
+    /* Credentials must commit before any metadata or connect request. */
+    if (m->wm_Protected) {
+        struct wifi_secret secret;
+        LONG result;
+        memset(&secret, 0, sizeof(secret));
+        if (m->wm_Key[0]) {
+            secret.version = 1;
+            secret.security = 2;
+            snprintf(secret.key, sizeof(secret.key), "%s", m->wm_Key);
+            result = WifiKeyring(1, m->wm_SSID, &secret);
+        } else
+            result = PrefsNetworkKey(m->wm_SSID, &secret);
+        wifi_secret_wipe(&secret, sizeof(secret));
+        wifi_secret_wipe(m->wm_Key, sizeof(m->wm_Key));
+        if (result != KR_SUCCESS) {
+            if (result == KR_ERR_NOTFOUND) {
+                m->wm_Result = WRES_NEEDKEY;
+                snprintf(m->wm_Status, sizeof(m->wm_Status),
+                    (const char *)_(MSG_ST_ENTER_PASSWORD), m->wm_SSID);
+            } else
+                snprintf(m->wm_Status, sizeof(m->wm_Status), "%s (keyring code %ld)",
+                    result == KR_ERR_CONTEXT ? "This program is not in SYS:Prefs/Keyring.allowlist" :
+                    result == KR_ERR_IO ? "USERS:.Machine could not be written; is USERS: assigned?" :
+                    result == KR_ERR_ENTROPY ? "No entropy for the machine key: entropy.resource is not loaded" :
+                    result == KR_ERR_LOCKED ? "The keyring is locked" :
+                    "keyring.library refused the password", (long)result);
             return;
         }
+    }
+    if (!MergePrefs(PREFS_ENVARC, m->wm_SSID, m->wm_Protected) ||
+        !MergePrefs(PREFS_ENV, m->wm_SSID, m->wm_Protected)) {
+        strcpy(m->wm_Status, (const char *)_(MSG_ST_CANNOT_WRITE_PREFS));
+        return;
     }
 
     RunConnect(m, wanted, inrange);
 
-    /* Blaming the passphrase and keeping it are contradictory: put the file
-     * back, so an untested passphrase never becomes the remembered one. */
-    if (m->wm_Result == WRES_NEEDKEY)
-        RestorePrefs(&backup);
-    FreePrefsBackup(&backup);
+
+}
+
+/*
+ * The same switches the network preferences write. Turning it off only stops
+ * the supplicant at boot: AutoRun also starts a wired interface.
+ */
+static void DoAutoRun(struct WifiMsg *m)
+{
+    TEXT dev[WIFI_DEV_MAX + 16];
+    BOOL want = m->wm_AutoRun, created, ok;
+
+    m->wm_AutoRun = AutoRunEnabled();
+    if (!WifiDevice(m))
+        return;
+
+    /* SetVar cannot create the directories. */
+    UnLock(CreateDir("ENV:AROSTCP"));
+    UnLock(CreateDir("ENVARC:AROSTCP"));
+
+    if (want)
+    {
+        /* The stack only runs DHCP on an interface it knows about. */
+        snprintf((char *)dev, sizeof(dev), "%s UNIT %ld",
+            (const char *)m->wm_Device, (long)m->wm_Unit);
+        ok = EnsureInterface(m, &created) &&
+             SetVar(WIRELESS_VAR, dev, -1, SAVE_VAR_FLAGS) &&
+             SetVar(WIRELESS_AUTORUN_VAR, "True", -1, SAVE_VAR_FLAGS) &&
+             SetVar(AUTORUN_VAR, "True", -1, SAVE_VAR_FLAGS);
+    }
+    else
+        ok = SetVar(WIRELESS_AUTORUN_VAR, "False", -1, SAVE_VAR_FLAGS);
+
+    m->wm_AutoRun = AutoRunEnabled();
+    strcpy(m->wm_Status, (const char *)_(!ok ? MSG_ST_AUTORUN_FAILED :
+        (m->wm_AutoRun ? MSG_ST_AUTORUN_ON : MSG_ST_AUTORUN_OFF)));
 }
 
 /*
@@ -1376,11 +1411,16 @@ VOID WifiWorker(VOID)
                 DoDisconnect(m);
                 break;
 
+            case WCMD_AUTORUN:
+                DoAutoRun(m);
+                break;
+
             case WCMD_QUIT:
                 done = TRUE;
                 break;
             }
 
+            wifi_secret_wipe(m->wm_Key, sizeof(m->wm_Key));
             ReplyMsg(&m->wm_Msg);
         }
     }

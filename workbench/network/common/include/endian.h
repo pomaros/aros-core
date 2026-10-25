@@ -36,4 +36,38 @@
 #   define BYTE_ORDER       _BYTE_ORDER
 #endif
 
+/*
+    Byte-order conversions of POSIX.1-2024, also those of glibc and the BSDs:
+    host to big- or little-endian and back, for 16, 32 and 64 bits.
+*/
+#if !defined(htobe16)
+#   if AROS_BIG_ENDIAN
+#       define htobe16(x)   ((__UINT16_TYPE__)(x))
+#       define htole16(x)   __builtin_bswap16(x)
+#       define be16toh(x)   ((__UINT16_TYPE__)(x))
+#       define le16toh(x)   __builtin_bswap16(x)
+#       define htobe32(x)   ((__UINT32_TYPE__)(x))
+#       define htole32(x)   __builtin_bswap32(x)
+#       define be32toh(x)   ((__UINT32_TYPE__)(x))
+#       define le32toh(x)   __builtin_bswap32(x)
+#       define htobe64(x)   ((__UINT64_TYPE__)(x))
+#       define htole64(x)   __builtin_bswap64(x)
+#       define be64toh(x)   ((__UINT64_TYPE__)(x))
+#       define le64toh(x)   __builtin_bswap64(x)
+#   else
+#       define htobe16(x)   __builtin_bswap16(x)
+#       define htole16(x)   ((__UINT16_TYPE__)(x))
+#       define be16toh(x)   __builtin_bswap16(x)
+#       define le16toh(x)   ((__UINT16_TYPE__)(x))
+#       define htobe32(x)   __builtin_bswap32(x)
+#       define htole32(x)   ((__UINT32_TYPE__)(x))
+#       define be32toh(x)   __builtin_bswap32(x)
+#       define le32toh(x)   ((__UINT32_TYPE__)(x))
+#       define htobe64(x)   __builtin_bswap64(x)
+#       define htole64(x)   ((__UINT64_TYPE__)(x))
+#       define be64toh(x)   __builtin_bswap64(x)
+#       define le64toh(x)   ((__UINT64_TYPE__)(x))
+#   endif
+#endif
+
 #endif /* _ENDIAN_H_ */

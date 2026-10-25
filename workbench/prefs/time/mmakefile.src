@@ -1,16 +1,17 @@
-#
-#   Makefile to make time prefs program.
-
+# Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+# Distributed under the AROS Public License, version 1.1.
 include $(SRCDIR)/config/aros.cfg
 
-FILES 	    := main vars locale misc prefs
-EXEDIR      := $(AROSDIR)/Prefs
+USER_INCLUDES := -I$(SRCDIR)/workbench/c/TimeZone
 
 #MM- workbench-prefs : workbench-prefs-time
-#MM workbench-prefs-time : includes linklibs workbench-prefs-time-catalogs
+#MM workbench-prefs-time : workbench-prefs-time-class workbench-classes-zune-systemprefswindow includes linklibs
+#MM workbench-prefs-time-class : workbench-classes-zune-prefseditor workbench-classes-zune-calendar workbench-classes-zune-clock includes linklibs
 
 %build_prog mmake=workbench-prefs-time \
-    progname=Time targetdir=$(EXEDIR) \
-    files=$(FILES)
+    progname=Time targetdir=$(AROS_PREFS) files=main
+
+%build_module mmake=workbench-prefs-time-class \
+    modname=TimeEditor modtype=mcc conffile=editor.conf files="editor tzrule"
 
 %common

@@ -29,9 +29,11 @@ BOOL DoASyncAction(void (*)(struct IntuiActionMsg *, struct IntuitionBase *),
                    struct IntuiActionMsg *, ULONG size,
                    struct IntuitionBase *IntuitionBase);
 
+void DrawAuxiliaryLayerRefresh(struct Screen *, struct IntuitionBase *);
 void CheckLayers(struct Screen *screen, struct IntuitionBase *IntuitionBase);
 
-void DoMoveSizeWindow(struct Window *targetwindow, LONG NewLeftEdge, LONG NewTopEdge,
+void NotifyWindowGeometry(struct Window *, BOOL, struct IntuitionBase *);
+BOOL DoMoveSizeWindow(struct Window *targetwindow, LONG NewLeftEdge, LONG NewTopEdge,
                       LONG NewWidth, LONG NewHeight, BOOL send_newsize,
                       struct IntuitionBase *IntuitionBase);
 

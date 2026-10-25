@@ -1,3 +1,4 @@
+# Copyright (C) 2026, John KNIPPER <code@jkn.me>.
 # Copyright (C) 2026, The AROS Development Team. All rights reserved.
 
 include $(SRCDIR)/config/aros.cfg
@@ -23,10 +24,10 @@ USER_LDFLAGS := -static
 
 FILES := boolgadgets boopsigadgets buttongclass frameiclass frbuttonclass \
          gadgetclass gadgets imageclass inputhandler propgadgets propgclass \
-         requesters strgadgets strgclass  pointerclass windowclasses \
-         intuition_misc inputhandler_support inputhandler_actions \
+         requesters systemrequestscale activegadgetscale strgadgets strgclass  pointerclass pointerscale windowclasses windowcomposition windowfit windowscale screenrendercontext windowframe \
+         intuition_misc inputhandler_support preparednotifications inputhandler_actions \
          menus barlabelclass fillrectclass groupgclass wbtasktalk \
-         rootclass icclass modelclass itexticlass misc sysiclass menutask \
+         rootclass icclass modelclass itexticlass misc sysiclass menutask menuscale \
 	 windecorclass scrdecorclass menudecorclass monitorclass screennotifytask \
 	 screenclass decoration sysrequest_intern shutdownscreen intuition_arch
 
@@ -71,6 +72,7 @@ FUNCS := \
 	eraseimage \
 	findclass \
 	findmonitor \
+	fitwindowlayout \
 	freeclass \
 	freeicdata \
 	freeintuimessage \
@@ -148,7 +150,7 @@ FUNCS := \
 	setedithook \
 	setgadgetattrsa \
 	setiprefs \
-	setmenustrip \
+	setmenustrip setmenustripcontext \
 	setmousequeue \
 	setpointer \
 	setpointerbounds \

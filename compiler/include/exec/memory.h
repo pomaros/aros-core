@@ -105,6 +105,8 @@ struct MemList
 #define MEMF_SEM_PROTECTED (1L << MEMB_SEM_PROTECTED)
 #define MEMB_NO_EXPUNGE    31
 #define MEMF_NO_EXPUNGE    (1L << MEMB_NO_EXPUNGE)
+#define MEMB_RESERVE       14           /* For KrnAllocPages() - reserve address space, no memory until KrnSetProtection grants access */
+#define MEMF_RESERVE       (1L << MEMB_RESERVE)
 
 /*
  * Mask for flags that describe physical properties of the memory.

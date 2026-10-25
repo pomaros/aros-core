@@ -14,13 +14,21 @@ static int Settings_Init(LIBBASETYPEPTR LIBBASE)
     NEWLIST(&LIBBASE->sb_Schemas);
     NEWLIST(&LIBBASE->sb_Watches);
     NEWLIST(&LIBBASE->sb_Subscriptions);
-    LIBBASE->sb_DOSBase = OpenLibrary("dos.library", 36);
+    LIBBASE->sb_DOSBase = OpenLibrary("dos.library", 50);
+    /* ReplaceObject is vector 227, introduced in DOS 50.84. Refuse an
+       older installed generation before publishing an openable library. */
+    if (LIBBASE->sb_DOSBase == NULL)
+        return FALSE;
+    if (LIBBASE->sb_DOSBase->lib_Version == 50 &&
+        LIBBASE->sb_DOSBase->lib_Revision < 84) {
+        CloseLibrary(LIBBASE->sb_DOSBase);
+        LIBBASE->sb_DOSBase = NULL;
+        return FALSE;
+    }
     LIBBASE->sb_UtilityBase = OpenLibrary("utility.library", 36);
-    if (LIBBASE->sb_DOSBase == NULL || LIBBASE->sb_UtilityBase == NULL) {
-        if (LIBBASE->sb_DOSBase != NULL)
-            CloseLibrary(LIBBASE->sb_DOSBase);
-        if (LIBBASE->sb_UtilityBase != NULL)
-            CloseLibrary(LIBBASE->sb_UtilityBase);
+    if (LIBBASE->sb_UtilityBase == NULL) {
+        CloseLibrary(LIBBASE->sb_DOSBase);
+        LIBBASE->sb_DOSBase = NULL;
         return FALSE;
     }
     return TRUE;

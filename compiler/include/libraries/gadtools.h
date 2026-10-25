@@ -2,6 +2,7 @@
 #define LIBRARIES_GADTOOLS_H
 
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright © 1995-2001, The AROS Development Team. All rights reserved.
     $Id$
 
@@ -237,6 +238,11 @@ struct NewMenu
 /* AROS Extensions */
 #define GTLV_Total  	     (GT_TagBase + 150) /* OM_GET */
 #define GTLV_Visible	     (GT_TagBase + 151) /* OM_GET */
+
+/* Exact immutable ScreenRenderContext supplied by the caller. No new screen
+ * query occurs. Default view is physical; GTVI_Logical selects its logical view. */
+#define GTVI_RenderContext (GT_TagBase + 152) /* const struct ScreenRenderContext * */
+#define GTVI_Logical       (GT_TagBase + 153) /* BOOL, default FALSE with context */
 
 /* GTTX_Justification and GTNM_Justification */
 #define GTJ_LEFT   0

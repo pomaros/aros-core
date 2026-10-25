@@ -356,8 +356,11 @@
             { NP_CloseError , FALSE                         }, /* 7  */
             { NP_Cli        , ((cliType == CLI_NEWCLI) || (cliType == CLI_ASYSTEM))
                                       ?  TRUE : FALSE       }, /* 8  */
-            { NP_WindowPtr  , isAsynch ? (IPTR)NULL :
-                              (IPTR)me->pr_WindowPtr        }, /* 9  */
+            /* This entry precedes the caller's tags, and CreateNewProc's
+             * first-match lookup would otherwise hide an explicit policy. */
+            { NP_WindowPtr  , GetTagData(NP_WindowPtr,
+                              isAsynch ? (IPTR)NULL :
+                              (IPTR)me->pr_WindowPtr, tags)  }, /* 9  */
             { NP_Seglist    , (IPTR)shellseg                }, /* 10 */
             { NP_FreeSeglist, FALSE                         }, /* 11 */
             { NP_Synchronous, FALSE                         }, /* 12 */

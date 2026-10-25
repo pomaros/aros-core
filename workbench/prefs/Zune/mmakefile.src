@@ -18,4 +18,16 @@ USER_CFLAGS := $(PARANOIA_CFLAGS)
     progname=Zune targetdir=$(EXEDIR) \
     files=$(FILES) uselibs="muiscreen"
 
+# The global preferences as a Settings page, from the same panels; the
+# Scrollbars panel stays in the program (see zuneeditor.c).
+EDITORFILES := zuneeditor zunestuff windowp buttonsp groupsp cyclesp slidersp \
+listviewsp stringsp specialp navigationp framesp locale systemp
+
+#MM- workbench-prefs : workbench-prefs-zune-class
+#MM workbench-prefs-zune-class : includes linklibs workbench-prefs-zune-catalogs workbench-classes-zune-prefseditor
+
+%build_module mmake=workbench-prefs-zune-class \
+    modname=ZuneEditor modtype=mcc conffile=zuneeditor.conf files="$(EDITORFILES)" \
+    uselibs="muiscreen"
+
 %common

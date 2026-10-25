@@ -3,7 +3,7 @@ include $(SRCDIR)/config/aros.cfg
 
 USER_LDFLAGS := -static
 
-FILES := basicfuncs specialreq \
+FILES := aslscale aslpublish frameclass basicfuncs specialreq \
 	 filereqhooks filereqsupport \
 	 modereqhooks modereqsupport \
          fontreqhooks fontreqsupport \

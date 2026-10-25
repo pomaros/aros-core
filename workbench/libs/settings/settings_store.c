@@ -6,6 +6,7 @@
     images and the atomic replace.
 */
 #include <string.h>
+#include <stdio.h>
 #include "settings_private.h"
 
 void *settings_lib_alloc(void *ctx, size_t size)
@@ -100,56 +101,86 @@ static void make_parent_dirs(struct SettingsBase *SettingsBase, const char *path
     }
 }
 
-/* Write to <path>.new in the same directory, then take the old name: in one
- * rename where the handler allows it, with a delete first where it answers
- * ERROR_OBJECT_EXISTS (ram-handler). A failed write leaves the old file. */
+/* Write beside the destination, then publish through the filesystem's
+ * atomic replacement packet. A failed publication preserves the old file. */
 LONG settings_image_write_atomic(struct SettingsBase *SettingsBase, CONST_STRPTR path,
     const struct SettingsImage *image)
 {
-    char temporary[SETTINGS_FULL_PATH];
-    BPTR file;
-    LONG error;
+    static ULONG nonce;
+    char directory[SETTINGS_FULL_PATH], temporary[SETTINGS_FULL_PATH];
+    const char *leaf = (const char *)FilePart(path);
+    size_t parent_length = (size_t)(leaf - (const char *)path);
+    BPTR stage = BNULL, file = BNULL;
+    LONG error = ERROR_OBJECT_EXISTS, result = SETTING_ERROR_IO;
+    unsigned attempt;
 
-    if (strlen((const char *)path) + 5 >= sizeof(temporary))
+    if (parent_length + 16 > sizeof(temporary))
         return SETTING_ERROR_BUFFER;
-    strcpy(temporary, (const char *)path);
-    strcat(temporary, ".new");
-    file = Open((CONST_STRPTR)temporary, MODE_NEWFILE);
-    if (file == BNULL && (IoErr() == ERROR_OBJECT_NOT_FOUND || IoErr() == ERROR_DIR_NOT_FOUND)) {
-        make_parent_dirs(SettingsBase, (const char *)path);
-        file = Open((CONST_STRPTR)temporary, MODE_NEWFILE);
-    }
-    if (file == BNULL)
-        return settings_code_from_dos(IoErr());
-    if (Write(file, image->si_Data, image->si_Length) != (LONG)image->si_Length) {
+    /* CreateDir claims an absent sibling exclusively. Decimal names
+       use digits only, preventing Unicode casefold aliases with the leaf. */
+    for (attempt = 0; attempt < 256; attempt++) {
+        unsigned candidate;
+        char name[24];
+        ObtainSemaphore(&SettingsBase->sb_Lock);
+        candidate = ++nonce;
+        ReleaseSemaphore(&SettingsBase->sb_Lock);
+        snprintf(name, sizeof(name), ".0.%010u", candidate);
+        if (strcmp(leaf, name) == 0)
+            continue;
+        memcpy(directory, path, parent_length);
+        strcpy(directory + parent_length, name);
+        stage = CreateDir((CONST_STRPTR)directory);
+        if (stage == BNULL && (IoErr() == ERROR_OBJECT_NOT_FOUND || IoErr() == ERROR_DIR_NOT_FOUND)) {
+            make_parent_dirs(SettingsBase, (const char *)path);
+            stage = CreateDir((CONST_STRPTR)directory);
+        }
+        if (stage != BNULL)
+            break;
         error = IoErr();
-        Close(file);
-        DeleteFile((CONST_STRPTR)temporary);
-        SetIoErr(error);
-        return SETTING_ERROR_IO;
-    }
-    if (!Close(file)) {
-        error = IoErr();
-        DeleteFile((CONST_STRPTR)temporary);
-        SetIoErr(error);
-        return SETTING_ERROR_IO;
-    }
-    if (!Rename((CONST_STRPTR)temporary, path)) {
-        error = IoErr();
-        if (error == ERROR_OBJECT_EXISTS) {
-            if (!DeleteFile(path) || !Rename((CONST_STRPTR)temporary, path)) {
-                error = IoErr();
-                DeleteFile((CONST_STRPTR)temporary);
-                SetIoErr(error);
-                return SETTING_ERROR_IO;
-            }
-        } else {
-            DeleteFile((CONST_STRPTR)temporary);
+        if (error != ERROR_OBJECT_EXISTS) {
             SetIoErr(error);
-            return SETTING_ERROR_IO;
+            return settings_code_from_dos(error);
         }
     }
-    return SETTING_OK;
+    if (stage == BNULL) {
+        SetIoErr(error);
+        return SETTING_ERROR_IO;
+    }
+    strcpy(temporary, directory);
+    strcat(temporary, "/0");
+    file = Open((CONST_STRPTR)temporary, MODE_NEWFILE);
+    if (file == BNULL) {
+        error = IoErr();
+        result = settings_code_from_dos(error);
+        goto cleanup;
+    }
+    if (Write(file, image->si_Data, image->si_Length) != (LONG)image->si_Length || !Flush(file)) {
+        error = IoErr();
+        goto cleanup;
+    }
+    if (!Close(file)) {
+        file = BNULL;
+        error = IoErr();
+        goto cleanup;
+    }
+    file = BNULL;
+    if (!ReplaceObject((CONST_STRPTR)temporary, path)) {
+        error = IoErr();
+        goto cleanup;
+    }
+    result = SETTING_OK;
+cleanup:
+    if (file != BNULL)
+        Close(file);
+    if (result != SETTING_OK)
+        DeleteFile((CONST_STRPTR)temporary);
+    UnLock(stage);
+    /* Publication already succeeded when this empty-directory cleanup runs.
+       A failed cleanup retains a private empty directory for later inspection;
+       it cannot turn the completed replacement into a failed publication. */
+    DeleteFile((CONST_STRPTR)directory);
+    SetIoErr(result == SETTING_OK ? 0 : error);
+    return result;
 }
 
 BOOL settings_layer_path(const struct settings_schema *schema, ULONG layer,

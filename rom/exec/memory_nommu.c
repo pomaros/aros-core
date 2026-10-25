@@ -81,6 +81,7 @@ APTR nommu_AllocMem(IPTR byteSize, ULONG flags, struct TraceLocation *loc, struc
     }
 
     MEM_UNLOCK;
+    mmPostPendingAlert(SysBase);
 
     return res;
 }
@@ -295,6 +296,7 @@ void nommu_FreeMem(APTR memoryBlock, IPTR byteSize, struct TraceLocation *loc, s
         }
 
         MEM_UNLOCK;
+        mmPostPendingAlert(SysBase);
         ReturnVoid ("nommu_FreeMem");
     }
 

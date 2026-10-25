@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
 
     Desc:
@@ -153,7 +154,7 @@ static int AVFCompare(struct AvailFonts *one, struct AvailFonts *two)
 static void SortAvailFonts(struct AvailFontsHeader *afh, struct AslBase_intern *AslBase)
 {
     struct AvailFonts   *avf;
-    WORD                numentries;
+    ULONG               numentries;
 
     avf = (struct AvailFonts *)&afh[1];
     numentries = afh->afh_NumEntries;
@@ -173,7 +174,7 @@ LONG FOGetFonts(struct LayoutData *ld, struct AslBase_intern *AslBase)
     struct IntFontReq    *iforeq = (struct IntFontReq *)ld->ld_IntReq;
     struct AvailFonts    *avf;
     ULONG                afshortage = 0, afsize = 100;
-    WORD                 i;
+    ULONG                i;
 
     SetBusyPointer(ld, AslBase);
 
@@ -209,8 +210,8 @@ LONG FOGetFonts(struct LayoutData *ld, struct AslBase_intern *AslBase)
     {
         struct AvailFonts       *avf_start = avf;
         struct ASLLVFontReqNode *fontnode;
-        UWORD                   num_sizes = 1;
-        WORD                    i2 = i;
+        ULONG                   num_sizes = 1;
+        ULONG                   i2 = i;
 
         while (i2 < udata->AFH->afh_NumEntries - 1)
         {
@@ -365,7 +366,10 @@ VOID FOUpdatePreview(struct LayoutData *ld, struct AslBase_intern *AslBase)
     STRPTR                   name;
 
     GetAttr(STRINGA_LongVal, udata->SizeString, &val);
-    ta.ta_YSize = (WORD)val;
+    {
+        LONG pixels = AslScaleValue(ld, (LONG)val);
+        ta.ta_YSize = pixels < 1 ? 1 : pixels > 65535 ? 65535 : pixels;
+    }
     ta.ta_Flags = 0;
     ta.ta_Style = 0;
 
@@ -409,6 +413,7 @@ VOID FOUpdatePreview(struct LayoutData *ld, struct AslBase_intern *AslBase)
 
         if (udata->PreviewFont) CloseFont(udata->PreviewFont);
         udata->PreviewFont = font;
+        udata->PreviewSize = (LONG)val;
 
         MyFreeVecPooled(name, AslBase);
     }
@@ -428,7 +433,7 @@ struct ASLLVFontReqNode *FOGetActiveFont(struct LayoutData *ld, struct AslBase_i
 
 /*****************************************************************************************/
 
-void FOChangeActiveFont(struct LayoutData *ld, WORD delta, UWORD quali, BOOL jump, struct AslBase_intern *AslBase)
+void FOChangeActiveFont(struct LayoutData *ld, LONG delta, UWORD quali, BOOL jump, struct AslBase_intern *AslBase)
 {
     struct FOUserData   *udata = (struct FOUserData *)ld->ld_UserData;
     IPTR                active, total, visible, size;
@@ -457,7 +462,8 @@ void FOChangeActiveFont(struct LayoutData *ld, WORD delta, UWORD quali, BOOL jum
             struct ASLLVFontReqNode *node;
             UBYTE                   buffer[MAXASLFONTNAME + 6];
             STRPTR                  val;
-            WORD                    i, len;
+            LONG                    i;
+            WORD                    len;
             BOOL                    dojump = TRUE;
 
             GetAttr(STRINGA_TextVal, udata->NameString, (IPTR *)&val);
@@ -469,7 +475,7 @@ void FOChangeActiveFont(struct LayoutData *ld, WORD delta, UWORD quali, BOOL jum
             {
                 if (((LONG)active) >= 0)
                 {
-                    if ((node = (struct ASLLVFontReqNode *)FindListNode(&udata->NameListviewList, (WORD)active)))
+                    if ((node = (struct ASLLVFontReqNode *)FindListNode(&udata->NameListviewList, (LONG)active)))
                     {
                         if (Stricmp(node->node.ln_Name, buffer) == 0) dojump = FALSE;
                     }
@@ -505,7 +511,7 @@ void FOChangeActiveFont(struct LayoutData *ld, WORD delta, UWORD quali, BOOL jum
 
 /*****************************************************************************************/
 
-void FOChangeActiveSize(struct LayoutData *ld, WORD delta, UWORD quali, struct AslBase_intern *AslBase)
+void FOChangeActiveSize(struct LayoutData *ld, LONG delta, UWORD quali, struct AslBase_intern *AslBase)
 {
     struct FOUserData   *udata = (struct FOUserData *)ld->ld_UserData;
     IPTR                active, total, visible;
@@ -536,7 +542,7 @@ void FOChangeActiveSize(struct LayoutData *ld, WORD delta, UWORD quali, struct A
 
 /*****************************************************************************************/
 
-void FOActivateFont(struct LayoutData *ld, WORD which, LONG size, struct AslBase_intern *AslBase)
+void FOActivateFont(struct LayoutData *ld, LONG which, LONG size, struct AslBase_intern *AslBase)
 {
     struct FOUserData       *udata = (struct FOUserData *)ld->ld_UserData;
 //  struct IntFontReq       *iforeq = (struct IntFontReq *)ld->ld_IntReq;
@@ -555,7 +561,7 @@ void FOActivateFont(struct LayoutData *ld, WORD which, LONG size, struct AslBase
         {ASLLV_MakeVisible      , 0             },
         {TAG_DONE                               }
     };
-    WORD                    sizelvindex = 0;
+    LONG                    sizelvindex = 0;
 
     fontnode = (struct ASLLVFontReqNode *)FindListNode(&udata->NameListviewList, which);
     udata->ActiveFont = fontnode;
@@ -593,7 +599,7 @@ void FOActivateFont(struct LayoutData *ld, WORD which, LONG size, struct AslBase
 
 /*****************************************************************************************/
 
-void FOActivateSize(struct LayoutData *ld, WORD which, struct AslBase_intern *AslBase)
+void FOActivateSize(struct LayoutData *ld, LONG which, struct AslBase_intern *AslBase)
 {
     struct FOUserData       *udata = (struct FOUserData *)ld->ld_UserData;
 //  struct IntFontReq       *iforeq = (struct IntFontReq *)ld->ld_IntReq;
@@ -613,7 +619,7 @@ void FOActivateSize(struct LayoutData *ld, WORD which, struct AslBase_intern *As
     }
     else
     {
-        LONG size  = -which;
+        QUAD size  = -(QUAD)which;
         BOOL found = FALSE;
 
         which = 0;
@@ -654,7 +660,7 @@ void FORestore(struct LayoutData *ld, CONST_STRPTR fontname, LONG fontsize, stru
     };
     UBYTE                   initialfontname[MAXASLFONTNAME + 6];
     char                    *sp;
-    WORD                    i = 0;
+    LONG                    i = 0;
 
     fontname = fontname ? fontname : (CONST_STRPTR) "";
 

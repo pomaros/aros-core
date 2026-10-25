@@ -59,6 +59,7 @@ struct settings_record {
     int32_t  min;
     int32_t  max;
     uint32_t select;                      /* selector value of the group     */
+    uint32_t mask;                        /* bits of the field, 0: all of it */
     uint32_t chunk;                       /* index into schema->chunks       */
     char     unit[SETTINGS_NAME_MAX];
     char     dflt[SETTINGS_TEXT_MAX];

@@ -33,5 +33,6 @@ struct ExceptionContext
 
 /* ExceptionContext Flags */
 #define ECF_FPU  0x0001 /* fpuContext is valid */
+#define ECF_JITWRITE 0x0002 /* Apple: the task's JIT pages are writable, not executable */
 
 #endif /* AROS_AARCH64_CPUCONTEXT_H */

@@ -291,7 +291,7 @@ diff -ruN clang-20.1.0.src/lib/Driver/Driver.cpp clang-20.1.0.src.aros/lib/Drive
 diff -ruN clang-20.1.0.src/lib/Driver/ToolChains/AROS.cpp clang-20.1.0.src.aros/lib/Driver/ToolChains/AROS.cpp
 --- clang-20.1.0.src/lib/Driver/ToolChains/AROS.cpp	1970-01-01 00:00:00.000000000 +0000
 +++ clang-20.1.0.src.aros/lib/Driver/ToolChains/AROS.cpp	2025-07-16 19:03:04.095289709 +0000
-@@ -0,0 +1,448 @@
+@@ -0,0 +1,455 @@
 +//===--- AROS.cpp - AROS Tool Chain -------------===//
 +//
 +//                     The LLVM Compiler Infrastructure
@@ -636,9 +636,16 @@ diff -ruN clang-20.1.0.src/lib/Driver/ToolChains/AROS.cpp clang-20.1.0.src.aros/
 +    if (DriverArgs.hasArg(options::OPT_nix)) {
 +        CC1Args.push_back("-D__NIX__");
 +    }
-+    // AROS has no usable hardware TLS; force emulated TLS (compiler-rt
-+    // emutls + pthread keys).  A later -fno-emulated-tls still overrides.
-+    CC1Args.push_back("-femulated-tls");
++    // Native AArch64 AROS keeps TPIDR_EL0 per task and LoadSeg() builds TLS
++    // descriptors, so TLS is native there. Hosted AArch64 AROS (built with
++    // x18 reserved for Darwin) and the other architectures emulate it
++    // (compiler-rt emutls + pthread keys). An explicit -f(no-)emulated-tls
++    // wins either way.
++    if ((!getTriple().isAArch64() ||
++         DriverArgs.hasArg(options::OPT_ffixed_x18)) &&
++        !DriverArgs.hasArg(options::OPT_femulated_tls,
++                           options::OPT_fno_emulated_tls))
++      CC1Args.push_back("-femulated-tls");
 +}
 +
 +

@@ -2,6 +2,7 @@
 #define GADTOOLS_INTERN_H
 
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright © 1995-2011, The AROS Development Team. All rights reserved.
     $Id$
 
@@ -301,6 +302,8 @@ struct VisualInfo
 {
     struct Screen  		* vi_screen;
     struct DrawInfo 		* vi_dri;
+    const struct ScreenRenderContext *vi_context; /* Borrowed until screen close. */
+    BOOL vi_logical;
 };
 
 /* dummy gadget created by CreateContext */
@@ -643,5 +646,7 @@ struct PaletteData
     Object		*pd_Frame;
 };
 
+
+ULONG GT_TextLength(struct VisualInfo *, CONST_STRPTR, ULONG, struct Library *);
 
 #endif /* GADTOOLS_INTERN_H */

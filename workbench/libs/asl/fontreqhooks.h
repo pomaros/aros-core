@@ -2,6 +2,7 @@
 #define FONTREQHOOKS_H
 
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright © 1995-2001, The AROS Development Team. All rights reserved.
     $Id$
 
@@ -62,6 +63,7 @@ struct FOUserData
     struct ASLLVFontReqNode     *ActiveFont;
     struct AvailFontsHeader     *AFH;
     struct TextFont             *PreviewFont;
+    LONG                        PreviewSize; /* Canonical requested points, Process-owned. */
 
     UWORD                       ButWidth;
     UWORD                       ButHeight;

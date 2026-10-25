@@ -18,6 +18,8 @@ struct PlatformTimer
     ULONG                    tb_DeadlineOwned;
     ULONG                    tb_DeadlineFault;
     ULONG                    tb_StateLock;
+    UQUAD                    tb_VBlankTicks;   /* counter ticks per VERTB */
+    UQUAD                    tb_NextVBlank;    /* counter value of the next one */
 };
 
 struct TimerBase;

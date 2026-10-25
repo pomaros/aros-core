@@ -45,6 +45,13 @@
                 the scheduled wakes on the grid on battery (and when the
                 machine does not report its power), always, or never.
                 POWER_GridSeconds (ULONG, default 900): the grid.
+                POWER_WakeHook (struct Hook *): asked every POWER_CheckMs
+                (default 1000) during the hold, in the calling task, with
+                every other task frozen: no DOS, no semaphore another task
+                may hold (smc.resource's SMCTryReadKey, not SMCReadKey). It
+                answers a POWER_SOURCE_* to wake now, reported to the
+                subscribers and in psr_WokenBy, or 0 to sleep on. With a
+                hook, POWER_Seconds 0 means no limit.
 
         The scheduled wakes (AddPowerWakeA()) that fall in the sleep run
         during it, each requester thawed alone with its budget, the up time
@@ -64,7 +71,8 @@
     AROS_LIBFUNC_INIT
 
     struct PowerSleepResult local, *result;
-    ULONG seconds, source, coalesce, grid;
+    ULONG seconds, source, coalesce, grid, check_ms;
+    struct Hook *wake_hook;
 
     if (depth < POWER_DEPTH_LIGHT || depth > POWER_DEPTH_HIBERNATE)
         return POWER_ERROR_ARGUMENT;
@@ -73,9 +81,15 @@
     result = (struct PowerSleepResult *)GetTagData(POWER_Result, (IPTR)&local, tags);
     coalesce = GetTagData(POWER_Coalesce, POWER_COALESCE_BATTERY, tags);
     grid = GetTagData(POWER_GridSeconds, POWER_DEFAULT_GRID_S, tags);
-    if (coalesce > POWER_COALESCE_NEVER)
+    wake_hook = (struct Hook *)GetTagData(POWER_WakeHook, 0, tags);
+    check_ms = GetTagData(POWER_CheckMs, 1000, tags);
+    if (coalesce > POWER_COALESCE_NEVER || check_ms < 10)
         return POWER_ERROR_ARGUMENT;
-    return power_Transition(PowerBase, depth, seconds, source, coalesce, grid, result);
+    /* No limit needs something that ends the sleep. */
+    if (seconds == 0 && wake_hook == NULL)
+        return POWER_ERROR_ARGUMENT;
+    return power_Transition(PowerBase, depth, seconds, source, coalesce, grid, wake_hook,
+                            check_ms, result);
 
     AROS_LIBFUNC_EXIT
 }

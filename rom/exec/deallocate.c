@@ -92,6 +92,7 @@
 #endif
 
         stdDealloc(freeList, NULL /* by design */, memoryBlock, byteSize, &tp, SysBase);
+        mmPostPendingAlert(SysBase);
 
     }
 

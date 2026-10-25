@@ -104,6 +104,9 @@ struct PowerState
 #define POWER_WakeWith              (POWER_TAGBASE + 6)  /* AddPowerWakeA: struct Task ** NULL-terminated, thawed with it */
 #define POWER_Coalesce              (POWER_TAGBASE + 7)  /* PowerSleepA: POWER_COALESCE_*            */
 #define POWER_GridSeconds           (POWER_TAGBASE + 8)  /* PowerSleepA: the coalescing grid, default 900 */
+#define POWER_WakeHook              (POWER_TAGBASE + 9)  /* PowerSleepA: struct Hook * asked during the hold;
+                                                            it answers a POWER_SOURCE_* to wake, 0 to sleep on */
+#define POWER_CheckMs               (POWER_TAGBASE + 10) /* PowerSleepA: how often the hook is asked, default 1000 */
 
 /* What a transition did, for the caller's one line. */
 struct PowerSleepResult
@@ -121,6 +124,7 @@ struct PowerSleepResult
     ULONG   psr_Wakes;              /* scheduled wakes run during the sleep             */
     ULONG   psr_WakesExpired;       /* of those, put back to sleep at their budget      */
     ULONG   psr_WakeBursts;         /* times the machine woke for them (coalesced wakes share one) */
+    ULONG   psr_WokenBy;            /* the source the wake hook answered, 0 when the hold ran out */
 };
 
 #endif /* LIBRARIES_POWER_H */

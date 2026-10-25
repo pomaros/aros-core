@@ -1,3 +1,5 @@
+# Copyright (C) 2026, John KNIPPER <code@jkn.me>.
+# Licensed under the AROS Public License, version 1.1.
 # Makefile to build AHI.
 
 include $(SRCDIR)/config/aros.cfg
@@ -11,7 +13,6 @@ include $(SRCDIR)/config/aros.cfg
 #MM- AHI-raspi-armhf :  kernel-dma-bcm2708-includes kernel-mbox-bcm2708-includes
 #MM- AHI-raspi-arm :  kernel-dma-bcm2708-includes kernel-mbox-bcm2708-includes
 #MM- AHI-raspi-aarch64 :  kernel-dma-bcm2708-includes kernel-mbox-bcm2708-includes
-#MM- AHI-apple-aarch64 :
 
 #MM- AHI-standalone-prereqs : \
 #MM                         AHI-$(AROS_TARGET_ARCH)-$(AROS_TARGET_CPU)
@@ -76,4 +77,4 @@ AHI_OPTIONS+=--with-target-asflags="$(AFLAGS)"
 #
 %build_with_configure mmake=workbench-devs-AHI-subsystem prefix=$(EXEDIR) \
     extraoptions="$(AHI_OPTIONS)" usecppflags=no gnuflags=no \
-    config_env_extra="OBJCOPY=$(OBJCOPY) STRIP=$(STRIP_PLAIN)"
+    config_env_extra="AR=$(firstword $(AR)) RANLIB=$(firstword $(RANLIB)) OBJCOPY=$(OBJCOPY) STRIP=$(STRIP_PLAIN)"

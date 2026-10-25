@@ -1972,7 +1972,7 @@ AROS_LH3(LONG, btSetAttrsA,
     if(savepopocfg) {
         /* per-device settings (name, popup/bind/connect policy): in memory
            only, the prefs' Save/Use writes them - as Poseidon does */
-        bStoreDevConfig(BluetoothBase, (struct BtDevice *) btstruct, FALSE);
+        if(!bStoreDevConfig(BluetoothBase, (struct BtDevice *) btstruct, FALSE)) res = -1;
     }
     if(checkcfgupdate) {
         struct BtIFFContext *pic;

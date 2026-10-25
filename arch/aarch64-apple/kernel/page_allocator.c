@@ -7,6 +7,7 @@
  */
 
 #include "page_allocator.h"
+#include "page_bitmap.h"
 
 #include <aros/kernel.h>
 #include <aros/debug.h>
@@ -32,18 +33,12 @@ struct AROSAppleMemoryLock AROSApplePageMapLock;
 
 static int page_used(uint32_t page)
 {
-    return (page_allocator.used[page / 64U] &
-        (UINT64_C(1) << (page % 64U))) != 0;
+    return page_bitmap_test(page_allocator.used, page);
 }
 
 static void set_page_used(uint32_t page, int used)
 {
-    uint64_t mask = UINT64_C(1) << (page % 64U);
-
-    if (used)
-        page_allocator.used[page / 64U] |= mask;
-    else
-        page_allocator.used[page / 64U] &= ~mask;
+    page_bitmap_set(page_allocator.used, page, used);
 }
 
 static int page_internal(uint32_t page)
@@ -61,6 +56,19 @@ static void set_page_internal(uint32_t page, int internal)
     else
         page_allocator.internal[page / 64U] &= ~mask;
 }
+
+/*
+ * Placement. Every ELF hunk, JIT region and page table comes from this one
+ * arena, with very different lifetimes: a page table lives as long as the
+ * system, a command's hunks for one run, a browser's for its session. First
+ * fit for all of them scatters the long-lived single pages between the big
+ * regions, and a 2 MiB request then fails in an arena mostly free. Page
+ * tables are therefore taken from the top of the arena, everything else
+ * first fit from the bottom. Hunks stay first fit so that the hunks of one
+ * segment, which LoadSeg allocates one by one, stay next to each other:
+ * their branches (CALL26, +/-128 MiB) and literal loads (+/-1 MiB) reach
+ * from one hunk to the next.
+ */
 
 int AROSApplePageAllocatorInitialize(uintptr_t start, uint64_t size)
 {
@@ -100,8 +108,8 @@ static void *page_allocate(
     uint32_t first;
     uint32_t limit;
     uint32_t index;
-    uint32_t run;
     uint32_t available;
+    int found;
     uintptr_t address;
     uintptr_t ceiling = UINTPTR_MAX;
 
@@ -152,20 +160,25 @@ static void *page_allocate(
         }
         limit = first;
     }
-    for (; first <= limit; ++first) {
-        for (run = 0; run < pages && !page_used(first + run); ++run) {
-        }
-        if (run == pages)
-            break;
-        first += run;
-    }
-    if (first > limit) {
+    if (requested != NULL)
+        found = page_bitmap_next(page_allocator.used, first, first + pages, 1) ==
+            first + pages;
+    else if (internal)
+        found = page_bitmap_find_down(page_allocator.used, available, pages, &first);
+    else
+        found = page_bitmap_find_up(page_allocator.used, 0, limit, pages, &first);
+    if (!found) {
         uint32_t used = (uint32_t)(page_allocator.stats.pages_in_use +
             page_allocator.stats.internal_pages_in_use);
         uint32_t capacity = page_allocator.pages;
+        uint32_t largest = 0;
+
+        /* Tell fragmentation from exhaustion: the longest free run. */
+        largest = page_bitmap_longest_free(page_allocator.used, available);
         AROSAppleMemoryLockRelease(&allocator_lock,saved);
-        bug("[MM] code page arena allocation unavailable: requested=%lu used=%lu capacity=%lu pages\n",
-            (unsigned long)pages, (unsigned long)used, (unsigned long)capacity);
+        bug("[MM] code page arena allocation unavailable: requested=%lu%s used=%lu capacity=%lu largest_free_run=%lu pages\n",
+            (unsigned long)pages, requested != NULL ? " at a fixed address" : "",
+            (unsigned long)used, (unsigned long)capacity, (unsigned long)largest);
         return NULL;
     }
     for (index = 0; index < pages; ++index) {

@@ -101,6 +101,8 @@ struct IntETask
 /* iet_AlertFlags */
 #define AF_Alert    0x01    /* The task is in alert state      */
 #define AF_Location 0x02    /* iet_AlertLocation is filled in */
+#define AF_MemPending 0x04  /* a memory alert found under the allocator's locks waits
+                               for mmPostPendingAlert() (iet_AlertCode, type, data, location) */
 
 /*
  * This function resets a task's crash status:

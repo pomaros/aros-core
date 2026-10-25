@@ -22,6 +22,7 @@
 #include <proto/graphics.h>
 #include <proto/layers.h>
 #include "intuition_intern.h"
+#include "screenrendercontext.h"
 #include "intuition_customize.h"
 #include "inputhandler_actions.h"
 
@@ -165,9 +166,6 @@ static VOID int_closescreen(struct CloseScreenActionMsg *msg,
         return FALSE;
     }
 
-    /* AROS: Notify decorator */
-    int_ExitDecorator(screen);
-
     /* kill screen bar */
     KillScreenBar(screen, IntuitionBase);
 
@@ -176,9 +174,16 @@ static VOID int_closescreen(struct CloseScreenActionMsg *msg,
     {
         Object *im = (Object*)((struct Gadget *)(((struct IntScreen *)screen)->depthgadget))->GadgetRender;
 
-        DisposeObject(im);
+        if (!CurrentScreenRenderContext(screen)) DisposeObject(im);
         DisposeObject(((struct IntScreen *)screen)->depthgadget);
+        IS(screen)->depthgadget = NULL;
+        screen->FirstGadget = NULL;
     }
+    /* Image handles use provider buffers; release them before ExitScreen and
+     * before freeing the color map or the decorator objects. */
+    FreeScreenRenderContexts(IS(screen), IntuitionBase);
+    FreeLogicalScreenInfo(IS(screen), IntuitionBase);
+    int_ExitDecorator(screen);
 
     if (IS(screen)->RestoreDBufInfo != NULL)
     {

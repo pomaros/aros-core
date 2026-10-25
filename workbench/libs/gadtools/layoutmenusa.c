@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2010, The AROS Development Team. All rights reserved.
 */
 #include "gadtools_intern.h"
@@ -127,9 +128,7 @@
         menu->LeftEdge = curX;
         menu->TopEdge  = curY;
 
-        menu->Width    = TextLength(&vinfo->vi_screen->RastPort,
-                                    menu->MenuName,
-                                    strlen(menu->MenuName)) +
+        menu->Width    = GT_TextLength(vinfo, menu->MenuName, strlen(menu->MenuName), GadToolsBase) +
                          vinfo->vi_screen->MenuHBorder * 2;
 
     #if 0

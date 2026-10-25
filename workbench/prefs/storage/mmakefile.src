@@ -10,6 +10,6 @@ include $(SRCDIR)/config/aros.cfg
     progname=Storage targetdir=$(AROS_PREFS) files=main
 
 %build_module mmake=workbench-prefs-storage-class \
-    modname=StorageEditor modtype=mcc conffile=editor.conf files=editor
+    modname=StorageEditor modtype=mcc conffile=editor.conf files="editor report"
 
 %common

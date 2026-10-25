@@ -12,6 +12,7 @@
 
 #include "__fdesc.h"
 #include "__dirdesc.h"
+#include "__reclock.h"
 
 /*****************************************************************************
 
@@ -63,6 +64,7 @@
     }
 
     __fcb_lock(desc->fcb);
+    __posixc_reclock_close(desc, desc->fcb->opencount == 1);
     if (--desc->fcb->opencount == 0)
     {
         UnLock(desc->fcb->handle);

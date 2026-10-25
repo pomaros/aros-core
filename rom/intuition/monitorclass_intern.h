@@ -1,3 +1,7 @@
+/*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
+    Licensed under the AROS Public License, version 1.1.
+*/
 #define USE_FAST_DISPLAYTOBMCOORDS 1
 #define USE_FAST_BMTODISPLAYCOORDS 1
 
@@ -46,6 +50,8 @@ struct IMonitorNode
     /* Monitor Cursor data */
     IPTR                        SpriteType;
     struct SharedPointer        *pointer;
+    struct Screen               *pointerScreen; /* borrowed under IBase */
+    struct PointerRenderGeneration *pointerRender;
     ULONG                       mouseX;
     ULONG                       mouseY;
 

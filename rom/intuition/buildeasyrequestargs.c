@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2023, The AROS Development Team. All rights reserved.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
 */
@@ -26,6 +27,7 @@
 #include <utility/tagitem.h>
 #include <aros/debug.h>
 #include "intuition_intern.h"
+#include "systemrequestscale.h"
 
 /**********************************************************************************************/
 
@@ -39,6 +41,7 @@ static BOOL buildeasyreq_calculatedims(struct IntReqDims *dims,
 static struct Gadget *buildeasyreq_makegadgets(struct IntReqDims *dims,
                                 STRPTR *gadgetlabels,
                                 struct Screen *scr,
+                                struct DrawInfo *dri,
                                 ULONG *idcmp,
                                 struct IntuitionBase *IntuitionBase);
 static struct Gadget *FindGadgetByID(struct Gadget *thisgadget, UWORD GadgetID);
@@ -110,6 +113,9 @@ const struct TagItem mapproptop[] = {
     struct IntRequestUserData   *requserdata;
     RAWARG                       nextarg;
     ULONG                       reqidcmp = IDCMP_GADGETUP | IDCMP_RAWKEY;
+    struct Screen                logicalscreen;
+    const struct ScreenRenderContext *legacycontext;
+    BOOL legacybound = FindTask(NULL)->tc_Node.ln_Type == NT_PROCESS;
 
     DEBUG_BUILDEASYREQUEST(dprintf("%s: window 0x%p easystruct 0x%p IDCMPFlags 0x08%x args 0x%p\n", __func__,
                                    RefWindow, easyStruct, IDCMP, Args));
@@ -167,15 +173,28 @@ const struct TagItem mapproptop[] = {
 
             if(gadgetlabels)
             {
-                if (buildeasyreq_calculatedims(&requserdata->ReqDims, scr,
+                BOOL handled;
+                req = OpenScaledSystemRequester(scr, reqtitle, requserdata->RawBody,
+                    NULL, gadgetlabels, requserdata->ReqDims.gadgets, IDCMP, 0, 0,
+                    &handled, IntuitionBase);
+                if (handled)
+                {
+                    intrequest_freelabels(gadgetlabels, IntuitionBase);
+                    FreeVec(requserdata->RawBody);
+                    FreeVec(requserdata);
+                    if (lockedscr) UnlockPubScreen(NULL, lockedscr);
+                    return req;
+                }
+                if (LogicalSystemRequesterScreen(scr, &logicalscreen, &legacycontext, IntuitionBase) &&
+                    buildeasyreq_calculatedims(&requserdata->ReqDims, &logicalscreen,
                                                requserdata->RawBody, gadgetlabels, IntuitionBase))
                 {
                     DEBUG_BUILDEASYREQUEST(bug("%s: dimensions OK\n", __func__));
                     struct TextAttr *reqfont = NULL;
                     struct TextAttr defreqfont = {
                         "topaz.font",
-                        scr->RastPort.Font->tf_YSize,
-                        scr->RastPort.Font->tf_Style,
+                        logicalscreen.RastPort.Font->tf_YSize,
+                        logicalscreen.RastPort.Font->tf_Style,
                         0
                     };
 #if (0)
@@ -186,7 +205,9 @@ const struct TagItem mapproptop[] = {
                     requserdata->ReqBody = requester_makebodyplain(&requserdata->ReqDims, requserdata->RawBody, reqfont);
                     DEBUG_BUILDEASYREQUEST(bug("%s: itext ReqBody 0x%p\n", __func__, requserdata->ReqBody));
 
-                    gadgets = buildeasyreq_makegadgets(&requserdata->ReqDims, gadgetlabels, scr, &reqidcmp, IntuitionBase);
+                    gadgets = requserdata->ReqBody ?
+                        buildeasyreq_makegadgets(&requserdata->ReqDims, gadgetlabels, &logicalscreen,
+                            legacycontext->src_LogicalDrawInfo, &reqidcmp, IntuitionBase) : NULL;
                     if (gadgets)
                     {
                         DEBUG_BUILDEASYREQUEST(dprintf("%s: gadgets 0x%p\n", __func__, gadgets));
@@ -195,17 +216,20 @@ const struct TagItem mapproptop[] = {
                         {
                             { WA_Width                                    , requserdata->ReqDims.width                                                  },
                             { WA_Height                                   , requserdata->ReqDims.height                                                 },
-                            { WA_Left                                     , - scr->LeftEdge + (scr->ViewPort.DWidth/2) - (requserdata->ReqDims.width/2) },
-                            { WA_Top                                      , - scr->TopEdge + (scr->ViewPort.DHeight/2) - (requserdata->ReqDims.height/2)},
+                            { WA_Left                                     , - logicalscreen.LeftEdge + (logicalscreen.ViewPort.DWidth/2) - (requserdata->ReqDims.width/2) },
+                            { WA_Top                                      , - logicalscreen.TopEdge + (logicalscreen.ViewPort.DHeight/2) - (requserdata->ReqDims.height/2)},
                             { WA_IDCMP                                    , reqidcmp | (IDCMP & ~IDCMP_VANILLAKEY)                      },
                             { WA_Gadgets                                  , (IPTR)gadgets                                               },
                             { WA_Title                                    , (IPTR)reqtitle                                              },
                             { (lockedscr ? WA_PubScreen : WA_CustomScreen), (IPTR)scr                                                   },
                             { WA_Flags                                    , WFLG_DRAGBAR     |
                                                                             WFLG_DEPTHGADGET |
-                                                                            WFLG_ACTIVATE    |
+                                                                            (legacybound ? 0 : WFLG_ACTIVATE) |
                                                                             WFLG_RMBTRAP   /*|
                                                                             WFLG_SIMPLE_REFRESH*/                                       },
+                            {WA_ScaleAware, FALSE},
+                            {WA_Hidden, legacybound},
+                            {(legacybound ? WA_RenderContext : TAG_IGNORE), (IPTR)legacycontext},
                             {TAG_DONE                                                                                                   }
                         };
 
@@ -246,6 +270,15 @@ const struct TagItem mapproptop[] = {
                             buildreq_draw(&requserdata->ReqDims, requserdata->ReqBody,
                                      req, scr, requserdata->Gadgets, IntuitionBase);
                             
+                            if (legacybound)
+                            {
+                                if (!ShowWindow(req, NULL))
+                                {
+                                    freesysreq_intern(req, IntuitionBase);
+                                    return NULL;
+                                }
+                                ActivateWindow(req);
+                            }
                             return req;
                         }
 
@@ -259,6 +292,7 @@ const struct TagItem mapproptop[] = {
                 
             } /* if (gadgetlabels) */
 
+            FreeVec(requserdata->ReqBody);
             FreeVec(requserdata->RawBody);
             
         } /* if (requserdata->RawBody) */
@@ -471,6 +505,7 @@ static BOOL buildeasyreq_calculatedims(struct IntReqDims *dims,
 static struct Gadget *buildeasyreq_makegadgets(struct IntReqDims *dims,
                     STRPTR *gadgetlabels,
                     struct Screen *scr,
+                    struct DrawInfo *dri,
                     ULONG   *idcmp,
                     struct IntuitionBase *IntuitionBase)
 {
@@ -480,7 +515,6 @@ static struct Gadget *buildeasyreq_makegadgets(struct IntReqDims *dims,
     WORD             currentgadget;
     UWORD            xoffset, yoffset, spacing, gadgetswidth, gadgetsheight, ngadgets, nrows;
     UWORD            x, y;
-    struct DrawInfo *dri;
 
     if (gadgetlabels[0] == NULL)
         return NULL;
@@ -528,7 +562,6 @@ static struct Gadget *buildeasyreq_makegadgets(struct IntReqDims *dims,
     if (ngadgets > 1)
         spacing = (spacing - dims->gadgetwidth) / (ngadgets - 1);
 
-    dri = GetScreenDrawInfo(scr);
 
     /* Now we know how much space our gadgets will occupy. Add the required height to the requester. */
     gadgetheight += GADGETGADGETSPACING_Y;
@@ -583,7 +616,10 @@ static struct Gadget *buildeasyreq_makegadgets(struct IntReqDims *dims,
 
             if (!thisgadget)
             {
-                intrequest_freegadgets(gadgetlist, IntuitionBase);
+                if (gadgetlist)
+                    intrequest_freegadgets(gadgetlist, IntuitionBase);
+                else
+                    DisposeObject(gadgetframe);
                 return NULL;
             }
 
@@ -643,7 +679,6 @@ static struct Gadget *buildeasyreq_makegadgets(struct IntReqDims *dims,
     }
 #endif
 
-    FreeScreenDrawInfo(scr, dri);
 
     return gadgetlist;
 }

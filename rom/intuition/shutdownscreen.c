@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
    Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
 */
 
@@ -112,6 +113,7 @@ static struct Screen *OpenFinalScreen(BYTE MinDepth, BOOL squarePixels,
         {
             struct msSetPointerShape pmsg;
             pmsg.MethodID = MM_SetPointerShape;
+            pmsg.screen = scr;
             pmsg.pointer = NULL;
 
             pointer = MakePointerFromData(IntuitionBase, empty_pointer,

@@ -682,6 +682,19 @@ static void freeLocalVars(struct Process *process, struct DosLibrary *DOSBase)
     }
 }
 
+void internal_FreePath(BPTR path, struct DosLibrary *DOSBase)
+{
+    BPTR *node = BADDR(path);
+
+    while (node != NULL)
+    {
+        BPTR next = node[0];
+        UnLock(node[1]);
+        FreeVec(node);
+        node = BADDR(next);
+    }
+}
+
 BPTR internal_CopyPath(BPTR boldpath, struct DosLibrary * DOSBase)
 {
     BPTR *nextpath, path, *newpath, *oldpath;
@@ -699,7 +712,10 @@ BPTR internal_CopyPath(BPTR boldpath, struct DosLibrary * DOSBase)
         *newpath = MKBADDR(nextpath);
         nextpath[1] = DupLock(oldpath[1]);
         if (nextpath[1] == BNULL)
+        {
+            FreeVec(nextpath);
             break;
+        }
     }
 
     *newpath = BNULL;

@@ -1,4 +1,6 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
+    Licensed under the AROS Public License, version 1.1.
     Copyright (C) 1995-2020, The AROS Development Team. All rights reserved.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
 */
@@ -15,6 +17,28 @@
 #include <string.h>
 
 #include "intuition_intern.h"
+
+/* A cached request may have been adjusted by the display driver when the
+   Workbench screen opened. A scale update can name either that request or
+   the effective raster, but may never change its scrolling policy. */
+static BOOL ScreenModeSameRaster(const struct IScreenModePrefs *a,
+                                 const struct IScreenModePrefs *b)
+{
+    return a->smp_DisplayID == b->smp_DisplayID &&
+           a->smp_Width == b->smp_Width &&
+           a->smp_Height == b->smp_Height &&
+           a->smp_Depth == b->smp_Depth;
+}
+
+static BOOL ScreenModeScaleOnly(const struct IScreenModePrefs *stored,
+                                const struct IScreenModePrefs *incoming,
+                                const struct IScreenModePrefs *effective)
+{
+    if (stored->smp_Control != incoming->smp_Control)
+        return FALSE;
+    return ScreenModeSameRaster(stored, incoming) ||
+           (effective && ScreenModeSameRaster(effective, incoming));
+}
 
 /*****************************************************************************
 
@@ -75,11 +99,56 @@
             BOOL reopen = FALSE, closed = (GetPrivIBase(IntuitionBase)->WorkBench) ? FALSE : TRUE;
 
             DEBUG_SETIPREFS(bug("[Intuition] %s: IP_SCREENMODE_V37\n", __func__));
-            if (length > sizeof(struct IScreenModePrefs))
-                length = sizeof(struct IScreenModePrefs);
-
+            struct IScreenModePrefs *incoming = data;
+            struct IScreenModePrefs *stored;
+            if (length < sizeof(*incoming))
+            {
+                Result = FALSE;
+                break;
+            }
             if (!GetPrivIBase(IntuitionBase)->ScreenModePrefs)
-                GetPrivIBase(IntuitionBase)->ScreenModePrefs = AllocMem(sizeof(struct IScreenModePrefs), MEMF_ANY);
+                SetDisplayDefaults(IntuitionBase);
+            stored = GetPrivIBase(IntuitionBase)->ScreenModePrefs;
+            if (!stored)
+            {
+                Result = FALSE;
+                break;
+            }
+            struct IScreenModePrefs effective = *stored;
+            struct Screen *live = GetPrivIBase(IntuitionBase)->WorkBench;
+            if (live)
+            {
+                effective.smp_DisplayID = GetVPModeID(&live->ViewPort);
+                effective.smp_Width = live->Width;
+                effective.smp_Height = live->Height;
+                effective.smp_Depth = GetBitMapAttr(live->RastPort.BitMap, BMA_DEPTH);
+            }
+            /* A scale-only update preserves every open application. Mode
+               changes retain the normal Workbench close/open transaction. */
+            if (ScreenModeScaleOnly(stored, incoming, live ? &effective : NULL))
+            {
+                struct Screen *wb;
+                ULONG scale = ClampScreenScale(incoming->smp_Scale);
+                IPTR got = scale;
+                /* Keep the original requested mode: both that request and
+                   the driver's effective raster can name a scale update. */
+                stored->smp_Scale = scale;
+                /* Without a Workbench screen the stored scale is the whole
+                   update: OpenWorkBench takes it. Locking "Workbench" here
+                   would open the screen before IPrefs has read the font
+                   preferences, in the screen font of the ROM. */
+                if (!live)
+                    break;
+                UnlockIBase(lock);
+                wb = LockPubScreen("Workbench");
+                if (wb)
+                {
+                    SetAttrs((Object *)wb, SA_Scale, scale, TAG_DONE);
+                    GetAttr(SA_Scale, (Object *)wb, &got);
+                    UnlockPubScreen(NULL, wb);
+                }
+                return got == scale;
+            }
 
             if (memcmp(GetPrivIBase(IntuitionBase)->ScreenModePrefs, data,
                        sizeof(struct IScreenModePrefs)) == 0)

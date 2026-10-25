@@ -124,7 +124,11 @@ static VOID FindScrollerValues(UWORD total, UWORD visible, UWORD top,
             (UWORD)(((ULONG)(visible - overlap) * MAXBODY) / (total - overlap)) :
             MAXBODY;
 
-    *pot = (hidden > 0) ? (UWORD)(((ULONG) top * MAXPOT) / hidden) : 0;
+    /* Nearest normalization must invert FindScrollerTop even when hidden is
+     * almost MAXPOT. The largest numerator is 65535*65535+32767, which fits
+     * ULONG. Flooring here loses one logical unit on a no-motion release. */
+    *pot = (hidden > 0) ?
+            (UWORD)((((ULONG)top * MAXPOT) + hidden / 2) / hidden) : 0;
 
     return;
 }
@@ -540,6 +544,8 @@ IPTR PropGClass__GM_GOACTIVE(Class *cl, struct Gadget *g, struct gpInput *msg)
     struct IntuitionBase *IntuitionBase = (struct IntuitionBase *)cl->cl_UserData;
     IPTR retval = GMR_NOREUSE;
 
+    GetPrivIBase(IntuitionBase)->prop_drag.gadget = NULL;
+
     /* Was GOACTIVE caused by an input event ? */
     if (msg->gpi_IEvent)
     {
@@ -557,6 +563,7 @@ IPTR PropGClass__GM_GOACTIVE(Class *cl, struct Gadget *g, struct gpInput *msg)
             msg->gpi_GInfo->gi_Requester,
             msg->gpi_Mouse.X,
             msg->gpi_Mouse.Y,
+            PropInputForMessage(g, msg, IntuitionBase),
             IntuitionBase
         );
         SetGadgetType(g, GTYP_CUSTOMGADGET);
@@ -618,7 +625,8 @@ IPTR PropGClass__GM_HANDLEINPUT(Class *cl, struct Gadget *g, struct gpInput *msg
         switch (ie->ie_Code)
         {
         case IECODE_NOBUTTON:
-            if ((msg->gpi_Mouse.X != data->last_x) || (msg->gpi_Mouse.Y != data->last_y))
+            /* Parent geometry or the input transform may have changed even
+             * when the supplied gadget-local coordinates are identical. */
             {
                  /* Fake a standard intuition prop gadget */
                 SetGadgetType(g, GTYP_PROPGADGET);
@@ -629,6 +637,7 @@ IPTR PropGClass__GM_HANDLEINPUT(Class *cl, struct Gadget *g, struct gpInput *msg
                     msg->gpi_GInfo->gi_Requester,
                     msg->gpi_Mouse.X, /* - data->last_x, */
                     msg->gpi_Mouse.Y, /* - data->last_y, */
+                    PropInputForMessage(g, msg, IntuitionBase),
                     IntuitionBase
                 );
 
@@ -767,6 +776,8 @@ IPTR PropGClass__GM_RENDER(Class *cl, struct Gadget *g, struct gpRender *msg)
 IPTR PropGClass__GM_GOINACTIVE(Class *cl, struct Gadget *g, struct gpGoInactive *msg)
 {
     struct IntuitionBase *IntuitionBase = (struct IntuitionBase *)cl->cl_UserData;
+    if (GetPrivIBase(IntuitionBase)->prop_drag.gadget == g)
+        GetPrivIBase(IntuitionBase)->prop_drag.gadget = NULL;
     /* Gadget cancelled by intuition ? */
 
     if (msg->gpgi_Abort == 1)

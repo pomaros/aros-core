@@ -28,6 +28,18 @@
 extern const LONG __aros_libreq_DOSBase __attribute__((weak));
 struct DosLibrary       *DOSBase __attribute__((weak));
 
+/*
+ * A program that needs a larger stack than it may be started with defines
+ *
+ *     ULONG __stack = 16 * 1024 * 1024;
+ *
+ * and runs on a stack of at least that many bytes, whatever the Shell's
+ * Stack setting or the icon's tooltype. Only the low 32 bits are read, so
+ * the LONG and long definitions of existing sources keep working on
+ * little-endian CPUs.
+ */
+ULONG                   __stack __attribute__((weak)) = 0;
+
 APTR                    _TaskResBase;
 
 
@@ -123,6 +135,52 @@ static int __startup_latehook_dispatcher(struct Hook *_latehook)
     D(bug("%s: hook @ 0x%p\n", __func__, _latehook);)
     return (int)CallHookA(_latehook, NULL, NULL);
 }
+
+#define STARTUP_STACK_ALIGN 16
+
+static IPTR __startup_stack_entry(struct ExecBase *SysBase)
+{
+    __startup_entries_next();
+    return 0;
+}
+
+/* Runs after detaching and before any other initialization, so that the C
+   library's exit() and the program's main() share the new stack. */
+static void __startup_stack(struct ExecBase *SysBase)
+{
+    struct Task *me = FindTask(NULL);
+    IPTR current = (IPTR)me->tc_SPUpper - (IPTR)me->tc_SPLower;
+    IPTR size = ((IPTR)__stack + STARTUP_STACK_ALIGN - 1) & ~(IPTR)(STARTUP_STACK_ALIGN - 1);
+    struct StackSwapStruct sss;
+    struct StackSwapArgs args;
+    APTR stack;
+
+    if (size <= current)
+    {
+        __startup_entries_next();
+        return;
+    }
+
+    D(bug("%s: %lu byte stack, %lu requested\n", __func__, (ULONG)current, (ULONG)size));
+    stack = AllocVec(size + STARTUP_STACK_ALIGN, MEMF_ANY);
+    if (!stack)
+    {
+        PutStr((CONST_STRPTR)me->tc_Node.ln_Name);
+        PutStr((CONST_STRPTR)": not enough memory for its stack\n");
+        __startup_error = RETURN_FAIL;
+        return;
+    }
+
+    sss.stk_Lower = (APTR)(((IPTR)stack + STARTUP_STACK_ALIGN - 1) & ~(IPTR)(STARTUP_STACK_ALIGN - 1));
+    sss.stk_Upper = (UBYTE *)sss.stk_Lower + size;
+    sss.stk_Pointer = sss.stk_Upper;
+    args.Args[0] = (IPTR)SysBase;
+    NewStackSwap(&sss, (APTR)__startup_stack_entry, &args);
+
+    FreeVec(stack);
+}
+
+ADD2SET(__startup_stack, PROGRAM_ENTRIES, -90);
 
 static void __startup_main(struct ExecBase *SysBase)
 {

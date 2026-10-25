@@ -18,6 +18,9 @@
 #if defined(__AROS__)
 #include <aros/config.h>
 #endif
+#if defined(__AROSEXEC_SMP__)
+#include <aros/apple/runtime.h>
+#endif
 
 struct KernelBase;
 
@@ -209,12 +212,83 @@ static int sink_kernel(int chr, void *data)
     return krnPutC(chr, (struct KernelBase *)data);
 }
 
+#if defined(__AROSEXEC_SMP__)
+/* Keep normal records together without holding interrupts across formatting.
+ * Long output is split at fixed chunk boundaries. CPU identity is obtained
+ * after IRQSave, which is safe at EL0 and prevents migration until release.
+ * Recursive fault diagnostics on the owning CPU must not wait on themselves.
+ * A dead owner must not silence every other CPU: after a bounded wait, emit
+ * an explicit contention marker and fall back to the character sink.
+ */
+#define BUG_CHUNK_SIZE 512U
+#define BUG_LOCK_TRIES 1000000U
+static uintptr_t bug_owner;
+struct bug_chunk {
+    void *kernel_base;
+    unsigned used;
+    char bytes[BUG_CHUNK_SIZE];
+};
+
+static void flush_chunk(struct bug_chunk *chunk)
+{
+    uint64_t saved;
+    uintptr_t cpu;
+    unsigned attempt, index;
+    int acquired = 0, recursive;
+
+    if (!chunk->used)
+        return;
+    saved = AROSAppleRuntimeIRQSave();
+    cpu = (uintptr_t)AROSAppleRuntimeLocal();
+    recursive = __atomic_load_n(&bug_owner, __ATOMIC_ACQUIRE) == cpu;
+    if (!recursive) {
+        for (attempt = 0; attempt < BUG_LOCK_TRIES; ++attempt) {
+            uintptr_t empty = 0;
+            if (__atomic_compare_exchange_n(&bug_owner, &empty, cpu, 0,
+                    __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+                acquired = 1;
+                break;
+            }
+#if defined(__aarch64__)
+            __asm__ volatile("yield" ::: "memory");
+#endif
+        }
+    }
+    if (!recursive && !acquired) {
+        const char *marker = "\n[debug contention]\n";
+        while (*marker)
+            sink_kernel(*marker++, chunk->kernel_base);
+    }
+    for (index = 0; index < chunk->used; ++index)
+        sink_kernel(chunk->bytes[index], chunk->kernel_base);
+    if (acquired)
+        __atomic_store_n(&bug_owner, 0, __ATOMIC_RELEASE);
+    AROSAppleRuntimeIRQRestore(saved);
+    chunk->used = 0;
+}
+
+static int sink_chunk(int chr, void *data)
+{
+    struct bug_chunk *chunk = data;
+    chunk->bytes[chunk->used++] = (char)chr;
+    if (chunk->used == BUG_CHUNK_SIZE)
+        flush_chunk(chunk);
+    return 1;
+}
+#endif
 
 int krnBug(const char *format, va_list args, void *kernelBase)
 {
     if (format == NULL)
         return 0;
+#if defined(__AROSEXEC_SMP__)
+    struct bug_chunk chunk = { .kernel_base = kernelBase, .used = 0 };
+    int written = format_string(sink_chunk, &chunk, format, args);
+    flush_chunk(&chunk);
+    return written;
+#else
     return format_string(sink_kernel, kernelBase, format, args);
+#endif
 }
 
 /*

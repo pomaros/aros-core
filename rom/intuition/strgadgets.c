@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2019, The AROS Development Team. All rights reserved.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
 */
@@ -353,7 +354,7 @@ STATIC VOID GetPensAndFont(struct Gadget *gad,
 {
 
     struct GfxBase  *GfxBase = GetPrivIBase(IntuitionBase)->GfxBase;
-    struct DrawInfo *dri = GetScreenDrawInfo(win->WScreen);
+    struct DrawInfo *dri = WindowDrawInfo(win->WScreen, win);
 
     SetFont(rp, dri->dri_Font);
 
@@ -389,12 +390,14 @@ STATIC VOID GetPensAndFont(struct Gadget *gad,
         ** we won't be here anymore.
         */
 
-        /* jDc: set the font to Topaz,8! */
-        if (GetPrivIBase(IntuitionBase)->TopazFont)
+        /* Preserve the legacy fixed-font contract. Adapted native windows
+         * use their retained physical frame generation for default strings. */
+        if (!IW(win)->ScaleAware)
         {
-            SetFont(rp,GetPrivIBase(IntuitionBase)->TopazFont);
-        } else {
-            SetFont(rp,GfxBase->DefaultFont);
+            if (GetPrivIBase(IntuitionBase)->TopazFont)
+                SetFont(rp, GetPrivIBase(IntuitionBase)->TopazFont);
+            else
+                SetFont(rp, GfxBase->DefaultFont);
         }
 
 #if 0
@@ -416,7 +419,6 @@ STATIC VOID GetPensAndFont(struct Gadget *gad,
     }
     pens[CURSORPEN] = dri->dri_Pens[FILLPEN];
 
-    FreeScreenDrawInfo(win->WScreen, dri);
 
     return;
 }
@@ -623,7 +625,7 @@ STATIC ULONG DoSGHClick(struct SGWork *sgw, struct IntuitionBase *IntuitionBase)
     window = sgw->GadgetInfo->gi_Window;
     req = sgw->GadgetInfo->gi_Requester;
 
-    GetGadgetDomain(sgw->Gadget, window->WScreen, window, NULL, (struct IBox *)&bbox);
+    GetGadgetDomain(sgw->Gadget, window->WScreen, window, req, (struct IBox *)&bbox);
     mousex = window->MouseX - bbox.Left;
 
     EnterFunc(bug("DoSGHClick(sgw=%p)\n", sgw));
@@ -640,9 +642,8 @@ STATIC ULONG DoSGHClick(struct SGWork *sgw, struct IntuitionBase *IntuitionBase)
     {
         struct DrawInfo *dri;
 
-        dri = GetScreenDrawInfo(window->WScreen);
+        dri = WindowDrawInfo(window->WScreen, window);
         SetFont(rp, dri->dri_Font);
-        FreeScreenDrawInfo(window->WScreen, dri);
     }
 
     if (gad->Flags & GFLG_STRINGEXTEND)
@@ -1448,7 +1449,7 @@ VOID UpdateStrGadget(struct Gadget  *gad,
 
     if (gad->Flags & GFLG_DISABLED )
     {
-        struct DrawInfo *dri = GetScreenDrawInfo(win->WScreen);
+        struct DrawInfo *dri = WindowDrawInfo(win->WScreen, win);
 
         RenderDisabledPattern(rp, dri, bbox.Left,
                               bbox.Top,
@@ -1456,7 +1457,6 @@ VOID UpdateStrGadget(struct Gadget  *gad,
                               bbox.Top + bbox.Height - 1,
                               IntuitionBase );
 
-        if (dri) FreeScreenDrawInfo(win->WScreen, dri);
     }
 
     ReleaseGIRPort(rp);

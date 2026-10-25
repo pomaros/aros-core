@@ -2,6 +2,8 @@
 #define INTUITION_INTUITION_H
 
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
+    Licensed under the AROS Public License, version 1.1.
     Copyright © 1995-2025, The AROS Development Team. All rights reserved.
     $Id$
 
@@ -106,6 +108,9 @@ struct ExtIntuiMessage
 #define IDCMP_MENUHELP	     (1L<<24)
 #define IDCMP_CHANGEWINDOW   (1L<<25)
 #define IDCMP_GADGETHELP     (1L<<26)
+/* Screen scale changed: Code is percent, IAddress is the screen.
+   Subscribe together with WA_ScaleAware; query SA_Scale for the latest value. */
+#define IDCMP_CHANGESCALE    (1L<<27)
 #define IDCMP_LONELYMESSAGE  (1L<<31)
 
 #define CWCODE_MOVESIZE 0
@@ -692,6 +697,32 @@ struct ExtNewWindow
 #define WA_Behind   	     (WA_Dummy + 103)
 /* BOOL: protected top layer, only borderless nonactivating top-level ToolBox. */
 #define WA_TileOverlay       (WA_Dummy + 104)
+#define WA_ScaleAware        (WA_Dummy + 105) /* BOOL: uses screen scale and CHANGESCALE */
+/* Copied during OpenWindow. Requires WA_ScaleAware. These outer-window
+ * rectangle/limit values override the constructor geometry and use 100%
+ * units; Width/Height -1 fill the viewport, MaxWidth/MaxHeight -1 are unbounded.
+ * Zero limits use the accepted initial extent at its opening scale.
+ * WA_AutoAdjust FALSE rejects a rectangle which requires fitting.
+ * Subsequent Move/Size/WindowLimits APIs retain physical-pixel units. */
+#define WA_ScaleGeometry     (WA_Dummy + 106)
+struct ScaleWindowGeometry
+{
+    LONG Left, Top, Width, Height;
+    LONG MinWidth, MinHeight, MaxWidth, MaxHeight;
+};
+
+/* BOOL: hidden-initially, aware, smart, borderless ToolBox visual-only scene
+ * member. No gadgets/IDCMP, parent, custom shape, activation or TileOverlay.
+ * Input-transparent protected layer; ShowWindow/MoveWindow/CloseWindow retain
+ * ordinary scene ownership and exposure. Does not provide through-scene alpha. */
+#define WA_VisualOverlay     (WA_Dummy + 107)
+/* const ScreenRenderContext*: expected immutable CLIENT layout generation.
+ * Requires WA_Hidden TRUE and no activation at Open. Construction/publication
+ * refuse stale/wrong-screen contexts. ShowWindow(window,NULL) for a bound
+ * window is synchronous, preserves z-order and returns FALSE if stale/closed;
+ * caller MUST hold no client Layer/LayerInfo lock. Other values are refused.
+ * Ordinary unbound ShowWindow retains its existing asynchronous contract. */
+#define WA_RenderContext     (WA_Dummy + 108)
 
 /* Flags */
 #define WFLG_SIZEGADGET     (1L<<0)

@@ -711,7 +711,7 @@ diff -ruN mesa-26.0.0/src/mesa/glapi/glapi/glapi.h mesa-26.0.0.aros/src/mesa/gla
 diff -ruN mesa-26.0.0/src/mesa/glapi/shared-glapi/core.c mesa-26.0.0.aros/src/mesa/glapi/shared-glapi/core.c
 --- mesa-26.0.0/src/mesa/glapi/shared-glapi/core.c	2026-02-11 19:07:29
 +++ mesa-26.0.0.aros/src/mesa/glapi/shared-glapi/core.c	2026-09-07 13:17:31
-@@ -148,9 +148,37 @@
+@@ -148,9 +148,26 @@
  #endif /* defined(_GLAPI_ENTRY_ARCH_TLS_H) */
  
  /* Current dispatch and current context variables */
@@ -720,27 +720,16 @@ diff -ruN mesa-26.0.0/src/mesa/glapi/shared-glapi/core.c mesa-26.0.0.aros/src/me
 + * AROS has no thread local storage. LoadSeg() is a static relocator, so
 + * neither the TPREL form of __thread nor the GOT-indirect form that
 + * -femulated-tls emits can be relocated - the loader rejects both. Keep the
-+ * two per-thread slots in pthread keys instead, reached only through the
-+ * accessors below; glapi.h routes GET_DISPATCH/GET_CURRENT_CONTEXT there.
++ * two per-thread slots in task.resource storage slots instead (mesa3dgl's
++ * tls.c), reached only through the accessors below; glapi.h routes
++ * GET_DISPATCH/GET_CURRENT_CONTEXT there. Not pthread keys: the pthread
++ * runtime maps every task it did not create to one record, so two programs
++ * would share one current context.
 + */
-+#include <pthread.h>
-+
-+static pthread_key_t aros_dispatch_key;
-+static pthread_key_t aros_context_key;
-+
-+static void
-+aros_glapi_keys_init(void)
-+{
-+   pthread_key_create(&aros_dispatch_key, NULL);
-+   pthread_key_create(&aros_context_key, NULL);
-+}
-+
-+static inline void
-+aros_glapi_keys(void)
-+{
-+   static once_flag flag = ONCE_FLAG_INIT;
-+   call_once(&flag, aros_glapi_keys_init);
-+}
++void *AROSMesaGetTaskSlot(int which);
++void AROSMesaSetTaskSlot(int which, void *value);
++#define AROS_GLAPI_DISPATCH 0
++#define AROS_GLAPI_CONTEXT 1
 +#else
  __THREAD_INITIAL_EXEC struct _glapi_table *_mesa_glapi_tls_Dispatch
     = (struct _glapi_table *)table_noop_array;
@@ -749,39 +738,36 @@ diff -ruN mesa-26.0.0/src/mesa/glapi/shared-glapi/core.c mesa-26.0.0.aros/src/me
  
  static int
  stub_compare(const void *key, const void *elem)
-@@ -238,7 +266,12 @@
+@@ -238,7 +255,11 @@
  void
  _mesa_glapi_set_context(void *ptr)
  {
 +#ifdef __AROS__
-+   aros_glapi_keys();
-+   pthread_setspecific(aros_context_key, ptr);
++   AROSMesaSetTaskSlot(AROS_GLAPI_CONTEXT, ptr);
 +#else
     _mesa_glapi_tls_Context = ptr;
 +#endif
  }
  
  /**
-@@ -249,7 +282,12 @@
+@@ -249,7 +270,11 @@
  void *
  _mesa_glapi_get_context(void)
  {
 +#ifdef __AROS__
-+   aros_glapi_keys();
-+   return pthread_getspecific(aros_context_key);
++   return AROSMesaGetTaskSlot(AROS_GLAPI_CONTEXT);
 +#else
     return _mesa_glapi_tls_Context;
 +#endif
  }
  
  /**
-@@ -263,8 +301,14 @@
+@@ -263,8 +288,13 @@
     static once_flag flag = ONCE_FLAG_INIT;
     call_once(&flag, entry_patch_public);
  
 +#ifdef __AROS__
-+   aros_glapi_keys();
-+   pthread_setspecific(aros_dispatch_key,
++   AROSMesaSetTaskSlot(AROS_GLAPI_DISPATCH,
 +      tbl ? tbl : (void *)table_noop_array);
 +#else
     _mesa_glapi_tls_Dispatch =
@@ -790,15 +776,14 @@ diff -ruN mesa-26.0.0/src/mesa/glapi/shared-glapi/core.c mesa-26.0.0.aros/src/me
  }
  
  /**
-@@ -273,5 +317,16 @@
+@@ -273,5 +303,15 @@
  struct _glapi_table *
  _mesa_glapi_get_dispatch(void)
  {
 +#ifdef __AROS__
 +   struct _glapi_table *tbl;
 +
-+   aros_glapi_keys();
-+   tbl = pthread_getspecific(aros_dispatch_key);
++   tbl = AROSMesaGetTaskSlot(AROS_GLAPI_DISPATCH);
 +
 +   /* An unset key reads NULL, where the TLS variable started out holding
 +      the no-op table. Callers dispatch through this unchecked. */
@@ -1253,3 +1238,202 @@ diff -ruN mesa-26.0.0/src/gallium/winsys/amdgpu/drm/amdgpu_winsys.c mesa-26.0.0.
  
     sws->aws = aws;
  
+diff -ruN mesa-26.0.0/src/vulkan/runtime/vk_instance.c mesa-26.0.0.aros/src/vulkan/runtime/vk_instance.c
+--- mesa-26.0.0/src/vulkan/runtime/vk_instance.c
++++ mesa-26.0.0.aros/src/vulkan/runtime/vk_instance.c
+@@ -38,7 +38,7 @@
+ #include "compiler/glsl_types.h"
+ #endif
+ 
+-#ifndef _WIN32
++#if !defined(_WIN32) && !defined(__AROS__)
+ #include "dlfcn.h"
+ #endif
+ 
+diff -ruN mesa-26.0.0/src/util/build_id.h mesa-26.0.0.aros/src/util/build_id.h
+--- mesa-26.0.0/src/util/build_id.h
++++ mesa-26.0.0.aros/src/util/build_id.h
+@@ -26,7 +26,7 @@
+ 
+ #include "detect_os.h"
+ 
+-#if defined(HAVE_DL_ITERATE_PHDR) || DETECT_OS_APPLE
++#if defined(HAVE_DL_ITERATE_PHDR) || DETECT_OS_APPLE || defined(__AROS__)
+ #define HAVE_BUILD_ID 1
+ #else
+ #define HAVE_BUILD_ID 0
+diff -ruN mesa-26.0.0/src/util/build_id.c mesa-26.0.0.aros/src/util/build_id.c
+--- mesa-26.0.0/src/util/build_id.c
++++ mesa-26.0.0.aros/src/util/build_id.c
+@@ -23,7 +23,60 @@
+ 
+ #include "build_id.h"
+ 
+-#if HAVE_BUILD_ID
++#if HAVE_BUILD_ID && defined(__AROS__)
++#include <assert.h>
++#include <string.h>
++
++#include "mesa-sha1.h"
++
++#ifndef PACKAGE_VERSION
++#define PACKAGE_VERSION "26"
++#endif
++
++/* AROS keeps no ELF notes at run time: every module gets one build ID, the
++ * SHA-1 of the Mesa version and the build time of this file, which changes
++ * whenever Mesa is rebuilt (what drivers key their caches on). */
++struct build_id_note {
++   uint8_t sha1[SHA1_DIGEST_LENGTH];
++};
++
++static struct build_id_note aros_build_id;
++static int aros_build_id_ready;
++
++const struct build_id_note *
++build_id_find_nhdr_for_addr(const void *addr)
++{
++   (void)addr;
++   if (!aros_build_id_ready) {
++      static const char id[] = "Mesa " PACKAGE_VERSION " AROS " __DATE__ " " __TIME__;
++
++      _mesa_sha1_compute(id, sizeof(id) - 1, aros_build_id.sha1);
++      aros_build_id_ready = 1;
++   }
++   return &aros_build_id;
++}
++
++unsigned
++build_id_length(const struct build_id_note *note)
++{
++   (void)note;
++   return SHA1_DIGEST_LENGTH;
++}
++
++const uint8_t *
++build_id_data(const struct build_id_note *note)
++{
++   return note->sha1;
++}
++
++void
++copy_build_id_to_sha1(uint8_t sha1[SHA1_DIGEST_LENGTH],
++                      const struct build_id_note *note)
++{
++   memcpy(sha1, build_id_data(note), SHA1_DIGEST_LENGTH);
++}
++
++#elif HAVE_BUILD_ID
+ #include <dlfcn.h>
+ #include <stddef.h>
+ #include <string.h>
+diff -ruN mesa-26.0.0/src/util/os_misc.c mesa-26.0.0.aros/src/util/os_misc.c
+--- mesa-26.0.0/src/util/os_misc.c
++++ mesa-26.0.0.aros/src/util/os_misc.c
+@@ -352,6 +352,18 @@
+  * \param size returns the size of the total physical memory
+  * \return true for success, or false on failure
+  */
++#if defined(__AROS__) && !HAVE_SYSCONF
++#include <exec/memory.h>
++#include <proto/exec.h>
++
++/* All of AROS's RAM, as exec counts it. */
++static uint64_t
++aros_total_memory(void)
++{
++   return (uint64_t)AvailMem(MEMF_TOTAL);
++}
++#endif
++
+ bool
+ os_get_total_physical_memory(uint64_t *size)
+ {
+@@ -403,6 +415,9 @@
+ #elif DETECT_OS_FUCHSIA
+    *size = zx_system_get_physmem();
+    return true;
++#elif defined(__AROS__)
++   *size = aros_total_memory();
++   return *size != 0;
+ #else
+ #error unexpected platform in os_misc.c
+    return false;
+diff -ruN mesa-26.0.0/src/vulkan/runtime/vk_image.h mesa-26.0.0.aros/src/vulkan/runtime/vk_image.h
+--- mesa-26.0.0/src/vulkan/runtime/vk_image.h
++++ mesa-26.0.0.aros/src/vulkan/runtime/vk_image.h
+@@ -75,7 +75,7 @@
+    /* wsi_image_create_info::scanout */
+    bool wsi_legacy_scanout;
+ 
+-#if DETECT_OS_LINUX || DETECT_OS_BSD
++#if DETECT_OS_LINUX || DETECT_OS_BSD || defined(__AROS__)
+    /* VK_EXT_drm_format_modifier
+     *
+     * Initialized by vk_image_create/init() to DRM_FORMAT_MOD_INVALID.  It's
+diff -ruN mesa-26.0.0/src/vulkan/runtime/vk_image.c mesa-26.0.0.aros/src/vulkan/runtime/vk_image.c
+--- mesa-26.0.0/src/vulkan/runtime/vk_image.c
++++ mesa-26.0.0.aros/src/vulkan/runtime/vk_image.c
+@@ -23,7 +23,7 @@
+ 
+ #include "vk_image.h"
+ 
+-#if DETECT_OS_LINUX || DETECT_OS_BSD
++#if DETECT_OS_LINUX || DETECT_OS_BSD || defined(__AROS__)
+ #include <drm-uapi/drm_fourcc.h>
+ #endif
+ 
+@@ -96,7 +96,7 @@
+       vk_find_struct_const(pCreateInfo->pNext, WSI_IMAGE_CREATE_INFO_MESA);
+    image->wsi_legacy_scanout = wsi_info && wsi_info->scanout;
+ 
+-#if DETECT_OS_LINUX || DETECT_OS_BSD
++#if DETECT_OS_LINUX || DETECT_OS_BSD || defined(__AROS__)
+    image->drm_format_mod = ((1ULL << 56) - 1) /* DRM_FORMAT_MOD_INVALID */;
+ #endif
+ 
+@@ -168,7 +168,7 @@
+    vk_object_free(device, alloc, image);
+ }
+ 
+-#if DETECT_OS_LINUX || DETECT_OS_BSD
++#if DETECT_OS_LINUX || DETECT_OS_BSD || defined(__AROS__)
+ VKAPI_ATTR VkResult VKAPI_CALL
+ vk_common_GetImageDrmFormatModifierPropertiesEXT(UNUSED VkDevice device,
+                                                  VkImage _image,
+diff -ruN mesa-26.0.0/src/egl/main/eglcurrent.c mesa-26.0.0.aros/src/egl/main/eglcurrent.c
+--- mesa-26.0.0/src/egl/main/eglcurrent.c	2026-02-11 19:07:29.000000000 +0000
++++ mesa-26.0.0.aros/src/egl/main/eglcurrent.c	2026-10-23 07:00:00.000000000 +0000
+@@ -38,9 +38,20 @@
+ #include "eglglobals.h"
+ #include "egllog.h"
+ 
++#ifdef __AROS__
++/*
++ * One thread info per task, kept in a task.resource storage slot by
++ * egl.library (tls.c), not in __thread: egl.library's emulated TLS sits on
++ * the pthread keys of its own pthread runtime, which gives every task it
++ * did not create the same record, so one task's eglMakeCurrent became every
++ * task's current context. Never NULL.
++ */
++_EGLThreadInfo *AROSEGLGetThreadInfo(unsigned long size);
++#else
+ static __THREAD_INITIAL_EXEC _EGLThreadInfo _egl_TLS = {
+    .inited = false,
+ };
++#endif
+ 
+ static void
+ _eglInitThreadInfo(_EGLThreadInfo *t)
+@@ -58,7 +69,11 @@
+ _EGLThreadInfo *
+ _eglGetCurrentThread(void)
+ {
++#ifdef __AROS__
++   _EGLThreadInfo *current = AROSEGLGetThreadInfo(sizeof(*current));
++#else
+    _EGLThreadInfo *current = &_egl_TLS;
++#endif
+    if (unlikely(!current->inited)) {
+       memset(current, 0, sizeof(current[0]));
+       _eglInitThreadInfo(current);

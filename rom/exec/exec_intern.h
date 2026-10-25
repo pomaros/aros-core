@@ -246,4 +246,9 @@ static inline void exec_TaskEnqueueSpinning(struct Task *task)
 
 #endif /* __AROSEXEC_SMP__ */
 
+/* A message port's lock; a platform may bound the wait (aarch64-apple). */
+#ifndef EXEC_PORT_LOCK
+#define EXEC_PORT_LOCK(port) EXEC_SPINLOCK_LOCK(&(port)->mp_SpinLock, NULL, SPINLOCK_MODE_WRITE)
+#endif
+
 #endif /* __EXEC_INTERN_H__ */

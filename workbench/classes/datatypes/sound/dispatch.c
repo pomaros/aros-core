@@ -4123,6 +4123,12 @@ void PlayerProcAHI( void )
                                 SoundHook = NULL;
                             }
                             SetTDMode( cb, id, BUT_STOP );
+                            /* A sound that cannot start has ended: the task
+                             * waiting for its end (C:Play, Workbench sounds)
+                             * hears it now instead of never. */
+                            if( id->SignalTask && id->SignalBit != -1 ) {
+                                Signal( id->SignalTask, 1L << id->SignalBit );
+                            }
                         } else {
                             SetTDMode( cb, id, BUT_PLAY );
 

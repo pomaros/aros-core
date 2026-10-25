@@ -134,6 +134,10 @@ S_TYPEISTMO(buf)
 
 #define S_BLKSIZE	512		/* block size used in the stat struct */
 
+/* tv_nsec values for futimens() and utimensat() */
+#define UTIME_NOW	((1L << 30) - 1L)	/* use the current time */
+#define UTIME_OMIT	((1L << 30) - 2L)	/* leave the time unchanged */
+
 
 
 __BEGIN_DECLS
@@ -155,7 +159,7 @@ int fstat(int fd, struct stat *sb);
 int fstat64(int fd, struct stat64 *sb);
 
 int fstatat(int, const char *__restrict, struct stat *__restrict, int);
-/* NOTIMPL int futimens(int, const struct timespec [2]); */
+int futimens(int, const struct timespec [2]);
 int lstat64(const char * __restrict path, struct stat64 * __restrict sb);
 #if defined(__USE_FILE_OFFSET64)
 int lstat(const char * __restrict path, struct stat * __restrict sb) __asm__("lstat64");
@@ -176,7 +180,7 @@ int stat(const char * __restrict path, struct stat * __restrict sb);
 #endif
 int stat64(const char * __restrict path, struct stat64 * __restrict sb);
 mode_t umask(mode_t numask);
-/* NOTIMPL int utimensat(int, const char *, const struct timespec [2], int); */
+int utimensat(int, const char *, const struct timespec [2], int);
 
 __END_DECLS
 

@@ -43,6 +43,7 @@ FILES := \
     SetDate \
     SetDefaultFont \
     SetLocale \
+    SettingsBoot \
     SetPSM \
     Shutdown \
     Sleep \
@@ -100,6 +101,7 @@ USER_CFLAGS      := -noposixc
 #MM workbench-c : \
 #MM        includes \
 #MM        kernel-task-includes \
+#MM        kernel-security-includes \
 #MM        kernel-hidd-ipmi-includes \
 #MM        workbench-libs-power-includes \
 #MM        linklibs \

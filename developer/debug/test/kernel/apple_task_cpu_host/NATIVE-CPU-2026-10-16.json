@@ -1,0 +1,70 @@
+{
+  "runtime_commit": "c3cbe0a55e",
+  "native_result": "PASS",
+  "host_result": "PASS",
+  "guest_result": "PENDING",
+  "build_directory": "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting",
+  "artifacts": [
+    {
+      "path": "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting/cpu-task-build-01.log",
+      "bytes": 660848,
+      "sha256": "28fb402ed01976c293f1a652f7e40cacf125d7d3c408425222d1ed128303e111"
+    },
+    {
+      "path": "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting/cpu-task-build-02.log",
+      "bytes": 7579,
+      "sha256": "c8f8a93b53c70f119854c7b325976e82df2708c2cdc16b615af6826d89401db7"
+    },
+    {
+      "path": "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting/cpu-kernel-build-01.log",
+      "bytes": 20546,
+      "sha256": "de8373125ae340c347d04ad016b8861e940c7c8c24d5a443141ff999e4f6fa29"
+    },
+    {
+      "path": "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting/host-003/result.json",
+      "bytes": 4177,
+      "sha256": "90f845fc9e0b23dd2a5114fb5f573c08aad64f266c066f92add505da54298542"
+    },
+    {
+      "path": "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting/bin/apple-aarch64/AROS/Devs/task.resource",
+      "bytes": 28920,
+      "sha256": "bd324e70c56a2937ea3be1dbe88431888d95313a56f94934b77fbac16b3ed2e5"
+    },
+    {
+      "path": "/Users/jknipper/Source/aros-personal/aros-build-cpu-accounting/bin/apple-aarch64/AROS/boot/apple/Devs/kernel.resource",
+      "bytes": 419728,
+      "sha256": "9c0c21b7c01c24db45578a1f71675d4f0e522a76af2a5fe7206fc9244e3a98eb"
+    }
+  ],
+  "native_execution": {
+    "session": 26889,
+    "exit_code": 0,
+    "commands": [
+      "make -j3 kernel-task > cpu-task-build-02.log 2>&1",
+      "make -j3 kernel-kernel > cpu-kernel-build-01.log 2>&1"
+    ],
+    "ordering": "sequential &&; kernel invoked only after task success"
+  },
+  "sources": [
+    {
+      "path": "arch/aarch64-apple/kernel/kernel_cpu.c",
+      "sha256": "5a864da044fd4b6f6c78286f0e1b25d423fd66ee75f21d5415043511c441fb8a"
+    },
+    {
+      "path": "arch/aarch64-apple/kernel/task_accounting.h",
+      "sha256": "155fa8ed464fe45a29dd4d56ac6f8b344e90ccce46513cc7aff9b194bc56594b"
+    },
+    {
+      "path": "arch/aarch64-apple/task/QueryTaskTagList.c",
+      "sha256": "9951945c7231a59ab9fe57848fd97fbe5bd3f50271c626d6b74bc67a29997ef1"
+    },
+    {
+      "path": "arch/aarch64-apple/task/mmakefile.src",
+      "sha256": "4f14857a29462e7a55b82647bea6a1f5155337244b673c63f66c302dba88dc8b"
+    },
+    {
+      "path": "rom/task/QueryTaskTagList.c",
+      "sha256": "8253113f7353471f4ff60cb2bb3b5519681267a0252f614207013134633d2a16"
+    }
+  ]
+}

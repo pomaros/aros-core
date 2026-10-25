@@ -1,3 +1,7 @@
+/*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
+    Licensed under the AROS Public License, version 1.1.
+*/
 /* System-private methods and attributes of monitorclass */
 
 /* Attributes */
@@ -64,6 +68,7 @@ struct msSetPointerShape
 {
     STACKED ULONG                   MethodID;
     STACKED struct SharedPointer    *pointer;
+    STACKED struct Screen           *screen; /* explicit source coordinate context, NULL=100% */
 };
 
 struct msSetScreenGamma

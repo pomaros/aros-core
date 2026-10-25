@@ -83,7 +83,7 @@
 #define SIGTTOU		22	/* to writer on background tty write */
 #define SIGUSR1		28	/* user defined signal 1 */
 #define SIGUSR2		29	/* user defined signal 2 */
-//FIXME: #define SIGPOLL
+#define SIGPOLL		30	/* pollable event, the System V name of SIGIO */
 #define SIGPROF		26	/* profiling time alarm */
 #define SIGSYS		12	/* non-existent system call */
 #define SIGTRAP		5	/* trace/breakpoint track */
@@ -112,10 +112,14 @@
 */
 #if !defined(_POSIX_SOURCE)
 // NOTIMPL #define SIGEMT		7	/* EMT instruction (emulator trap) */
-// NOTIMPL #define SIGWINCH	27	/* window size changes */
-/*  BSD defines SIGIO and SIGINFO, we should probably include these */
-// NOTIMPL #define SIGIO		30	/* IO event */
 // NOTIMPL #define SIGINFO		31	/* terminal info request */
+#endif
+/* BSD signals with valid numbers whose events AROS does not generate yet:
+   a handler installs, and runs once a terminal reports a resize (SIGWINCH)
+   or a descriptor reports readiness by signal (SIGIO). */
+#if !defined(_POSIX_SOURCE) || defined(_BSD_SOURCE) || defined(_DEFAULT_SOURCE)
+#define SIGWINCH	27	/* window size changes */
+#define SIGIO		30	/* IO event */
 #endif
 
 

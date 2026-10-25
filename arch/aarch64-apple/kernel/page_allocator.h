@@ -14,10 +14,16 @@
 
 /* One lock for both mapping and protection: they modify the same tables. */
 extern struct AROSAppleMemoryLock AROSApplePageMapLock;
+#if defined(__AROSEXEC_SMP__)
+uint64_t AROSApplePageMapAcquire(void);
+uint64_t AROSApplePageMutationBegin(void);
+void AROSApplePageMutationEnd(uint64_t token);
+#else
 static inline uint64_t AROSApplePageMapAcquire(void)
 { return AROSAppleMemoryLockAcquire(&AROSApplePageMapLock); }
 static inline uint64_t AROSApplePageMutationBegin(void) { return 1; }
 static inline void AROSApplePageMutationEnd(uint64_t token) { (void)token; }
+#endif
 
 #include <aros/apple/page_arena.h>
 

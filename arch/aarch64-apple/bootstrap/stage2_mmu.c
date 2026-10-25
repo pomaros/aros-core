@@ -176,6 +176,21 @@ static uint64_t *child_table(
     return table;
 }
 
+/*
+ * Normal memory is mapped with 2 MiB blocks at most. The kernel never splits
+ * a block of normal memory while it runs (the block may hold the code, stack
+ * or table doing the break-before-make), but it may give a whole 2 MiB block
+ * to the code arena or take it back by rewriting that one L2 entry, which a
+ * 1 GiB block would forbid. Device memory keeps 1 GiB blocks.
+ */
+static int level1_block_allowed(uint64_t attributes)
+{
+    /* MAIR index 0 is Device-nGnRnE, 3 Device-nGnRE (stage2_mmu.h) */
+    uint64_t index = (attributes >> 2) & 7U;
+
+    return index == 0 || index == 3;
+}
+
 static int map_range(
     struct Stage2MMUBuilder *builder, uint64_t start, uint64_t end,
     uint64_t attributes)
@@ -202,7 +217,8 @@ static int map_range(
         if (level1 == NULL)
             return 0;
 
-        if ((start & (STAGE2_MMU_L1_BLOCK_SIZE - 1U)) == 0 &&
+        if (level1_block_allowed(attributes) &&
+            (start & (STAGE2_MMU_L1_BLOCK_SIZE - 1U)) == 0 &&
             remaining >= STAGE2_MMU_L1_BLOCK_SIZE &&
             !ranges_overlap(start, start + STAGE2_MMU_L1_BLOCK_SIZE,
                 builder->page_arena_start, builder->page_arena_end) &&

@@ -36,6 +36,9 @@ int tz_parse_rule_default(struct tz_rule *out);
  * that goes with it. Returns 0 when the name is known. */
 int tz_lookup(const char *name, const char **rule, const char **country);
 
+/* The zone names tz_lookup knows, in table order; NULL past the last. */
+const char *tz_zone_name(unsigned index);
+
 /* The offset east of UTC in force at a UTC instant, and whether daylight
  * time is in force then. */
 long tz_offset_at(const struct tz_rule *rule, int64_t utc, int *dst);

@@ -288,13 +288,16 @@ static int IntuitionInit(LIBBASETYPEPTR LIBBASE)
 
     DEBUG_INIT(dprintf("LIB_Init: Setting up pointers...\n"));
 
-    GetPrivIBase(LIBBASE)->DefaultPointer = MakePointerFromPrefs
+    SetPointerColors(GetPubIBase(LIBBASE));
+    GetPrivIBase(LIBBASE)->DefaultPointer = MakeBuiltinPointerFromData
     (
-        GetPubIBase(LIBBASE), &GetPrivIBase(LIBBASE)->ActivePreferences
+        GetPubIBase(LIBBASE), GetPrivIBase(LIBBASE)->ActivePreferences.PointerMatrix,
+        GetPrivIBase(LIBBASE)->ActivePreferences.XOffset,
+        GetPrivIBase(LIBBASE)->ActivePreferences.YOffset, 16, 16, POINTER_BUILTIN_ARROW
     );
-    GetPrivIBase(LIBBASE)->BusyPointer = MakePointerFromData
+    GetPrivIBase(LIBBASE)->BusyPointer = MakeBuiltinPointerFromData
     (
-        GetPubIBase(LIBBASE), IntuitionBusyPointer, 0, 0, 16, 16
+        GetPubIBase(LIBBASE), IntuitionBusyPointer, 0, 0, 16, 16, POINTER_BUILTIN_BUSY
     );
 
     if

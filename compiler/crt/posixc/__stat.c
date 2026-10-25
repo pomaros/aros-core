@@ -829,7 +829,8 @@ static void __fill_statbuffer(
        st_atim, st_mtim and st_ctim */
     sb->st_atim.tv_nsec =
     sb->st_ctim.tv_nsec =
-    sb->st_mtim.tv_nsec = 0;
+    sb->st_mtim.tv_nsec = (fib->fib_Date.ds_Tick % TICKS_PER_SECOND) *
+                          (1000000000L / TICKS_PER_SECOND);
     sb->st_uid     = __id_a2u(fib->fib_OwnerUID);
     sb->st_gid     = __id_a2u(fib->fib_OwnerGID);
     sb->st_mode    = __prot_a2u(fib->fib_Protection);
@@ -922,7 +923,8 @@ static void __fill_stat64buffer(
        st_atim, st_mtim and st_ctim */
     sb->st_atim.tv_nsec =
     sb->st_ctim.tv_nsec =
-    sb->st_mtim.tv_nsec = 0;
+    sb->st_mtim.tv_nsec = (fib->fib_Date.ds_Tick % TICKS_PER_SECOND) *
+                          (1000000000L / TICKS_PER_SECOND);
 
     sb->st_uid     = __id_a2u(fib->fib_OwnerUID);
     sb->st_gid     = __id_a2u(fib->fib_OwnerGID);

@@ -5,7 +5,11 @@
 
 #include "tls.h"
 
+#include <string.h>
+
 #include <proto/exec.h>
+#include <proto/task.h>
+#include <exec/memory.h>
 
 struct TaskLocalNode
 {
@@ -129,4 +133,55 @@ VOID DestroyTLS(struct TaskLocalStorage * tls)
     }
 
     FreeVec(tls);
+}
+
+/* EGL's per-thread state (Mesa's _EGLThreadInfo: current context, surfaces,
+   API, last error), one per task, in a task.resource storage slot: the slot
+   reads 0 in a task that never set it, goes with the task, and DOS
+   RunCommand saves and restores it around a command. The block hangs on the
+   task's tc_MemEntry, so it is freed with the task. */
+APTR TaskResBase;
+static LONG egl_thread_slot;
+/* Only when even a few bytes cannot be had: every such task shares it. */
+static UBYTE egl_thread_fallback[256] __attribute__((aligned(16)));
+
+APTR AROSEGLGetThreadInfo(unsigned long size)
+{
+    struct Task * me = FindTask(NULL);
+    struct MemList * ml;
+    struct
+    {
+        struct Node ml_Node;
+        UWORD ml_NumEntries;
+        struct MemEntry ml_ME[1];
+    } template;
+    ULONG failed;
+    APTR info;
+
+    if (egl_thread_slot == 0)
+    {
+        Forbid();
+        if (TaskResBase == NULL)
+            TaskResBase = OpenResource((CONST_STRPTR)"task.resource");
+        if (egl_thread_slot == 0 && TaskResBase != NULL)
+            egl_thread_slot = AllocTaskStorageSlot();
+        Permit();
+    }
+    if (egl_thread_slot == 0 || size > sizeof(egl_thread_fallback))
+        return egl_thread_fallback;
+    if ((info = (APTR)GetTaskStorageSlot(egl_thread_slot)) != NULL)
+        return info;
+
+    memset(&template, 0, sizeof(template));
+    template.ml_NumEntries = 1;
+    template.ml_ME[0].me_Reqs = MEMF_PUBLIC | MEMF_CLEAR;
+    template.ml_ME[0].me_Length = size;
+    if (!(ml = NewAllocEntry((struct MemList *)&template, &failed)))
+        return egl_thread_fallback;
+    info = ml->ml_ME[0].me_Addr;
+    Forbid();
+    AddHead(&me->tc_MemEntry, &ml->ml_Node);
+    Permit();
+    SetTaskStorageSlot(egl_thread_slot, (IPTR)info);
+    return info;
 }

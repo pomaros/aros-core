@@ -13,7 +13,17 @@
 #define SMEditor__MUIM_PrefsEditor_ExportFH SMEditor__MUIM_PrefsEditor_ExportFH_inner
 #define SMEditor__MUIM_PrefsEditor_Test SMEditor__MUIM_PrefsEditor_Test_inner
 #define SMEditor__MUIM_PrefsEditor_SetDefaults SMEditor__MUIM_PrefsEditor_SetDefaults_inner
+#define SMEditor__MUIM_PrefsEditor_ImportFromDirectory SMEditor__MUIM_PrefsEditor_ImportFromDirectory_inner
+#define SMEditor__MUIM_PrefsEditor_ExportToDirectory SMEditor__MUIM_PrefsEditor_ExportToDirectory_inner
+#define SMEditor__MUIM_Setup SMEditor__MUIM_Setup_inner
+#define SMEditor__MUIM_PrefsEditor_Cancel SMEditor__MUIM_PrefsEditor_Cancel_inner
+#define SMEditor__MUIM_PrefsEditor_Revert SMEditor__MUIM_PrefsEditor_Revert_inner
 #include "smeditor.c"
+#undef SMEditor__MUIM_PrefsEditor_Cancel
+#undef SMEditor__MUIM_PrefsEditor_Revert
+#undef SMEditor__MUIM_Setup
+#undef SMEditor__MUIM_PrefsEditor_ImportFromDirectory
+#undef SMEditor__MUIM_PrefsEditor_ExportToDirectory
 #undef SMEditor__OM_NEW
 #undef SMEditor__MUIM_PrefsEditor_ImportFH
 #undef SMEditor__MUIM_PrefsEditor_Export
@@ -72,4 +82,29 @@ IPTR SMEditor__MUIM_PrefsEditor_Test(Class *CLASS, Object *self, Msg message)
 IPTR SMEditor__MUIM_PrefsEditor_SetDefaults(Class *CLASS, Object *self, Msg message)
 {
     return (IPTR)SMEditor__MUIM_PrefsEditor_SetDefaults_inner(CLASS, self, (APTR)message);
+}
+
+IPTR SMEditor__MUIM_PrefsEditor_ImportFromDirectory(Class *CLASS, Object *self, Msg message)
+{
+    return SMEditor__MUIM_PrefsEditor_ImportFromDirectory_inner(CLASS, self, (APTR)message);
+}
+
+IPTR SMEditor__MUIM_PrefsEditor_ExportToDirectory(Class *CLASS, Object *self, Msg message)
+{
+    return SMEditor__MUIM_PrefsEditor_ExportToDirectory_inner(CLASS, self, (APTR)message);
+}
+
+IPTR SMEditor__MUIM_Setup(Class *CLASS, Object *self, Msg message)
+{
+    return SMEditor__MUIM_Setup_inner(CLASS, self, (APTR)message);
+}
+
+IPTR SMEditor__MUIM_PrefsEditor_Cancel(Class *CLASS, Object *self, Msg message)
+{
+    return SMEditor__MUIM_PrefsEditor_Cancel_inner(CLASS, self, message);
+}
+
+IPTR SMEditor__MUIM_PrefsEditor_Revert(Class *CLASS, Object *self, Msg message)
+{
+    return SMEditor__MUIM_PrefsEditor_Revert_inner(CLASS, self, message);
 }

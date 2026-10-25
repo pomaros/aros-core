@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 2002-2023, The AROS Development Team.
     Copyright (C) 1999, David Le Corfec.
     All rights reserved.
@@ -1435,7 +1436,7 @@ static void group_minmax_horiz(struct IClass *cl, Object *obj,
     if (data->num_visible_children > 0)
     {
         tmp.MinWidth = tmp.DefWidth = tmp.MaxWidth =
-            (data->num_visible_children - 1) * data->horiz_spacing;
+            (data->num_visible_children - 1) * zune_scale(obj, data->horiz_spacing);
     }
     else
     {
@@ -1524,7 +1525,7 @@ static void group_minmax_vert(struct IClass *cl, Object *obj,
     if (data->num_visible_children > 0)
     {
         tmp.MinHeight = tmp.DefHeight = tmp.MaxHeight =
-            (data->num_visible_children - 1) * data->vert_spacing;
+            (data->num_visible_children - 1) * zune_scale(obj, data->vert_spacing);
     }
     else
     {
@@ -1756,9 +1757,9 @@ group_minmax_2d(struct IClass *cl, Object *obj,
     data->vert_weight_sum = 0;
 
     tmp.MinHeight = tmp.DefHeight = tmp.MaxHeight =
-        (data->rows - 1) * data->vert_spacing;
+        (data->rows - 1) * zune_scale(obj, data->vert_spacing);
     tmp.MinWidth = tmp.DefWidth = tmp.MaxWidth =
-        (data->columns - 1) * data->horiz_spacing;
+        (data->columns - 1) * zune_scale(obj, data->horiz_spacing);
     /* get minimum dims if same dims for all children are needed */
     maxmin_width = 0;
     maxmin_height = 0;
@@ -2306,7 +2307,7 @@ static void group_layout_vert(struct IClass *cl, Object *obj,
     total_init_size = 0;
     total_size =
         layout_height - (data->num_visible_children -
-        1) * data->vert_spacing;
+        1) * zune_scale(obj, data->vert_spacing);
     total_size_backup = total_size;
 
 /*      D(bug("\nvert layout for %p, A=%d W=%ld\n", */
@@ -2360,7 +2361,7 @@ static void group_layout_vert(struct IClass *cl, Object *obj,
 /*              child, width, _height(child))); */
         if (!MUI_Layout(child, left, top, width, _height(child), 0))
             return;
-        top += data->vert_spacing + _height(child);
+        top += zune_scale(obj, data->vert_spacing) + _height(child);
     }
 
 }
@@ -2414,7 +2415,7 @@ static void group_layout_horiz(struct IClass *cl, Object *obj,
     total_init_size = 0;
     total_size =
         layout_width - (data->num_visible_children -
-        1) * data->horiz_spacing;
+        1) * zune_scale(obj, data->horiz_spacing);
     total_size_backup = total_size;
 
 /*      D(bug("\nhoriz layout for %p, A=%d W=%ld\n", */
@@ -2471,7 +2472,7 @@ static void group_layout_horiz(struct IClass *cl, Object *obj,
 /*              child, _width(child), height)); */
         if (!MUI_Layout(child, left, top, _width(child), height, 0))
             return;
-        left += data->horiz_spacing + _width(child);
+        left += zune_scale(obj, data->horiz_spacing) + _width(child);
     }
 
 }
@@ -2597,7 +2598,7 @@ static void Layout2D_minmax_constraints_and_redistrib(struct layout2d_elem
 }
 
 static void
-layout_2d_distribute_space(struct MUI_GroupData *data,
+layout_2d_distribute_space(Object *obj, struct MUI_GroupData *data,
     struct layout2d_elem *row_infos,
     struct layout2d_elem *col_infos,
     struct MinList *children, LONG left_start, LONG top_start)
@@ -2653,14 +2654,14 @@ layout_2d_distribute_space(struct MUI_GroupData *data,
             if (!MUI_Layout(child, cleft, ctop, cwidth, cheight, 0))
                 return;
 
-            left += data->horiz_spacing + col_width;
+            left += zune_scale(obj, data->horiz_spacing) + col_width;
 
             ++j;
             if ((j % data->columns) == 0)
                 break;
         }
 
-        top += data->vert_spacing + row_height;
+        top += zune_scale(obj, data->vert_spacing) + row_height;
     }
 
 }
@@ -2688,9 +2689,9 @@ group_layout_2d(struct IClass *cl, Object *obj, struct MinList *children)
     WORD left_start = 0;
     WORD top_start = 0;
     WORD total_size_height =
-        _mheight(obj) - (data->rows - 1) * data->vert_spacing;
+        _mheight(obj) - (data->rows - 1) * zune_scale(obj, data->vert_spacing);
     WORD total_size_width =
-        _mwidth(obj) - (data->columns - 1) * data->horiz_spacing;
+        _mwidth(obj) - (data->columns - 1) * zune_scale(obj, data->horiz_spacing);
     WORD total_init_height;
     WORD total_init_width;
     WORD remainder_height;
@@ -2728,9 +2729,9 @@ group_layout_2d(struct IClass *cl, Object *obj, struct MinList *children)
     }
 
     total_size_height =
-        layout_height - (data->rows - 1) * data->vert_spacing;
+        layout_height - (data->rows - 1) * zune_scale(obj, data->vert_spacing);
     total_size_width =
-        layout_width - (data->columns - 1) * data->horiz_spacing;
+        layout_width - (data->columns - 1) * zune_scale(obj, data->horiz_spacing);
 
     // fix left/top ?
 
@@ -2752,7 +2753,7 @@ group_layout_2d(struct IClass *cl, Object *obj, struct MinList *children)
 /*      (data->flags & GROUP_SAME_WIDTH) ? data->samesize_maxmin_horiz : 0, */
         0, remainder_width);
 
-    layout_2d_distribute_space(data, data->row_infos, data->col_infos,
+    layout_2d_distribute_space(obj, data, data->row_infos, data->col_infos,
         children, left_start, top_start);
 }
 
@@ -3403,6 +3404,17 @@ BOOPSI_DISPATCHER(IPTR, Group_Dispatcher, cl, obj, msg)
 {
     switch (msg->MethodID)
     {
+    case MUIM_ScaleContextChildren:
+    {
+        struct MUI_GroupData *data = INST_DATA(cl, obj);
+        struct MinList *children = NULL;
+        GetAttr(MUIA_Family_List, data->family, (IPTR *)&children);
+        return (IPTR)children;
+    }
+    case MUIM_ScaleContextSupported:
+        return DoSuperMethodA(cl, obj, msg) &&
+            (!((struct MUI_GroupData *)INST_DATA(cl, obj))->layout_hook ||
+                muiAreaData(obj)->mad_ScaleAwareHooks);
     case OM_NEW:
         return Group__OM_NEW(cl, obj, (struct opSet *)msg);
     case OM_DISPOSE:
@@ -3520,5 +3532,6 @@ const struct __MUIBuiltinClass _MUI_Group_desc =
     MUIC_Group,
     MUIC_Area,
     sizeof(struct MUI_GroupData),
-    (void *) Group_Dispatcher
+    (void *) Group_Dispatcher,
+    MUI_CLASS_SCALE_AWARE
 };

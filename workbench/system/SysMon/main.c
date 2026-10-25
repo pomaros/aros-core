@@ -372,6 +372,11 @@ LONG InitModules(struct SysMonModule ** modules, struct SysMonData *smdata)
             lastinitedmodule++;
         else
         {
+            /* Say which part could not start: SysMon has no window yet. */
+            printf("SysMon: the %s module could not start\n",
+                modules[lastinitedmodule + 1]->Name);
+            bug("[SysMon] the %s module could not start\n",
+                modules[lastinitedmodule + 1]->Name);
             DeInitModules(modules, smdata, lastinitedmodule);
             return -1;
         }
@@ -392,7 +397,13 @@ int main()
         return 1;
     
     if (!CreateApplication(&smdata))
+    {
+        printf("SysMon: its application object could not be created\n");
+        bug("[SysMon] its application object could not be created (tasklist %p)\n",
+            smdata.tasklist);
+        DeInitModules(modules, &smdata, lastinitedmodule);
         return 1;
+    }
 
     /* Increase our priority! */
     SetTaskPri(FindTask(NULL), 19);

@@ -215,3 +215,14 @@ OOP_Object *EFIFBGfxDisplay__Hidd_Display__Show(OOP_Class *cl, OOP_Object *o, st
     D(bug("[EFIFBGfx:Display] Show() done\n"));
     return msg->bitMap;
 }
+
+/* This driver keeps the generic Display software cursor: it overrides none of
+ * the Display cursor methods (SetCursorShape/Pos/Visible), so the inherited
+ * prepared-cursor contract (detached shape preparation, allocation-free state
+ * swap, typed release) applies unchanged and is declared here. */
+BOOL EFIFBGfxDisplay__Hidd_Display__SupportsPreparedCursor(OOP_Class *cl, OOP_Object *o,
+    struct pHidd_Display_SupportsPreparedCursor *msg)
+{
+    (void)cl; (void)o; (void)msg;
+    return TRUE;
+}

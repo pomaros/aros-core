@@ -44,7 +44,10 @@
         SAVE   --  store ZONE in ENVARC:Sys/timezone and ENV:Sys/timezone
         SHOW   --  report only; change nothing
         WATCH  --  keep running and apply each change of offset when its
-                   moment comes (run it in the background)
+                   moment comes (run it in the background); without ZONE
+                   it also re-reads ENV:Sys/timezone each minute, so a
+                   zone set, changed or removed later takes effect, and
+                   it waits for one when none is set
         NOSET  --  update the preferences but leave the clock alone
         QUIET  --  no report
 
@@ -371,18 +374,51 @@ static void report(const struct Args *args, const char *zone, const struct tz_ru
         Printf("[tz] next change at %s UTC\n", (IPTR)next);
 }
 
+/* The rule and country of a zone name or POSIX rule; 0 when it parses. */
+static int load_zone(const char *text, struct tz_rule *rule, const char **country)
+{
+    const char *spec;
+    *country = NULL;
+    if (tz_lookup(text, &spec, country) != 0)
+        spec = text;
+    return tz_parse(spec, rule);
+}
+
+/* Applies the rule at this instant: the locale offset, the clock unless
+ * NOSET, and the record the desktop widget reads. */
+static int apply(const struct Args *args, const char *zone, const struct tz_rule *rule,
+                 const char *country, long *applied_east)
+{
+    char error[160];
+    int64_t utc;
+    long east;
+    int dst, source, set = 0;
+
+    utc = utc_now(&source);
+    east = tz_offset_at(rule, utc, &dst);
+    if (store_offset(-(LONG)(east / 60), country, error, sizeof error) != 0) {
+        Printf("[tz] %s\n", (IPTR)error);
+        return RETURN_ERROR;
+    }
+    if (!args->noset)
+        set = set_clock(utc + east) == 0;
+    record_applied(utc, east, dst ? rule->dst_name : rule->std_name);
+    report(args, zone, rule, utc, east, dst, source, set);
+    *applied_east = east;
+    return RETURN_OK;
+}
+
 int main(void)
 {
     IPTR argv[6] = { 0 };
     struct RDArgs *rda;
     struct Args args;
     struct tz_rule rule;
-    const char *spec, *country = NULL, *zone;
-    char error[160];
+    const char *country = NULL;
+    char watched[sizeof zone_text];
     int64_t utc;
-    long east, applied_east;
-    int dst, source, result = RETURN_OK;
-
+    long east, applied_east = 0;
+    int dst, source, have_zone, result = RETURN_OK;
     struct Process *me = (struct Process *)FindTask(NULL);
     APTR window = me->pr_WindowPtr;
 
@@ -396,26 +432,26 @@ int main(void)
     args.save = argv[1]; args.show = argv[2]; args.watch = argv[3];
     args.noset = argv[4]; args.quiet = argv[5];
 
-    if (args.zone != NULL)
+    if (args.zone != NULL) {
         strlcpy(zone_text, (const char *)args.zone, sizeof zone_text);
-    else if (read_text(ENV_ZONE, zone_text, sizeof zone_text) != 0 &&
-             read_text(ENVARC_ZONE, zone_text, sizeof zone_text) != 0) {
+        have_zone = 1;
+    } else
+        have_zone = read_text(ENV_ZONE, zone_text, sizeof zone_text) == 0 ||
+                    read_text(ENVARC_ZONE, zone_text, sizeof zone_text) == 0;
+    if (!have_zone && !args.watch) {
         if (!args.quiet)
             Printf("[tz] no zone set: the clock stays as it is (TimeZone ZONE=Europe/Berlin SAVE)\n");
         me->pr_WindowPtr = window;
         FreeArgs(rda);
         return RETURN_WARN;
     }
-    zone = zone_text;
-    if (tz_lookup(zone_text, &spec, &country) != 0)
-        spec = zone_text;
-    if (tz_parse(spec, &rule) != 0) {
+    if (have_zone && load_zone(zone_text, &rule, &country) != 0) {
         Printf("[tz] %s is neither a known zone nor a POSIX rule\n", (IPTR)zone_text);
         me->pr_WindowPtr = window;
         FreeArgs(rda);
         return RETURN_ERROR;
     }
-    if (args.save) {
+    if (have_zone && args.save) {
         char line[260];
         LONG n = snprintf(line, sizeof line, "%s\n", zone_text);
         ensure_dir("ENV:Sys");
@@ -437,38 +473,51 @@ int main(void)
     }
     KernelBase = OpenResource("kernel.resource");
 
-    utc = utc_now(&source);
-    east = tz_offset_at(&rule, utc, &dst);
-    if (args.show) {
-        report(&args, zone, &rule, utc, east, dst, source, 0);
-    } else {
-        int set = 0;
-        if (store_offset(-(LONG)(east / 60), country, error, sizeof error) != 0) {
-            Printf("[tz] %s\n", (IPTR)error);
-            result = RETURN_ERROR;
-        } else {
-            if (!args.noset)
-                set = set_clock(utc + east) == 0;
-            record_applied(utc, east, dst ? rule.dst_name : rule.std_name);
-            report(&args, zone, &rule, utc, east, dst, source, set);
-        }
-    }
-    applied_east = east;
+    if (have_zone && args.show) {
+        utc = utc_now(&source);
+        east = tz_offset_at(&rule, utc, &dst);
+        report(&args, zone_text, &rule, utc, east, dst, source, 0);
+    } else if (have_zone)
+        result = apply(&args, zone_text, &rule, country, &applied_east);
+
+    /* WATCH follows the rule's changes and, unless ZONE was given, the zone
+     * file itself: a zone set, changed or removed by the Time page takes
+     * effect within a minute, and with no zone the clock is left alone. */
     while (args.watch && result == RETURN_OK) {
         Delay(50 * 60);
         if (SetSignal(0, 0) & SIGBREAKF_CTRL_C)
             break;
+        if (args.zone == NULL) {
+            int now_set = read_text(ENV_ZONE, watched, sizeof watched) == 0;
+            if (!now_set) {
+                have_zone = 0;
+                continue;
+            }
+            if (!have_zone || strcmp(watched, zone_text) != 0) {
+                struct tz_rule next;
+                const char *next_country;
+                if (load_zone(watched, &next, &next_country) != 0) {
+                    if (!args.quiet)
+                        Printf("[tz] %s is neither a known zone nor a POSIX rule\n", (IPTR)watched);
+                    have_zone = 0;
+                    strlcpy(zone_text, watched, sizeof zone_text);
+                    continue;
+                }
+                strlcpy(zone_text, watched, sizeof zone_text);
+                rule = next;
+                country = next_country;
+                have_zone = 1;
+                if (apply(&args, zone_text, &rule, country, &applied_east) != RETURN_OK && !args.quiet)
+                    Printf("[tz] %s not applied\n", (IPTR)zone_text);
+                continue;
+            }
+        }
+        if (!have_zone)
+            continue;
         utc = utc_now(&source);
         east = tz_offset_at(&rule, utc, &dst);
-        if (east != applied_east) {
-            if (store_offset(-(LONG)(east / 60), country, error, sizeof error) == 0) {
-                int set = args.noset ? 0 : set_clock(utc + east) == 0;
-                record_applied(utc, east, dst ? rule.dst_name : rule.std_name);
-                report(&args, zone, &rule, utc, east, dst, source, set);
-                applied_east = east;
-            } else if (!args.quiet)
-                Printf("[tz] %s\n", (IPTR)error);
-        }
+        if (east != applied_east)
+            apply(&args, zone_text, &rule, country, &applied_east);
     }
     close_timer();
     me->pr_WindowPtr = window;

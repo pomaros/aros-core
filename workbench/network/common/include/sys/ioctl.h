@@ -54,6 +54,7 @@ __END_DECLS
  * Console I/O controls
  */
 #define TIOCSWINSZ  _IOW('t', 103, struct winsize)  /* set window size */
+#define TIOCSCTTY   _IO('t', 97)            /* become controlling tty; AROS has none */
 #define TIOCGWINSZ  _IOR('t', 104, struct winsize)  /* get window size */
 
 /* 

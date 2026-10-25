@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright  2002-2020, The AROS Development Team.
     Copyright  1999, David Le Corfec.
     All rights reserved.
@@ -458,6 +459,33 @@ static void zune_imspec_free(struct MUI_ImageSpec_intern *spec)
     mui_free(spec);
 }
 
+/* Optional high density brush, named name@2x.ext beside name.ext. */
+static struct dt_node *scale_brush(CONST_STRPTR filename, struct Screen *screen,
+    ULONG scale, ULONG *density)
+{
+    struct dt_node *node = NULL;
+    if (scale > 100) {
+        STRPTR path = AllocVec(strlen(filename) + 4, MEMF_ANY);
+        if (path) {
+            STRPTR dot;
+            strcpy(path, filename);
+            dot = strrchr(path, '.');
+            if (!dot || strchr(dot, '/') || strchr(dot, ':'))
+                dot = path + strlen(path);
+            memmove(dot + 3, dot, strlen(dot) + 1);
+            memcpy(dot, "@2x", 3);
+            node = dt_load_picture(path, screen);
+            FreeVec(path);
+            if (node) *density = 200;
+        }
+    }
+    if (!node) {
+        node = dt_load_picture(filename, screen);
+        if (node) *density = 100;
+    }
+    return node;
+}
+
 struct MUI_ImageSpec_intern *zune_imspec_setup(IPTR s,
     struct MUI_RenderInfo *mri)
 {
@@ -475,6 +503,9 @@ struct MUI_ImageSpec_intern *zune_imspec_setup(IPTR s,
             spec, zune_imspec_to_string(spec)));
     if (!spec)
         return NULL;
+
+    spec->scale = zune_render_scale(mri);
+    spec->density[0] = spec->density[1] = 100;
 
     switch (spec->type)
     {
@@ -499,8 +530,8 @@ struct MUI_ImageSpec_intern *zune_imspec_setup(IPTR s,
             {
                 if (spec->u.brush.filename[i])
                 {
-                    spec->u.brush.dt[i] = dt_load_picture
-                        (spec->u.brush.filename[i], mri->mri_Screen);
+                    spec->u.brush.dt[i] = scale_brush
+                        (spec->u.brush.filename[i], mri->mri_Screen, spec->scale, &spec->density[i]);
 
                     if (!spec->u.brush.dt[i]
                         && !strchr(spec->u.brush.filename[i], ':'))
@@ -517,8 +548,8 @@ struct MUI_ImageSpec_intern *zune_imspec_setup(IPTR s,
                             strcpy(fullpath, IMSPEC_EXTERNAL_PREFIX);
                             strcat(fullpath, spec->u.brush.filename[i]);
                             fullpath[size - 1] = 0;
-                            spec->u.brush.dt[i] = dt_load_picture
-                                (fullpath, mri->mri_Screen);
+                            spec->u.brush.dt[i] = scale_brush
+                                (fullpath, mri->mri_Screen, spec->scale, &spec->density[i]);
                             FreeVec(fullpath);
                         }
                     }
@@ -526,6 +557,7 @@ struct MUI_ImageSpec_intern *zune_imspec_setup(IPTR s,
                 else
                 {
                     spec->u.brush.dt[i] = spec->u.brush.dt[0];
+                    spec->density[i] = spec->density[0];
                 }
             }
         }
@@ -649,7 +681,8 @@ BOOL zune_imspec_askminmax(struct MUI_ImageSpec_intern *spec,
         break;
 
     case IST_VECTOR:
-        return zune_imspec_vector_get_minmax(spec, minmax);
+        if (!zune_imspec_vector_get_minmax(spec, minmax))
+            return FALSE;
         break;
 
     case IST_BOOPSI:
@@ -709,6 +742,19 @@ BOOL zune_imspec_askminmax(struct MUI_ImageSpec_intern *spec,
     case IST_CONFIG:
         D(bug("*** zune_imspec_askminmax : IST_CONFIG\n"));
         break;
+    }
+    if (spec->type == IST_VECTOR || spec->type == IST_BRUSH) {
+        ULONG factor = spec->type == IST_BRUSH ? spec->density[0] : 100;
+#define SCALE_IMAGE_FIELD(field) \
+        if (minmax->field != MUI_MAXMAX) \
+            minmax->field = (minmax->field * spec->scale + factor / 2) / factor
+        SCALE_IMAGE_FIELD(MinWidth);
+        SCALE_IMAGE_FIELD(DefWidth);
+        SCALE_IMAGE_FIELD(MaxWidth);
+        SCALE_IMAGE_FIELD(MinHeight);
+        SCALE_IMAGE_FIELD(DefHeight);
+        SCALE_IMAGE_FIELD(MaxHeight);
+#undef SCALE_IMAGE_FIELD
     }
     return TRUE;
 }
@@ -801,8 +847,7 @@ void zune_imspec_drawbuffered(struct MUI_ImageSpec_intern *spec,
     case IST_VECTOR:
         if (spec->u.vect.draw)
         {
-            spec->u.vect.draw(mri, left - dx, top - dy, width, height,
-                state);
+            spec->u.vect.draw(mri, left - dx, top - dy, width, height, state);
         }
         break;
 
@@ -827,13 +872,13 @@ void zune_imspec_drawbuffered(struct MUI_ImageSpec_intern *spec,
             {
                 if (strcmp(&straddr[len - 4], ".mim") == 0)
                 {
-                    dt_put_mim_on_rastport(spec->u.brush.dt[0],
-                        mri->mri_RastPort, left - dx, top - dy, state);
+                    dt_put_scaled_on_rastport(spec->u.brush.dt[0],
+                        rp, left - dx, top - dy, spec->scale, spec->density[0], TRUE, state);
                     break;
                 }
             }
-            dt_put_on_rastport(spec->u.brush.dt[state], mri->mri_RastPort,
-                left - dx, top - dy);
+            dt_put_scaled_on_rastport(spec->u.brush.dt[state], rp,
+                left - dx, top - dy, spec->scale, spec->density[state], FALSE, 0);
             /*              dt_put_on_rastport_tiled(spec->u.brush.dt[state], mri->mri_RastPort, */
             /*                                       left, top, right, bottom, */
             /*                                       xoffset - left, yoffset - top); */
@@ -919,4 +964,40 @@ void zune_image_spec_free(CONST_STRPTR spec)
 {
     if (spec)
         FreeVec((APTR) spec);
+}
+
+/* Query only: no datatypes, foreign BOOPSI object or draw callback runs here. */
+BOOL zune_imspec_scale_supported(Object *obj, IPTR description)
+{
+    struct MUI_ImageSpec_intern *spec;
+    BOOL supported = FALSE;
+    if (!description) return TRUE;
+    spec = zune_image_spec_to_structure(description);
+    if (!spec) return FALSE;
+    switch (spec->type)
+    {
+    case IST_COLOR:
+    case IST_BRUSH: /* Explicit1x/2x density path, dimensions and raster together. */
+    case IST_SCALED_GRADIENT:
+    case IST_TILED_GRADIENT:
+        supported = TRUE;
+        break;
+    case IST_VECTOR:
+        supported = spec->u.vect.type >= 0 && spec->u.vect.type < 4;
+        break;
+    case IST_CONFIG:
+    {
+        LONG image = spec->u.cfg.muiimg;
+        if (image >= 0 && image < MUII_Count && muiGlobalInfo(obj))
+        {
+            CONST_STRPTR value = muiGlobalInfo(obj)->mgi_Prefs->imagespecs[image];
+            if (value && value[0] != '6') supported = zune_imspec_scale_supported(obj, (IPTR)value);
+        }
+        break;
+    }
+    default: /* Fixed pattern/bitmap/foreign image contracts retain legacy mode. */
+        break;
+    }
+    zune_imspec_free(spec);
+    return supported;
 }

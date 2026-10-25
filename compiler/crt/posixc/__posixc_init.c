@@ -12,6 +12,7 @@
 #include <libraries/posixc.h>
 
 #include "__posixc_intbase.h"
+#include "__reclock.h"
 
 /* We handle StdCBase */
 const ULONG __aros_rellib_base_StdCBase = 0;
@@ -38,6 +39,7 @@ static int __posixc_open(struct PosixCIntBase *PosixCBase)
 static void __posixc_close(struct PosixCIntBase *PosixCBase)
 {
     D(bug("[posixc] %s(0x%p)\n", __func__, PosixCBase));
+    __posixc_reclock_release_owner(PosixCBase);
     __upath_free_others(PosixCBase);
     DeletePool(PosixCBase->internalpool);
 }

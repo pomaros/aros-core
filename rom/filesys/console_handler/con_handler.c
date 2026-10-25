@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
 */
 
@@ -31,6 +32,7 @@
 #include <dos/dosasl.h>
 #include <intuition/intuition.h>
 #include <intuition/extensions.h>
+#include <intuition/screens.h>
 #include <workbench/workbench.h>
 #include <workbench/startup.h>
 #include <devices/conunit.h>
@@ -356,6 +358,84 @@ void close_con_window(struct filehandle *fh)
     }
 }
 
+/* Intuition owns the physical rectangle and scale-dependent limits. This
+ * Process refreshes the retained console font/text after geometry publication. */
+/* Detached menu preparation never changes the installed strip on failure.
+ * One immutable context binds VisualInfo, layout and source geometry. */
+static BOOL con_install_menu(struct filehandle *fh)
+{
+    struct Window *window = fh->window;
+    const struct ScreenRenderContext *context;
+    struct Menu *candidate, *previous;
+    APTR vi;
+    IPTR value = 0;
+    /* Stock menu source is always 100-point layout. Its native popup can
+       project all fonts and fixed gaps sharply into any destination scale. */
+    const BOOL logical = TRUE;
+    struct TagItem vi_tags[] = {
+        { GTVI_RenderContext, 0 }, { GTVI_Logical, logical }, { TAG_DONE, 0 }
+    };
+    struct TagItem menu_tags[] = {
+        { GTMN_NewLookMenus, TRUE }, { TAG_DONE, 0 }
+    };
+    if (!window) return FALSE;
+    if (window->MenuStrip != fh->winmenu) return TRUE;
+    if (!GetAttr(SA_RenderContext, (Object *)window->WScreen, &value) || !value)
+        return FALSE;
+    context = (const struct ScreenRenderContext *)value;
+    vi_tags[0].ti_Data = value;
+    struct NewMenu newconmenu[] = {
+        { NM_TITLE, "Console",      NULL,   0                               },
+         { NM_ITEM, NM_BARLABEL                                             },
+         { NM_ITEM,  "About...",    "?",    0, 0, (APTR)MEN_CONSOLE_ABOUT   },
+         { NM_ITEM, NM_BARLABEL                                             },
+         { NM_ITEM,  "Close",       "Q",    !(fh->nw.Flags & WFLG_CLOSEGADGET) ? NM_ITEMDISABLED : 0,
+                                               0, (APTR)MEN_CONSOLE_CLOSE   },
+        { NM_TITLE, "Edit",         NULL,   0                               },
+         { NM_ITEM,  "Clipboard Unit", NULL, 0                              },
+          { NM_SUB,  "0",           "0",    0, 0, (APTR)MEN_CONSOLE_CLIP0   },
+          { NM_SUB,  "1",           "1",    0, 0, (APTR)MEN_CONSOLE_CLIP1   },
+          { NM_SUB,  "2",           "2",    0, 0, (APTR)MEN_CONSOLE_CLIP2   },
+          { NM_SUB,  "3",           "3",    0, 0, (APTR)MEN_CONSOLE_CLIP3   },
+         { NM_ITEM, NM_BARLABEL                                             },
+         { NM_ITEM,  "Copy",        NULL,    0, 0, (APTR)MEN_CONSOLE_COPY    },
+         { NM_ITEM,  "Paste",       NULL,    0, 0, (APTR)MEN_CONSOLE_PASTE   },
+        { NM_END                                                            }
+    };
+    vi = GetVisualInfoA(window->WScreen, vi_tags);
+    if (!vi) return FALSE;
+    candidate = CreateMenusA(newconmenu, menu_tags);
+    if (!candidate) { FreeVisualInfo(vi); return FALSE; }
+    if (!LayoutMenusA(candidate, vi, menu_tags) ||
+        !SetMenuStripContext(window, candidate, context, logical))
+    {
+        FreeMenus(candidate);
+        FreeVisualInfo(vi);
+        return FALSE;
+    }
+    previous = fh->winmenu;
+    fh->winmenu = candidate;
+    if (previous) FreeMenus(previous);
+    FreeVisualInfo(vi);
+    return TRUE;
+}
+
+static void con_apply_scale(struct filehandle *fh)
+{
+    if (fh->otherwindow) return;
+    /* CMD_UPDATE redraws retained characters without replacing Window,
+       ConUnit or streams. The menu task projects its exact source context
+       into the then-current destination if another scale commits meanwhile. */
+    fh->conwriteio.io_Command = CMD_UPDATE;
+    fh->conwriteio.io_Data = NULL;
+    fh->conwriteio.io_Length = 0;
+    if (DoIO(ioReq(&fh->conwriteio)))
+        bug("[CONSOLE-SCALE] result=FAIL reason=font-update ioerror=%d\n",
+            (int)fh->conwriteio.io_Error);
+    if (!con_install_menu(fh))
+        bug("[CONSOLE-SCALE] result=FAIL reason=menu-context\n");
+}
+
 static LONG MakeConWindow(struct filehandle *fh)
 {
     LONG err = 0;
@@ -363,6 +443,7 @@ static LONG MakeConWindow(struct filehandle *fh)
     D(bug("[con:handler] %s(0x%p)\n", __func__, fh));
 
     if (fh->otherwindow == NULL) {
+        struct ScaleWindowGeometry geometry;
         struct TagItem win_tags[] =
         {
             { WA_PubScreen,         0 },
@@ -370,6 +451,8 @@ static LONG MakeConWindow(struct filehandle *fh)
             { WA_PubScreenName,     0 },
             { WA_PubScreenFallBack, TRUE },
             { TAG_IGNORE,            0 },
+            { WA_ScaleAware, TRUE },
+            { WA_ScaleGeometry, (IPTR)&geometry },
             { TAG_DONE }
         };
 
@@ -389,7 +472,23 @@ static LONG MakeConWindow(struct filehandle *fh)
         fh->nw.Height = (fh->flags & FHFLG_BOOTCON && fh->nw.Height == -1) ||
                             fh->nw.Height > fh->nw.MinHeight ? fh->nw.Height : fh->nw.MinHeight;
 
-        fh->window = OpenWindowTagList(&fh->nw, (struct TagItem *) win_tags);
+        {
+            struct Screen *screen = LockPubScreen(fh->screenname);
+            if (!screen) screen = LockPubScreen(NULL);
+            geometry = (struct ScaleWindowGeometry){fh->nw.LeftEdge,
+                fh->nw.TopEdge, fh->nw.Width, fh->nw.Height,
+                fh->nw.MinWidth, fh->nw.MinHeight,
+                fh->nw.MaxWidth == (UWORD)-1 ? -1 : fh->nw.MaxWidth,
+                fh->nw.MaxHeight == (UWORD)-1 ? -1 : fh->nw.MaxHeight};
+            fh->nw.IDCMPFlags |= IDCMP_CHANGESCALE | IDCMP_CHANGEWINDOW;
+            if (screen)
+            {
+                win_tags[0].ti_Data = (IPTR)screen;
+                win_tags[2].ti_Tag = TAG_IGNORE;
+            }
+            fh->window = OpenWindowTagList(&fh->nw, win_tags);
+            if (screen) UnlockPubScreen(NULL, screen);
+        }
     }
     else
         fh->window = fh->otherwindow;
@@ -399,46 +498,14 @@ static LONG MakeConWindow(struct filehandle *fh)
         D(bug("[con:handler] %s: Using window  @ 0x%p\n", __func__, fh->window));
 
 #if defined(CONSOLE_SHOW_MENU)
-        struct TagItem menu_tags[] = {
-            {GTMN_NewLookMenus, TRUE},
-            {TAG_DONE               }
-        };
-        struct NewMenu newconmenu[] = {
-            { NM_TITLE, "Console",      NULL,   0                               },
-             { NM_ITEM, NM_BARLABEL                                             },
-             { NM_ITEM,  "About...",    "?",    0, 0, (APTR)MEN_CONSOLE_ABOUT   },
-             { NM_ITEM, NM_BARLABEL                                             },
-             { NM_ITEM,  "Close",       "Q",    !(fh->nw.Flags & WFLG_CLOSEGADGET) ? NM_ITEMDISABLED : 0,
-                                                   0, (APTR)MEN_CONSOLE_CLOSE   },
-            { NM_TITLE, "Edit",         NULL,   0                               },
-             { NM_ITEM,  "Clipboard Unit", NULL, 0                              },
-              { NM_SUB,  "0",           "0",    0, 0, (APTR)MEN_CONSOLE_CLIP0   },
-              { NM_SUB,  "1",           "1",    0, 0, (APTR)MEN_CONSOLE_CLIP1   },
-              { NM_SUB,  "2",           "2",    0, 0, (APTR)MEN_CONSOLE_CLIP2   },
-              { NM_SUB,  "3",           "3",    0, 0, (APTR)MEN_CONSOLE_CLIP3   },
-             { NM_ITEM, NM_BARLABEL                                             },
-             /* No CommKey: console.device's rawkey handler sits above intuition
-                and already acts on Right-Amiga+C/V, so a menu shortcut on the
-                same chord would run the copy/paste a second time. */
-             { NM_ITEM,  "Copy",        NULL,   0, 0, (APTR)MEN_CONSOLE_COPY    },
-             { NM_ITEM,  "Paste",       NULL,   0, 0, (APTR)MEN_CONSOLE_PASTE   },
-            { NM_END                                                            }
-        };
-        if ((fh->winmenu = CreateMenusA(newconmenu, menu_tags))) {
-            APTR vi = GetVisualInfoA(fh->window->WScreen, NULL);
-            if (vi) {
-                if (LayoutMenusA(fh->winmenu, vi, menu_tags)) {
-                    SetMenuStrip(fh->window, fh->winmenu);
-                    D(bug("[con:handler] %s: menu attached\n", __func__));
-                }
-                FreeVisualInfo(vi);
-            }
-        }
+        if (!con_install_menu(fh))
+            bug("[CONSOLE-SCALE] result=FAIL reason=initial-menu-context\n");
 #endif
         fh->conreadio->io_Data = (APTR) fh->window;
         fh->conreadio->io_Length = sizeof(struct Window);
 
-        if (0 == OpenDevice("console.device", CONU_SNIPMAP, ioReq(fh->conreadio), 0)) {
+        if (0 == OpenDevice("console.device", CONU_SNIPMAP, ioReq(fh->conreadio),
+            fh->otherwindow ? 0 : CONFLAG_SCALEAWARE)) {
             const UBYTE lf_on[] =
             { 0x9B, 0x32, 0x30, 0x68 }; /* Set linefeed mode    */
 
@@ -600,7 +667,7 @@ static struct filehandle *open_con(struct DosPacket *dp, LONG *perr)
     void *ExecLockBase = OpenResource("execlock.resource");
 #endif
     char *filename, *fn;
-    struct filehandle *fh;
+    struct filehandle *fh = NULL;
     struct DeviceNode *dn;
     LONG err, ok = FALSE;
     LONG i;
@@ -856,7 +923,7 @@ LONG CONMain(struct ExecBase *SysBase)
     struct Message *mn;
     struct FileHandle *dosfh;
     LONG error;
-    struct filehandle *fh;
+    struct filehandle *fh = NULL;
     struct FileLock *fl;
     struct DosPacket *waitingdp = NULL;
 
@@ -997,6 +1064,14 @@ LONG CONMain(struct ExecBase *SysBase)
                     UWORD   msgcode  = msg->Code;
 
                     switch (msgclass) {
+                    case IDCMP_CHANGESCALE:
+                        con_apply_scale(fh);
+                        break;
+                    case IDCMP_CHANGEWINDOW:
+                        /* Geometry is committed by Intuition before this
+                         * event. Retry font preparation after user resizing. */
+                        con_apply_scale(fh);
+                        break;
                     case IDCMP_GADGETUP:
                         {
                             struct Gadget *gadget = (struct Gadget *)msg->IAddress;
@@ -1085,6 +1160,11 @@ LONG CONMain(struct ExecBase *SysBase)
                                                 D(bug("[con:handler] %s: Menu: Copy\n", __func__));
                                                 struct Library *ConsoleDevice = (struct Library *)fh->conreadio->io_Device;
                                                 struct InputEvent ie;
+                                                /* All of it: the keymap reads the
+                                                   previous keys for dead keys, and
+                                                   stack garbage there can turn the
+                                                   'c' into another character. */
+                                                memset(&ie, 0, sizeof(ie));
                                                 ie.ie_NextEvent = NULL;
                                                 ie.ie_Class     = IECLASS_RAWKEY;
                                                 ie.ie_Code      = RAWKEY_C;

@@ -21,6 +21,9 @@
 #ifndef GRAPHICS_LAYERS_H
 #   include <graphics/layers.h>
 #endif
+#ifndef GRAPHICS_TEXT_H
+#   include <graphics/text.h>
+#endif
 #ifndef GRAPHICS_RASTPORT_H
 #   include <graphics/rastport.h>
 #endif
@@ -216,6 +219,145 @@ struct ExtNewScreen
 #define SA_CompositingFlags     (SA_Dummy + 140) /* [ISG] ULONG           AROS: Allow openers to request compositing modes    */
 #define SA_AlphaPreCompositingHook (SA_Dummy + 141) /* [ISG] Hook *       AROS: Hook to Pre-Process Composited buffers        */
 #define SA_ScreenbarTextColor   (SA_Dummy + 160) /* [..G] ULONG           AROS: Raw color for the screenbar text              */
+#define SA_Scale                (SA_Dummy + 161) /* [ISG] ULONG           AROS: the screen's scale in percent, 100..400 in
+                                                                          steps of 25; one point is Scale/100 pixels. The
+                                                                          physical raster/bar font is opened at its size times
+                                                                          the scale; Screen.Font/GetScreenDrawInfo remain
+                                                                          unscaled logical defaults. */
+/* [..G] ULONG: actual legacy presentation factor, 1..4. Returns 1 on
+ * screens without legacy composition; otherwise nearest integer percentage
+ * with half steps rounded up. Independent of a future window's awareness. */
+#define SA_LegacyScaleFactor    (SA_Dummy + 163)
+struct DrawInfo;
+struct ScreenRenderContext
+{
+    UWORD src_Scale;                 /* requested percentage,100..400 */
+    UWORD src_LegacyScaleFactor;     /* actual integer canvas factor */
+    ULONG src_PhysicalBarHeight;    /* full physical extent: BarHeight + 1 */
+    UWORD src_PhysicalBarHBorder, src_PhysicalBarVBorder; /* physical pixels */
+    UWORD src_PhysicalMenuHBorder, src_PhysicalMenuVBorder; /* physical pixels */
+    UWORD src_LogicalBarHBorder, src_LogicalBarVBorder; /* unscaled pixels */
+    UWORD src_LogicalMenuHBorder, src_LogicalMenuVBorder; /* unscaled pixels */
+    struct TTextAttr src_BaseFont;   /*100% attributes, including owned tags */
+    struct DrawInfo *src_LogicalDrawInfo;
+    struct DrawInfo *src_PhysicalDrawInfo;
+    BOOL src_PreparedScaleWindow;    /* exact window decorator admits native prepared frames */
+};
+
+/* [..G] const struct ScreenRenderContext *: one coherent render snapshot.
+ * The snapshot, its attributes, fonts and images are immutable and borrowed
+ * until CloseScreen; retain the normal window/public-screen lifetime lock.
+ * Reacquire after IDCMP_CHANGESCALE for new rendering. Do not free it. */
+#define SA_RenderContext       (SA_Dummy + 164)
+
+/* [..S] struct ScreenScaleResult *: synchronous result of SA_Scale in this
+ * SetAttrs call, independent of tag order. Caller-owned storage is cleared
+ * for every attempt and is never retained. Zero initialization detects an
+ * older implementation which does not report this tag. */
+#define SA_ScaleResult         (SA_Dummy + 165)
+#define SSR_UNREPORTED 0
+#define SSR_SUCCESS 1
+#define SSR_UNCHANGED 2
+#define SSR_FAILED 3
+#define SSR_REASON_NONE 0
+#define SSR_REASON_INVALID_REQUEST 1
+#define SSR_REASON_INVALID_CONTEXT 2
+#define SSR_REASON_UNSUPPORTED 3
+#define SSR_REASON_NO_MEMORY 4
+#define SSR_REASON_PREPARE_FAILED 5
+#define SSR_REASON_GEOMETRY 6
+#define SSR_REASON_COMMIT_FAILED 7
+#define SSR_DOMAIN_NONE 0
+#define SSR_DOMAIN_LOGICAL 1
+#define SSR_DOMAIN_PHYSICAL 2
+#define SSR_AXIS_NONE 0
+#define SSR_AXIS_WIDTH 1
+#define SSR_AXIS_HEIGHT 2
+#define SSR_STAGE_NONE 0
+#define SSR_STAGE_VALIDATE 1
+#define SSR_STAGE_FONT 2
+#define SSR_STAGE_LOGICAL_SCREEN 3
+#define SSR_STAGE_DECORATION 4
+#define SSR_STAGE_RENDER_CONTEXT 5
+#define SSR_STAGE_FRAME 6
+#define SSR_STAGE_GEOMETRY 7
+#define SSR_STAGE_ACTIVE_GADGET 8
+#define SSR_STAGE_REQUESTER 9
+#define SSR_STAGE_MENU 10
+#define SSR_STAGE_POINTER 11
+#define SSR_STAGE_LAYER_GEOMETRY 12
+#define SSR_STAGE_CURSOR 13
+#define SSR_STAGE_PIXELS 14
+#define SSR_STAGE_NOTIFICATIONS 15
+#define SSR_STAGE_COMMIT 16
+struct ScreenScaleResult
+{
+    ULONG ssr_Status, ssr_Reason, ssr_Stage, ssr_Domain, ssr_Axis;
+    ULONG ssr_RequestedScale, ssr_AppliedScale;
+    IPTR ssr_Window; /* Opaque identity only: never dereference it. */
+    /* Valid when Domain is not NONE. These are effective fitting limits in
+     * that domain; maxima include the viewport cap, not an unlimited sentinel.
+     * A reported zero maximum is an invalid zero constraint. */
+    LONG ssr_MinWidth, ssr_MinHeight, ssr_MaxWidth, ssr_MaxHeight;
+    LONG ssr_AvailableWidth, ssr_AvailableHeight;
+    UBYTE ssr_WindowTitle[128]; /* Owned, truncated if necessary, always NUL. */
+    /* The exact check that refused, SSR_DETAIL_*; NONE when Reason says all.
+     * For SSR_DETAIL_DECORATOR, DetailMethod is the refusing WDM_* method and
+     * DecorRefusal its WDP_REFUSE_* cause. DetailValue meanings are listed
+     * per detail. DetailName is an owned copy (resource or key name), never a
+     * pointer into a decorator, truncated if necessary and always NUL. */
+    ULONG ssr_Detail, ssr_DetailMethod, ssr_DecorRefusal;
+    LONG ssr_DetailValue[3];
+    /* SSR_DETAIL_LAYER*: LayerRole is the SSR_LAYER_* role of the refusing
+     * layer, Layer its opaque identity. For SSR_DETAIL_LAYER the remaining
+     * fields copy the Layers refusal (graphics/layertransaction.h): LayerCheck
+     * LGR_*, LayerFlags LGRF_*, LayerPixels LGR_PIXELS_*, LayerLease
+     * LGR_LEASE_*, LayerDriver HIDD_PIXELS_REFUSE_* and LayerValue its four
+     * values; DetailName is the refusing bitmap class or driver. */
+    ULONG ssr_LayerRole, ssr_LayerCheck, ssr_LayerFlags;
+    ULONG ssr_LayerPixels, ssr_LayerLease, ssr_LayerDriver;
+    LONG ssr_LayerValue[4];
+    IPTR ssr_Layer; /* Opaque identity only: never dereference it. */
+    UBYTE ssr_DetailName[64];
+};
+#define SSR_DETAIL_NONE 0
+#define SSR_DETAIL_FRAME_NO_GENERATION 1   /* window has no committed frame */
+#define SSR_DETAIL_FRAME_CONTEXT 2         /* context draw infos absent or for another screen */
+#define SSR_DETAIL_FRAME_CONTEXT_BORDERS 3 /* [0] 1 logical, 0 physical border set absent */
+#define SSR_DETAIL_FRAME_NO_FONT 4         /* context has no frame font */
+#define SSR_DETAIL_FRAME_BORDER_RANGE 5    /* [0] side 0..3 left/top/right/bottom, [1] value */
+#define SSR_DETAIL_FRAME_SIZE_IMAGE 6      /* [0] query status, [1] width, [2] height */
+#define SSR_DETAIL_FRAME_LAYOUT_SIZE 7     /* [0] width, [1] height of the proposed frame */
+#define SSR_DETAIL_FRAME_USER_BUFFER 8     /* [0] decorator WDA_UserBuffer size */
+#define SSR_DETAIL_FRAME_UNTYPED_GADGET 9  /* [0] system gadget slot without image type */
+#define SSR_DETAIL_FRAME_IMAGE_QUERY 10    /* Name image; [0] status, [1] width, [2] height */
+#define SSR_DETAIL_FRAME_IMAGE_EXTENT 11   /* Name image; [0] width, [1] height, [2] preferred height */
+#define SSR_DETAIL_FRAME_IMAGE_OBJECT 12   /* Name image; [0] width, [1] height */
+#define SSR_DETAIL_FRAME_METRICS 13        /* window absent from the measured frame set */
+#define SSR_DETAIL_DECORATOR 14            /* see DetailMethod and DecorRefusal */
+#define SSR_DETAIL_LAYER 15                /* the Layers batch refused: see the Layer fields */
+#define SSR_DETAIL_LAYER_REQUEST 16        /* LayerValue [0] left, [1] top, [2] width, [3] height
+                                            * of a proposed layer outside the WORD range */
+#define SSR_DETAIL_COMPOSITION 17          /* legacy composition could not project to
+                                            * [0] width x [1] height physical pixels */
+/* LayerRole. NONE: the refusal named no layer. OTHER: a layer Intuition
+ * holds no record for; Layer identifies it. */
+#define SSR_LAYER_NONE 0
+#define SSR_LAYER_OTHER 1
+#define SSR_LAYER_ROOT 2            /* the screen's root layer (uncovered backdrop) */
+#define SSR_LAYER_BAR 3             /* the screen title bar */
+#define SSR_LAYER_WINDOW 4          /* a window's only layer */
+#define SSR_LAYER_WINDOW_BORDER 5   /* a GIMMEZEROZERO window's border layer */
+#define SSR_LAYER_WINDOW_CLIENT 6   /* a GIMMEZEROZERO window's client layer */
+#define SSR_LAYER_REQUESTER 7       /* a requester layer of the window */
+#define SSR_LAYER_PRESENTATION 8    /* a legacy window's physical presentation layer */
+#define SSR_LAYER_CANVAS 9          /* a legacy window's layer in its logical canvas */
+#define SSR_LAYER_CANVAS_ROOT 10    /* the root layer of a legacy window's logical canvas */
+#define SSR_LAYER_PRIVATE 11        /* another layer in a private composed canvas */
+
+#define SA_SCALE_MIN            100
+#define SA_SCALE_MAX            400
+#define SA_SCALE_STEP           25
 
 /* SA_Overscan */
 #define OSCAN_TEXT     1

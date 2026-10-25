@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2023, The AROS Development Team. All rights reserved.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
 */
@@ -23,6 +24,7 @@
 #include <graphics/gfxmacros.h>
 #include <utility/tagitem.h>
 #include "intuition_intern.h"
+#include "systemrequestscale.h"
 
 /**********************************************************************************************/
 
@@ -55,6 +57,9 @@ struct Window *buildsysreq_intern(struct Window *window, STRPTR reqtitle, struct
     struct Gadget               *gadgets;
     STRPTR                       gadgetlabels[3];
     struct IntRequestUserData   *requserdata;
+    struct Screen                logicalscreen;
+    const struct ScreenRenderContext *legacycontext;
+    BOOL legacybound = FindTask(NULL)->tc_Node.ln_Type == NT_PROCESS;
 
     DEBUG_BUILDSYSREQUEST(dprintf("intrequest_buildsysrequest: window 0x%p body <%s> postext <%s> negtext <%s> IDCMPFlags 0x%lx width %ld height %ld\n",
                                   window,
@@ -81,6 +86,20 @@ struct Window *buildsysreq_intern(struct Window *window, STRPTR reqtitle, struct
         if (!scr)
             return NULL;
         lockedscr = scr;
+    }
+
+    /* The custom IntuiText font path remains logical and composed. */
+    gadgetlabels[0] = postext ? postext->IText : negtext->IText;
+    gadgetlabels[1] = postext ? negtext->IText : NULL;
+    gadgetlabels[2] = NULL;
+    BOOL handled = FALSE;
+    if ((!postext || !postext->ITextFont) && !negtext->ITextFont)
+        req = OpenScaledSystemRequester(scr, reqtitle, NULL, bodytext, gadgetlabels,
+            postext ? 2 : 1, IDCMPFlags, width, height, &handled, IntuitionBase);
+    if (handled)
+    {
+        if (lockedscr) UnlockPubScreen(NULL, lockedscr);
+        return req;
     }
 
     /* create everything */
@@ -114,10 +133,11 @@ struct Window *buildsysreq_intern(struct Window *window, STRPTR reqtitle, struct
         requserdata->ReqDims.width  = width;
         requserdata->ReqDims.height = height;
 
-        if (buildsysreq_calculatedims(&requserdata->ReqDims, scr,
+        if (LogicalSystemRequesterScreen(scr, &logicalscreen, &legacycontext, IntuitionBase) &&
+            buildsysreq_calculatedims(&requserdata->ReqDims, &logicalscreen,
                                       bodytext, gadgetlabels, IntuitionBase))
         {
-            gadgets = buildsysreq_makegadgets(&requserdata->ReqDims, gadgetlabels, scr, IntuitionBase);
+            gadgets = buildsysreq_makegadgets(&requserdata->ReqDims, gadgetlabels, &logicalscreen, IntuitionBase);
             DEBUG_BUILDSYSREQUEST(dprintf("intrequest_buildsysrequest: gadgets 0x%p\n", gadgets));
             if (gadgets)
             {
@@ -125,17 +145,20 @@ struct Window *buildsysreq_intern(struct Window *window, STRPTR reqtitle, struct
                 {
                     {WA_Width                                       , requserdata->ReqDims.width                                                        },
                     {WA_Height                                      , requserdata->ReqDims.height                                                       },
-                    {WA_Left                                        , (scr->Width/2) - (requserdata->ReqDims.width/2)                                   },
-                    {WA_Top                                         , (scr->Height/2) - (requserdata->ReqDims.height/2)                                 },
+                    {WA_Left                                        , (logicalscreen.Width/2) - (requserdata->ReqDims.width/2)                                   },
+                    {WA_Top                                         , (logicalscreen.Height/2) - (requserdata->ReqDims.height/2)                                 },
                     {WA_IDCMP                                       , (IDCMP_GADGETUP | IDCMP_RAWKEY | (IDCMPFlags & ~IDCMP_VANILLAKEY))},
                     {WA_Gadgets                                     , (IPTR)gadgets                                                     },
                     {WA_Title                                       , (IPTR)reqtitle                                                    },
                     {(lockedscr ? WA_PubScreen : WA_CustomScreen)   , (IPTR)scr                                                         },
                     {WA_Flags                                       , WFLG_DRAGBAR     |
                                                                       WFLG_DEPTHGADGET |
-                                                                      WFLG_ACTIVATE    |
+                                                                      (legacybound ? 0 : WFLG_ACTIVATE) |
                                                                       WFLG_RMBTRAP   /*|
                                                                       WFLG_SIMPLE_REFRESH*/                                             },
+                    {WA_ScaleAware, FALSE},
+                    {WA_Hidden, legacybound},
+                    {(legacybound ? WA_RenderContext : TAG_IGNORE), (IPTR)legacycontext},
                     {TAG_DONE                                                                                                           }
                 };
 
@@ -155,6 +178,15 @@ struct Window *buildsysreq_intern(struct Window *window, STRPTR reqtitle, struct
                     DEBUG_BUILDSYSREQUEST(dprintf("intrequest_buildsysrequest: gadgets 0x%p\n", requserdata->Gadgets));
                     gadgets = requserdata->Gadgets;
 
+                    if (legacybound)
+                    {
+                        if (!ShowWindow(req, NULL))
+                        {
+                            freesysreq_intern(req, IntuitionBase);
+                            return NULL;
+                        }
+                        ActivateWindow(req);
+                    }
                     return req;
                 }
                 intrequest_freegadgets(gadgets, IntuitionBase);
@@ -207,6 +239,11 @@ LONG sysreqhandler_intern(struct Window *window, ULONG *IDCMPFlagsPtr, BOOL Wait
         while ((result <= -2) && (msg = sysreqhandler_getmsg(window, WaitInput)))
         {
             DEBUG_SYSREQHANDLER(dprintf("SysReqHandler: msg 0x%p class 0x%lx\n", msg, msg->Class));
+            if (HandleScaledSystemRequesterEvent(window, msg, IntuitionBase))
+            {
+                ReplyMsg((struct Message *)msg);
+                continue;
+            }
             switch (msg->Class)
             {
             /* we don't use VANILLA (filtered from useridcmp!) to get
@@ -322,6 +359,8 @@ void freesysreq_intern(struct Window *window, struct IntuitionBase *IntuitionBas
     if ((window == NULL) || (window == (void *)1L))
         return;
 
+    if (FreeScaledSystemRequester(window, IntuitionBase)) return;
+
     requserdata = (struct IntRequestUserData *)window->UserData;
 
     DEBUG_FREESYSREQUEST(dprintf("intrequest_freesysrequest: requserdata 0x%lx\n", (ULONG) requserdata));
@@ -339,14 +378,12 @@ void freesysreq_intern(struct Window *window, struct IntuitionBase *IntuitionBas
 
     window->UserData = 0;
     CloseWindow(window);
-#if (0)
     if (requserdata->RawBody)
     {
         if (requserdata->ReqBody)
             FreeVec(requserdata->ReqBody);
         FreeVec(requserdata->RawBody);
     }
-#endif
     intrequest_freegadgets(gadgets, IntuitionBase);
     intrequest_freelabels(gadgetlabels, IntuitionBase);
 
@@ -508,7 +545,10 @@ static struct Gadget *buildsysreq_makegadgets(struct IntReqDims *dims,
 
         if (!thisgadget)
         {
-            intrequest_freegadgets(gadgetlist, IntuitionBase);
+            if (gadgetlist)
+                intrequest_freegadgets(gadgetlist, IntuitionBase);
+            else
+                DisposeObject(gadgetframe);
             return NULL;
         }
 

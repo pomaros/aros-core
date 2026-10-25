@@ -74,6 +74,7 @@ static void bPairingDone(struct BtHWConn *cn, LONG error, ULONG status);
 static void bAskUser(struct BtHWConn *cn, UBYTE type, ULONG passkey);
 static void bSMPChannelEvent(struct bt_l2cap_channel_event_info *info, void *user_data);
 static void bLEReencrypt(struct BtHWConn *cn);
+static void bDisconnect(struct BtHWConn *cn, UBYTE reason);
 static BOOL bSMPSetup(struct BtHWConn *cn);
 static void bSMPStart(struct BtHWConn *cn);
 static void bSMPFail(struct BtHWConn *cn, UBYTE reason, CONST_STRPTR why);
@@ -1017,6 +1018,11 @@ static void bConnUp(struct BtHWConn *cn, UWORD handle, UBYTE role)
     struct BtEndpoint *bep;
     ULONG fraglen;
 
+    if((bd->bd_Flags & BDFF_BONDED) && !bLoadKeyringBond(BluetoothBase, bd)) {
+        cn->cn_Handle = handle;
+        bDisconnect(cn, 0x05);
+        return;
+    }
     cn->cn_Handle = handle;
     cn->cn_Role = role;
     cn->cn_State = HCNS_CONNECTED;
@@ -1381,6 +1387,13 @@ static struct BtHWConn * bEnsureConnection(struct BtHWCore *hc, struct BtDevice 
     struct BtHWConn *cn;
     UBYTE linktype;
 
+    if((bd->bd_Flags & BDFF_BONDED) && !bLoadKeyringBond(BluetoothBase, bd)) {
+        *pending = FALSE;
+        *error = BTIOERR_NOTREADY;
+        btAddErrorMsg0(RETURN_ERROR, (STRPTR) GM_UNIQUENAME(libname),
+                      "Keyring locked or unavailable: secured reconnect refused.");
+        return NULL;
+    }
     *pending = FALSE;
     if(mode == CONN_NOW) {
         bd->bd_AutoHold = FALSE;   /* asked for explicitly: automatic reconnects resume */
@@ -2405,6 +2418,7 @@ static void bPairingDone(struct BtHWConn *cn, LONG error, ULONG status)
         }
         return;
     }
+    if(!error && bd->bd_PairingState==BDPS_FAILED) { error=BTIOERR_NOTREADY;status=0x05; }
     cn->cn_PairState = PAIR_IDLE;
     cn->cn_SMPRequestLen = 0;
     cn->cn_SMPAcceptWait = FALSE;
@@ -2425,8 +2439,14 @@ static void bPairingDone(struct BtHWConn *cn, LONG error, ULONG status)
         bd->bd_PairingState = BDPS_FAILED;
     }
     btUnlockDevice(bd);
+    if(!error && !bStoreDevConfig(BluetoothBase, bd, TRUE)) {
+        error = BTIOERR_NOTREADY;
+        status = 0x05;
+        bd->bd_PairingState = BDPS_FAILED;
+        bd->bd_Flags &= ~BDFF_BONDED;
+        memset(&bd->bd_Keys, 0, sizeof(bd->bd_Keys));
+    }
     if(!error) {
-        bStoreDevConfig(BluetoothBase, bd, TRUE);
         btAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname), "Paired with %s.", bd->bd_Name);
         btSendEvent(BEHMB_DEVICEREGISTERED, bd, NULL);
     } else {
@@ -2861,8 +2881,11 @@ static void bSMPKeysComplete(void *context, const struct bt_smp_distributed_keys
     struct BtHWConn *cn = context;
     struct BtBase *BluetoothBase = cn->cn_Core->hc_Base;
     struct BtDevice *bd = cn->cn_Device;
+    struct BtKeyCfg previous_keys;
+    BOOL rekey=FALSE;
     cn->cn_Core->hc_Hardware->bth_LEListsDirty = TRUE;   /* a new bond for the controller's lists */
     btLockWriteDevice(bd);
+    previous_keys=bd->bd_Keys;
     if((cn->cn_Role == BDR_PERIPHERAL) &&
        (local->key_mask & BT_SMP_KEYDIST_ENC_KEY)) {
         CopyMem((APTR) local->ltk, bd->bd_Keys.bkc_LocalLTK, 16);
@@ -2889,13 +2912,22 @@ static void bSMPKeysComplete(void *context, const struct bt_smp_distributed_keys
            identity address it just told us, so the bond is found again
            after the private address has rotated */
         if(memcmp(peer->identity_address, noaddr, 6)) {
-            bRekeyDevice(BluetoothBase, bd, peer->identity_address,
-                         peer->identity_address_type ? BDAT_RANDOM : BDAT_PUBLIC);
+            rekey=TRUE;
         }
     }
     if(peer->key_mask & BT_SMP_KEYDIST_SIGN_KEY) {
         CopyMem((APTR) peer->csrk, bd->bd_Keys.bkc_CSRK, 16);
         bd->bd_Keys.bkc_Flags |= BKCF_CSRK;
+    }
+    if(rekey && !bRekeyDevice(BluetoothBase,bd,peer->identity_address,
+                              peer->identity_address_type?BDAT_RANDOM:BDAT_PUBLIC)) {
+        bd->bd_Keys=previous_keys;
+        bd->bd_PairingState=BDPS_FAILED;
+    }
+    {
+        volatile UBYTE *p=(volatile UBYTE *)&previous_keys;
+        ULONG size=sizeof(previous_keys);
+        while(size--) *p++=0;
     }
     btUnlockDevice(bd);
 }
@@ -3001,6 +3033,7 @@ static void bLEReencrypt(struct BtHWConn *cn)
 {
     struct BtBase *BluetoothBase = cn->cn_Core->hc_Base;
     struct BtDevice *bd = cn->cn_Device;
+    if(!bLoadKeyringBond(BluetoothBase, bd)) { bDisconnect(cn, 0x05); return; }
     UWORD ediv = bd->bd_Keys.bkc_EDIV[0] | (bd->bd_Keys.bkc_EDIV[1] << 8);
     if(bLEStartEncryption(cn, bd->bd_Keys.bkc_LTK, bd->bd_Keys.bkc_Rand, ediv)) {
         cn->cn_EncryptPending = TRUE;
@@ -3456,7 +3489,7 @@ BOOL bConnHandleEvent(struct BtHWCore *hc, UBYTE code, const UBYTE *params, ULON
         bd = bFindDeviceByAddr(hc, params);
         btUnlockBase();
         CopyMem((APTR) params, reply, 6);
-        if(bd && bd->bd_Keys.bkc_Flags & BKCF_LINKKEY) {
+        if(bd && bLoadKeyringBond(BluetoothBase, bd) && (bd->bd_Keys.bkc_Flags & BKCF_LINKKEY)) {
             CopyMem(bd->bd_Keys.bkc_LinkKey, &reply[6], 16);
             bSubmitCmd(hc, HC_OP_LINK_KEY_REQ_REPLY, reply, 22, bIgnoreCompletion, hc);
         } else {
@@ -3473,16 +3506,26 @@ BOOL bConnHandleEvent(struct BtHWCore *hc, UBYTE code, const UBYTE *params, ULON
         bd = bFindDeviceByAddr(hc, params);
         btUnlockBase();
         if(bd) {
+            struct BtKeyCfg previous;
+            ULONG flags;
             btLockWriteDevice(bd);
-            CopyMem((APTR) &params[6], bd->bd_Keys.bkc_LinkKey, 16);
-            bd->bd_Keys.bkc_LinkKeyType = params[22];
-            bd->bd_Keys.bkc_Flags |= BKCF_LINKKEY;
-            bd->bd_Flags |= BDFF_BONDED;
+            previous=bd->bd_Keys;flags=bd->bd_Flags;
+            CopyMem((APTR)&params[6],bd->bd_Keys.bkc_LinkKey,16);
+            bd->bd_Keys.bkc_LinkKeyType=params[22];
+            bd->bd_Keys.bkc_Flags|=BKCF_LINKKEY;
+            bd->bd_Flags|=BDFF_BONDED;
             btUnlockDevice(bd);
-            if(bd->bd_Flags & BDFF_REGISTERED) {
-                bStoreDevConfig(BluetoothBase, bd, TRUE);
+            if((flags&BDFF_REGISTERED) && !bStoreDevConfig(BluetoothBase,bd,TRUE)) {
+                btLockWriteDevice(bd);
+                bd->bd_Keys=previous;bd->bd_Flags=flags;bd->bd_PairingState=BDPS_FAILED;
+                btUnlockDevice(bd);
+            }
+            {
+                volatile UBYTE *p=(volatile UBYTE *)&previous;ULONG n=sizeof(previous);
+                while(n--) *p++=0;
             }
         }
+
         return(TRUE);
 
     case HC_EVT_PIN_CODE_REQUEST:
@@ -3731,6 +3774,7 @@ BOOL bConnHandleEvent(struct BtHWCore *hc, UBYTE code, const UBYTE *params, ULON
                     have = TRUE;
                 }
             } else if(cn && (cn->cn_Role == BDR_PERIPHERAL) &&
+                      bLoadKeyringBond(BluetoothBase, cn->cn_Device) &&
                       (cn->cn_Device->bd_Keys.bkc_Flags & BKCF_LOCAL_LTK) &&
                       !memcmp(&params[3], cn->cn_Device->bd_Keys.bkc_LocalRand, 8) &&
                       params[11] == cn->cn_Device->bd_Keys.bkc_LocalEDIV[0] &&
@@ -3960,14 +4004,20 @@ BOOL bConnHandleRequest(struct BtHWCore *hc, struct BtChannel *bch)
             }
             return(TRUE);
 
-        case BTPRI_UNPAIR:
+        case BTPRI_UNPAIR: {
+            ULONG previous_flags=bd->bd_Flags;
             btLockWriteDevice(bd);
             memset(&bd->bd_Keys, 0, sizeof(bd->bd_Keys));
             bd->bd_Flags &= ~BDFF_BONDED;
             bd->bd_CurAddrValid = FALSE;
             btUnlockDevice(bd);
             hc->hc_Hardware->bth_LEListsDirty = TRUE;
-            bStoreDevConfig(BluetoothBase, bd, TRUE);
+            if(!bStoreDevConfig(BluetoothBase, bd, TRUE)) {
+                bd->bd_Flags=previous_flags;
+                bLoadKeyringBond(BluetoothBase,bd);
+                bReplyChannel(BluetoothBase, bch, BTIOERR_NOTREADY, 0);
+                return TRUE;
+            }
             if(bd->bd_Conns[0]) {
                 bDisconnect(bd->bd_Conns[0], 0x13);
             }
@@ -3978,6 +4028,7 @@ BOOL bConnHandleRequest(struct BtHWCore *hc, struct BtChannel *bch)
             bReplyChannel(BluetoothBase, bch, 0, 0);
             return(TRUE);
 
+        }
         case BTPR_READRSSI:
             /* answered from the last inquiry / advertising report */
             if(bch->bch_Data && bch->bch_Length) {

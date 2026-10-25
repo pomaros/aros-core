@@ -122,6 +122,43 @@ EL1 faults for its own setup. It does **not** meet MP1's every-task-stack,
 task-attribution or continued-AROS-operation requirements, and makes no Apple
 hardware or SMP validation claim. No `[MP1] PASS` line is emitted.
 
+## Reproduce the native controlled-task lane
+
+Use an **external** UP Apple build directory. MetaMake scans the source tree,
+including ignored directories, so placing build output under `artifacts/`
+causes generated makefiles to be mistaken for source. Initialize the pinned
+`rom/dos/catalogs` submodule before the build; `locale.library` needs its
+`catalog_version.h`. The AROS compiler prefix must have verified compiler-rt
+builtins; this runner does not install or modify that toolchain.
+
+After configuring `--target=apple-aarch64 --with-toolchain=llvm
+--with-aros-toolchain=yes --with-aros-toolchain-install=PREFIX --without-x`,
+run `gmake -j2 apple-boot-payloads` in that external directory. Then:
+
+```sh
+python3 developer/debug/test/aarch64-protection/native.py \
+  --build /absolute/path/to/apple-build \
+  --integration /absolute/path/to/aros-apple-silicon \
+  --toolchain /absolute/path/to/aros-crosstools \
+  --output developer/debug/test/aarch64-protection/artifacts/native
+```
+
+The runner needs QEMU, `dtc`'s `fdtput`, GNU make and the integration loader's
+LLVM/LLD tools. `--firmware` overrides the Homebrew EDK2 default. It compiles
+the integration UEFI loader into its own output, builds the CLI ABI probe
+against this native SDK, packages the same 20 components as the integration
+base recipe, and injects the opt-in property into a private DTB. It never
+rebuilds or writes the integration checkout. The ABI producer is native;
+this does not claim parity with the separately locked hosted ABI corpus.
+
+`result.json`, `inputs.json`, `prepare.log`, `runner.log` and `run/` retain
+commands, component/firmware hashes and serial/semihost/QEMU evidence. A short
+transient directory avoids the UNIX socket path limit; evidence is copied
+back before cleanup. Acceptance requires each control/guard/continuation,
+B2A and B2Q marker exactly once, in order, exit zero and an empty QEMU trace.
+Every-task allocation, general overflow termination and SMP remain open as
+listed above.
+
 ## Provenance
 
 Implementation is original APL 1.1 code. Architectural facts: Arm DDI 0487,

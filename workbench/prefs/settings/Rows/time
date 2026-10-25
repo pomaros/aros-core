@@ -1,0 +1,7 @@
+group region
+order 20
+class TimeEditor.mcc
+name Date and time
+description The system date and time, and the time zone whose summer time the clock follows
+keywords date time clock calendar hour minute time zone timezone summer time daylight saving utc gmt
+level novice

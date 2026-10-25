@@ -4,8 +4,7 @@
     C99 function free().
 */
 
-#include "__stdc_intbase.h"
-#include "__memalign.h"
+#include "__malloc.h"
 
 #include <exec/memory.h>
 #include <proto/exec.h>
@@ -32,6 +31,9 @@
         None.
 
     NOTES
+        An allocation may be freed through a different stdc opener. Its
+        originating opener must remain open until the allocation is freed;
+        closing that opener still destroys its pool and outstanding blocks.
 
     EXAMPLE
 
@@ -46,22 +48,8 @@
 {
     if (memory)
     {
-        struct StdCIntBase *StdCBase = (struct StdCIntBase *)__aros_getbase_StdCBase();
-
-        unsigned char *mem;
-        size_t         size;
-
-        mem = ((UBYTE *)memory) - AROS_ALIGN(sizeof(size_t));
-
-        size = *((size_t *) mem);
-        if (size == MEMALIGN_MAGIC) {
-            mem -= AROS_ALIGN(sizeof(void *));
-            free(((void **) mem)[0]);
-        }
-        else {
-            size += AROS_ALIGN(sizeof(size_t));
-            FreePooled (StdCBase->mempool, mem, size);
-        }
+        struct __stdc_malloc_header *header = __stdc_allocation_header(memory);
+        FreePooled(header->pool, header->allocation, header->allocation_size);
     }
 
 } /* free */

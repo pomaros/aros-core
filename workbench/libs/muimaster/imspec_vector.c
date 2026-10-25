@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * Licensed under the AROS Public License (APL) Version 1.1. */
 /*
     Copyright (C) 2003, The AROS Development Team.
     All rights reserved.
@@ -34,125 +36,53 @@ static void draw_thick_line(struct RastPort *rp, int x1, int y1, int x2,
 #define VERTARROW_VSPACING ARROW_VSPACING
 #define HORIZARROW_HSPACING ARROW_HSPACING
 
+/* Arrow geometry and stroke are physical, independently rounded from logical
+ * points. Combining a two-point stroke before conversion avoids doubling the
+ * rounding error at fractional scales (e.g.150% means three physicalpixels). */
+static void arrow_line(struct MUI_RenderInfo *mri, LONG x0, LONG y0,
+    LONG x1, LONG y1, LONG stroke)
+{
+    LONG x, y;
+    for (y = 0; y < stroke; ++y) for (x = 0; x < stroke; ++x)
+    {
+        Move(mri->mri_RastPort, x0 + x, y0 + y);
+        Draw(mri->mri_RastPort, x1 + x, y1 + y);
+    }
+}
+static void arrow_draw(struct MUI_RenderInfo *mri, LONG left, LONG top,
+    LONG width, LONG height, ULONG direction)
+{
+    ULONG scale = zune_render_scale(mri);
+    LONG margin = zune_scale_value(1, scale), stroke = zune_scale_value(2, scale);
+    LONG x0 = left + margin, y0 = top + margin;
+    LONG x1 = left + width - margin - stroke, y1 = top + height - margin - stroke;
+    LONG cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    if (x1 < x0 || y1 < y0) return;
+    SetAPen(mri->mri_RastPort, mri->mri_Pens[MPEN_TEXT]);
+    switch (direction)
+    {
+    case 0:
+        arrow_line(mri,x0,y1,cx,y0,stroke); arrow_line(mri,cx,y0,x1,y1,stroke); break;
+    case 1:
+        arrow_line(mri,x0,y0,cx,y1,stroke); arrow_line(mri,cx,y1,x1,y0,stroke); break;
+    case 2:
+        arrow_line(mri,x1,y0,x0,cy,stroke); arrow_line(mri,x0,cy,x1,y1,stroke); break;
+    default:
+        arrow_line(mri,x0,y0,x1,cy,stroke); arrow_line(mri,x1,cy,x0,y1,stroke); break;
+    }
+}
 void arrowup_draw(struct MUI_RenderInfo *mri, LONG left, LONG top,
     LONG width, LONG height, LONG state)
-{
-    int cx;
-    struct RastPort *rport = mri->mri_RastPort;
-
-    SetAPen(rport, mri->mri_Pens[MPEN_TEXT]);
-
-    cx = width / 2;
-
-    if ((width > 8 + ARROW_SPACING) && (height > 8 + ARROW_SPACING))
-    {
-        Move(rport, left + ARROW_HSPACING + 1,
-            top + height - 1 - VERTARROW_VSPACING);
-        Draw(rport, left + width - cx, top + VERTARROW_VSPACING);
-    }
-    Move(rport, left + ARROW_HSPACING,
-        top + height - 1 - VERTARROW_VSPACING);
-    Draw(rport, left + width - cx - 1, top + VERTARROW_VSPACING);
-    if ((width > 8 + ARROW_SPACING) && (height > 8 + ARROW_SPACING))
-    {
-        Move(rport, left + width - 1 - ARROW_HSPACING - 1,
-            top + height - 1 - VERTARROW_VSPACING);
-        Draw(rport, left + cx - 1, top + VERTARROW_VSPACING);
-    }
-    Move(rport, left + width - 1 - ARROW_HSPACING,
-        top + height - 1 - VERTARROW_VSPACING);
-    Draw(rport, left + cx, top + VERTARROW_VSPACING);
-}
-
+{ arrow_draw(mri,left,top,width,height,0); }
 void arrowdown_draw(struct MUI_RenderInfo *mri, LONG left, LONG top,
     LONG width, LONG height, LONG state)
-{
-    int cx;
-    struct RastPort *rport = mri->mri_RastPort;
-
-    SetAPen(rport, mri->mri_Pens[MPEN_TEXT]);
-
-    cx = width / 2;
-
-    if ((width > 8 + ARROW_SPACING) && (height > 8 + ARROW_SPACING))
-    {
-        Move(rport, left + ARROW_HSPACING + 1, top + VERTARROW_VSPACING);
-        Draw(rport, left + width - cx,
-            top + height - 1 - VERTARROW_VSPACING);
-    }
-    Move(rport, left + ARROW_HSPACING, top + VERTARROW_VSPACING);
-    Draw(rport, left + width - cx - 1,
-        top + height - 1 - VERTARROW_VSPACING);
-    if ((width > 8 + ARROW_SPACING) && (height > 8 + ARROW_SPACING))
-    {
-        Move(rport, left + width - 1 - ARROW_HSPACING - 1,
-            top + VERTARROW_VSPACING);
-        Draw(rport, left + cx - 1, top + height - 1 - VERTARROW_VSPACING);
-    }
-    Move(rport, left + width - 1 - ARROW_HSPACING,
-        top + VERTARROW_VSPACING);
-    Draw(rport, left + cx, top + height - 1 - VERTARROW_VSPACING);
-}
-
+{ arrow_draw(mri,left,top,width,height,1); }
 void arrowleft_draw(struct MUI_RenderInfo *mri, LONG left, LONG top,
     LONG width, LONG height, LONG state)
-{
-    int cy;
-    struct RastPort *rport = mri->mri_RastPort;
-
-    SetAPen(rport, mri->mri_Pens[MPEN_TEXT]);
-
-    cy = height / 2;
-
-    if ((height > 8 + ARROW_SPACING) && (width > 8 + ARROW_SPACING))
-    {
-        Move(rport, left + width - 1 - HORIZARROW_HSPACING,
-            top + ARROW_VSPACING + 1);
-        Draw(rport, left + HORIZARROW_HSPACING, top + height - cy);
-    }
-    Move(rport, left + width - 1 - HORIZARROW_HSPACING,
-        top + ARROW_VSPACING);
-    Draw(rport, left + HORIZARROW_HSPACING, top + height - cy - 1);
-    if ((height > 8 + ARROW_SPACING) && (width > 8 + ARROW_SPACING))
-    {
-        Move(rport, left + width - 1 - HORIZARROW_HSPACING,
-            top + height - 1 - ARROW_VSPACING - 1);
-        Draw(rport, left + HORIZARROW_HSPACING, top + cy - 1);
-    }
-    Move(rport, left + width - 1 - HORIZARROW_HSPACING,
-        top + height - 1 - ARROW_VSPACING);
-    Draw(rport, left + HORIZARROW_HSPACING, top + cy);
-}
-
+{ arrow_draw(mri,left,top,width,height,2); }
 void arrowright_draw(struct MUI_RenderInfo *mri, LONG left, LONG top,
     LONG width, LONG height, LONG state)
-{
-    int cy;
-    struct RastPort *rport = mri->mri_RastPort;
-
-    SetAPen(rport, mri->mri_Pens[MPEN_TEXT]);
-
-    cy = height / 2;
-
-    if ((height > 8 + ARROW_SPACING) && (width > 8 + ARROW_SPACING))
-    {
-        Move(rport, left + HORIZARROW_HSPACING, top + ARROW_VSPACING + 1);
-        Draw(rport, left + width - 1 - HORIZARROW_HSPACING,
-            top + height - cy);
-    }
-    Move(rport, left + HORIZARROW_HSPACING, top + ARROW_VSPACING);
-    Draw(rport, left + width - 1 - HORIZARROW_HSPACING,
-        top + height - cy - 1);
-    if ((height > 8 + ARROW_SPACING) && (width > 8 + ARROW_SPACING))
-    {
-        Move(rport, left + HORIZARROW_HSPACING,
-            top + height - 1 - ARROW_VSPACING - 1);
-        Draw(rport, left + width - 1 - HORIZARROW_HSPACING, top + cy - 1);
-    }
-    Move(rport, left + HORIZARROW_HSPACING,
-        top + height - 1 - ARROW_VSPACING);
-    Draw(rport, left + width - 1 - HORIZARROW_HSPACING, top + cy);
-}
+{ arrow_draw(mri,left,top,width,height,3); }
 
 void checkbox_draw(struct MUI_RenderInfo *mri, LONG left, LONG top,
     LONG width, LONG height, LONG state)

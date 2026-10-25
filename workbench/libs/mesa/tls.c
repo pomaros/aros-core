@@ -5,6 +5,7 @@
 #include "tls.h"
 
 #include <proto/exec.h>
+#include <proto/task.h>
 
 struct TaskLocalNode
 {
@@ -128,4 +129,41 @@ VOID DestroyTLS(struct TaskLocalStorage * tls)
     }
 
     FreeVec(tls);
+}
+
+/* glapi's current dispatch table and context (core.c), one pair per task,
+   in task.resource storage slots: a slot reads 0 in a task that never set
+   it, goes with the task, and DOS RunCommand saves and restores the slots
+   around a command, so a GL program run from a Shell leaves nothing behind
+   in the Shell. */
+APTR TaskResBase;
+static LONG mesa_task_slots[2];
+
+static LONG mesa_task_slot(int which)
+{
+    if (mesa_task_slots[which] == 0)
+    {
+        Forbid();
+        if (TaskResBase == NULL)
+            TaskResBase = OpenResource((CONST_STRPTR)"task.resource");
+        if (mesa_task_slots[which] == 0 && TaskResBase != NULL)
+            mesa_task_slots[which] = AllocTaskStorageSlot();
+        Permit();
+    }
+    return mesa_task_slots[which];
+}
+
+void *AROSMesaGetTaskSlot(int which)
+{
+    LONG id = mesa_task_slot(which);
+
+    return id != 0 ? (void *)GetTaskStorageSlot(id) : NULL;
+}
+
+void AROSMesaSetTaskSlot(int which, void *value)
+{
+    LONG id = mesa_task_slot(which);
+
+    if (id != 0)
+        SetTaskStorageSlot(id, (IPTR)value);
 }

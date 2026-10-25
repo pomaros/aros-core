@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2007, The AROS Development Team. All rights reserved.
 
     Desc:
@@ -32,7 +33,10 @@
     INPUTS
         screen -  pointer to the screen to create a visual info structure for
                   (may be NULL)
-        taglist - additional tags (none defined, yet)
+        taglist - GTVI_RenderContext supplies one immutable context already
+                  sampled by the caller; GTVI_Logical selects its logical view.
+                  With no context the traditional logical contract is used.
+                  FreeVisualInfo never releases borrowed context metadata.
 
     RESULT
         A (private) visual info structure. NULL indicates an error.
@@ -64,7 +68,16 @@
         return NULL;
 
     vi->vi_screen = screen;
-    vi->vi_dri = GetScreenDrawInfo(screen);
+    vi->vi_dri = NULL;
+    vi->vi_context = (const struct ScreenRenderContext *)GetTagData(GTVI_RenderContext, 0, tagList);
+    vi->vi_logical = GetTagData(GTVI_Logical, FALSE, tagList) != 0;
+    if (vi->vi_context)
+        vi->vi_dri = vi->vi_logical ? vi->vi_context->src_LogicalDrawInfo :
+            vi->vi_context->src_PhysicalDrawInfo;
+    else
+        vi->vi_dri = GetScreenDrawInfo(screen);
+    if (!vi->vi_dri || (vi->vi_context && vi->vi_dri->dri_Screen != screen))
+    { FreeVec(vi); return NULL; }
 
     return vi;
 

@@ -27,8 +27,13 @@ void RefreshPropGadgetKnob (struct Gadget * gadget, struct BBox * clear,
                             struct BBox * knob, struct Window * window, struct Requester * requester,
                             struct IntuitionBase * IntuitionBase);
 
+struct PropInputPosition;
+const struct PropInputPosition *PropInputForMessage(struct Gadget *,
+    const struct gpInput *, struct IntuitionBase *);
+
 VOID HandlePropSelectDown (struct Gadget *gadget, struct Window *win,
                            struct Requester *req, UWORD mouse_x, UWORD mouse_y,
+                           const struct PropInputPosition *position,
                            struct IntuitionBase *IntuitionBase);
 
 VOID HandlePropSelectUp (struct Gadget *gadget, struct Window *w,
@@ -36,5 +41,6 @@ VOID HandlePropSelectUp (struct Gadget *gadget, struct Window *w,
 
 VOID HandlePropMouseMove (struct Gadget *gadget, struct Window *w,
                           struct Requester *req, LONG dx, LONG dy,
+                          const struct PropInputPosition *position,
                           struct IntuitionBase *IntuitionBase);
 #endif /* _PROPGADGETS_H_ */

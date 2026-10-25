@@ -17,6 +17,7 @@ NIXFILES := \
 
 FILES := \
 	startup \
+	dlmodule-startup \
 	cxx-startup \
 	detach  \
 	elf-startup \

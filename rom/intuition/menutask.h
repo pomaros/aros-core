@@ -2,6 +2,7 @@
 #define MENUTASK_H
 
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright  1995-2018, The AROS Development Team. All rights reserved.
     Copyright  2001-2003, The MorphOS Development Team. All Rights Reserved.
     $Id$
@@ -20,6 +21,8 @@
 
 #define AMIGAKEY_KEY_SPACING    4 /* GadTools assumes this, too */
 #define AMIGAKEY_BORDER_SPACING 2
+
+#include "menuscale.h"
 
 #ifdef SKINS
 #include "intuition_intern.h"
@@ -73,6 +76,11 @@ struct MenuHandlerData
 
 struct MenuHandlerData
 {
+    struct MenuScaleGeneration *generation;
+    const struct MenuScaleView *view;
+    struct MsgPort *scaleport;
+    BOOL presentationFailed;
+    BOOL barDecorReady, decorReady, subDecorReady;
     struct Window   	*win;
     struct Screen   	*scr;
     struct DrawInfo 	*dri;

@@ -25,6 +25,9 @@ extern struct ExecBase *SysBase;
 
 static const char boot_memory_name[] = "Apple boot memory";
 #include "cpu_monitor.h"
+#if defined(__AROSEXEC_SMP__)
+#include "../exec/tls.h"
+#endif
 
 static uintptr_t retained_boot_image_start;
 static uint64_t retained_boot_image_size;
@@ -284,6 +287,8 @@ enum AROSAppleKernelStartupStatus AROSAppleKernelPrepareMemory(
     /* Firmware does not own our CPU anchor. Clear it before any possible
      * Exec access; the monitor binds a validated record before activation. */
     __asm__ volatile("msr tpidrro_el0,xzr\n\tisb" ::: "memory");
+    /* Firmware TLS does not belong to the initial AROS task. */
+    __asm__ volatile("msr tpidr_el0,xzr\n\tisb" ::: "memory");
 
     if (tags == NULL || state == NULL ||
         ((uintptr_t)state & 15U) != 0)
@@ -335,6 +340,8 @@ enum AROSAppleKernelStartupStatus AROSAppleKernelPrepareMemory(
                 (const void *)(uintptr_t)fdt_address, fdt_size);
             AROSAppleKernelRecordIdentity();
             AROSCPUInitMonitor((const void *)(uintptr_t)fdt_address, fdt_size);
+            AROSAppleKernelDebugSelectEvidenceChannel(
+                (const void *)(uintptr_t)fdt_address, fdt_size);
             AROSAppleKernelDebugSelectVirtConsole(
                 (const void *)(uintptr_t)fdt_address, fdt_size);
         } else {
@@ -346,6 +353,11 @@ enum AROSAppleKernelStartupStatus AROSAppleKernelPrepareMemory(
      * Preserve a typed boot failure instead of trapping during allocation. */
     if (AROSCPUCurrentIndex() == AROS_CPU_MAX)
         return fail(state, AROS_APPLE_KERNEL_STARTUP_CPU_BIND, 0);
+#if defined(__AROSEXEC_SMP__)
+    if (AROSCPUCurrentIndex() >= 32 ||
+        AROSAppleRuntimeLocal()->exec_smp_api == NULL)
+        return fail(state, AROS_APPLE_KERNEL_STARTUP_CPU_BIND, 1);
+#endif
     retained_boot_image_start = (uintptr_t)boot_image_start;
     retained_boot_image_size = boot_image_size;
     retained_payload_identity = state->payload_identity;
@@ -436,6 +448,9 @@ enum AROSAppleKernelStartupStatus AROSAppleKernelInitializeExec(
     if (SysBase != sys_base)
         return fail(state, AROS_APPLE_KERNEL_STARTUP_SYSBASE, 0);
 
+#if defined(__AROSEXEC_SMP__)
+    TLS_SET(SysBase, sys_base);
+#endif
     sys_base->ResModules = resident_list;
     if (memory_header->mh_Node.ln_Succ == NULL ||
         memory_header->mh_Node.ln_Pred == NULL ||
@@ -494,9 +509,18 @@ enum AROSAppleKernelStartupStatus AROSAppleKernelInitializeSingleTask(
     memory_header = (struct MemHeader *)(uintptr_t)state->memory_header;
     free_before = memory_header->mh_Free;
     state->phase = AROS_APPLE_KERNEL_PHASE_SINGLE_TASK_INIT;
+#if defined(__AROSEXEC_SMP__)
+    /* Exec vectors exist; initialize queues before any resource init can
+     * enqueue or cancel an IPI. Secondary admission happens much later. */
+    extern void core_IPIInit(void);
+    core_IPIInit();
+#endif
     InitCode(RTF_SINGLETASK, 0);
     if (KernelBase == NULL)
         return fail(state, AROS_APPLE_KERNEL_STARTUP_SINGLE_TASK_INIT, 0);
+#if defined(__AROSEXEC_SMP__)
+    AROSCPUAttachExec(SysBase, KernelBase);
+#endif
     if (KernelBase->kb_Node.ln_Type != NT_RESOURCE ||
         KernelBase->kb_Node.ln_Name == NULL ||
         !startup_name_equal(KernelBase->kb_Node.ln_Name,

@@ -57,6 +57,8 @@ asm (
     ".globl start\n\t"
     ".type start,%function\n"
     "start:\n"
+    "           msr     tpidr_el0, xzr          \n"
+    "           isb                             \n"
     "           mov     x20, x0                  \n" /* Save TagItem pointer */
     "           bl      __clear_bss              \n"
     "           mov     x0, x20                  \n" /* Restore TagItem pointer */

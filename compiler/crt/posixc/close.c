@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <libraries/fd.h>
 #include "__fdesc.h"
+#include "__reclock.h"
 
 /*****************************************************************************
 
@@ -55,26 +56,14 @@
     __fdesc_lock();
     if (!(fdesc = __getfdesc(fd)))
     {
-        /* Not a local posixc file descriptor: dispatch to the owning
-           subsystem's close hook (e.g. a bsdsocket socket).  The owner
-           releases its own fd.library reservation. */
-        APTR data;
-        const struct fd_hooks *hooks;
+        /* Not a local posixc file descriptor: the owning subsystem's hook
+           closes it (e.g. a bsdsocket socket). */
+        LONG err = 0;
+        int result;
         __fdesc_unlock();
-        hooks = __getfdhooks(fd, &data);
-        if (hooks && hooks->fdh_close)
-        {
-            LONG err = 0;
-            if (hooks->fdh_close(data, fd, &err) < 0)
-            {
-                errno = err;
-                return -1;
-            }
-            return 0;
-        }
-        errno = EBADF;
-
-        return -1;
+        result = __fdhook(fd, __FDH_CLOSE, 0, 0, 0, &err);
+        if (result < 0) errno = err;
+        return result;
     }
 
     cblock = fdesc->fcb;
@@ -82,6 +71,9 @@
     lastclose = (--cblock->opencount == 0);
     __setfdesc(fd, NULL);
     __fdesc_unlock();
+    /* Closing any descriptor of a file releases the process's record locks
+       on it; the descriptor is out of the table and still allocated. */
+    __posixc_reclock_close(fdesc, lastclose);
     __free_fdesc(fdesc);
 
     if (lastclose)

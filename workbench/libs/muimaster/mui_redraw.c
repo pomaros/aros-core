@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * Licensed under the AROS Public License (APL) Version 1.1. */
 /*
     Copyright (C) 2003-2023, The AROS Development Team. All rights reserved.
 */
@@ -54,6 +56,19 @@
     IPTR disabled = 0;
 
     if (!(_flags(obj) & MADF_CANDRAW)) return;
+    /* A newly inserted custom child or changed external resource cannot draw
+     * once in physical coordinates before its whole window falls back. */
+    {
+        struct MUI_RenderInfo *mri = muiRenderInfo(obj);
+        if (mri && mri->mri_ScaleAware && mri->mri_WindowObject &&
+            !zune_object_scale_aware(obj, MUIMasterBase))
+        {
+            /* Drawing can be entered with a native layer already locked. Never
+             * synchronously reopen/reveal from this call stack. */
+            DoMethod(mri->mri_WindowObject, MUIM_Window_RequestScaleContext);
+            return;
+        }
+    }
 
     if (_flags(obj) & MADF_INVIRTUALGROUP)
     {

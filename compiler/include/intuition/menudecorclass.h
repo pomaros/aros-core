@@ -2,6 +2,7 @@
 #define INTUITION_MENUDECORCLASS_H
 
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright  1995-2011, The AROS Development Team. All rights reserved.
     $Id$
 
@@ -42,6 +43,20 @@
 #define MDM_DRAWBACKGROUND          (MDM_Dummy + 4)
 #define MDM_INITMENU                (MDM_Dummy + 5)
 #define MDM_EXITMENU                (MDM_Dummy + 6)
+#define MDM_GETSCALESPACES          (MDM_Dummy + 7)
+#define MDM_GETSCALEDEFSIZE_SYSIMAGE (MDM_Dummy + 8)
+#define MDM_DRAWSCALE_SYSIMAGE      (MDM_Dummy + 9)
+#define MDM_RELEASESCALE_SYSIMAGE   (MDM_Dummy + 10)
+#define MDM_INITSCALEMENU           (MDM_Dummy + 11)
+#define MDM_QUERYCAPABILITIES       (MDM_Dummy + 12)
+
+/* Pure, context-free exact-provider query. Unsupported providers return zero;
+ * failure of a supported typed prepare must never imply fallback. */
+#define MDM_CAP_SCALE              (1UL << 0)
+struct mdpQueryCapabilities
+{
+    STACKED ULONG MethodID;
+};
 
 struct mdpGetDefSizeSysImage
 {
@@ -140,5 +155,48 @@ struct mdpExitMenu
 #define MDP_MDF_ITEM                (1<<1)
 #define MDP_MDF_SUBITEM             (1<<2)
 #define MDP_MDF_MENUS_UNDERMOUSE    (1<<7)
+
+/* Typed image preparation results: UNAVAILABLE permits the caller to use
+ * built-in vectors; FAILED includes OOM and must never silently fall back. */
+#define MDP_SCALE_FAILED 0
+#define MDP_SCALE_READY 1
+#define MDP_SCALE_UNAVAILABLE 2
+
+/* Explicit immutable-context methods. Exact built-in/shipped classes opt in;
+ * unknown subclasses must not inherit acceptance. Existing message sizes
+ * remain unchanged. Inputs/outputs in base use the declared render domain. */
+struct ScreenRenderContext;
+struct mdpGetScaleSpaces
+{
+    struct mdpGetMenuSpaces base;
+    STACKED const struct ScreenRenderContext *context;
+    STACKED BOOL logical;
+};
+struct mdpGetScaleDefSizeSysImage
+{
+    struct mdpGetDefSizeSysImage base;
+    STACKED const struct ScreenRenderContext *context;
+    STACKED BOOL logical;
+    STACKED ULONG requestedWidth, requestedHeight; /* zero selects auto */
+    STACKED APTR *prepared; /* independent owned resource; release with provider */
+};
+struct mdpDrawScaleSysImage
+{
+    struct mdpDrawSysImage base;
+    STACKED const struct ScreenRenderContext *context;
+    STACKED BOOL logical;
+    STACKED APTR prepared;
+};
+struct mdpInitScaleMenu
+{
+    struct mdpInitMenu base;
+    STACKED const struct ScreenRenderContext *context;
+    STACKED BOOL logical;
+};
+struct mdpReleaseScaleSysImage
+{
+    STACKED ULONG MethodID;
+    STACKED APTR prepared;
+};
 
 #endif /* INTUITION_MENUDECORCLASS_H */

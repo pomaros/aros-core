@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * Licensed under the AROS Public License (APL) Version 1.1. */
 /*
     Copyright (C) 2003-2023, The AROS Development Team. All rights reserved.
 */
@@ -155,13 +157,12 @@ enum
 /****** String.mui/MUIA_String_BufferPos *************************************
 *
 *   NAME
-*       MUIA_String_BufferPos -- (V4) [ISG], STRPTR
+*       MUIA_String_BufferPos -- (V4) [ISG], LONG
 *
 *   FUNCTION
 *       The cursor's position relative to the start of the string.
 *
 *   NOTES
-*       The MUI AutoDocs claim this attribute is not initialisable.
 *
 ******************************************************************************
 *
@@ -2252,6 +2253,11 @@ BOOPSI_DISPATCHER(IPTR, String_Dispatcher, cl, obj, msg)
 {
     switch (msg->MethodID)
     {
+    case MUIM_ScaleContextSupported:
+        return DoSuperMethodA(cl, obj, msg) &&
+            (!((struct MUI_StringData *)INST_DATA(cl, obj))->msd_EditHook || muiAreaData(obj)->mad_ScaleAwareHooks) &&
+            zune_imspec_scale_supported(obj, (IPTR)muiGlobalInfo(obj)->mgi_Prefs->string_bg_active) &&
+            zune_imspec_scale_supported(obj, (IPTR)muiGlobalInfo(obj)->mgi_Prefs->string_bg_inactive);
     case OM_NEW:
         return String__OM_NEW(cl, obj, (struct opSet *)msg);
     case OM_DISPOSE:
@@ -2301,5 +2307,6 @@ const struct __MUIBuiltinClass _MUI_String_desc =
     MUIC_String,
     MUIC_Area,
     sizeof(struct MUI_StringData),
-    (void *)String_Dispatcher
+    (void *)String_Dispatcher,
+    MUI_CLASS_SCALE_AWARE
 };

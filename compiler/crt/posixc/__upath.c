@@ -349,6 +349,9 @@ static const char *__path_devstuff_u2a(const char *path)
             if (path[5] == 'z' && path[6] == 'e' && path[7] == 'r' && path[8] == 'o' && path[9] == '\0')
                 return "ZERO:";
             else
+            if (strcmp(path + 5, "urandom") == 0 || strcmp(path + 5, "random") == 0)
+                return "RANDOM:";
+            else
             if (path[5] == 's' && path[6] == 't' && path[7] == 'd')
             {
                 if (path[8] == 'i' && path[9] == 'n' && path[10] == '\0')

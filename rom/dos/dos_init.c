@@ -189,7 +189,11 @@ AROS_UFH3S(struct DosLibrary *, DosInit,
 
         /* initialize segment data list */
         NEWLIST(&((struct IntDosBase *)DOSBase)->segdata);
+        NEWLIST(&((struct IntDosBase *)DOSBase)->handlerStarts);
         InitSemaphore(&((struct IntDosBase *)DOSBase)->segsem);
+#ifdef __aarch64__
+        InitSemaphore(&((struct IntDosBase *)DOSBase)->tlsSem);
+#endif
         taskarray = AllocMem(sizeof(IPTR) + sizeof(APTR) * 20, MEMF_CLEAR);
         if (!taskarray)
         {

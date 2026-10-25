@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 2016-2026, The AROS Development Team. All rights reserved.
 
     Desc: Graphics display class implementation.
@@ -95,9 +96,9 @@ static UBYTE get_fbmode(OOP_Class *cl, OOP_Object *o)
  *
  * These helpers render the mouse pointer in software for display drivers that
  * have no hardware sprite (e.g. vesagfx, vgagfx). The pointer is alpha
- * composited onto the bitmap that is currently scanned out (data->cursor_bm).
+ * composited onto the bitmap that is currently scanned out (data->cursor.cursor_bm).
  * The pixels under the pointer are first copied into a save-under bitmap
- * (data->cursor_backup) so they can be restored when the pointer moves or is
+ * (data->cursor.cursor_backup) so they can be restored when the pointer moves or is
  * hidden. All callers must hold data->fbsem.
  */
 
@@ -107,20 +108,20 @@ static void cursor_Erase(OOP_Class *cl, OOP_Object *o)
     struct Library *OOPBase = CSD(cl)->cs_OOPBase;
     struct HIDDDisplayData *data = OOP_INST_DATA(cl, o);
 
-    if (!data->cursor_drawn || !data->cursor_bm || !data->cursor_backup)
+    if (!data->cursor.cursor_drawn || !data->cursor.cursor_bm || !data->cursor.cursor_backup)
         return;
 
     /* Raw native-format restore: a colour-space CopyBox on a palettized
        target degrades to a nearest-colour search per pixel */
-    HIDD_BM_PutImage(data->cursor_bm, data->gc, data->cursor_backup,
-                     data->cursor_backupW * data->cursor_backup_bpp,
-                     data->cursor_backupX, data->cursor_backupY,
-                     data->cursor_backupW, data->cursor_backupH,
+    HIDD_BM_PutImage(data->cursor.cursor_bm, data->gc, data->cursor.cursor_backup,
+                     data->cursor.cursor_backupW * data->cursor.cursor_backup_bpp,
+                     data->cursor.cursor_backupX, data->cursor.cursor_backupY,
+                     data->cursor.cursor_backupW, data->cursor.cursor_backupH,
                      vHidd_StdPixFmt_Native);
-    HIDD_BM_UpdateRect(data->cursor_bm, data->cursor_backupX, data->cursor_backupY,
-                       data->cursor_backupW, data->cursor_backupH);
+    HIDD_BM_UpdateRect(data->cursor.cursor_bm, data->cursor.cursor_backupX, data->cursor.cursor_backupY,
+                       data->cursor.cursor_backupW, data->cursor.cursor_backupH);
 
-    data->cursor_drawn = FALSE;
+    data->cursor.cursor_drawn = FALSE;
 }
 
 /* Save the area under the cursor and alpha-composite the pointer image. */
@@ -134,13 +135,13 @@ static void cursor_Draw(OOP_Class *cl, OOP_Object *o)
     ULONG modulo;
     UBYTE *pixels;
 
-    if (data->cursor_drawn || !data->cursor_visible)
+    if (data->cursor.cursor_drawn || !data->cursor.cursor_visible)
         return;
-    if (!data->cursor_bm || !data->cursor_argb || !data->cursor_backup)
+    if (!data->cursor.cursor_bm || !data->cursor.cursor_argb || !data->cursor.cursor_backup)
         return;
 
-    OOP_GetAttr(data->cursor_bm, aHidd_BitMap_Width, &fbw);
-    OOP_GetAttr(data->cursor_bm, aHidd_BitMap_Height, &fbh);
+    OOP_GetAttr(data->cursor.cursor_bm, aHidd_BitMap_Width, &fbw);
+    OOP_GetAttr(data->cursor.cursor_bm, aHidd_BitMap_Height, &fbh);
 
     /*
      * The pointer position arrives in display coordinates, but it is composited
@@ -149,20 +150,20 @@ static void cursor_Draw(OOP_Class *cl, OOP_Object *o)
      * subtracting that offset. This keeps cursor_drawX/Y in bitmap space, which
      * the CursorFB bracket intersection test also relies on.
      */
-    OOP_GetAttr(data->cursor_bm, aHidd_BitMap_LeftEdge, &le);
-    OOP_GetAttr(data->cursor_bm, aHidd_BitMap_TopEdge, &te);
+    OOP_GetAttr(data->cursor.cursor_bm, aHidd_BitMap_LeftEdge, &le);
+    OOP_GetAttr(data->cursor.cursor_bm, aHidd_BitMap_TopEdge, &te);
 
-    data->cursor_drawX = data->cursor_mouseX + data->cursor_xoffset - (LONG)le;
-    data->cursor_drawY = data->cursor_mouseY + data->cursor_yoffset - (LONG)te;
-
-    x = data->cursor_drawX;
-    y = data->cursor_drawY;
-    w = data->cursor_w;
-    h = data->cursor_h;
-
-    /* Fully off-screen? Nothing to do. */
-    if ((x <= -w) || (y <= -h) || (x >= (LONG)fbw) || (y >= (LONG)fbh))
-        return;
+    {
+        QUAD dx = (QUAD)data->cursor.cursor_mouseX + data->cursor.cursor_xoffset - (LONG)le;
+        QUAD dy = (QUAD)data->cursor.cursor_mouseY + data->cursor.cursor_yoffset - (LONG)te;
+        w = data->cursor.cursor_w;
+        h = data->cursor.cursor_h;
+        /* Check in the wide domain before narrowing extreme custom offsets. */
+        if (dx <= -(QUAD)w || dy <= -(QUAD)h || dx >= (QUAD)fbw || dy >= (QUAD)fbh)
+            return;
+        data->cursor.cursor_drawX = x = dx;
+        data->cursor.cursor_drawY = y = dy;
+    }
 
     /* Clip against the display edges */
     if (x < 0) { ox = -x; w += x; x = 0; }
@@ -173,25 +174,25 @@ static void cursor_Draw(OOP_Class *cl, OOP_Object *o)
         return;
 
     /* Save the pixels we are about to overwrite */
-    HIDD_BM_GetImage(data->cursor_bm, data->cursor_backup,
-                     w * data->cursor_backup_bpp,
+    HIDD_BM_GetImage(data->cursor.cursor_bm, data->cursor.cursor_backup,
+                     w * data->cursor.cursor_backup_bpp,
                      x, y, w, h, vHidd_StdPixFmt_Native);
-    data->cursor_backupX = x;
-    data->cursor_backupY = y;
-    data->cursor_backupW = w;
-    data->cursor_backupH = h;
+    data->cursor.cursor_backupX = x;
+    data->cursor.cursor_backupY = y;
+    data->cursor.cursor_backupW = w;
+    data->cursor.cursor_backupH = h;
 
     /* Alpha-composite the pointer image on top */
-    modulo = data->cursor_w * 4;
-    pixels = data->cursor_argb + oy * modulo + ox * 4;
-    HIDD_BM_PutAlphaImage(data->cursor_bm, data->gc, pixels, modulo, x, y, w, h);
-    HIDD_BM_UpdateRect(data->cursor_bm, x, y, w, h);
+    modulo = data->cursor.cursor_w * 4;
+    pixels = data->cursor.cursor_argb + oy * modulo + ox * 4;
+    HIDD_BM_PutAlphaImage(data->cursor.cursor_bm, data->gc, pixels, modulo, x, y, w, h);
+    HIDD_BM_UpdateRect(data->cursor.cursor_bm, x, y, w, h);
 
-    data->cursor_drawn = TRUE;
+    data->cursor.cursor_drawn = TRUE;
 }
 
 /*
- * (Re)assert the cursor onto data->cursor_bm: erase from the old location and
+ * (Re)assert the cursor onto data->cursor.cursor_bm: erase from the old location and
  * draw at the current location. Used after the pointer moves, the shape
  * changes, visibility changes or the shown bitmap changes.
  */
@@ -200,7 +201,7 @@ static void cursor_Refresh(OOP_Class *cl, OOP_Object *o)
     struct HIDDDisplayData *data = OOP_INST_DATA(cl, o);
 
     cursor_Erase(cl, o);
-    if (data->cursor_visible)
+    if (data->cursor.cursor_visible)
         cursor_Draw(cl, o);
 }
 
@@ -213,24 +214,27 @@ static BOOL cursor_AllocBackup(OOP_Class *cl, OOP_Object *o)
     OOP_Object *pf = NULL;
     IPTR bpp = 0;
 
-    if (data->cursor_backup)
+    ULONG size;
+    UBYTE *backup;
+    if (!data->cursor.cursor_bm || !data->cursor.cursor_w || !data->cursor.cursor_h)
+        return FALSE;
+    OOP_GetAttr(data->cursor.cursor_bm, aHidd_BitMap_PixFmt, (IPTR *)&pf);
+    if (pf) OOP_GetAttr(pf, aHidd_PixFmt_BytesPerPixel, &bpp);
+    if (!bpp || bpp > 4 || data->cursor.cursor_w >
+        (ULONG)-1 / data->cursor.cursor_h / bpp) return FALSE;
+    size = data->cursor.cursor_w * data->cursor.cursor_h * bpp;
+    if (data->cursor.cursor_backup && data->cursor.cursor_backup_size >= size)
     {
-        FreeVec(data->cursor_backup);
-        data->cursor_backup = NULL;
+        data->cursor.cursor_backup_bpp = bpp;
+        return TRUE;
     }
-
-    if (!data->cursor_bm || !data->cursor_w || !data->cursor_h)
-        return FALSE;
-
-    OOP_GetAttr(data->cursor_bm, aHidd_BitMap_PixFmt, (IPTR *)&pf);
-    if (pf)
-        OOP_GetAttr(pf, aHidd_PixFmt_BytesPerPixel, &bpp);
-    if (!bpp)
-        return FALSE;
-
-    data->cursor_backup_bpp = bpp;
-    data->cursor_backup = AllocVec(data->cursor_w * data->cursor_h * bpp, MEMF_ANY);
-    return (data->cursor_backup != NULL);
+    backup = AllocVec(size, MEMF_ANY);
+    if (!backup) return FALSE;
+    FreeVec(data->cursor.cursor_backup);
+    data->cursor.cursor_backup = backup;
+    data->cursor.cursor_backup_size = size;
+    data->cursor.cursor_backup_bpp = bpp;
+    return TRUE;
 }
 
 /*
@@ -252,7 +256,7 @@ static void cursor_SetTarget(OOP_Class *cl, OOP_Object *o, OOP_Object *bm)
     if (real)
         bm = real;
 
-    if (data->cursor_bm == bm)
+    if (data->cursor.cursor_bm == bm)
     {
         /*
          * Same target. Drawing that reaches the framebuffer goes through the
@@ -261,7 +265,7 @@ static void cursor_SetTarget(OOP_Class *cl, OOP_Object *o, OOP_Object *bm)
          * Drawing it again here would save a backup that contains the pointer
          * itself, leaving a copy behind on the next move (issue #999).
          */
-        if (!data->cursor_drawn && data->cursor_visible)
+        if (!data->cursor.cursor_drawn && data->cursor.cursor_visible)
             cursor_Draw(cl, o);
         return;
     }
@@ -269,14 +273,14 @@ static void cursor_SetTarget(OOP_Class *cl, OOP_Object *o, OOP_Object *bm)
     /* Switching target: remove the pointer from the old one first */
     cursor_Erase(cl, o);
 
-    data->cursor_drawn = FALSE;
-    data->cursor_bm = bm;
+    data->cursor.cursor_drawn = FALSE;
+    data->cursor.cursor_bm = bm;
 
     /* Backup bitmap is tied to the target's format, recreate it. */
     if (bm)
         cursor_AllocBackup(cl, o);
 
-    if (data->cursor_visible)
+    if (data->cursor.cursor_visible)
         cursor_Draw(cl, o);
 }
 
@@ -299,12 +303,12 @@ BOOL GfxDisplay_CursorIntersects(struct class_static_data *gcsd, OOP_Object *dis
     struct HIDDDisplayData *data = OOP_INST_DATA(gcsd->displayclass, display);
 
     /* Only the currently shown bitmap carries the pointer */
-    if (!data->cursor_drawn || (data->cursor_bm != bm))
+    if (!data->cursor.cursor_drawn || (data->cursor.cursor_bm != bm))
         return FALSE;
 
     /* Reject if the operation rectangle is entirely outside the pointer rectangle */
-    if ((x2 < data->cursor_drawX) || (x1 > data->cursor_drawX + data->cursor_w - 1) ||
-        (y2 < data->cursor_drawY) || (y1 > data->cursor_drawY + data->cursor_h - 1))
+    if ((x2 < data->cursor.cursor_drawX) || (x1 > data->cursor.cursor_drawX + data->cursor.cursor_w - 1) ||
+        (y2 < data->cursor.cursor_drawY) || (y1 > data->cursor.cursor_drawY + data->cursor.cursor_h - 1))
         return FALSE;
 
     return TRUE;
@@ -319,7 +323,7 @@ void GfxDisplay_CursorRender(struct class_static_data *gcsd, OOP_Object *display
 {
     struct HIDDDisplayData *data = OOP_INST_DATA(gcsd->displayclass, display);
 
-    if (data->cursor_visible)
+    if (data->cursor.cursor_visible)
         cursor_Draw(gcsd->displayclass, display);
 }
 
@@ -347,10 +351,10 @@ void GfxDisplay_CursorUntarget(struct class_static_data *gcsd, OOP_Object *displ
     struct HIDDDisplayData *data = OOP_INST_DATA(cl, display);
 
     ObtainSemaphore(&data->fbsem);
-    if (data->cursor_bm == bm)
+    if (data->cursor.cursor_bm == bm)
     {
         cursor_Erase(cl, display);
-        data->cursor_bm = NULL;
+        data->cursor.cursor_bm = NULL;
     }
     ReleaseSemaphore(&data->fbsem);
 }
@@ -398,13 +402,13 @@ OOP_Object *Display__Root__New(OOP_Class *cl, OOP_Object *o, struct pRoot_New *m
         data->gc = NULL;
         InitSemaphore(&data->fbsem);
 
-        data->cursor_bm = NULL;
-        data->cursor_backup = NULL;
-        data->cursor_argb = NULL;
-        data->cursor_w = 0;
-        data->cursor_h = 0;
-        data->cursor_visible = FALSE;
-        data->cursor_drawn = FALSE;
+        data->cursor.cursor_bm = NULL;
+        data->cursor.cursor_backup = NULL;
+        data->cursor.cursor_argb = NULL;
+        data->cursor.cursor_w = 0;
+        data->cursor.cursor_h = 0;
+        data->cursor.cursor_visible = FALSE;
+        data->cursor.cursor_drawn = FALSE;
 
         while ((tag = NextTagItem(&tstate)))
         {
@@ -469,10 +473,10 @@ VOID Display__Root__Dispose(OOP_Class *cl, OOP_Object *o, OOP_Msg msg)
         OOP_DisposeObject(data->gc);
     if (NULL != data->dmenum)
         OOP_DisposeObject(data->dmenum);
-    if (NULL != data->cursor_backup)
-        FreeVec(data->cursor_backup);
-    if (NULL != data->cursor_argb)
-        FreeVec(data->cursor_argb);
+    if (NULL != data->cursor.cursor_backup)
+        FreeVec(data->cursor.cursor_backup);
+    if (NULL != data->cursor.cursor_argb)
+        FreeVec(data->cursor.cursor_argb);
 
     OOP_DoSuperMethod(cl, o, msg);
 }
@@ -1411,72 +1415,158 @@ ULONG Display__Hidd_Display__ShowViewPorts(OOP_Class *cl, OOP_Object *o, struct 
 
 *****************************************************************************************/
 
-BOOL Display__Hidd_Display__SetCursorShape(OOP_Class *cl, OOP_Object *o,
-                                   struct pHidd_Display_SetCursorShape *msg)
+/* A detached shape owns both allocations before the visible pointer changes.
+ * The save-under reserves four bytes/pixel for all supported native targets. */
+static BOOL cursor_PrepareShape(OOP_Class *cl, OOP_Object *shape,
+    LONG xoffset, LONG yoffset, struct HIDD_CursorState *out)
 {
     struct Library *OOPBase = CSD(cl)->cs_OOPBase;
-    struct HIDDDisplayData *data = OOP_INST_DATA(cl, o);
+    struct HIDD_CursorState pending = {0};
     IPTR width = 0, height = 0;
-    UBYTE *argb;
-
-    ObtainSemaphore(&data->fbsem);
-
-    /* Remove the current pointer from the display before changing it */
-    cursor_Erase(cl, o);
-
-    data->cursor_xoffset = msg->xoffset;
-    data->cursor_yoffset = msg->yoffset;
-
-    if (!msg->shape)
+    ULONG bytes;
+    if (!out || out->cursor_argb || out->cursor_backup) return FALSE;
+    pending.cursor_xoffset = xoffset;
+    pending.cursor_yoffset = yoffset;
+    if (shape)
     {
-        /* No shape - drop the pointer entirely */
-        if (data->cursor_argb)
+        OOP_GetAttr(shape, aHidd_BitMap_Width, &width);
+        OOP_GetAttr(shape, aHidd_BitMap_Height, &height);
+        if (!width || !height || width > 32767 || height > 32767 ||
+            width > (ULONG)-1 / height / 4) return FALSE;
+        bytes = width * height * 4;
+        pending.cursor_argb = AllocVec(bytes, MEMF_ANY);
+        if (!pending.cursor_argb) return FALSE;
+        pending.cursor_backup = AllocVec(bytes, MEMF_ANY);
+        if (!pending.cursor_backup)
         {
-            FreeVec(data->cursor_argb);
-            data->cursor_argb = NULL;
+            FreeVec(pending.cursor_argb);
+            return FALSE;
         }
-        data->cursor_w = 0;
-        data->cursor_h = 0;
-        ReleaseSemaphore(&data->fbsem);
-        return TRUE;
+        HIDD_BM_GetImage(shape, pending.cursor_argb, width * 4,
+            0, 0, width, height, vHidd_StdPixFmt_ARGB32);
+        pending.cursor_w = width;
+        pending.cursor_h = height;
+        pending.cursor_backup_size = bytes;
+        pending.cursor_backup_bpp = 4;
     }
-
-    OOP_GetAttr(msg->shape, aHidd_BitMap_Width, &width);
-    OOP_GetAttr(msg->shape, aHidd_BitMap_Height, &height);
-
-    if ((width == 0) || (height == 0))
-    {
-        ReleaseSemaphore(&data->fbsem);
-        return FALSE;
-    }
-
-    /* Extract the pointer image as ARGB32. The pointer bitmap carries an alpha
-       colormap (transparent index has alpha 0) so this yields correct
-       transparency for alpha compositing onto truecolor displays. */
-    argb = AllocVec(width * height * 4, MEMF_ANY);
-    if (!argb)
-    {
-        ReleaseSemaphore(&data->fbsem);
-        return FALSE;
-    }
-
-    HIDD_BM_GetImage(msg->shape, argb, width * 4, 0, 0, width, height, vHidd_StdPixFmt_ARGB32);
-
-    if (data->cursor_argb)
-        FreeVec(data->cursor_argb);
-    data->cursor_argb = argb;
-    data->cursor_w = width;
-    data->cursor_h = height;
-
-    /* The save-under must match the new pointer size */
-    cursor_AllocBackup(cl, o);
-
-    if (data->cursor_visible)
-        cursor_Draw(cl, o);
-
-    ReleaseSemaphore(&data->fbsem);
-
+    *out = pending;
     return TRUE;
+}
+/* The declaration point stays exact: an unknown subclass (for example one
+ * with its own hardware cursor methods) cannot inherit a promise about pure
+ * state swaps. A driver that keeps this software cursor declares it by
+ * answering SupportsPreparedCursor itself. */
+BOOL Display__Hidd_Display__SupportsPreparedCursor(OOP_Class *cl, OOP_Object *o,
+    struct pHidd_Display_SupportsPreparedCursor *msg)
+{
+    (void)msg;
+    return OOP_OCLASS(o) == cl;
+}
+/* Not exact-class: a declared driver subclass reaches the prepare, release
+ * and install bodies by inheritance, where OOP_OCLASS(o) is that subclass.
+ * The object's own SupportsPreparedCursor answer decides admission. */
+static BOOL cursor_PreparedDeclared(OOP_Class *cl, OOP_Object *o)
+{
+    struct Library *OOPBase = CSD(cl)->cs_OOPBase;
+    (void)OOPBase;
+    return OOP_OCLASS(o) == cl || HIDD_Display_SupportsPreparedCursor(o);
+}
+BOOL Display__Hidd_Display__PrepareCursorShape(OOP_Class *cl, OOP_Object *o,
+    struct pHidd_Display_PrepareCursorShape *msg)
+{
+    if (!cursor_PreparedDeclared(cl, o)) return FALSE;
+    return cursor_PrepareShape(cl, msg->shape, msg->xoffset, msg->yoffset, msg->state);
+}
+BOOL Display__Hidd_Display__ReleaseCursorShape(OOP_Class *cl, OOP_Object *o,
+    struct pHidd_Display_ReleaseCursorShape *msg)
+{
+    struct HIDDDisplayData *data = OOP_INST_DATA(cl, o);
+    struct HIDD_CursorState *state = msg->state;
+    if (!state || !cursor_PreparedDeclared(cl, o)) return FALSE;
+    ObtainSemaphore(&data->fbsem);
+    if (state == &data->cursor ||
+        (state->cursor_argb && state->cursor_argb == data->cursor.cursor_argb) ||
+        (state->cursor_backup && state->cursor_backup == data->cursor.cursor_backup))
+    {
+        ReleaseSemaphore(&data->fbsem);
+        return FALSE;
+    }
+    FreeVec(state->cursor_argb);
+    FreeVec(state->cursor_backup);
+    *state = (struct HIDD_CursorState){0};
+    ReleaseSemaphore(&data->fbsem);
+    return TRUE;
+}
+static BOOL cursor_InstallShape(OOP_Class *cl, OOP_Object *o,
+    struct HIDD_CursorState *prepared, struct HIDD_CursorState *previous)
+{
+    struct HIDDDisplayData *data = OOP_INST_DATA(cl, o);
+    struct HIDD_CursorState pending, old;
+    if (!prepared || !previous || prepared == previous ||
+        previous->cursor_argb || previous->cursor_backup ||
+        (prepared->cursor_w && (!prepared->cursor_argb || !prepared->cursor_backup ||
+         !prepared->cursor_h || prepared->cursor_w > (ULONG)-1 / prepared->cursor_h / 4 ||
+         prepared->cursor_backup_size < prepared->cursor_w * prepared->cursor_h * 4)))
+        return FALSE;
+    ObtainSemaphore(&data->fbsem);
+    old = data->cursor;
+    if (prepared == &data->cursor ||
+        (prepared->cursor_argb && prepared->cursor_argb == old.cursor_argb) ||
+        (prepared->cursor_backup && prepared->cursor_backup == old.cursor_backup))
+    {
+        ReleaseSemaphore(&data->fbsem);
+        return FALSE;
+    }
+    pending = *prepared;
+    pending.cursor_bm = old.cursor_bm;
+    pending.cursor_visible = old.cursor_visible;
+    pending.cursor_mouseX = old.cursor_mouseX;
+    pending.cursor_mouseY = old.cursor_mouseY;
+    pending.cursor_drawn = FALSE;
+    pending.cursor_backupW = pending.cursor_backupH = 0;
+    if (pending.cursor_bm && pending.cursor_argb)
+    {
+        struct Library *OOPBase = CSD(cl)->cs_OOPBase;
+        OOP_Object *pf = NULL;
+        IPTR bpp = 0;
+        OOP_GetAttr(pending.cursor_bm, aHidd_BitMap_PixFmt, (IPTR *)&pf);
+        if (pf) OOP_GetAttr(pf, aHidd_PixFmt_BytesPerPixel, &bpp);
+        if (!bpp || bpp > 4)
+        {
+            ReleaseSemaphore(&data->fbsem);
+            return FALSE;
+        }
+        pending.cursor_backup_bpp = bpp;
+    }
+    cursor_Erase(cl, o);
+    data->cursor = pending;
+    if (data->cursor.cursor_visible) cursor_Draw(cl, o);
+    *previous = old;
+    *prepared = (struct HIDD_CursorState){0}; /* transfer ownership */
+    ReleaseSemaphore(&data->fbsem);
+    return TRUE;
+}
+BOOL Display__Hidd_Display__InstallCursorShape(OOP_Class *cl, OOP_Object *o,
+    struct pHidd_Display_InstallCursorShape *msg)
+{
+    if (!cursor_PreparedDeclared(cl, o)) return FALSE;
+    /* Ordinary setter, outside a prepared-frame commit. It may render/call
+     * drivers; transactions publish/restore the mapped typed state directly. */
+    return cursor_InstallShape(cl, o, msg->prepared, msg->previous);
+}
+BOOL Display__Hidd_Display__SetCursorShape(OOP_Class *cl, OOP_Object *o,
+    struct pHidd_Display_SetCursorShape *msg)
+{
+    struct HIDD_CursorState pending = {0}, old = {0};
+    BOOL result;
+    if (!cursor_PrepareShape(cl, msg->shape, msg->xoffset, msg->yoffset, &pending))
+        return FALSE;
+    result = cursor_InstallShape(cl, o, &pending, &old);
+    FreeVec(pending.cursor_argb);
+    FreeVec(pending.cursor_backup);
+    FreeVec(old.cursor_argb);
+    FreeVec(old.cursor_backup);
+    return result;
 }
 
 /*****************************************************************************************
@@ -1525,7 +1615,7 @@ VOID Display__Hidd_Display__SetCursorVisible(OOP_Class *cl, OOP_Object *o, struc
 
     ObtainSemaphore(&data->fbsem);
 
-    data->cursor_visible = msg->visible;
+    data->cursor.cursor_visible = msg->visible;
     if (msg->visible)
         cursor_Draw(cl, o);
     else
@@ -1587,8 +1677,8 @@ BOOL Display__Hidd_Display__SetCursorPos(OOP_Class *cl, OOP_Object *o, struct pH
 
     ObtainSemaphore(&data->fbsem);
 
-    data->cursor_mouseX = msg->x;
-    data->cursor_mouseY = msg->y;
+    data->cursor.cursor_mouseX = msg->x;
+    data->cursor.cursor_mouseY = msg->y;
 
     /* Erase from the old position and redraw at the new one */
     cursor_Refresh(cl, o);

@@ -14,6 +14,11 @@
 
 #include "kernel_cpu.h"
 #include "kernel_intern.h"
+#include "task_tls.h"
+
+/* AllocMem aligns to MEMCHUNK_TOTAL, at least AROS_WORSTALIGN (16 on
+ * AArch64). The private pointer must not alias a rounded-down SIMD tail. */
+_Static_assert((MEMCHUNK_TOTAL & 15) == 0, "16-byte context allocation");
 
 AROS_LH0(void *, KrnCreateContext,
          struct KernelBase *, KernelBase, 18, Kernel)
@@ -34,9 +39,10 @@ AROS_LH0(void *, KrnCreateContext,
     ctx = krnAllocCPUContext();
     if (ctx)
     {
-        ctx->fpuContext = (APTR)(((IPTR)ctx + sizeof(struct ExceptionContext) + 15) & ~15);
+        ctx->fpuContext = (APTR)((char *)ctx + AARCH64_NATIVE_TASK_PREFIX);
         ctx->Flags      = ECF_FPU;
         ctx->cpsr       = CPUMODE_EL1t;
+        AROSAArch64NativeTaskTLSInit(ctx);
     }
 
     return ctx;

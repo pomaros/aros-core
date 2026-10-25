@@ -595,6 +595,9 @@ struct DosPacket
 #define ACTION_EXAMINE_FH               1034
 #define ACTION_EXAMINE_ALL_END          1035
 #define ACTION_SET_OWNER                1036
+/* Atomic regular-file replacement; lock/BSTR arguments as RENAME.
+ * A missing destination is created. Failures preserve both names. */
+#define ACTION_REPLACE_OBJECT           1037
 
 #define ACTION_LOCK_RECORD              2008
 #define ACTION_FREE_RECORD              2009

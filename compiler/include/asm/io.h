@@ -18,6 +18,8 @@
 #  include <asm/i386/io.h>
 #elif defined __powerpc__
 #  include <asm/ppc/io.h>
+#elif defined __aarch64__
+#  include <asm/aarch64/io.h>
 #else
 
 /* Default version for memory-mapped I/O with strong ordering */
@@ -41,10 +43,12 @@
 #define mmio_inb(address) (*((volatile unsigned char  *)(address)))
 #define mmio_inw(address) (*((volatile unsigned short *)(address)))
 #define mmio_inl(address) (*((volatile unsigned int   *)(address)))
+#define mmio_inq(address) (*((volatile unsigned long long *)(address)))
 
 #define mmio_outb(value, address) *((volatile unsigned char  *)(address)) = (value)
 #define mmio_outw(value, address) *((volatile unsigned short *)(address)) = (value)
 #define mmio_outl(value, address) *((volatile unsigned int   *)(address)) = (value)
+#define mmio_outq(value, address) *((volatile unsigned long long *)(address)) = (value)
 
 #endif
 

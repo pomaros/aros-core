@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2013, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
 */
 
@@ -7,6 +8,7 @@
 #include <intuition/gadgetclass.h>
 #include "showhide.h"
 #include "intuition_intern.h"
+#include "windowcomposition.h"
 #include "inputhandler.h"
 #include "inputhandler_actions.h"
 #include "inputhandler_support.h"
@@ -199,6 +201,8 @@ static VOID int_hidewindow(struct HideWindowActionMsg *msg,
             ChangeLayerVisibility(BLAYER(window), FALSE);
         }
         ChangeLayerVisibility(WLAYER(window), FALSE);
+        if (WindowCompositionLayer(window) != WLAYER(window))
+            ChangeLayerVisibility(WindowCompositionLayer(window), FALSE);
 
         for (req = window->FirstRequest; req; req = req->OlderRequest)
         {

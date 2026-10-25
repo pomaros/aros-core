@@ -573,12 +573,16 @@ IPTR WiFiEditor__MUIM_WiFiEditor_Reply(Class *CLASS, Object *self, Msg message)
 /*** Module setup ***********************************************************/
 static int WiFiEditor_Init(LIBBASETYPEPTR LIBBASE)
 {
+    extern APTR WifiKeyringModule;
+    WifiKeyringModule = LIBBASE;
     Locale_Initialize();
     return TRUE;
 }
 
 static int WiFiEditor_Expunge(LIBBASETYPEPTR LIBBASE)
 {
+    extern APTR WifiKeyringModule;
+    WifiKeyringModule = NULL;
     Locale_Deinitialize();
     return TRUE;
 }

@@ -33,6 +33,8 @@
 #include "intuition_extend.h"
 #endif
 
+#include "menuscale.h"
+#include "windowsystemimage.h"
 #include "gadgets.h" /* Some handy rendering funtions */
 
 #define INTDRI(dri) ((struct IntDrawInfo *)(dri))
@@ -96,6 +98,85 @@ void draw_thick_line(Class *cl, struct RastPort *rport,
 
 /**************************************************************************************************/
 
+/* All resource preparation precedes image publication. A typed provider
+ * owns its independent handle until OM_DISPOSE, including constructor failure. */
+static BOOL prepare_menu_image(struct SysIData *data, struct Image *image,
+    struct mdpGetDefSizeSysImage *message, BOOL set_width, BOOL set_height,
+    struct IntuitionBase *IntuitionBase)
+{
+                struct mdpGetScaleDefSizeSysImage prepared = {0};
+                IPTR result;
+                if (!data->context->src_LogicalDrawInfo ||
+                    !data->context->src_PhysicalDrawInfo ||
+                    data->context->src_LogicalDrawInfo->dri_Screen != data->dri->dri_Screen ||
+                    data->context->src_PhysicalDrawInfo->dri_Screen != data->dri->dri_Screen)
+                    return FALSE;
+                data->scaleProvider = IS(data->dri->dri_Screen)->MenuDecorObj;
+                struct mdpQueryCapabilities query = {MDM_QUERYCAPABILITIES};
+                if (!(DoMethodA(data->scaleProvider, (Msg)&query) & MDM_CAP_SCALE))
+                {
+                    /* Established custom decorators retain their100% route.
+                     * A known typed provider failing allocation never enters
+                     * this branch: capability and preparation are separate. */
+                    if (data->context->src_Scale != 100) return FALSE;
+                    data->legacyMenuProvider = TRUE;
+                    DoMethodA(data->scaleProvider, (Msg)message);
+                    return TRUE;
+                }
+                prepared.base = *message;
+                prepared.base.MethodID = MDM_GETSCALEDEFSIZE_SYSIMAGE;
+                prepared.context = data->context;
+                prepared.logical = data->logical;
+                prepared.requestedWidth = set_width ? image->Width : 0;
+                prepared.requestedHeight = set_height ? image->Height : 0;
+                prepared.prepared = &data->prepared;
+                result = DoMethodA(data->scaleProvider, (Msg)&prepared);
+                if (result == MDP_SCALE_UNAVAILABLE)
+                {
+                    /* Only an explicitly missing theme asset permits vectors.
+                     * A failed allocation or unknown provider never does. */
+                    if (data->prepared) return FALSE;
+                    data->vectorFallback = TRUE;
+                    if (!MenuScaleVectorSize(&prepared, IntuitionBase)) return FALSE;
+                }
+                else if (result != MDP_SCALE_READY) return FALSE;
+                if (!*message->mdp_Width || !*message->mdp_Height ||
+                    *message->mdp_Width > 32767 || *message->mdp_Height > 32767)
+                    return FALSE;
+    return TRUE;
+}
+
+static BOOL prepare_window_image(struct SysIData *data, struct Image *image,
+    struct wdpGetDefSizeSysImage *message, BOOL set_width, BOOL set_height,
+    struct IntuitionBase *IntuitionBase)
+{
+    struct wdpGetScaleDefSizeSysImage prepared = {0};
+    IPTR result;
+    if (!data->context->src_LogicalDrawInfo || !data->context->src_PhysicalDrawInfo ||
+        data->context->src_LogicalDrawInfo->dri_Screen != data->dri->dri_Screen ||
+        data->context->src_PhysicalDrawInfo->dri_Screen != data->dri->dri_Screen)
+        return FALSE;
+    data->scaleProvider = IS(data->dri->dri_Screen)->WinDecorObj;
+    data->windowProvider = TRUE;
+    prepared.base = *message;
+    prepared.base.MethodID = WDM_GETSCALEDEFSIZE_SYSIMAGE;
+    prepared.context = data->context;
+    prepared.logical = data->logical;
+    prepared.requestedWidth = set_width ? image->Width : 0;
+    prepared.requestedHeight = set_height ? image->Height : 0;
+    prepared.prepared = &data->prepared;
+    result = DoMethodA(data->scaleProvider, (Msg)&prepared);
+    if (result == WDP_SCALE_UNAVAILABLE)
+    {
+        if (data->prepared) return FALSE;
+        data->vectorFallback = TRUE;
+        if (!WindowScaleVectorSize(&prepared, IntuitionBase)) return FALSE;
+    }
+    else if (result != WDP_SCALE_READY) return FALSE;
+    return *message->wdp_Width && *message->wdp_Height &&
+        *message->wdp_Width <= 32767 && *message->wdp_Height <= 32767;
+}
+
 BOOL sysi_setnew(Class *cl, Object *obj, struct opSet *msg)
 {
     struct IntuitionBase *IntuitionBase = (struct IntuitionBase *)cl->cl_UserData;
@@ -118,6 +199,14 @@ BOOL sysi_setnew(Class *cl, Object *obj, struct opSet *msg)
 
             case IA_Height:
                 set_height = TRUE;
+                break;
+
+            case SYSIA_RenderContext:
+                data->context = (const struct ScreenRenderContext *)tag->ti_Data;
+                break;
+
+            case SYSIA_Logical:
+                data->logical = tag->ti_Data != 0;
                 break;
 
             case SYSIA_DrawInfo:
@@ -220,18 +309,22 @@ BOOL sysi_setnew(Class *cl, Object *obj, struct opSet *msg)
         }
         else if ((data->type == AMIGAKEY) || (data->type == MENUCHECK) || (data->type == SUBMENUIMAGE))
         {
-        struct mdpGetDefSizeSysImage  mmsg;
-
-                mmsg.MethodID           = MDM_GETDEFSIZE_SYSIMAGE;
-        mmsg.mdp_TrueColor      = tc;
-                mmsg.mdp_Which          = data->type;
-                mmsg.mdp_SysiSize       = size;
-                mmsg.mdp_ReferenceFont  = reffont;
-                mmsg.mdp_Width          = &width;
-                mmsg.mdp_Height         = &height;
-                mmsg.mdp_Flags          = 0;
-                mmsg.mdp_Dri            = data->dri;
-        DoMethodA(((struct IntScreen *)(((struct IntDrawInfo *)data->dri)->dri_Screen))->MenuDecorObj, (Msg)&mmsg);
+            struct mdpGetDefSizeSysImage mmsg = {0};
+            mmsg.MethodID = MDM_GETDEFSIZE_SYSIMAGE;
+            mmsg.mdp_TrueColor = tc;
+            mmsg.mdp_Which = data->type;
+            mmsg.mdp_SysiSize = size;
+            mmsg.mdp_ReferenceFont = reffont;
+            mmsg.mdp_Width = &width;
+            mmsg.mdp_Height = &height;
+            mmsg.mdp_Dri = data->dri;
+            if (data->context)
+            {
+                if (!prepare_menu_image(data, IM(obj), &mmsg,
+                    set_width, set_height, IntuitionBase)) return FALSE;
+            }
+            else
+                DoMethodA(IS(data->dri->dri_Screen)->MenuDecorObj, (Msg)&mmsg);
 
         }
         else
@@ -249,7 +342,12 @@ BOOL sysi_setnew(Class *cl, Object *obj, struct opSet *msg)
                 wmsg.wdp_Dri            = data->dri;
                 wmsg.wdp_UserBuffer     = 0;
 
-        DoMethodA(((struct IntScreen *)(((struct IntDrawInfo *)data->dri)->dri_Screen))->WinDecorObj, (Msg)&wmsg);
+        if (data->context)
+        {
+            if (!prepare_window_image(data, IM(obj), &wmsg,
+                set_width, set_height, IntuitionBase)) return FALSE;
+        }
+        else DoMethodA(IS(data->dri->dri_Screen)->WinDecorObj, (Msg)&wmsg);
 
         }
 
@@ -263,7 +361,7 @@ BOOL sysi_setnew(Class *cl, Object *obj, struct opSet *msg)
          * and keeps aspect rate of the image if only height is supplied.
          * Currently only OpenScreen() relies on this.
          */
-        if (set_height && (!set_width))
+        if (!data->context && set_height && (!set_width))
             IM(obj)->Width = IM(obj)->Height * width / height;
 #endif
     }
@@ -291,6 +389,13 @@ Object *SysIClass__OM_NEW(Class *cl, Class *rootcl, struct opSet *msg)
     data->dri   = NULL;
     data->frame = NULL;
     data->flags = 0;
+    data->context = NULL;
+    data->scaleProvider = NULL;
+    data->prepared = NULL;
+    data->logical = FALSE;
+    data->vectorFallback = FALSE;
+    data->windowProvider = FALSE;
+    data->legacyMenuProvider = FALSE;
     
     if (!sysi_setnew(cl, obj, (struct opSet *)msg))
     {
@@ -437,6 +542,40 @@ IPTR SysIClass__IM_DRAW(Class *cl, Object *obj, struct impDraw *msg)
     mdecormsg.mdp_UserBuffer = GetPrivScreen(data->dri->dri_Screen)->DecorUserBuffer;
 
     SetDrMd(rport, JAM1);
+
+    if (data->context && data->windowProvider)
+    {
+        struct wdpDrawScaleSysImage prepared = {0};
+        prepared.base = wdecormsg;
+        prepared.base.MethodID = WDM_DRAWSCALE_SYSIMAGE;
+        prepared.context = data->context;
+        prepared.logical = data->logical;
+        prepared.prepared = data->prepared;
+        if (data->vectorFallback) WindowScaleVectorDraw(&prepared, IntuitionBase);
+        else DoMethodA(data->scaleProvider, (Msg)&prepared);
+        return 0;
+    }
+
+    if (data->context && (data->type == MENUCHECK ||
+        data->type == AMIGAKEY || data->type == SUBMENUIMAGE))
+    {
+        if (data->legacyMenuProvider)
+        {
+            DoMethodA(data->scaleProvider, (Msg)&mdecormsg);
+            return 0;
+        }
+        struct mdpDrawScaleSysImage prepared = {0};
+        prepared.base = mdecormsg;
+        prepared.base.MethodID = MDM_DRAWSCALE_SYSIMAGE;
+        prepared.context = data->context;
+        prepared.logical = data->logical;
+        prepared.prepared = data->prepared;
+        if (data->vectorFallback)
+            MenuScaleVectorDraw(&prepared, IntuitionBase);
+        else
+            DoMethodA(data->scaleProvider, (Msg)&prepared);
+        return 0;
+    }
 
     switch(data->type)
     {
@@ -1044,6 +1183,22 @@ IPTR SysIClass__OM_DISPOSE(Class *cl, Object *obj, Msg msg)
     struct IntuitionBase *IntuitionBase = (struct IntuitionBase *)cl->cl_UserData;
     struct SysIData *data = INST_DATA(cl, obj);
     
+    if (data->scaleProvider && data->prepared)
+    {
+        if (data->windowProvider)
+        {
+            struct wdpReleaseScaleSysImage release = {
+                WDM_RELEASESCALE_SYSIMAGE, data->prepared};
+            DoMethodA(data->scaleProvider, (Msg)&release);
+        }
+        else
+        {
+            struct mdpReleaseScaleSysImage release = {
+                MDM_RELEASESCALE_SYSIMAGE, data->prepared};
+            DoMethodA(data->scaleProvider, (Msg)&release);
+        }
+        data->prepared = NULL;
+    }
     DisposeObject(data->frame);
     return DoSuperMethodA(cl, obj, msg);
 }
@@ -1052,6 +1207,15 @@ IPTR SysIClass__OM_SET(Class *cl, Object *obj, Msg msg)
 {
     struct SysIData *data = INST_DATA(cl, obj);
     
+    if (data->context)
+    {
+        struct Library *UtilityBase = GetPrivIBase((struct IntuitionBase *)cl->cl_UserData)->UtilityBase;
+        struct opSet *set = (struct opSet *)msg;
+        if (FindTagItem(IA_Width, set->ops_AttrList) ||
+            FindTagItem(IA_Height, set->ops_AttrList) ||
+            FindTagItem(SYSIA_RenderContext, set->ops_AttrList) ||
+            FindTagItem(SYSIA_Logical, set->ops_AttrList)) return FALSE;
+    }
     if (data->frame)
         DoMethodA((Object *)data->frame, msg);
     return DoSuperMethodA(cl, obj, msg);

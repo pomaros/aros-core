@@ -96,6 +96,14 @@ BOOL core_Schedule(void)
 
     FLAG_SCHEDSWITCH_CLEAR;
 
+#if defined(__AROSEXEC_SMP__)
+    /* FreezeTasks() on another CPU marked it: switch it out, core_Switch()
+     * parks it. */
+    if (GetIntETask(task) &&
+        (__atomic_load_n(&GetIntETask(task)->iet_FreezeFlags, __ATOMIC_ACQUIRE) & IETF_FREEZE_PENDING))
+        return TRUE;
+#endif
+
     /* If task has pending exception, reschedule it so that the dispatcher may handle the exception */
     if (!(task->tc_Flags & TF_EXCEPT))
     {
@@ -209,6 +217,19 @@ void core_Switch(void)
         if (task->tc_Flags & TF_SWITCH)
             AROS_UFC1NR(void, task->tc_Switch, AROS_UFCA(struct ExecBase *, SysBase, A6));
 
+#if defined(__AROSEXEC_SMP__)
+        /* Marked by FreezeTasks() while it ran: parked frozen on the wait
+         * list, as the freeze leaves a ready task, under the same lock. */
+        if (task->tc_State == TS_READY && GetIntETask(task) &&
+            (__atomic_load_n(&GetIntETask(task)->iet_FreezeFlags, __ATOMIC_ACQUIRE) & IETF_FREEZE_PENDING))
+        {
+            __atomic_fetch_and(&GetIntETask(task)->iet_FreezeFlags, (UBYTE)~IETF_FREEZE_PENDING,
+                               __ATOMIC_ACQ_REL);
+            GetIntETask(task)->iet_FrozenState = TS_READY;
+            task->tc_State = TS_FROZEN;
+            exec_TaskEnqueueWait(task);
+        }
+#endif
         if (task->tc_State == TS_READY)
         {
             DSCHED(bug("[Kernel:%02d] Setting '%s' @ 0x%p as ready\n", cpunum, task->tc_Node.ln_Name, task));

@@ -2,6 +2,7 @@
 #define INTUITION_POINTERCLASS_H
 
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright © 1995-2001, The AROS Development Team. All rights reserved.
     $Id$
 
@@ -29,6 +30,8 @@
 #define POINTERA_WordWidth	(POINTERA_Dummy + 0x04)
 #define POINTERA_XResolution	(POINTERA_Dummy + 0x05)
 #define POINTERA_YResolution	(POINTERA_Dummy + 0x06)
+/* Bitmap and offsets already use physical destination pixels; do not scale. */
+#define POINTERA_PhysicalPixels (POINTERA_Dummy + 0x07)
 
 #define POINTERXRESN_DEFAULT	0
 #define POINTERXRESN_140NS	1

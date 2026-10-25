@@ -11,6 +11,7 @@
 #include <devices/timer.h>
 #include <devices/inputevent.h>
 #include <dos/dos.h>
+#include <dos/dostags.h>
 #include <dos/var.h>
 #include <libraries/commodities.h>
 #include <libraries/mui.h>
@@ -377,10 +378,27 @@ static void notify_tiles(struct Indicator *s)
     if (TileSourceSend(&s->outgoing,&s->notifyOwner,FALSE,(CONST_STRPTR)"TILES",
                        (CONST_STRPTR)command,now_ms())) s->notifyDirty=FALSE;
 }
+/* Settings already running is asked to show the page; otherwise it is
+   started on it, in the background. */
 static BOOL show_settings(struct Indicator *s)
 {
-    BOOL sent=TileSourceSend(&s->outgoing,s,TRUE,(CONST_STRPTR)s->settingsPort,
+    BOOL running, sent=FALSE;
+    Forbid();
+    running=FindPort((CONST_STRPTR)s->settingsPort)!=NULL;
+    Permit();
+    if (running)
+        sent=TileSourceSend(&s->outgoing,s,TRUE,(CONST_STRPTR)s->settingsPort,
                             (CONST_STRPTR)s->settingsCommand,now_ms());
+    else {
+        char command[96];
+        BPTR in=Open((CONST_STRPTR)"NIL:",MODE_OLDFILE), out=Open((CONST_STRPTR)"NIL:",MODE_NEWFILE);
+        /* settingsCommand is "SHOW PAGE <kind>" */
+        snprintf(command,sizeof(command),"SYS:Prefs/Settings PAGE %s",s->settingsCommand+10);
+        if (in && out && SystemTags((CONST_STRPTR)command,SYS_Input,(IPTR)in,SYS_Output,(IPTR)out,
+                                    SYS_Asynch,TRUE,TAG_DONE)!=-1) { sent=TRUE; in=out=BNULL; }
+        if (in) Close(in);
+        if (out) Close(out);
+    }
     if (!sent) SetAttrs(s->notice,MUIA_Text_Contents,(IPTR)"Settings unavailable or busy",TAG_DONE);
     return sent;
 }

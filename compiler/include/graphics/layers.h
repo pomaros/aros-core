@@ -2,6 +2,8 @@
 #define GRAPHICS_LAYERS_H
 
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
+    Licensed under the AROS Public License, version 1.1.
     Copyright © 1995-2011, The AROS Development Team. All rights reserved.
     $Id$
 
@@ -50,6 +52,9 @@ struct Layer_Info
 #define LAYERIREFRESH2       (1<<10)
 /* AROS protected overlay priority; ordinary layers cannot cross this class. */
 #define LAYERPROTECTED      (1<<11)
+/* Input hit tests skip this layer, while visual occlusion/backing and prepared
+ * scene transactions include it normally. Layer.Flags is UWORD (bit12 fits). */
+#define LAYERINPUTTRANSPARENT (1<<12)
 
 #define LAYERS_BACKFILL   ((struct Hook *)0)
 #define LAYERS_NOBACKFILL ((struct Hook *)1)

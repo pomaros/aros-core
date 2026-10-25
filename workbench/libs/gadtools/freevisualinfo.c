@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2007, The AROS Development Team. All rights reserved.
 
     Desc:
@@ -48,7 +49,8 @@
 
     if (vi)
     {
-        FreeScreenDrawInfo(((struct VisualInfo *)vi)->vi_screen, ((struct VisualInfo *)vi)->vi_dri);
+        if (!((struct VisualInfo *)vi)->vi_context)
+            FreeScreenDrawInfo(((struct VisualInfo *)vi)->vi_screen, ((struct VisualInfo *)vi)->vi_dri);
         FreeVec(vi);
     }
     

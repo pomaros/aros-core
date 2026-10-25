@@ -10,6 +10,7 @@ include $(SRCDIR)/config/aros.cfg
     progname=Battery targetdir=$(AROS_PREFS) files=main
 
 %build_module mmake=workbench-prefs-battery-class \
-    modname=BatteryEditor modtype=mcc conffile=editor.conf files=editor
+    modname=BatteryEditor modtype=mcc conffile=editor.conf \
+    files="editor $(SRCDIR)/workbench/system/Indicators/consumers $(SRCDIR)/workbench/system/Indicators/cpu_tasks"
 
 %common

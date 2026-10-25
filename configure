@@ -1826,7 +1826,7 @@ Optional Packages:
   --with-llvm-version=VERSION
                           Compile llvm-VERSION for AROS
   --with-rust-version=VERSION
-                          Compile rust-VERSION for AROS (default=1.98.1)
+                          Rust version (AArch64 LLVM: nightly-2026-08-04; other targets: 1.98.1)
   --with-cpu=<spec>       Specify minumum CPU (default=$gcc_default_cpu).
   --with-fpu=<spec>       Specify minumum FPU (default=$gcc_float_fpu).
   --with-float=<spec>     Specify floating point ABI
@@ -11808,16 +11808,6 @@ if test "$aros_vm_guest" = yes; then
     fi
 fi
 
-# The public Apple target supplies virtual guests only. Native hardware drivers
-# are maintained separately and are not part of this source distribution.
-if test "$aros_target_arch" = apple && test "$aros_vm_guest" != yes; then
-    as_fn_error $? "PomAROS public core requires --enable-vm-guest for --target=apple-aarch64" "$LINENO" 5
-fi
-
-if test "$aros_target_arch" = apple && test "$aros_target_variant" = smp; then
-    as_fn_error $? "PomAROS public VM target currently supports the single-CPU build only" "$LINENO" 5
-fi
-
 crosstools_guess="yes"
 aros_target_toolchain="no"
 aros_kernel_sysroot=""
@@ -12682,6 +12672,9 @@ fi
 printf '%s\n' "$aros_enable_rust" >&6; }
 
 default_rust_version="1.98.1"
+if test "$aros_target_cpu:$aros_toolchain" = "aarch64:llvm"; then
+    default_rust_version="nightly-2026-08-04"
+fi
 
 # Check whether --with-rust-version was given.
 if test ${with_rust_version+y}
@@ -21874,3 +21867,4 @@ if test -n "$aros_shared_cflags" ; then
     echo "SHARED_CFLAGS := $aros_shared_cflags" >> ${aros_hostcfg_dir}/host.cfg
     echo "SHARED_AR := $aros_shared_ar" >> ${aros_hostcfg_dir}/host.cfg
 fi
+

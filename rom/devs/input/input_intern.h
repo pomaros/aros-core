@@ -69,6 +69,12 @@ struct inputbase
     UBYTE Prev2DownCode;
     UBYTE Prev2DownQual;
     BOOL Stopped;
+    struct MsgPort *SecretOwner;
+    struct InputEvent SecretEvents[32];
+    UBYTE SecretHead, SecretCount;
+    BOOL SecretOverflow;
+    ULONG SecretTicks;
+
 };
 
 /* Prototypes */

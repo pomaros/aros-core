@@ -14,7 +14,6 @@
 #include <devices/usb_hub.h>
 
 #include "uhwcmd.h"
-#include "xhci_mmio.h"
 #include "xhciproto.h"
 
 #undef base
@@ -40,9 +39,9 @@ void xhciRingDoorbell(struct PCIController *hc, ULONG slot, ULONG value)
 
     /* Publication calls this with IRQs masked: MMIO only, no logging. */
     XHCI_MMIO_BARRIER();
-    xhcidb[slot].db = AROS_LONG2LE(value);
+    XHCI_WR32(xhcidb[slot].db, value);
     /* Read back to flush posted MMIO write (helps some hypervisors). */
-    (void)xhcidb[slot].db;
+    (void)XHCI_RD32(xhcidb[slot].db);
 }
 #endif
 
@@ -103,7 +102,7 @@ LONG xhciCmdSubmit(struct PCIController *hc,
             }
 
             volatile struct xhci_pr *xhciports = (volatile struct xhci_pr *)((IPTR)xhcic->xhc_XHCIPorts);
-            portsc = xhciReadMMIO32(&xhciports[port - 1].portsc);
+            portsc = XHCI_RD32(xhciports[port - 1].portsc);
 
             pciusbXHCIDebugV("xHCI", DEBUGCOLOR_SET "%s:     portsc=%08x" DEBUGCOLOR_RESET" \n", __func__, portsc);
         }
@@ -184,21 +183,21 @@ void xhciDumpCmdTimeout(struct PCIController *hc, WORD queued)
 
     pciusbWarn("xHCI", DEBUGWARNCOLOR_SET
                "timeout: usbcmd %08lx usbsts %08lx crcr %08lx%08lx" DEBUGCOLOR_RESET" \n",
-               (unsigned long)AROS_LE2LONG(hcopr->usbcmd),
-               (unsigned long)AROS_LE2LONG(hcopr->usbsts),
-               (unsigned long)AROS_LE2LONG(hcopr->crcr.addr_hi),
-               (unsigned long)AROS_LE2LONG(hcopr->crcr.addr_lo));
+               (unsigned long)XHCI_RD32(hcopr->usbcmd),
+               (unsigned long)XHCI_RD32(hcopr->usbsts),
+               (unsigned long)XHCI_RD32(hcopr->crcr.addr_hi),
+               (unsigned long)XHCI_RD32(hcopr->crcr.addr_lo));
 
     pciusbWarn("xHCI", DEBUGWARNCOLOR_SET
                "timeout: iman %08lx imod %08lx erstsz %08lx erstba %08lx%08lx erdp %08lx%08lx"
                DEBUGCOLOR_RESET" \n",
-               (unsigned long)AROS_LE2LONG(ir->iman),
-               (unsigned long)AROS_LE2LONG(ir->imod),
-               (unsigned long)AROS_LE2LONG(ir->erstsz),
-               (unsigned long)AROS_LE2LONG(ir->erstba.addr_hi),
-               (unsigned long)AROS_LE2LONG(ir->erstba.addr_lo),
-               (unsigned long)AROS_LE2LONG(ir->erdp.addr_hi),
-               (unsigned long)AROS_LE2LONG(ir->erdp.addr_lo));
+               (unsigned long)XHCI_RD32(ir->iman),
+               (unsigned long)XHCI_RD32(ir->imod),
+               (unsigned long)XHCI_RD32(ir->erstsz),
+               (unsigned long)XHCI_RD32(ir->erstba.addr_hi),
+               (unsigned long)XHCI_RD32(ir->erstba.addr_lo),
+               (unsigned long)XHCI_RD32(ir->erdp.addr_hi),
+               (unsigned long)XHCI_RD32(ir->erdp.addr_lo));
 
     if (cring && (queued >= 0) && (queued < XHCI_EVENT_RING_TRBS))
     {
@@ -315,7 +314,7 @@ LONG xhciCmdSubmitAsync(struct PCIController *hc,
             port = (slotctx1 >> 16) & 0xff;
 
             if(port > 0 && port <= hc->hc_NumPorts)
-                portsc = xhciReadMMIO32(&xhciports[port - 1].portsc);
+                portsc = XHCI_RD32(xhciports[port - 1].portsc);
         }
         if(!(slot) || !(portsc & XHCIF_PR_PORTSC_CCS)) {
             Enable();

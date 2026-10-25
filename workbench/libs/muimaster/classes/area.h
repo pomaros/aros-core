@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * Licensed under the AROS Public License (APL) Version 1.1. */
 /*
     Copyright (C) 1999, David Le Corfec.
     Copyright (C) 2002 - 2014, The AROS Development Team.
@@ -279,6 +281,16 @@ struct MUIP_Show
     STACKED ULONG MethodID;
 };
 
+#define MUIM_ScaleContextSupported (MUIB_Area | 0x00000040)
+/* Borrowed typed BOOPSI child list; Notify returnsNULL. Resource predicates
+ * and child discovery must be side-effect free and must not render. */
+#define MUIM_ScaleContextChildren (MUIB_Area | 0x00000041)
+
+/* Effective context: unqualified whole windows report100 even on scaled screens. */
+#define MUIA_RenderContext (MUIB_Area | 0x00000042) /* ..g const ScreenRenderContext *, Setup/Cleanup lifetime */
+#define MUIA_RenderScale (MUIB_Area | 0x00000040) /* ..g ULONG */
+#define MUIA_ScaleAwareHooks (MUIB_Area | 0x00000041) /* i.. BOOL */
+
 #define MUIM_Layout \
     (MUIB_Area | 0x00000000)
 #define MUIM_DrawParentBackground \
@@ -541,6 +553,7 @@ struct MUI_AreaData
     struct ZMenu *mad_ContextZMenu;
     struct MUI_EventHandlerNode mad_hiehn;      /* Eventhandler to simulate MUIM_HandleInput */
 
+    BOOL mad_ScaleAwareHooks; /* Explicit qualification of external resources. */
     LONG mad_DisableCount;      /* counts number of disables */
     /* END PRIV */
 // only 148 bytes for the struct in MUI !
@@ -586,6 +599,7 @@ struct MUI_AreaData
 #define MADF_ISVIRTUALGROUP        (1<<30) /* PRIV UNDOC: The object is a virtual group */
 
 #define MADF2_SEARCHMARK (1UL << 0) /* PRIV */
+#define MADF2_EHN_LISTED (1UL << 1) /* PRIV: mad_ehn is in the window's list */
 
 #define MADF_DRAWFLAGS (MADF_DRAWOBJECT | MADF_DRAWUPDATE | MADF_DRAW_XXX \
     | MADF_DRAWFRAME | MADF_DRAW_XXX_2 | MADF_DRAWALL)

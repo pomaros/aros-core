@@ -175,7 +175,7 @@ LONG CoolImagesBase_version = -1;
 /*****************************************************************************************/
 
 VOID InitReqInfo(struct AslBase_intern *);
-VOID LoadPrefs(struct AslBase_intern *);
+static VOID LoadPrefs(struct AslBase_intern *);
 
 /*****************************************************************************************/
 
@@ -186,6 +186,7 @@ static int InitBase(LIBBASETYPEPTR LIBBASE)
     NEWLIST(&LIBBASE->ReqList);
 
     InitSemaphore(&LIBBASE->ReqListSem);
+    InitSemaphore(&LIBBASE->PrefsSem);
 
     InitReqInfo(LIBBASE);
 
@@ -198,19 +199,6 @@ ADD2INITLIB(InitBase, 0);
 
 /*****************************************************************************************/
 
-static int OpenBase(LIBBASETYPEPTR LIBBASE)
-{
-    if (!(LIBBASE->Prefs.ap_Reserved[0] & 0x1))
-        LoadPrefs(LIBBASE);
-
-    return 1;
-}
-
-/*****************************************************************************************/
-
-ADD2OPENLIB(OpenBase, 0);
-
-/*****************************************************************************************/
 
 #include <string.h>
 #include "filereqhooks.h"
@@ -266,9 +254,10 @@ VOID InitReqInfo(struct AslBase_intern *AslBase)
 
 /*****************************************************************************************/
 
-VOID LoadPrefs(struct AslBase_intern *AslBase)
+static VOID LoadPrefs(struct AslBase_intern *AslBase)
 {
     struct Library *IFFParseBase;
+    struct AslPrefs prefs;
 
     IFFParseBase = OpenLibrary("iffparse.library", 0);
     if (IFFParseBase)
@@ -286,11 +275,15 @@ VOID LoadPrefs(struct AslBase_intern *AslBase)
                     {
                         if (ParseIFF(iff, IFFPARSE_SCAN) == 0)
                         {
-                            ReadChunkBytes(iff, &AslBase->Prefs, sizeof(struct AslPrefs));
-
-                            AslBase->Prefs.ap_RelativeLeft  = AROS_BE2WORD(AslBase->Prefs.ap_RelativeLeft);
-                            AslBase->Prefs.ap_RelativeTop   = AROS_BE2WORD(AslBase->Prefs.ap_RelativeTop);
-                            AslBase->Prefs.ap_Reserved[0]   |= 0x1; /* loaded */
+                            if (ReadChunkBytes(iff, &prefs, sizeof(struct AslPrefs)) == sizeof(struct AslPrefs))
+                            {
+                                prefs.ap_RelativeLeft  = AROS_BE2WORD(prefs.ap_RelativeLeft);
+                                prefs.ap_RelativeTop   = AROS_BE2WORD(prefs.ap_RelativeTop);
+                                prefs.ap_Reserved[0]   |= 0x1; /* loaded */
+                                ObtainSemaphore(&AslBase->PrefsSem);
+                                AslBase->Prefs = prefs;
+                                ReleaseSemaphore(&AslBase->PrefsSem);
+                            }
                         }
                     }
 
@@ -308,3 +301,27 @@ VOID LoadPrefs(struct AslBase_intern *AslBase)
 }
 
 /*****************************************************************************************/
+
+/*****************************************************************************************/
+
+/* Asl prefs apply on Use: a requester allocated after ENV:Sys/Asl.prefs
+   changed reads the new file. Runs in the caller's context, never under
+   the Forbid() of OpenLibrary(). */
+VOID RefreshPrefs(struct AslBase_intern *AslBase)
+{
+    struct FileInfoBlock *fib;
+    BPTR lock = Lock("ENV:Sys/Asl.prefs", SHARED_LOCK);
+
+    if (!lock)
+        return;
+    fib = AllocDosObject(DOS_FIB, NULL);
+    if (fib && Examine(lock, fib) &&
+        CompareDates(&fib->fib_Date, &AslBase->PrefsDate) != 0)
+    {
+        LoadPrefs(AslBase);
+        AslBase->PrefsDate = fib->fib_Date;
+    }
+    if (fib)
+        FreeDosObject(DOS_FIB, fib);
+    UnLock(lock);
+}

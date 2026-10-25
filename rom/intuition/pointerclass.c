@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
 */
@@ -64,6 +65,10 @@ IPTR PointerClass__OM_NEW(Class *cl, Object *o, struct opSet *msg)
         BOOL oldbitmap = GetTagData(SPRITEA_OldDataFormat, FALSE, tags);
         IPTR width = GetTagData(SPRITEA_Width, 16, tags);
         IPTR height = GetTagData(SPRITEA_OutputHeight, 0, tags);
+        SIPTR xoffset = (SIPTR)GetTagData(POINTERA_XOffset, 0, tags);
+        SIPTR yoffset = (SIPTR)GetTagData(POINTERA_YOffset, 0, tags);
+        if (xoffset < (-2147483647LL - 1) || xoffset > 2147483647LL ||
+            yoffset < (-2147483647LL - 1) || yoffset > 2147483647LL) return 0;
 
         //ULONG xResolution = GetTagData(POINTERA_XResolution, POINTERXRESN_DEFAULT, tags);
         //ULONG yResolution = GetTagData(POINTERA_YResolution, POINTERYRESN_DEFAULT, tags);
@@ -142,12 +147,21 @@ IPTR PointerClass__OM_NEW(Class *cl, Object *o, struct opSet *msg)
             }
         
             shared = CreateSharedPointer(sprite,
-                                         GetTagData(POINTERA_XOffset, 0, tags),
-                                         GetTagData(POINTERA_YOffset, 0, tags),
+                                         xoffset, yoffset,
                                          IntuitionBase);
 
             if (shared)
             {
+                shared->physicalPixels = GetTagData(POINTERA_PhysicalPixels, FALSE, tags) != 0;
+                shared->builtinShape = GetTagData(POINTERA_BuiltinShape, POINTER_BUILTIN_NONE, tags);
+                if (shared->builtinShape > POINTER_BUILTIN_BUSY ||
+                    (shared->builtinShape &&
+                        (GetBitMapAttr(sprite->es_BitMap, BMA_WIDTH) != 16 ||
+                         GetBitMapAttr(sprite->es_BitMap, BMA_HEIGHT) != 16)))
+                {
+                    ReleaseSharedPointer(shared, IntuitionBase);
+                    return 0;
+                }
                 o = (Object *)DoSuperMethodA(cl, o, (Msg)msg);
 
                 if (o)
@@ -193,6 +207,10 @@ IPTR PointerClass__OM_GET(Class *cl, Object *o, struct opGet *msg)
     case POINTERA_SharedPointer:
         D(kprintf("[Pointer] %s: current extSprite 0x%lx\n", __func__, data->shared_pointer->sprite));
         *msg->opg_Storage = (IPTR)data->shared_pointer;
+        break;
+
+    case POINTERA_PhysicalPixels:
+        *msg->opg_Storage = data->shared_pointer->physicalPixels;
         break;
 
     case POINTERA_XOffset:

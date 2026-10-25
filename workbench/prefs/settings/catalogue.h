@@ -38,6 +38,7 @@ struct cat_group {
 #define CAT_EXPERT  2
 
 struct cat_row {
+    char id[CAT_ID];              /* the row file's name: SHOW PAGE <id> */
     int  level;                   /* CAT_NOVICE..CAT_EXPERT, default average */
     char group[CAT_ID];
     char class_name[CAT_NAME];
@@ -70,6 +71,10 @@ int cat_group_index(const struct catalogue *catalogue, const char *id);
 
 /* Case-insensitive substring search over a row's name, description and
  * keywords, and its group's name. An empty query matches everything. */
+/* The row a page request names: its id, its class with or without
+ * ".mcc" or "Editor.mcc", or its name, ignoring case; -1 when none. */
+int cat_find_row(const struct catalogue *catalogue, const char *what);
+
 int cat_row_matches(const struct catalogue *catalogue, const struct cat_row *row,
     const char *query);
 

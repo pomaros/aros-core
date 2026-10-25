@@ -1,6 +1,8 @@
 # Makefile to make the WiFi network chooser.
 
 include $(SRCDIR)/config/aros.cfg
+#MM- workbench-prefs-wifi : workbench-libs-keyring-includes
+#MM- workbench-prefs-wifi-class : workbench-libs-keyring-includes
 
 FILES := main worker locale
 

@@ -9,17 +9,22 @@
 #include <aros/apple/runtime.h>
 #include <aros/apple/startup.h>
 
+#include <exec/execbase.h>
+#include <exec/tasks.h>
+#include <proto/exec.h>
 
 #include <stdint.h>
 
 #include "kernel_cpu.h"
+#include "kernel_intern.h"
 #include "cpu_monitor.h"
 #include "kernel_intr.h"
 #include "kernel_syscall.h"
-
+#include "platform_irq.h"
 #include "platform_timer_kernel.h"
-#include "vm_irq.h"
 #include "guard_proof.h"
+#include "jit_protect.h"
+#include <aros/apple/jit.h>
 
 #define ESR_EC_SHIFT 26U
 #define ESR_EC_SVC64 UINT64_C(0x15)
@@ -185,6 +190,7 @@ int AROSAppleRuntimeDebugPutChar(int chr)
 
 void AROSAppleRuntimeSetFIQReady(int ready)
 {
+    ready = ready || AROSPlatformFIQRequired();
     if (ready == 0) {
         __asm__ volatile("msr DAIFSet, #1" ::: "memory");
         AROSAppleRuntimeLocal()->fiq_ready = 0;
@@ -268,6 +274,92 @@ static void runtime_exception_report(const struct AROSAppleRuntimeFrame *frame,
     halt_puts("\n");
 }
 
+static void irq_mask_abort(void);
+extern int AROSAppleKernelTaskCrash(struct AROSAppleRuntimeFrame *frame);
+extern void AROSAppleKernelCrashHaltDetails(
+    const struct AROSAppleRuntimeFrame *frame);
+
+static const char *current_task_name(void)
+{
+    struct Task *task = SysBase != NULL ? GET_THIS_TASK : NULL;
+
+    if (task == NULL || task->tc_Node.ln_Name == NULL)
+        return "-";
+    return task->tc_Node.ln_Name;
+}
+
+/*
+ * The exception that halts this CPU, on the panel and the evidence
+ * channel: the boot log on the panel comes back for it, over whatever the
+ * desktop drew, so a crash that nothing can recover from is read as a
+ * crash and not as a frozen screen. Every general register is listed; the
+ * two-line report of the proofs stays for the evidence channel readers.
+ */
+void AROSAppleRuntimeHaltReport(const struct AROSAppleRuntimeFrame *frame);
+__attribute__((noinline)) void AROSAppleRuntimeHaltReport(
+    const struct AROSAppleRuntimeFrame *frame)
+{
+    static const char *const vector_names[16] = {
+        "sync EL1t", "IRQ EL1t", "FIQ EL1t", "SError EL1t",
+        "sync EL1h", "IRQ EL1h", "FIQ EL1h", "SError EL1h",
+        "sync EL0", "IRQ EL0", "FIQ EL0", "SError EL0",
+        "sync EL0/32", "IRQ EL0/32", "FIQ EL0/32", "SError EL0/32"
+    };
+    unsigned index;
+
+    AROSAppleKernelScreenLogResume();
+    runtime_exception_report(frame, "[KI] runtime halt");
+    halt_puts("\n[KI] UNHANDLED EXCEPTION, this CPU halts\n");
+    halt_puts("[KI] task=");
+    halt_puts(current_task_name());
+    halt_puts(" vector=");
+    halt_puts(frame->vector < 16 ? vector_names[frame->vector] : "?");
+    halt_puts(" ec=");
+    halt_put_hex((frame->esr >> ESR_EC_SHIFT) & UINT64_C(0x3f));
+    halt_puts("\n[KI] esr=");
+    halt_put_hex(frame->esr);
+    halt_puts(" far=");
+    halt_put_hex(frame->far);
+    halt_puts("\n[KI] elr=");
+    halt_put_hex(frame->elr);
+    halt_puts(" sp=");
+    halt_put_hex(frame->sp);
+    halt_puts("\n[KI] spsr=");
+    halt_put_hex(frame->spsr);
+    halt_puts(" depth=");
+    halt_put_hex(AROSAppleRuntimeLocal()->interrupt_depth);
+    halt_puts("\n");
+    for (index = 0; index < 31; ++index) {
+        halt_puts(index % 2 ? " x" : "[KI] x");
+        AROSAppleKernelDebugPutDirect('0' + (int)(index / 10));
+        AROSAppleKernelDebugPutDirect('0' + (int)(index % 10));
+        halt_puts("=");
+        halt_put_hex(frame->x[index]);
+        if (index % 2 || index == 30)
+            halt_puts("\n");
+    }
+    /* The decoded fault, module+offset+symbol, backtrace and crash-log
+     * entry (task_crash.c), unless the task route printed them already. */
+    AROSAppleKernelCrashHaltDetails(frame);
+}
+
+/*
+ * A task crashed: a synchronous exception at EL0 that no handler owns.
+ * task_crash.c decides whether only the task pays for it (it is suspended
+ * and the next task dispatched into frame) or this CPU halts with the
+ * decoded report; see the comment block there. Out of line, with symbols of
+ * their own: the dispatcher stays integer-only and free of libc calls
+ * (tests/early-kernel-runtime.sh reads it up to the next symbol).
+ */
+int AROSAppleRuntimeTaskTrap(struct AROSAppleRuntimeFrame *frame);
+__attribute__((noinline)) int AROSAppleRuntimeTaskTrap(
+    struct AROSAppleRuntimeFrame *frame)
+{
+    if (frame->vector != 8 || SysBase == NULL)
+        return 0;
+    return AROSAppleKernelTaskCrash(frame);
+}
+
 
 static void irq_mask_abort(void)
 {
@@ -297,7 +389,7 @@ int AROSAppleRuntimeHandleException(struct AROSAppleRuntimeFrame *frame)
         /* Charge interrupt work to the executing CPU, including idle wakes. */
         AROSCPUCurrentState(AROS_CPU_BUSY);
         ++AROSAppleRuntimeLocal()->interrupt_depth;
-        handled = AROSVMKernelHandleIRQ(frame);
+        handled = AROSPlatformHandleIRQ(frame);
         --AROSAppleRuntimeLocal()->interrupt_depth;
         if (handled) {
             /* Whether or not the handler switched tasks, the frame returns
@@ -317,7 +409,7 @@ int AROSAppleRuntimeHandleException(struct AROSAppleRuntimeFrame *frame)
         /* Charge interrupt work to the executing CPU, including idle wakes. */
         AROSCPUCurrentState(AROS_CPU_BUSY);
         ++AROSAppleRuntimeLocal()->interrupt_depth;
-        handled = AROSAppleKernelTimerHandleFIQ(frame);
+        handled = AROSPlatformHandleFIQ(frame);
         --AROSAppleRuntimeLocal()->interrupt_depth;
         if (handled) {
             /* The return mode, not the entry vector, decides: an idle IRQ
@@ -331,8 +423,11 @@ int AROSAppleRuntimeHandleException(struct AROSAppleRuntimeFrame *frame)
         return 1;
     if (frame == NULL ||
         ((frame->esr >> ESR_EC_SHIFT) & UINT64_C(0x3f)) != ESR_EC_SVC64 ||
-        (frame->vector != 0 && frame->vector != 4 && frame->vector != 8))
+        (frame->vector != 0 && frame->vector != 4 && frame->vector != 8)) {
+        if (frame != NULL && AROSAppleRuntimeTaskTrap(frame))
+            return 1;
         goto unhandled;
+    }
     from_el0 = frame->vector == 8;
     service = frame->esr & UINT64_C(0xffff);
     frame->service = service;
@@ -405,6 +500,10 @@ int AROSAppleRuntimeHandleException(struct AROSAppleRuntimeFrame *frame)
         frame->spsr = (frame->spsr & ~SPSR_INTERRUPT_MASK) |
             cpu_RequiredCurrentTaskMasks();
         return 1;
+    case AROS_APPLE_RUNTIME_SVC_JIT_WRITE:
+        frame->x[0] = AROSAppleJitSetWritable(
+            SysBase != NULL ? GET_THIS_TASK : NULL, frame->x[0] != 0);
+        return 1;
     case AROS_APPLE_RUNTIME_SVC_DEBUG_PUT_CHAR:
         frame->x[0] = (uint64_t)AROSAppleKernelDebugPutDirect(
             (int)(uint8_t)frame->x[0]);
@@ -414,6 +513,8 @@ int AROSAppleRuntimeHandleException(struct AROSAppleRuntimeFrame *frame)
             (struct AROSAppleTimerControl *)(uintptr_t)frame->x[0]);
         return 1;
     default:
+        if (AROSPlatformHandleService(service, frame))
+            return 1;
         break;
     }
 rejected:
@@ -430,6 +531,10 @@ unhandled:
     if (frame != NULL && AROSAppleRuntimeLocal()->transition_active != 0 &&
         AROSAppleRuntimeLocal()->return_pc != 0) {
         AROSAppleColdStartRecordRuntimeException(frame);
+        /* Outside the runtime proof this continuation unwinds the whole
+         * session into stage two's halt: the panel gets the report first. */
+        if (AROSAppleRuntimeLocal()->proof == NULL)
+            AROSAppleRuntimeHaltReport(frame);
         runtime_exception_report(frame, "[KI] runtime exception before recovery");
         irq_mask_abort();
         AROSAppleRuntimeLocal()->transition_active = 0;
@@ -440,7 +545,7 @@ unhandled:
     }
     /* The halt that follows is silent; say what led to it first. */
     if (frame != NULL)
-        runtime_exception_report(frame, "[KI] runtime halt");
+        AROSAppleRuntimeHaltReport(frame);
     return 0;
 }
 
@@ -533,6 +638,26 @@ int AROSAppleKernelProveRuntime(
     if (installed_vectors != vectors)
         return 0;
     AROSAppleRuntimeLocal()->active = 1;
+    /* EL0 tasks may read CTR_EL0 (UCT) and clean/invalidate caches by VA
+     * (UCI): code generators such as JIT compilers and compiler-rt's
+     * __clear_cache rely on both. APs inherit this SCTLR. */
+    {
+        uint64_t sctlr;
+        __asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
+        sctlr |= (UINT64_C(1) << 15) | (UINT64_C(1) << 26);
+        __asm__ volatile("msr sctlr_el1, %0; isb" :: "r"(sctlr) : "memory");
+    }
+#if defined(__AROSEXEC_SMP__)
+    /* Exec's shared spinlocks use WFE at EL0. Permit event waits rather
+     * than inheriting firmware's nTWE=0 trap policy. APs inherit this
+     * SCTLR through the SMP handoff. WFI remains a kernel operation. */
+    {
+        uint64_t sctlr;
+        __asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
+        sctlr |= UINT64_C(1) << 18;
+        __asm__ volatile("msr sctlr_el1, %0; isb" :: "r"(sctlr) : "memory");
+    }
+#endif
 
     proof->el1_is_super = (uint64_t)AROSAppleRuntimeIsSuper();
     proof->el1_invalid_result = runtime_svc_invalid();

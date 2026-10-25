@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2023, The AROS Development Team. All rights reserved.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
  
@@ -18,6 +19,7 @@
 #include <graphics/gfxmacros.h>
 #include "intuition_intern.h"
 #include "requesters.h"
+#include "windowframe.h"
 
 
 /**********************************************************************************************/
@@ -40,7 +42,9 @@ void intrequest_freelabels(STRPTR *gadgetlabels, struct IntuitionBase *Intuition
 /* free the gadgets made in BuildEasyRequestArgs() */
 void intrequest_freegadgets(struct Gadget *gadgets, struct IntuitionBase *IntuitionBase)
 {
-    struct Image *frame = gadgets->GadgetRender;
+    struct Image *frame;
+    if (!gadgets) return;
+    frame = gadgets->GadgetRender;
 
     while (gadgets)
     {
@@ -135,7 +139,9 @@ void buildreq_draw(struct IntReqDims *dims, struct IntuiText *itext,
     struct Region   *clipreg, *origreg;
     struct Rectangle cliprect;
 
-    dri = GetScreenDrawInfo(scr);
+    /* The legacy frame retains its logical birth generation; an adapted
+       client must likewise use its actual Window frame, not a fresh screen. */
+    dri = (struct DrawInfo *)WindowFrameDrawInfo(req);
     if (!dri)
         return;
 
@@ -182,5 +188,4 @@ void buildreq_draw(struct IntReqDims *dims, struct IntuiText *itext,
     /* render gadgets */
     RefreshGList(gadgets, req, NULL, -1L);
 
-    FreeScreenDrawInfo(scr, dri);
 }

@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * Licensed under the AROS Public License (APL) Version 1.1. */
 /*
     Copyright (C)  2002-2026, The AROS Development Team. All rights reserved.
 */
@@ -245,5 +247,6 @@ const struct __MUIBuiltinClass _MUI_Scrollbar_desc =
     MUIC_Scrollbar,
     MUIC_Group,
     sizeof(struct Scrollbar_DATA),
-    (void *)Scrollbar_Dispatcher
+    (void *)Scrollbar_Dispatcher,
+    MUI_CLASS_SCALE_AWARE
 };

@@ -17,7 +17,7 @@
 
     NAME */
 
-      void glASetRast(
+      BOOL glASetRast(
 
 /*  SYNOPSIS */
       GLAContext ctx,
@@ -72,6 +72,9 @@
 
             /* After the new render target has been attached, invoke framebuffer recalculation */
             HostGL_CheckAndUpdateBufferSize(_ctx);
+            return _ctx->visible_rp != NULL;
         }
+        return TRUE;
     }
+    return FALSE;
 }

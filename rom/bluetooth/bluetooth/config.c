@@ -157,14 +157,14 @@ AROS_LH1(BOOL, btLoadCfgFromDisk,
                     if(Read(filehandle, &buf[3], formlen - 4) == formlen - 4) {
                         KPRINTF(1, ("Data read OK\n"));
 
-                        btAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname),
-                                       "Loaded config from '%s' (%ld bytes).", filename, formlen + 8);
-                        btReadCfg(NULL, buf);
-                        btParseCfg();
+                        loaded = btReadCfg(NULL, buf);
+                        if(loaded) {
+                            btParseCfg();
+                            btAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname),
+                                "Loaded config from '%s' (%ld bytes).", filename, formlen + 8);
+                            level = RETURN_OK;
+                        }
 
-                        KPRINTF(1, ("All done\n"));
-                        loaded = TRUE;
-                        level = RETURN_OK;
                     }
                     btFreeVec(buf);
                 }
@@ -1405,6 +1405,14 @@ struct BtIFFContext * bAddCfgChunk(LIBBASETYPEPTR BluetoothBase, struct BtIFFCon
         }
         return(subpic);
     } else {
+        if(bRdBE32(buf) == MAKE_ID('K','E','Y','S')) {
+            /* A bond saved in cleartext by an older stack is not loaded: the
+               keys live in the keyring now. The device stays registered and
+               is paired again; the next save writes the file without it. */
+            btAddErrorMsg0(RETURN_WARN, (STRPTR) GM_UNIQUENAME(libname),
+                "An old cleartext Bluetooth bond was dropped: pair the device again.");
+            return(pic);
+        }
         bRemCfgChunk(BluetoothBase, pic, bRdBE32(buf));
         len = (bRdBE32(&buf[1]) + 9) & ~1UL;
         if(pic->bic_ChunksLen+len > pic->bic_BufferLen) {

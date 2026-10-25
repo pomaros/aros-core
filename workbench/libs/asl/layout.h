@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2011, The AROS Development Team. All rights reserved.
 
     Desc:
@@ -34,6 +35,9 @@
 /*****************************************************************************************/
 
 struct AslBase_intern;
+struct AslReqInfo;
+struct ScreenRenderContext;
+struct AslObjectRecord;
 
 /*****************************************************************************************/
 
@@ -105,6 +109,7 @@ struct AslBase_intern;
 #define ASLSC_Inc               (ASLSC_Dummy + 1)
 #define ASLSC_Dec               (ASLSC_Dummy + 2)
 #define ASLSC_DeltaFactor       (ASLSC_Dummy + 3)
+#define ASLSC_ListView          (ASLSC_Dummy + 4)
 
 /* ListviewClass */
 
@@ -127,6 +132,10 @@ struct AslBase_intern;
 #define ASLLV_VisiblePixels     (ASLLV_Dummy + 15)
 #define ASLLV_DeltaFactor       (ASLLV_Dummy + 16)
 #define ASLLV_DoSaveMode        (ASLLV_Dummy + 17)
+#define ASLLV_PropTop           (ASLLV_Dummy + 18)
+#define ASLLV_PropTotal         (ASLLV_Dummy + 19)
+#define ASLLV_PropVisible       (ASLLV_Dummy + 20)
+#define ASLLV_ScrollPixels      (ASLLV_Dummy + 21)
 
 /* ButtonClass */
 
@@ -185,6 +194,7 @@ struct ASLLVDrawMsg
     STACKED struct DrawInfo  * lvdm_DrawInfo;
     STACKED struct Rectangle   lvdm_Bounds;
     STACKED ULONG              lvdm_State;
+    STACKED struct LayoutData *lvdm_LayoutData;
 };
 
 struct ASLLVFileReqNode
@@ -272,14 +282,31 @@ struct LayoutData
     struct TextFont     *ld_Font;
 
     /* Texattr describing the above font */
-    struct TextAttr     ld_TextAttr;
+    struct TTextAttr    ld_TextAttr;
+    const struct ScreenRenderContext *ld_RenderContext;
+    struct AslObjectRecord *ld_Objects;
+    struct List        *ld_Events; /* Process-owned pending IDCMP, shared by generations. */
+    struct LayoutData   *ld_GadgetContext;
+    ULONG               ld_UserDataSize;
+    UWORD               ld_RenderScale;
+    BOOL                ld_ScaleAware;
+    BOOL                ld_GadgetsAttached;
+    BOOL                ld_FontOwned;
+    BOOL                ld_Rebuilding;
+    BOOL                ld_PrepareOnly;
+    BOOL                ld_GenerationFailed;
+    BOOL                ld_RetryScale;
+    BOOL                ld_PendingAbort;
+    struct ReqNode      *ld_ReqNode;
+    WORD                ld_ColumnWidth[ASLLV_MAXCOLUMNS];
+    WORD                ld_ColumnAlign[ASLLV_MAXCOLUMNS];
 
     WORD                ld_WBorLeft;
     WORD                ld_WBorTop;
     WORD                ld_WBorRight;
     WORD                ld_WBorBottom;
 
-    /* Used for passing back info about minimum *inner* window size
+    /* Used for passing back info about minimum outer window size
      * From LDCMD_INIT hook
     */
     UWORD               ld_MinWidth;
@@ -312,4 +339,46 @@ struct ScrollerGadget
 #endif
 };
 
+/* Dimensions are always derived from canonical points, never the previous raster. */
+static inline LONG AslScaleValue(const struct LayoutData *ld, LONG points)
+{
+    QUAD scale = ld && ld->ld_RenderScale ? ld->ld_RenderScale : 100;
+    QUAD value = points;
+    value = value < 0 ? -((-value * scale + 50) / 100) : (value * scale + 50) / 100;
+    return value < -2147483647 - 1 ? (-2147483647 - 1) : value > 2147483647 ? 2147483647 : (LONG)value;
+}
+static inline WORD AslWindowValue(const struct LayoutData *ld, LONG points)
+{
+    LONG pixels = AslScaleValue(ld, points);
+    return pixels < -32768 ? -32768 : pixels > 32767 ? 32767 : pixels;
+}
+LONG AslUnscaleValue(const struct LayoutData *, LONG);
+BOOL AslPrepareContext(struct LayoutData *, struct AslBase_intern *);
+VOID AslPrepareWindowGeometry(const struct LayoutData *, const struct NewWindow *, struct ScaleWindowGeometry *);
+BOOL AslScaleEligible(const struct IntReq *);
+const struct ScreenRenderContext *AslPopupContext(const struct LayoutData *);
+Object *AslFrame(struct LayoutData *, struct TagItem *, struct AslBase_intern *);
+enum AslObjectKind { ASLOBJ_GADGET, ASLOBJ_IMAGE, ASLOBJ_MODEL };
+struct AslObjectRecord
+{
+    struct AslObjectRecord *next;
+    Object *object;
+    Class *objectClass;
+    enum AslObjectKind kind;
+};
+#define ASLGM_INSTALLSCALE 0x80415001UL
+struct AslInstallScale
+{
+    ULONG MethodID;
+    struct GadgetInfo *ginfo; /* DoGadgetMethodA fills the ordinary method prefix. */
+    struct LayoutData *live, *candidate;
+};
+BOOL AslPublishScale(struct LayoutData *, struct LayoutData *, struct GadgetInfo *, struct AslBase_intern *);
+Object *AslLayoutObject(struct LayoutData *, Class *, CONST_STRPTR, struct TagItem *, Object *, struct AslBase_intern *);
+VOID AslForgetObject(struct LayoutData *, Object *, struct AslBase_intern *);
+VOID AslDisposeObjects(struct LayoutData *, struct AslBase_intern *);
+struct IntuiMessage *AslNextEvent(struct LayoutData *, struct MsgPort *, struct AslBase_intern *);
+BOOL AslAbortPending(struct LayoutData *, struct AslBase_intern *);
+VOID AslDiscardEvents(struct LayoutData *, struct Window *, struct AslBase_intern *);
+BOOL AslRelayout(struct LayoutData *, struct AslReqInfo *, struct AslBase_intern *);
 #endif /* LAYOUT_H */

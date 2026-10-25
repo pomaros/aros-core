@@ -116,6 +116,7 @@ struct PowerMessage *power_NewMessage(struct PowerBase *PowerBase, ULONG event);
 void power_CollectReplies(struct PowerBase *PowerBase);
 void power_TaskRemoved(struct PowerBase *PowerBase, struct Task *task);
 LONG power_Transition(struct PowerBase *PowerBase, ULONG depth, ULONG seconds, ULONG source,
-                      ULONG coalesce, ULONG grid_seconds, struct PowerSleepResult *result);
+                      ULONG coalesce, ULONG grid_seconds, struct Hook *wake_hook, ULONG check_ms,
+                      struct PowerSleepResult *result);
 
 #endif /* POWER_PRIVATE_H */

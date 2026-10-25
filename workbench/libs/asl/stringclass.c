@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2011, The AROS Development Team. All rights reserved.
 
     Desc:
@@ -50,6 +51,7 @@ IPTR AslString__OM_NEW(Class * cl, Object * o, struct opSet * msg)
     if (eg)
     {
         data = INST_DATA(cl, eg);
+        data->ld = (struct LayoutData *)GetTagData(GA_UserData, 0, msg->ops_AttrList);
 
         eg->BoundsLeftEdge = eg->LeftEdge;
         eg->BoundsTopEdge  = eg->TopEdge;
@@ -57,12 +59,12 @@ IPTR AslString__OM_NEW(Class * cl, Object * o, struct opSet * msg)
         eg->BoundsHeight   = eg->Height;
         eg->MoreFlags |= GMORE_BOUNDS;
 
-        eg->LeftEdge += BORDERSTRINGSPACINGX;
-        eg->TopEdge  += BORDERSTRINGSPACINGY;
-        eg->Width    -= BORDERSTRINGSPACINGX * 2;
-        eg->Height   -= BORDERSTRINGSPACINGY * 2;
+        eg->LeftEdge += AslScaleValue(data->ld, BORDERSTRINGSPACINGX);
+        eg->TopEdge  += AslScaleValue(data->ld, BORDERSTRINGSPACINGY);
+        eg->Width    -= AslScaleValue(data->ld, BORDERSTRINGSPACINGX) * 2;
+        eg->Height   -= AslScaleValue(data->ld, BORDERSTRINGSPACINGY) * 2;
 
-        data->frame = NewObjectA(NULL, FRAMEICLASS, fitags);
+        data->frame = AslFrame((struct LayoutData *)GetTagData(GA_UserData, 0, msg->ops_AttrList), fitags, AslBase);
         if (!data->frame)
         {
             CoerceMethod(cl, (Object *)eg, OM_DISPOSE);
@@ -109,10 +111,10 @@ IPTR AslString__GM_RENDER(Class *cl, struct Gadget *g, struct gpRender *msg)
 
         getgadgetcoords(g, msg->gpr_GInfo, &x, &y, &w, &h);
 
-        x -= BORDERSTRINGSPACINGX;
-        y -= BORDERSTRINGSPACINGY;
-        w += BORDERSTRINGSPACINGX * 2;
-        h += BORDERSTRINGSPACINGY * 2;
+        x -= AslScaleValue(data->ld, BORDERSTRINGSPACINGX);
+        y -= AslScaleValue(data->ld, BORDERSTRINGSPACINGY);
+        w += AslScaleValue(data->ld, BORDERSTRINGSPACINGX) * 2;
+        h += AslScaleValue(data->ld, BORDERSTRINGSPACINGY) * 2;
 
         im_tags[0].ti_Data = w;
         im_tags[1].ti_Data = h;
@@ -124,7 +126,7 @@ IPTR AslString__GM_RENDER(Class *cl, struct Gadget *g, struct gpRender *msg)
                        x,
                        y,
                        IDS_NORMAL,
-                       msg->gpr_GInfo->gi_DrInfo);
+                       ((struct LayoutData *)g->UserData)->ld_Dri);
 
     } /* if (msg->gpr_Redraw == GREDRAW_REDRAW) */
 

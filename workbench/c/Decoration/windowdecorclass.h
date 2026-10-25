@@ -33,6 +33,7 @@ struct CachedTitleBar
 
     UWORD           width;
     UWORD           height;
+    UWORD           bordertop;  /* the bitmap is width x bordertop pixels */
     ULONG           windowflags;
     STRPTR          title;
     ULONG           titlelen;
@@ -48,8 +49,10 @@ struct CachedTitleBarShape
     ULONG           windowflags;
 };
 
+struct WindowScaleData;
 struct  WindowData
 {
+    struct WindowScaleData *scaleData; /* owned prepared render resources */
     /* Per-screen theme instance shared with the ScreenData (not owned) */
     struct DecorThemeScreen *dts;
 

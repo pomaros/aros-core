@@ -61,6 +61,8 @@ struct Register_DATA
     WORD total_hspacing;
     WORD columns;               /* Number of register columns */
     WORD rows;                  /* Number of register rows */
+    LONG *counts;               /* search matches per tab, numitems LONGs */
+    BOOL searching;             /* counts apply */
 };
 
 
@@ -223,10 +225,45 @@ static void RenderRegisterTabItem(struct IClass *cl, Object *obj,
     /* text */
     fitwidth = item_bar_width - TEXTSPACING;
     x = left_item_bar_x + TEXTSPACING / 2;
+
+    /* While a search is open, the count of a tab with matches sits at its
+     * right on the highlight fill, and a tab without matches is dimmed. */
+    if (data->searching && data->counts[item] > 0)
+    {
+        char badge[12];
+        WORD n = 0, badge_width;
+        LONG count = data->counts[item];
+        char digits[12];
+        WORD d = 0;
+
+        do
+        {
+            digits[d++] = '0' + count % 10;
+            count /= 10;
+        }
+        while (count > 0 && d < 10);
+        while (d > 0)
+            badge[n++] = digits[--d];
+        badge[n] = 0;
+        badge_width = TextLength(_rp(obj), badge, n) + 4;
+        if (badge_width < fitwidth / 2)
+        {
+            WORD bx = x + fitwidth - badge_width;
+            WORD by = top_item_bar_y + TEXTSPACING - 1;
+            SetAPen(_rp(obj), _pens(obj)[MPEN_FILL]);
+            RectFill(_rp(obj), bx, by, bx + badge_width - 1, by + _font(obj)->tf_YSize - 1);
+            SetAPen(_rp(obj), _pens(obj)[MPEN_TEXT]);
+            Move(_rp(obj), bx + 2, by + _font(obj)->tf_Baseline);
+            Text(_rp(obj), badge, n);
+            fitwidth -= badge_width + 2;
+        }
+    }
+
     APTR clip = MUI_AddClipping(muiRenderInfo(obj), x, top_item_bar_y,
         fitwidth, bottom_item_bar_y - top_item_bar_y + 1);
 
-    SetAPen(_rp(obj), _pens(obj)[MPEN_TEXT]);
+    SetAPen(_rp(obj), _pens(obj)[data->searching && data->counts[item] == 0 ?
+        MPEN_HALFSHADOW : MPEN_TEXT]);
     zune_text_draw(ri->ztext, obj, x, x + fitwidth, top_item_bar_y + TEXTSPACING - 1);
 
     MUI_RemoveClipping(muiRenderInfo(obj), clip);
@@ -419,8 +456,9 @@ IPTR Register__OM_NEW(struct IClass *cl, Object *obj, struct opSet *msg)
     data->items =
         (struct RegisterTabItem *)AllocVec(data->numitems *
         sizeof(struct RegisterTabItem), MEMF_PUBLIC | MEMF_CLEAR);
+    data->counts = AllocVec(data->numitems * sizeof(LONG), MEMF_CLEAR);
 
-    if (!data->items)
+    if (!data->items || !data->counts)
     {
         CoerceMethod(cl, obj, OM_DISPOSE);
         return (IPTR) NULL;
@@ -451,8 +489,30 @@ IPTR Register__OM_GET(struct IClass *cl, Object *obj, struct opGet *msg)
     case MUIA_Register_Titles:
         STORE = (IPTR) data->labels;
         return 1;
+
+    case MUIA_Register_SearchCounts:
+        STORE = (IPTR) (data->searching ? data->counts : NULL);
+        return 1;
     }
 
+    return DoSuperMethodA(cl, obj, (Msg) msg);
+}
+
+
+IPTR Register__OM_SET(struct IClass *cl, Object *obj, struct opSet *msg)
+{
+    struct Register_DATA *data = INST_DATA(cl, obj);
+    struct TagItem *tag;
+
+    if ((tag = FindTagItem(MUIA_Register_SearchCounts, msg->ops_AttrList)))
+    {
+        const LONG *counts = (const LONG *)tag->ti_Data;
+        if (counts)
+            CopyMem((APTR)counts, data->counts, data->numitems * sizeof(LONG));
+        data->searching = counts != NULL;
+        if (_flags(obj) & MADF_CANDRAW)
+            MUI_Redraw(obj, MADF_DRAWOBJECT);
+    }
     return DoSuperMethodA(cl, obj, (Msg) msg);
 }
 
@@ -463,6 +523,8 @@ IPTR Register__OM_DISPOSE(struct IClass *cl, Object *obj, Msg msg)
 
     if (data->items)
         FreeVec(data->items);
+    if (data->counts)
+        FreeVec(data->counts);
 
     return DoSuperMethodA(cl, obj, msg);
 }
@@ -763,6 +825,8 @@ BOOPSI_DISPATCHER(IPTR, Register_Dispatcher, cl, obj, msg)
         return Register__OM_NEW(cl, obj, (struct opSet *)msg);
     case OM_GET:
         return Register__OM_GET(cl, obj, (struct opGet *)msg);
+    case OM_SET:
+        return Register__OM_SET(cl, obj, (struct opSet *)msg);
     case OM_DISPOSE:
         return Register__OM_DISPOSE(cl, obj, msg);
     case MUIM_Setup:

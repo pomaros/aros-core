@@ -28,14 +28,22 @@ struct mesa3dgl_framebuffer
     BOOL                        resized;
 };
 
-/* mesa/gallium GL context */
-struct mesa3dgl_context
+/* The pipe screen and state tracker manager that contexts sharing objects
+ * or a screen have in common; the last context to go frees them. */
+struct mesa3dgl_screen
 {
-    APTR                                driver;
-    struct st_context           *st;
-    struct st_visual            stvis;
+    APTR                        driver;
     struct pipe_frontend_screen *stmanager;
+    ULONG                       refs;
+};
 
+/* What a context draws to (a GLADrawable): a window, a rastport or an
+ * offscreen bitmap, and the Gallium framebuffer that holds its pixels. A
+ * context owns one (its target from glACreateContext and glASetRast); an
+ * EGL surface owns another through glACreateDrawable. */
+struct mesa3dgl_drawable
+{
+    APTR                        driver;         /* the pipe driver that presents it */
     struct mesa3dgl_framebuffer *framebuffer;
     struct Window               *window;
     struct Screen               *Screen;
@@ -43,9 +51,28 @@ struct mesa3dgl_context
     struct RastPort             *visible_rp;
     ULONG                       visible_rp_width;
     ULONG                       visible_rp_height;
-    ULONG                      top, bottom;
-    ULONG                      left, right;
+    ULONG                       top, bottom;
+    ULONG                       left, right;
 
+    /* An offscreen target (no window, screen or rastport): a bitmap the
+     * drawable allocated, a friend of the default public screen's, on a
+     * layer of its own. NULL for a visible target. */
+    struct BitMap               *offscreen_bm;
+    struct Layer_Info           *offscreen_li;
+    struct Layer                *offscreen_layer;
+};
+
+/* mesa/gallium GL context */
+struct mesa3dgl_context
+{
+    APTR                                driver;
+    struct st_context           *st;
+    struct st_visual            stvis;
+    struct pipe_frontend_screen *stmanager;
+    struct mesa3dgl_screen      *shared;
+
+    struct mesa3dgl_drawable    own;            /* its own target */
+    struct mesa3dgl_drawable    *draw, *read;   /* bound now (NULL: none) */
 };
 
 /*  state trackers GL API */

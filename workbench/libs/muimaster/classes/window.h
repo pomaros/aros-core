@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * Licensed under the AROS Public License (APL) Version 1.1. */
 #ifndef _MUI_CLASSES_WINDOW_H
 #define _MUI_CLASSES_WINDOW_H
 
@@ -102,14 +104,21 @@ struct MUIP_Window_ToFront
 #define MUIM_Window_FreeGadgetID \
     (MUIB_Window | 0x00000004)   /* Zune: V1 - free the GadgetID for
                                   * BOOPSI gadgets */
-#define MUIM_Window_RecalcDisplay /* PRIV */ \
-    (MUIB_Window | 0x00000005)   /* Zune: V1, PRIV don't use it! */
+#define MUIM_Window_RecalcDisplay \
+    (MUIB_Window | 0x00000005)   /* Requalify scale context and relayout originator. */
 #define MUIM_Window_RemControlCharHandler /* PRIV */ \
     (MUIB_Window | 0x00000006)   /* Zune: V1, PRIV don't use it! */
 #define MUIM_Window_UpdateMenu   /* PRIV */ \
     (MUIB_Window | 0x00000007)   /* Zune: V1, PRIV don't use it! */
 #define MUIM_Window_Refresh      /* PRIV */ \
     (MUIB_Window | 0x00000008)   /* Zune: V1, PRIV don't use it! */
+
+#define MUIM_Window_RetryRenderContext /* PRIV */ \
+    (MUIB_Window | 0x00000009) /* PRIV: bounded setup/open generation retry */
+#define MUIM_Window_RequestScaleContext /* PRIV */ \
+    (MUIB_Window | 0x0000000a) /* PRIV: queue outside a client's draw locks */
+#define MUIM_Window_ApplyScaleContext /* PRIV */ \
+    (MUIB_Window | 0x0000000b) /* PRIV: coalesced context requalification */
 
 struct MUIP_Window_AddControlCharHandler
 {
@@ -298,6 +307,8 @@ struct MUIP_Window_SetMenuState
     (MUIB_Window | 0x00000002)
 #define MUIA_Window_ToolBox \
     (MUIB_Window | 0x00000003)
+#define MUIA_Window_NativeGeneration /* PRIV */ \
+    (MUIB_Window | 0x00000004) /* PRIV: native open lifetime, avoids pointer ABA */
 
 #define MUIV_Window_ActiveObject_None       0
 #define MUIV_Window_ActiveObject_Next       (-1)
@@ -374,6 +385,9 @@ struct MUI_RenderInfo
                                  * MUIM_Setup/MUIM_Cleanup */
 
     /* the following stuff is private */
+    const struct ScreenRenderContext *mri_RenderContext;
+    ULONG mri_RenderScale; /*100 for logical legacy context, actual% if aware. */
+    BOOL mri_ScaleAware;
     struct ColorMap *mri_Colormap;
     UWORD mri_Reserved1;
     UWORD mri_Reserved2;

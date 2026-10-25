@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 2016-2026, The AROS Development Team. All rights reserved.
 
     Desc: Software-cursor framebuffer wrapper bitmap class (CursorFB).
@@ -25,6 +26,7 @@
 #include <stddef.h>
 
 #include "gfx_intern.h"
+#include "gfx_display.h"
 
 /* In gfx_intern.h, 'csd' is a macro expanding to CSD(cl). This class takes an
    explicit class_static_data argument in its factory/helper functions and the
@@ -147,6 +149,186 @@ static IPTR cursorfb_set(OOP_Class *cl, OOP_Object *o, struct pRoot_Set *msg)
     }
 
     return ret;
+}
+
+/* Drivers subclass the Display class (efifbgfx, virtiogfx, ...), so the owner
+ * is admitted when the generic Display class is anywhere in its class chain;
+ * only then is its HIDDDisplayData instance part valid. */
+static BOOL cursorfb_isdisplay(struct class_static_data *csd, OOP_Object *owner)
+{
+    OOP_Class *c;
+
+    for (c = owner ? OOP_OCLASS(owner) : NULL; c; c = c->superclass)
+        if (c == csd->displayclass)
+            return TRUE;
+    return FALSE;
+}
+
+#define CURSORFB_NAME "CursorFB"
+static BOOL cursorfb_refuse(struct HIDD_PixelMap *m, ULONG cause, LONG v0, LONG v1)
+{
+    if (!m) return FALSE;
+    m->refusal = cause;
+    m->refusalValue[0] = v0; m->refusalValue[1] = v1;
+    m->refusalClass = CURSORFB_NAME;
+    return FALSE;
+}
+
+/* Freeze cursor state, retaining the drawn pointer until an entirely prepared
+ * replacement (including save-under) is copied by the transaction backend.
+ * A refusal of the wrapped bitmap keeps that bitmap's own cause and class. */
+static IPTR cursorfb_preparepixels(OOP_Class *cl, OOP_Object *o,
+    struct pHidd_BitMap_PreparePixels *msg)
+{
+    CFB_INIT
+    struct HIDDDisplayData *d = OOP_INST_DATA(csd->displayclass, data->display);
+    if (!msg->map || OOP_OCLASS(o) != cl || !cursorfb_isdisplay(csd, data->display))
+    {
+        ReleaseSemaphore(sem);
+        return cursorfb_refuse(msg->map, OOP_OCLASS(o) != cl ?
+            HIDD_PIXELS_REFUSE_SUBCLASS : HIDD_PIXELS_REFUSE_DISPLAY, 0, 0);
+    }
+    retval = OOP_DoMethod(data->realbm, (OOP_Msg)msg);
+    if (!retval)
+    {
+        ReleaseSemaphore(sem);
+        return FALSE;
+    }
+    msg->map->cursorState = &d->cursor;
+    msg->map->cursorCookie = o;
+    msg->map->cursorSemaphore = sem;
+    if (d->cursor.cursor_drawn && d->cursor.cursor_bm == data->realbm)
+    {
+        LONG ox = d->cursor.cursor_backupX - d->cursor.cursor_drawX;
+        LONG oy = d->cursor.cursor_backupY - d->cursor.cursor_drawY;
+        if (d->cursor.cursor_backup_bpp != 4 || !d->cursor.cursor_backup || !d->cursor.cursor_argb ||
+            ox < 0 || oy < 0 || ox + d->cursor.cursor_backupW > d->cursor.cursor_w ||
+            oy + d->cursor.cursor_backupH > d->cursor.cursor_h)
+        {
+            struct pHidd_BitMap_ReleasePixels release = {
+                OOP_GetMethodID(IID_Hidd_BitMap, moHidd_BitMap_ReleasePixels), msg->map};
+            OOP_DoMethod(data->realbm, (OOP_Msg)&release);
+            ReleaseSemaphore(sem);
+            return cursorfb_refuse(msg->map, HIDD_PIXELS_REFUSE_CURSOR, d->cursor.cursor_backup_bpp,
+                d->cursor.cursor_backup && d->cursor.cursor_argb);
+        }
+        msg->map->cursorBackup = d->cursor.cursor_backup;
+        msg->map->cursorARGB = d->cursor.cursor_argb + (oy * d->cursor.cursor_w + ox) * 4;
+        msg->map->cursorARGBStride = d->cursor.cursor_w * 4;
+        msg->map->cursorX = d->cursor.cursor_backupX;
+        msg->map->cursorY = d->cursor.cursor_backupY;
+        msg->map->cursorW = d->cursor.cursor_backupW;
+        msg->map->cursorH = d->cursor.cursor_backupH;
+    }
+    return TRUE;
+}
+static IPTR cursorfb_releasepixels(OOP_Class *cl, OOP_Object *o,
+    struct pHidd_BitMap_ReleasePixels *msg)
+{
+    struct Library *OOPBase = CSD(cl)->cs_OOPBase;
+    struct CursorFBData *data = OOP_INST_DATA(cl, o);
+    struct HIDD_PixelMap *m = msg->map;
+    if (m->cursorCookie != o) return 0;
+    OOP_DoMethod(data->realbm, (OOP_Msg)msg);
+    ReleaseSemaphore(m->cursorSemaphore);
+    m->cursorState = NULL;
+    m->cursorCookie = NULL;
+    m->cursorSemaphore = NULL;
+    return 0;
+}
+
+/* Preparation only: render with the exact ordinary renderer into unpublished
+ * storage. This retains its rounding, alpha and unused-bit behavior, including
+ * the generic 30-bit conversion path, without a parallel blend implementation. */
+static IPTR cursorfb_renderprepared(OOP_Class *cl, OOP_Object *o,
+    struct pHidd_BitMap_RenderPreparedCursor *msg)
+{
+    struct Library *OOPBase = CSD(cl)->cs_OOPBase;
+    struct CursorFBData *data = OOP_INST_DATA(cl, o);
+    struct class_static_data *csd = CSD(cl);
+    struct HIDD_PixelMap *m = msg->map;
+    struct HIDD_CursorState *proposed = msg->proposed;
+    OOP_Object *display = NULL, *pf = NULL, *temporary;
+    const UBYTE *argb;
+    ULONG stride, x, y, w, h;
+    struct TagItem tags[] = {
+        {aHidd_BitMap_Display, 0}, {aHidd_BitMap_PixFmt, 0},
+        {aHidd_BitMap_Width, 0}, {aHidd_BitMap_Height, 0},
+        {aHidd_BitMap_BytesPerRow, 0},
+        {aHidd_ChunkyBM_Buffer, (IPTR)msg->stage}, {TAG_DONE, 0}};
+    if (!m || m->cursorCookie != o || !m->cursorState || !msg->stage)
+        return cursorfb_refuse(m, HIDD_PIXELS_REFUSE_CURSOR_RENDER, HIDD_CURSOR_REFUSE_LEASE, 0);
+    tags[2].ti_Data = m->width; tags[3].ti_Data = m->height;
+    tags[4].ti_Data = m->stride;
+    if (proposed)
+    {
+        struct HIDD_CursorState *live = m->cursorState;
+        IPTR left = 0, top = 0;
+        LONG dx, dy, ox = 0, oy = 0, cw, ch;
+        QUAD wideX, wideY;
+        /* Pending resources are independently owned, never a live alias. */
+        if (proposed == live ||
+            (proposed->cursor_argb && proposed->cursor_argb == live->cursor_argb) ||
+            (proposed->cursor_backup && proposed->cursor_backup == live->cursor_backup))
+            return cursorfb_refuse(m, HIDD_PIXELS_REFUSE_CURSOR_RENDER, HIDD_CURSOR_REFUSE_ALIAS, 0);
+        proposed->cursor_bm = live->cursor_bm;
+        proposed->cursor_visible = live->cursor_visible;
+        proposed->cursor_mouseX = live->cursor_mouseX;
+        proposed->cursor_mouseY = live->cursor_mouseY;
+        proposed->cursor_drawn = FALSE;
+        proposed->cursor_backupW = proposed->cursor_backupH = 0;
+        if (!proposed->cursor_visible || !proposed->cursor_argb ||
+            !proposed->cursor_w || !proposed->cursor_h) return TRUE;
+        if (live->cursor_bm != data->realbm)
+            return cursorfb_refuse(m, HIDD_PIXELS_REFUSE_CURSOR_RENDER, HIDD_CURSOR_REFUSE_TARGET,
+                live->cursor_bm != NULL);
+        if (!proposed->cursor_backup ||
+            proposed->cursor_w > 32767 || proposed->cursor_h > 32767 ||
+            proposed->cursor_w > (ULONG)-1 / proposed->cursor_h / 4 ||
+            proposed->cursor_backup_size < proposed->cursor_w * proposed->cursor_h * 4)
+            return cursorfb_refuse(m, HIDD_PIXELS_REFUSE_CURSOR_RENDER, HIDD_CURSOR_REFUSE_SHAPE,
+                (LONG)proposed->cursor_backup_size);
+        OOP_GetAttr(data->realbm, aHidd_BitMap_LeftEdge, &left);
+        OOP_GetAttr(data->realbm, aHidd_BitMap_TopEdge, &top);
+        wideX = (QUAD)proposed->cursor_mouseX + proposed->cursor_xoffset - (LONG)left;
+        wideY = (QUAD)proposed->cursor_mouseY + proposed->cursor_yoffset - (LONG)top;
+        cw = proposed->cursor_w; ch = proposed->cursor_h;
+        if (wideX <= -(QUAD)cw || wideY <= -(QUAD)ch ||
+            wideX >= (QUAD)m->width || wideY >= (QUAD)m->height) return TRUE;
+        proposed->cursor_drawX = dx = wideX;
+        proposed->cursor_drawY = dy = wideY;
+        if (dx < 0) { ox = -dx; cw += dx; dx = 0; }
+        if (dy < 0) { oy = -dy; ch += dy; dy = 0; }
+        if ((ULONG)cw > m->width - dx) cw = m->width - dx;
+        if ((ULONG)ch > m->height - dy) ch = m->height - dy;
+        if (cw <= 0 || ch <= 0) return TRUE;
+        x = dx; y = dy; w = cw; h = ch;
+        stride = proposed->cursor_w * 4;
+        argb = proposed->cursor_argb + oy * stride + ox * 4;
+        proposed->cursor_backupX = x; proposed->cursor_backupY = y;
+        proposed->cursor_backupW = w; proposed->cursor_backupH = h;
+        proposed->cursor_backup_bpp = 4;
+        for (ULONG row = 0; row < h; ++row)
+            CopyMem(msg->stage + (y + row) * m->stride + x * 4,
+                proposed->cursor_backup + row * w * 4, w * 4);
+    }
+    else
+    {
+        if (!m->cursorBackup)
+            return cursorfb_refuse(m, HIDD_PIXELS_REFUSE_CURSOR_RENDER, HIDD_CURSOR_REFUSE_BACKUP, 0);
+        argb = m->cursorARGB; stride = m->cursorARGBStride;
+        x = m->cursorX; y = m->cursorY; w = m->cursorW; h = m->cursorH;
+    }
+    OOP_GetAttr(data->realbm, aHidd_BitMap_Display, (IPTR *)&display);
+    OOP_GetAttr(data->realbm, aHidd_BitMap_PixFmt, (IPTR *)&pf);
+    tags[0].ti_Data = (IPTR)display; tags[1].ti_Data = (IPTR)pf;
+    temporary = OOP_NewObject(NULL, CLID_Hidd_ChunkyBM, tags);
+    if (!temporary)
+        return cursorfb_refuse(m, HIDD_PIXELS_REFUSE_CURSOR_RENDER, HIDD_CURSOR_REFUSE_RENDERER, 0);
+    HIDD_BM_PutAlphaImage(temporary, NULL, (UBYTE *)argb, stride, x, y, w, h);
+    OOP_DisposeObject(temporary);
+    if (proposed) proposed->cursor_drawn = TRUE;
+    return TRUE;
 }
 
 /* Default: forward to the real bitmap unchanged */
@@ -484,6 +666,9 @@ OOP_Class *init_cursorfbclass(struct class_static_data *csd)
         {(IPTR (*)(OOP_Class *, OOP_Object *, OOP_MethodID *))cursorfb_fwd              , moHidd_BitMap_PrivateSet               },
         {(IPTR (*)(OOP_Class *, OOP_Object *, OOP_MethodID *))cursorfb_fwd              , moHidd_BitMap_SetRGBConversionFunction },
         {(IPTR (*)(OOP_Class *, OOP_Object *, OOP_MethodID *))cursorfb_fwd              , moHidd_BitMap_UpdateRect               },
+        {(IPTR (*)(OOP_Class *, OOP_Object *, OOP_MethodID *))cursorfb_preparepixels, moHidd_BitMap_PreparePixels},
+        {(IPTR (*)(OOP_Class *, OOP_Object *, OOP_MethodID *))cursorfb_releasepixels, moHidd_BitMap_ReleasePixels},
+        {(IPTR (*)(OOP_Class *, OOP_Object *, OOP_MethodID *))cursorfb_renderprepared, moHidd_BitMap_RenderPreparedCursor},
         {NULL, 0UL }
     };
 

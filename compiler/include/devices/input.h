@@ -23,6 +23,15 @@
 
 #define IND_ADDEVENT	(CMD_NONSTD + 15) /* V50! */
 
+/* Physical keyboard capture for secret dialogs (cooperative containment).
+ * Use one reply port throughout. READ returns io_Actual 0 or one InputEvent.
+ * BEGIN clears repeat state; injected events are rejected until END.
+ * No keyboard event is sent to handlers/recorders while capture is active.
+ * READ must be polled; overflow fails closed until END. */
+#define IND_SECRETBEGIN (CMD_NONSTD + 16)
+#define IND_SECRETREAD  (CMD_NONSTD + 17)
+#define IND_SECRETEND   (CMD_NONSTD + 18)
+
 /* The following is AROS-specific, experimental and subject to change */
 struct InputDevice
 {

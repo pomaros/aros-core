@@ -24,7 +24,7 @@ Start with the relevant product's instructions:
 
 Use separate source and build directories from private native development. Build toolchain sources and patches live under `tools/crosstools/`; external prerequisites are downloaded from their original public sources. Apple signing credentials are not build prerequisites.
 
-[Repository ownership and upstream maintenance](docs/pomaros/UPSTREAM.md) explains synchronization and contribution flow. [Source and binary provenance](docs/pomaros/SOURCES.md) explains what a source revision identifies.
+Keep the official AROS remote fetch-only and review generic changes in this fork before proposing upstream contributions. A source pin identifies source inputs; build manifests and product runtime checks identify and qualify binaries separately. Changing a pin does not qualify an existing image.
 
 ## Licences
 

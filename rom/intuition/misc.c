@@ -1,5 +1,6 @@
 /*
     Copyright (C) 2002-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
 */
 
@@ -8,12 +9,19 @@
 #include <exec/memory.h>
 #include <graphics/rastport.h>
 #include <intuition/pointerclass.h>
+#include <intuition/imageclass.h>
 #include <prefs/pointer.h>
 #include <proto/exec.h>
 #include <proto/graphics.h>
+#include <diskfont/diskfont.h>
+#include <proto/diskfont.h>
 #include <proto/intuition.h>
 
 #include "intuition_intern.h"
+#include "windowframe.h"
+#ifndef SKINS
+#include "intuition_customize.h"
+#endif
 #include "inputhandler.h"
 #include "inputhandler_support.h"
 #include "monitorclass_private.h"
@@ -35,6 +43,7 @@ void SetActiveMonPointerPos(struct IntuitionBase *IntuitionBase)
 
 BOOL ResetPointer(struct IntuitionBase *IntuitionBase)
 {
+    ULONG lock = LockIBase(0);
     struct IntIntuitionBase *_intuitionBase = GetPrivIBase(IntuitionBase);
     struct msSetPointerShape pmsg;
     Object *mon;
@@ -47,22 +56,26 @@ BOOL ResetPointer(struct IntuitionBase *IntuitionBase)
         GetAttr(POINTERA_SharedPointer, obj, (IPTR *)&pmsg.pointer);
     D(bug("[ResetPointer] Default pointer is 0x%p\n", pmsg.pointer));
     if (!pmsg.pointer)
+    {
+        UnlockIBase(lock);
         return TRUE;
+    }
 
     ObtainSemaphoreShared(&_intuitionBase->MonitorListSem);
 
     ForeachNode(&_intuitionBase->MonitorList, mon) {
-        if (!FindFirstScreen(mon, IntuitionBase)) {
-            pmsg.MethodID = MM_SetPointerShape;
-            D(bug("[ResetPointer] Setting default pointer for monitor 0x%p\n", mon));
-            if (!DoMethodA(mon, &pmsg))
-                res = FALSE;
-        }
+        struct Screen *screen = FindFirstScreen(mon, IntuitionBase);
+        pmsg.MethodID = MM_SetPointerShape;
+        pmsg.screen = screen;
+        if (screen && GetPrivScreen(screen)->Pointer) pmsg.pointer = GetPrivScreen(screen)->Pointer;
+        else GetAttr(POINTERA_SharedPointer, obj, (IPTR *)&pmsg.pointer);
+        if (!DoMethodA(mon, &pmsg)) res = FALSE;
     }
 
     ReleaseSemaphore(&_intuitionBase->MonitorListSem);
 
     D(bug("[ResetPointer] Returning %d\n", res));
+    UnlockIBase(lock);
     return res;
 }
 
@@ -212,6 +225,186 @@ BOOL IsLayerHiddenBySibling(struct Layer *layer, BOOL xx)
 
 #endif
 
+/*
+ * Round a screen scale to the allowed grid: 100 to 400 percent in steps of
+ * 25. Zero (no tag) is 100.
+ */
+ULONG ClampScreenScale(ULONG scale)
+{
+    if (scale < SA_SCALE_MIN)
+        return SA_SCALE_MIN;
+    if (scale > SA_SCALE_MAX)
+        return SA_SCALE_MAX;
+    return scale - (scale % SA_SCALE_STEP);
+}
+
+/*
+ * The same font at its size times the scale. Memory fonts first
+ * (graphics), then the disk, through diskfont.library when it is there.
+ * Bitmap faces without a designed size are scaled by diskfont.library.
+ * NULL on failure; the caller keeps the unscaled font.
+ */
+/* FSF_TAGGED describes a TTextAttr, not a plain TextAttr. The source
+ * font is held open by both callers for the complete synchronous request,
+ * so its extension tags remain borrowed and valid until the open returns. */
+void ScreenFontTextAttr(struct TextFont *font, struct TTextAttr *attr)
+{
+    attr->tta_Name = font->tf_Message.mn_Node.ln_Name;
+    attr->tta_YSize = font->tf_YSize;
+    attr->tta_Style = font->tf_Style & ~FSF_TAGGED;
+    attr->tta_Flags = font->tf_Flags;
+    attr->tta_Tags = NULL;
+    if ((font->tf_Style & FSF_TAGGED) && font->tf_Extension)
+    {
+        attr->tta_Tags = ((struct TextFontExtension *)font->tf_Extension)->tfe_Tags;
+        if (attr->tta_Tags) attr->tta_Style |= FSF_TAGGED;
+    }
+}
+
+/* Borrowed logical metadata generations remain valid until screen disposal,
+ * including their font, TextAttr tags and font-sized images. A plain scale
+ * change reuses the current generation; only a new base font allocates one. */
+struct LogicalScreenInfo
+{
+    struct LogicalScreenInfo *previous;
+    struct IntDrawInfo drawinfo;
+    struct IntuitionCustomize customize;
+    struct TTextAttr fontattr;
+};
+
+/* All these views are owned by the screen, never by a gadget or a requester.
+ * Keep past base-font generations alive for clients borrowing public metadata.
+ * This also keeps inherited menu images in existing legacy windows valid. */
+void DisposeLogicalScreenInfo(struct LogicalScreenInfo *info,
+                              struct IntuitionBase *IntuitionBase)
+{
+    struct GfxBase *GfxBase = GetPrivIBase(IntuitionBase)->GfxBase;
+    if (!info) return;
+    DisposeObject((Object *)info->drawinfo.dri_CheckMark);
+    DisposeObject((Object *)info->drawinfo.dri_AmigaKey);
+    DisposeObject((Object *)info->customize.submenu);
+    if (info->drawinfo.dri_Font) CloseFont(info->drawinfo.dri_Font);
+    FreeVec(info);
+}
+
+struct LogicalScreenInfo *PrepareLogicalScreenInfo(struct IntScreen *screen,
+    struct TextFont *basefont, struct IntuitionBase *IntuitionBase)
+{
+    struct LogicalScreenInfo *info;
+    struct TagItem tags[] = {{SYSIA_Which, MENUCHECK}, {SYSIA_DrawInfo, 0}, {TAG_DONE, 0}};
+    if (screen->LogicalInfo && screen->LogicalInfo->drawinfo.dri_Font == basefont)
+        return screen->LogicalInfo;
+    info = AllocVec(sizeof(*info), MEMF_PUBLIC | MEMF_CLEAR);
+    if (!info) return NULL;
+    info->drawinfo = screen->DInfo;
+    info->drawinfo.dri_Font = NULL;
+    info->drawinfo.dri_CheckMark = info->drawinfo.dri_AmigaKey = NULL;
+    /* Customize contains only submenu: allocate our own logical image below,
+     * never borrow physical decorator resources across later reinitialization. */
+    info->drawinfo.dri_Customize = &info->customize;
+    info->drawinfo.dri_Font = SafeReopenFont(IntuitionBase, &basefont);
+    if (!info->drawinfo.dri_Font) goto failure;
+    ScreenFontTextAttr(info->drawinfo.dri_Font, &info->fontattr);
+    tags[1].ti_Data = (IPTR)&info->drawinfo;
+    info->drawinfo.dri_CheckMark = (struct Image *)NewObjectA(NULL, SYSICLASS, tags);
+    tags[0].ti_Data = AMIGAKEY;
+    info->drawinfo.dri_AmigaKey = (struct Image *)NewObjectA(NULL, SYSICLASS, tags);
+    tags[0].ti_Data = SUBMENUIMAGE;
+    info->customize.submenu = (struct Image *)NewObjectA(NULL, SYSICLASS, tags);
+    if (!info->drawinfo.dri_CheckMark || !info->drawinfo.dri_AmigaKey || !info->customize.submenu)
+        goto failure;
+    return info;
+failure:
+    DisposeLogicalScreenInfo(info, IntuitionBase);
+    return NULL;
+}
+
+void CommitLogicalScreenInfo(struct IntScreen *screen, struct LogicalScreenInfo *info)
+{
+    if (screen->LogicalInfo != info)
+    {
+        info->previous = screen->LogicalInfo;
+        screen->LogicalInfo = info;
+    }
+    screen->Screen.Font = (struct TextAttr *)&info->fontattr;
+}
+
+void RestoreLogicalScreenInfo(struct IntScreen *screen, struct LogicalScreenInfo *info)
+{
+    screen->LogicalInfo = info;
+    screen->Screen.Font = info ? (struct TextAttr *)&info->fontattr : NULL;
+}
+
+void FreeLogicalScreenInfo(struct IntScreen *screen, struct IntuitionBase *IntuitionBase)
+{
+    struct LogicalScreenInfo *info = screen->LogicalInfo;
+    screen->LogicalInfo = NULL;
+    while (info)
+    {
+        struct LogicalScreenInfo *previous = info->previous;
+        DisposeLogicalScreenInfo(info, IntuitionBase);
+        info = previous;
+    }
+}
+
+struct DrawInfo *LogicalScreenDrawInfo(struct Screen *screen)
+{
+    return IS(screen)->LogicalInfo ? (struct DrawInfo *)&IS(screen)->LogicalInfo->drawinfo : NULL;
+}
+
+struct DrawInfo *WindowDrawInfo(struct Screen *screen, struct Window *window)
+{
+    /* Screen gadgets render on the physical bar. Window gadgets use their
+     * known destination domain; retained legacy decoration metadata stays
+     * coherent even when the screen's preferred base font changes later. */
+    if (!window) return (struct DrawInfo *)&IS(screen)->DInfo;
+    return (struct DrawInfo *)WindowFrameDrawInfo(window);
+}
+
+struct TextFont *OpenScaledScreenFont(struct IntuitionBase *IntuitionBase,
+                                      struct TextFont *font, ULONG scale)
+{
+    struct IntIntuitionBase *_intuitionBase = GetPrivIBase(IntuitionBase);
+    struct GfxBase *GfxBase = _intuitionBase->GfxBase;
+    struct TTextAttr ta;
+    struct TextFont *ret;
+    struct Library *DiskfontBase;
+
+    if (font == NULL || scale == SA_SCALE_MIN)
+        return NULL;
+    ScreenFontTextAttr(font, &ta);
+    ta.tta_YSize = (UWORD)(((ULONG)font->tf_YSize * scale + 50) / 100);
+    if (ta.tta_YSize == font->tf_YSize)
+        return NULL;
+    ret = OpenFont((struct TextAttr *)&ta);
+    if (ret && ret->tf_YSize != ta.tta_YSize)
+    {
+        /* graphics gave the nearest memory size; the disk may have the exact one */
+        CloseFont(ret);
+        ret = NULL;
+    }
+    if (ret == NULL)
+    {
+        DiskfontBase = OpenLibrary("diskfont.library", 0);
+        if (DiskfontBase)
+        {
+            ret = OpenDiskFont((struct TextAttr *)&ta);
+            if (ret && ret->tf_YSize != ta.tta_YSize)
+            {
+                CloseFont(ret);
+                ret = NULL;
+            }
+            if (ret == NULL)
+            {
+                struct DiskFontHeader *scaled = NewScaledDiskFont(font, (struct TextAttr *)&ta);
+                if (scaled) ret = &scaled->dfh_TF;
+            }
+            CloseLibrary(DiskfontBase);
+        }
+    }
+    return ret;
+}
+
 struct TextFont *SafeReopenFont(struct IntuitionBase *IntuitionBase,
                                 struct TextFont **fontptr)
 {
@@ -226,19 +419,16 @@ struct TextFont *SafeReopenFont(struct IntuitionBase *IntuitionBase,
     font = *fontptr;
     if (font)
     {
-        struct TextAttr ta;
+        struct TTextAttr ta;
 
         font->tf_Accessors++;
         Permit();
 
         /* Now really open it
          */
-        ta.ta_Name  = font->tf_Message.mn_Node.ln_Name;
-        ta.ta_YSize = font->tf_YSize;
-        ta.ta_Style = font->tf_Style;
-        ta.ta_Flags = font->tf_Flags;
+        ScreenFontTextAttr(font, &ta);
 
-        ret = OpenFont(&ta);
+        ret = OpenFont((struct TextAttr *)&ta);
 
         /* Unlock it
          */
@@ -251,12 +441,13 @@ struct TextFont *SafeReopenFont(struct IntuitionBase *IntuitionBase,
     return ret;
 }
 
-Object *MakePointerFromData(struct IntuitionBase *IntuitionBase,
-    const UWORD *source, int xOffset, int yOffset, int width, int height)
+static Object *MakePointerWithRole(struct IntuitionBase *IntuitionBase,
+    const UWORD *source, int xOffset, int yOffset, int width, int height, ULONG role)
 {
     struct IntIntuitionBase *_intuitionBase = GetPrivIBase(IntuitionBase);
     struct TagItem pointertags[] = {
         {POINTERA_BitMap      , (IPTR)source},
+        {POINTERA_BuiltinShape, role},
         {POINTERA_XOffset     , xOffset      },
         {POINTERA_YOffset     , yOffset      },
         {SPRITEA_OldDataFormat, TRUE         },
@@ -266,6 +457,18 @@ Object *MakePointerFromData(struct IntuitionBase *IntuitionBase,
     };
 
     return NewObjectA(_intuitionBase->pointerclass, NULL, pointertags);
+}
+
+Object *MakePointerFromData(struct IntuitionBase *IntuitionBase,
+    const UWORD *source, int xOffset, int yOffset, int width, int height)
+{
+    return MakePointerWithRole(IntuitionBase, source, xOffset, yOffset, width, height,
+        POINTER_BUILTIN_NONE);
+}
+Object *MakeBuiltinPointerFromData(struct IntuitionBase *IntuitionBase,
+    const UWORD *source, int xOffset, int yOffset, int width, int height, ULONG role)
+{
+    return MakePointerWithRole(IntuitionBase, source, xOffset, yOffset, width, height, role);
 }
 
 Object *MakePointerFromPrefs(struct IntuitionBase *IntuitionBase, struct Preferences *prefs)
@@ -306,6 +509,7 @@ void InstallPointer(struct IntuitionBase *IntuitionBase, UWORD which, Object **o
 
         if (scr->Pointer == oldpointer)
         {
+            pmsg.screen = &scr->Screen;
             DEBUG_POINTER(dprintf("InstallPointer: scr 0x%lx pointer 0x%lx sprite 0x%lx\n",
                                   scr, pointer, pmsg.pointer->sprite));
             if (DoMethodA(scr->IMonitorNode, &pmsg))
@@ -381,6 +585,8 @@ struct SharedPointer *CreateSharedPointer(struct ExtSprite *sprite, int x, int y
         pointer->xoffset = x;
         pointer->yoffset = y;
         pointer->ref_count = 1;
+        pointer->physicalPixels = FALSE;
+        pointer->builtinShape = POINTER_BUILTIN_NONE;
     }
 
     return pointer;

@@ -46,6 +46,7 @@ struct IScreenModePrefs
     UWORD smp_Height;
     UWORD smp_Depth;
     UWORD smp_Control;
+    UWORD smp_Scale;
 };
 
 struct IIControlPrefs

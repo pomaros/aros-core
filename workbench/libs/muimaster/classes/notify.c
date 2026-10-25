@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * Licensed under the AROS Public License (APL) Version 1.1. */
 /*
     Copyright (C) 2002-2020, The AROS Development Team. All rights reserved.
 */
@@ -821,6 +823,10 @@ BOOPSI_DISPATCHER(IPTR, Notify_Dispatcher, cl, obj, msg)
 {
     switch (msg->MethodID)
     {
+    case MUIM_ScaleContextChildren:
+        return 0;
+    case MUIM_ScaleContextSupported:
+        return TRUE; /* Structural class; exact-class registry gates dispatch. */
     case OM_NEW:
         return Notify__OM_NEW(cl, obj, (struct opSet *)msg);
     case OM_DISPOSE:
@@ -882,5 +888,6 @@ const struct __MUIBuiltinClass _MUI_Notify_desc =
     MUIC_Notify,                /* Class name */
     ROOTCLASS,                  /* super class name */
     sizeof(struct MUI_NotifyData),      /* size of class's own data */
-    (void *) Notify_Dispatcher   /* class dispatcher */
+    (void *) Notify_Dispatcher   /* class dispatcher */,
+    MUI_CLASS_SCALE_AWARE
 };

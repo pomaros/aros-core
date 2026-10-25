@@ -1,0 +1,7 @@
+group system
+order 65
+class KeyringEditor.mcc
+name Keyring
+description Session keyring state and lock or unlock
+keywords security secrets keyring credentials passphrase lock unlock containment
+level novice

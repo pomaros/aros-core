@@ -69,3 +69,4 @@
 
     AROS_LIBFUNC_EXIT
 } /* CmpTime */
+

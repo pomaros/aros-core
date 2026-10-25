@@ -17,6 +17,10 @@
 #define MUIA_Register_Titles  (MUIB_MUI | 0x004297ec)   /* V7  i.g STRPTR * */
 
 #define MUIA_Register_Columns (MUIB_Register | 0x0000)  /* Zune V1  i..  */
+/* Search state of the tabs: one LONG per title, the matches in that page.
+ * A tab with matches carries its count, a tab with none is dimmed; NULL
+ * restores the plain tabs. The array is copied. */
+#define MUIA_Register_SearchCounts (MUIB_Register | 0x0001)  /* Zune V1  .sg LONG * */
 
 
 extern const struct __MUIBuiltinClass _MUI_Register_desc;       /* PRIV */

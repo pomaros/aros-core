@@ -78,20 +78,13 @@
         case DOS_CLI:
         {
             struct CommandLineInterface *cli=(struct CommandLineInterface *)ptr;
-            BPTR *cur, *next;
-            cur=(BPTR *)BADDR(cli->cli_CommandDir);
+            BPTR path = cli->cli_CommandDir;
             FreeVec(BADDR(cli->cli_SetName));
             FreeVec(BADDR(cli->cli_CommandName));
             FreeVec(BADDR(cli->cli_CommandFile));
             FreeVec(BADDR(cli->cli_Prompt));
             FreeVec(ptr);
-            while(cur!=NULL)
-            {
-                next=(BPTR *)BADDR(cur[0]);
-                UnLock(cur[1]);
-                FreeVec(cur);
-                cur=next;
-            }
+            internal_FreePath(path, DOSBase);
             break;
 
         /*

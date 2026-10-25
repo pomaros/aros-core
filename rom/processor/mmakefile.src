@@ -6,6 +6,11 @@ include $(SRCDIR)/config/aros.cfg
 #MM kernel-processor: includes
 
 USER_LDFLAGS := -static
+ifeq ($(AROS_TARGET_PLATFORM),apple-aarch64)
+ifneq ($(AROS_VM_GUEST),1)
+    USER_LDFLAGS += -lfdt
+endif
+endif
 ifneq (,$(filter riscv riscv64,$(CPU)))
     # The harts are described by the device tree, so the tree parser has
     # to be linked in; it pulls in string functions, which a kickstart

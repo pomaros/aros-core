@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * Licensed under the AROS Public License (APL) Version 1.1. */
 /*
     Copyright (C) 2002, The AROS Development Team. 
     All rights reserved.
@@ -11,7 +13,8 @@ struct NewMenu;
 struct Window;
 struct ZMenu;
 
-struct ZMenu *zune_open_menu(struct Window *wnd, struct NewMenu *newmenu);
+struct MUI_RenderInfo;
+struct ZMenu *zune_open_menu(struct MUI_RenderInfo *mri, struct NewMenu *newmenu);
 void zune_mouse_update(struct ZMenu *menu, int left_down);
 /* returns the user data of the selected entry */
 struct MenuItem *zune_leave_menu(struct ZMenu *zmenu);

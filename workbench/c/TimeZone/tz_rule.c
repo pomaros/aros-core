@@ -42,6 +42,11 @@ static const struct {
     { "Pacific/Auckland",    "NZST-12NZDT,M9.5.0,M4.1.0/3",          "new_zealand" },
 };
 
+const char *tz_zone_name(unsigned index)
+{
+    return index < sizeof zones / sizeof zones[0] ? zones[index].name : NULL;
+}
+
 int tz_lookup(const char *name, const char **rule, const char **country)
 {
     size_t i;

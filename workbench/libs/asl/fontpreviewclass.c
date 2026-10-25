@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2011, The AROS Development Team. All rights reserved.
 */
 
@@ -57,6 +58,8 @@
 
 /********************** ASL FONTPREVIEW CLASS **************************************************/
 
+IPTR AslFontPreview__OM_SET(Class *, Object *, struct opSet *);
+
 IPTR AslFontPreview__OM_NEW(Class * cl, Object * o, struct opSet * msg)
 {
     struct AslFontPreviewData *data;
@@ -73,14 +76,17 @@ IPTR AslFontPreview__OM_NEW(Class * cl, Object * o, struct opSet * msg)
     if (o)
     {
         data = INST_DATA(cl, o);
+        data->ld = (struct LayoutData *)GetTagData(GA_UserData, 0, msg->ops_AttrList);
 
-        data->frame = NewObjectA(NULL, FRAMEICLASS, fitags);
+        data->frame = AslFrame((struct LayoutData *)GetTagData(GA_UserData, 0, msg->ops_AttrList), fitags, AslBase);
         data->previewtext = (STRPTR)GetTagData(ASLFP_SampleText, 0, msg->ops_AttrList);
         if (!data->previewtext) data->previewtext = PREVIEW_TEXT;
 
         data->apen = 1;
         data->bpen = 0;
         data->drawstyle = FS_NORMAL;
+        AslFontPreview__OM_SET(cl, o, msg);
+        if (!data->frame) { CoerceMethod(cl, o, OM_DISPOSE); o = NULL; }
 
     } /* if (o) */
 
@@ -207,7 +213,7 @@ IPTR AslFontPreview__GM_RENDER(Class *cl, struct Gadget *g, struct gpRender *msg
                            x,
                            y,
                            IDS_NORMAL,
-                           msg->gpr_GInfo->gi_DrInfo);
+                           ((struct LayoutData *)g->UserData)->ld_Dri);
 
         #if AVOID_FLICKER
             {
@@ -218,27 +224,27 @@ IPTR AslFontPreview__GM_RENDER(Class *cl, struct Gadget *g, struct gpRender *msg
                 fbox.Width = w;
                 fbox.Height = h;
 
-                ibox.Left = x + PREVIEW_BORDER_X;
-                ibox.Top = y + PREVIEW_BORDER_Y;
-                ibox.Width = w - PREVIEW_BORDER_X * 2;
-                ibox.Height = h - PREVIEW_BORDER_Y * 2;
+                ibox.Left = x + AslScaleValue(data->ld, PREVIEW_BORDER_X);
+                ibox.Top = y + AslScaleValue(data->ld, PREVIEW_BORDER_Y);
+                ibox.Width = w - AslScaleValue(data->ld, PREVIEW_BORDER_X) * 2;
+                ibox.Height = h - AslScaleValue(data->ld, PREVIEW_BORDER_Y) * 2;
 
                 PaintInnerFrame(msg->gpr_RPort,
-                                msg->gpr_GInfo->gi_DrInfo,
+                                ((struct LayoutData *)g->UserData)->ld_Dri,
                                 data->frame,
                                 &fbox,
                                 &ibox,
-                                msg->gpr_GInfo->gi_DrInfo->dri_Pens[BACKGROUNDPEN],
+                                ((struct LayoutData *)g->UserData)->ld_Dri->dri_Pens[BACKGROUNDPEN],
                                 AslBase);
             }
         #endif
         }
     }
 
-    x2 = x + w - 1 - PREVIEW_BORDER_X;
-    y2 = y + h - 1 - PREVIEW_BORDER_Y;
-    x += PREVIEW_BORDER_X;
-    y += PREVIEW_BORDER_Y;
+    x2 = x + w - 1 - AslScaleValue(data->ld, PREVIEW_BORDER_X);
+    y2 = y + h - 1 - AslScaleValue(data->ld, PREVIEW_BORDER_Y);
+    x += AslScaleValue(data->ld, PREVIEW_BORDER_X);
+    y += AslScaleValue(data->ld, PREVIEW_BORDER_Y);
 
     if ((clip = NewRectRegion(x, y, x2, y2)))
     {
@@ -252,7 +258,7 @@ IPTR AslFontPreview__GM_RENDER(Class *cl, struct Gadget *g, struct gpRender *msg
         updating = (lay->Flags & LAYERUPDATING) != 0;
         if (updating) EndUpdate(lay, FALSE);
 
-        font = data->font ? data->font : msg->gpr_GInfo->gi_DrInfo->dri_Font;
+        font = data->font ? data->font : ((struct LayoutData *)g->UserData)->ld_Dri->dri_Font;
         text = data->font ? data->previewtext : (STRPTR)"???";
 
         oldclip = InstallClipRegion(lay, clip);

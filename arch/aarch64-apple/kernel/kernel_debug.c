@@ -4,15 +4,19 @@
  *
  * Licensed under the AROS Public License (APL) Version 1.1
  *
- * Desc: Bounded output through a firmware-selected PL011 or virtio console.
+ * Desc: Shared kernel diagnostics, retained FDT and VM console output.
  */
 
 #include <stdint.h>
 
 #include <aros/apple/runtime.h>
 #include <aros/apple/startup.h>
+#include <aros/apple/klog.h>
+#include <aros/aarch64/hwcap.h>
+#include <aros/kernel.h>
 
 #include "kernel_intern.h"
+#include "platform_debug.h"
 
 struct KernelBase;
 
@@ -31,19 +35,16 @@ static uint32_t debug_kind;
 
 void AROSAppleKernelDebugInitialize(uintptr_t base, uint64_t size)
 {
-    debug_uart = (base != 0 && size >= UINT64_C(0x30) &&
-        size <= UINTPTR_MAX - base) ? base : 0;
+    AROSPlatformDebugInitialize(base, size);
+    debug_uart = 0;
     debug_uart_failed = 0;
     debug_kind = DEBUG_KIND_NONE;
+    if (base != 0 && size >= UINT64_C(0x30) &&
+        size <= UINTPTR_MAX - base) {
+        debug_uart = base;
+    }
 }
 
-/*
- * The evidence channel is the same DockChannel the stage-two loader prints
- * on, named by the loader in the chosen node as
- * "dockchannel:<base>:<size>:<sha256>" with fixed-width hexadecimal fields.
- * The scan is bounded by the tree's own header and never follows a pointer
- * out of it; a malformed tree leaves the UART selection untouched.
- */
 #define FDT_MAGIC UINT32_C(0xd00dfeed)
 #define FDT_BEGIN_NODE UINT32_C(1)
 #define FDT_END_NODE UINT32_C(2)
@@ -73,10 +74,6 @@ static int text_equal(const uint8_t *text, uint32_t limit, const char *want)
     }
     return want[index] == 0 || want[index] == ':';
 }
-
-
-
-
 
 /*
  * Look one property up under /chosen. The scan is bounded by the tree's own
@@ -324,6 +321,8 @@ uint64_t AROSAppleKernelChosenDecimal(const char *name)
 static uint64_t identity_midr;
 static uint64_t identity_current_el;
 static uint64_t identity_counter_frequency;
+static uint64_t identity_hwcap;
+static uint64_t identity_hwcap2;
 static char identity_model[AROS_APPLE_IDENTITY_TEXT_BYTES];
 static char identity_compatible[AROS_APPLE_IDENTITY_TEXT_BYTES];
 static int identity_recorded;
@@ -349,7 +348,6 @@ static void copy_root_text(const char *name, char *out)
 }
 
 static struct AROSAppleBootSeed boot_seed;
-static volatile struct AROSAppleBatteryInfo battery_info;
 static struct AROSAppleSystemTimeInfo system_time_info;
 
 void AROSAppleKernelPublishSystemTime(const struct AROSAppleSystemTimeInfo *info)
@@ -360,31 +358,6 @@ void AROSAppleKernelPublishSystemTime(const struct AROSAppleSystemTimeInfo *info
 
     for (index = 0; index < sizeof(system_time_info); ++index)
         target[index] = source[index];
-}
-
-/* Written by the spihid driver, read by the desktop widget. */
-static struct AROSAppleTrackpadState trackpad_state;
-static struct AROSAppleSPIStats spi_stats = {
-    .version = AROS_APPLE_SPI_STATS_VERSION,
-    .size = sizeof(struct AROSAppleSPIStats)
-};
-
-void AROSAppleKernelPublishBattery(const struct AROSAppleBatteryInfo *sample)
-{
-    const uint32_t *source = (const uint32_t *)sample;
-    volatile uint32_t *target = (volatile uint32_t *)&battery_info;
-    uint32_t sequence = battery_info.sequence;
-    uint32_t index;
-
-    battery_info.sequence = sequence + 1U;      /* odd: writing */
-    __asm__ volatile("dmb ish" ::: "memory");
-    for (index = 0; index < sizeof(battery_info) / sizeof(uint32_t); ++index) {
-        if (index == 2U)                          /* sequence's slot */
-            continue;
-        target[index] = source[index];
-    }
-    __asm__ volatile("dmb ish" ::: "memory");
-    battery_info.sequence = sequence + 2U;      /* even: stable */
 }
 
 /* Copy a /chosen seed property into the kernel's one-shot buffer, then wipe
@@ -408,6 +381,21 @@ static void take_chosen_seed(const char *name, uint32_t limit)
     }
 }
 
+/* The boot CPU's features stand for all of them: every core of one Apple SoC
+ * implements the same ISA, and a VM guest is given one CPU model. */
+static void record_hwcap(void)
+{
+    uint64_t isar0, isar1, pfr0, zfr0 = 0;
+
+    __asm__ volatile("mrs %0, id_aa64isar0_el1" : "=r"(isar0));
+    __asm__ volatile("mrs %0, id_aa64isar1_el1" : "=r"(isar1));
+    __asm__ volatile("mrs %0, id_aa64pfr0_el1" : "=r"(pfr0));
+    if (AROSAArch64IDField(pfr0, 32) >= 1)
+        __asm__ volatile("mrs %0, s3_0_c0_c4_4" : "=r"(zfr0)); /* ZFR0 */
+    AROSAArch64DecodeHWCap(isar0, isar1, pfr0, zfr0,
+        &identity_hwcap, &identity_hwcap2);
+}
+
 void AROSAppleKernelRecordIdentity(void)
 {
     uint64_t value;
@@ -418,6 +406,7 @@ void AROSAppleKernelRecordIdentity(void)
     identity_current_el = (value >> 2) & 3U;
     __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(value));
     identity_counter_frequency = value & UINT32_MAX;
+    record_hwcap();
     copy_root_text("model", identity_model);
     copy_root_text("compatible", identity_compatible);
     boot_seed.length = 0;
@@ -441,42 +430,26 @@ int AROSAppleKernelIdentity(uint32_t id, intptr_t *value)
     case AROS_APPLE_KATTR_COUNTER_FREQUENCY:
         *value = (intptr_t)identity_counter_frequency;
         return 1;
+    case KATTR_HWCap:
+        *value = (intptr_t)identity_hwcap;
+        return 1;
+    case KATTR_HWCap2:
+        *value = (intptr_t)identity_hwcap2;
+        return 1;
     case AROS_APPLE_KATTR_BOARD_MODEL:
         *value = (intptr_t)identity_model;
         return identity_model[0] != 0;
     case AROS_APPLE_KATTR_BOARD_COMPATIBLE:
         *value = (intptr_t)identity_compatible;
         return identity_compatible[0] != 0;
-    case AROS_APPLE_KATTR_KEYBOARD_ISO:
-        *value = (intptr_t)AROSAppleKernelChosenDecimal("aros,keyboard-iso");
-        return 1;
-    case AROS_APPLE_KATTR_TRACKPAD_STATE:
-        trackpad_state.version = AROS_APPLE_TRACKPAD_STATE_VERSION;
-        *value = (intptr_t)&trackpad_state;
-        return 1;
-    case AROS_APPLE_KATTR_SPI_STATS:
-        *value = (intptr_t)&spi_stats;
-        return 1;
-    case AROS_APPLE_KATTR_TRACKPAD_HID:
-        *value = (intptr_t)AROSAppleKernelChosenDecimal("aros,trackpad-hid");
-        return 1;
-    case AROS_APPLE_KATTR_DESKTOP_AIC:
-        *value = (intptr_t)AROSAppleKernelChosenDecimal("aros,desktop-aic");
-        return 1;
-    case AROS_APPLE_KATTR_DESKTOP_NVME:
-        *value = (intptr_t)AROSAppleKernelChosenDecimal("aros,desktop-nvme");
-        return 1;
     case AROS_APPLE_KATTR_BOOT_SEED:
         *value = (intptr_t)&boot_seed;
         return boot_seed.length != 0;
-    case AROS_APPLE_KATTR_BATTERY:
-        *value = (intptr_t)&battery_info;
-        return battery_info.version == AROS_APPLE_BATTERY_VERSION;
     case AROS_APPLE_KATTR_SYSTEM_TIME:
         *value = (intptr_t)&system_time_info;
         return system_time_info.version == AROS_APPLE_SYSTEM_TIME_VERSION;
     default:
-        return 0;
+        return AROSPlatformIdentity(id, value);
     }
 }
 
@@ -526,32 +499,64 @@ void AROSAppleKernelDebugSelectVirtConsole(const void *fdt, uint64_t size)
     }
 }
 
-
+void AROSAppleKernelDebugSelectEvidenceChannel(const void *fdt, uint64_t size)
+{
+    if (AROSPlatformDebugSelectEvidenceChannel(fdt, size))
+        debug_kind = DEBUG_KIND_NONE;
+}
 
 static int put_raw(int chr)
 {
+    if (debug_kind == DEBUG_KIND_NONE)
+        return AROSPlatformDebugPutRaw(chr);
     if (debug_uart == 0 || debug_uart_failed != 0)
         return 0;
     if (debug_kind == DEBUG_KIND_VIRTIO) {
-        char c = (char)chr;
-        return vm_console_write(vm_console, &c, 1);
+        char c=(char)chr;return vm_console_write(vm_console,&c,1);
     }
     if (debug_kind == DEBUG_KIND_PL011) {
         pl011_put(chr);
-        return debug_uart_failed == 0;
+        return 1;
     }
     return 0;
 }
 
-/*
- * One read of the evidence channel's free-count register. On the target the
- * hypervisor traps it, and a trap is what makes m1n1 recompute the guest's
- * virtual FIQ line; natively it is a harmless read. Nothing is written.
- */
+void AROSAppleKernelDebugTouchSink(void)
+{
+    AROSPlatformDebugTouchSink();
+}
 
+/* The kernel log ring (aros/apple/klog.h). */
+#define KLOG_CAPACITY (512U * 1024U)
+static volatile char klog_ring[KLOG_CAPACITY];
+static volatile uint64_t klog_head;
+
+/* A plain increment, not an atomic one: this runs from the first stage-two
+ * output on, before the MMU makes memory cacheable, where exclusive loads
+ * may fault. Two cores writing at once may lose a character. */
+static void klog_put(int chr)
+{
+    uint64_t at = klog_head;
+
+    klog_head = at + 1;
+    klog_ring[at % KLOG_CAPACITY] = (char)chr;
+}
+
+intptr_t AROSAppleKernelLogRecord(void)
+{
+    static struct AROSAppleKernelLog record;
+
+    record.version = AROS_APPLE_KLOG_VERSION;
+    record.size = sizeof(record);
+    record.ring = klog_ring;
+    record.capacity = KLOG_CAPACITY;
+    record.head = &klog_head;
+    return (intptr_t)&record;
+}
 
 int AROSAppleKernelDebugPutDirect(int chr)
 {
+    klog_put(chr);
     AROSAppleKernelScreenLogPut(chr);
     if (chr == '\n' && !put_raw('\r'))
         return 0;

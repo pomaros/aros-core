@@ -15,6 +15,7 @@
 
 #include "exec_intern.h"
 #include "etask.h"
+#include "freeze_smp.h"
 
 /*****************************************************************************
 
@@ -38,7 +39,7 @@
         flags - reserved, pass 0.
 
     RESULT
-        The number of tasks thawed, or FREEZE_UNSUPPORTED on an SMP build.
+        The number of tasks thawed.
 
     NOTES
         Relative timer.device requests of the frozen tasks measure awake
@@ -58,8 +59,8 @@
     D(bug("[Exec] ThawTasks(0x%lx)\n", flags);)
 
 #if defined(__AROSEXEC_SMP__)
-    /* FreezeTasks() refused, so there is nothing to thaw. */
-    return FREEZE_UNSUPPORTED;
+    (void)task; (void)next; (void)thawed;
+    return exec_ThawAllSMP();
 #else
     Disable();
     ForeachNodeSafe(&SysBase->TaskWait, task, next)

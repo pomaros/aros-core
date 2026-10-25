@@ -59,6 +59,6 @@ ukrainian.ct         text encoding=ISO-8859-5
 # Russian is stored as WINDOWS-1251 but used as Amiga-1251
 russian.ct           text encoding=WINDOWS-1251
 
-# Preserve recorded serial bytes and patch context exactly.
-developer/debug/test/pipe/readiness_vm/evidence/**/serial.log -whitespace
-tools/crosstools/llvm/*.diff -whitespace
+# Unified-diff context lines can consist of their leading space marker.
+tools/crosstools/rust/crates/libc-0.2.190-aros-native.diff whitespace=-blank-at-eol
+tools/crosstools/rust/unmodified/rust-src-aros.diff whitespace=-blank-at-eol

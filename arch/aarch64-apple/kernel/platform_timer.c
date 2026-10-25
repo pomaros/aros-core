@@ -7,7 +7,6 @@
  */
 
 #include <aros/apple/platformtimer.h>
-
 #include <aros/apple/runtime.h>
 #include <aros/apple/startup.h>
 #include <aros/symbolsets.h>
@@ -21,6 +20,11 @@
 #include "kernel_intern.h"
 #include "platform_timer_kernel.h"
 #include "vm_irq.h"
+#include "platform_irq.h"
+#if defined(__AROSEXEC_SMP__)
+#include "smp.h"
+#include "cpu_monitor.h"
+#endif
 
 #define CNTKCTL_EL0VCTEN UINT64_C(1U << 1)
 
@@ -98,12 +102,7 @@ static int retained_fdt(const void **fdt, size_t *fdt_size)
         *fdt_size <= AROS_APPLE_FDT_MAX_SIZE;
 }
 
-static void timer_delivery_ready(int ready)
-{
-    /* The GIC owns IRQ readiness; an unarmed timer simply deasserts its PPI. */
-    (void)ready;
-}
-
+#if defined(AROS_VM_GUEST) && AROS_VM_GUEST
 int AROSVMKernelTimerFire(void)
 {
     enum AROSAppleTimerStatus status = AROSAppleTimerHandle(&kernel_timer);
@@ -117,6 +116,7 @@ int AROSVMKernelTimerFire(void)
     /* A source may deassert after the GIC sampled it; it is still ours. */
     return status == AROS_APPLE_TIMER_OK || status == AROS_APPLE_TIMER_NOT_PENDING;
 }
+#endif
 
 static void fill_control(
     struct AROSAppleTimerControl *control,
@@ -154,12 +154,16 @@ static void fiq_report(const char *label, uint64_t value)
  * coalesce: the callback always derives the deadline from the current queue. */
 int AROSAppleKernelTimerNotify(void)
 {
+#if defined(__AROSEXEC_SMP__)
+    if (AROSAppleSMPIsSecondary())
+        return AROS_APPLE_TIMER_OWNERSHIP;
+#endif
     /* A queued notification can outlive release; there is no work left. */
     if (!kernel_timer.claimed)
         return AROS_APPLE_TIMER_OK;
     enum AROSAppleTimerStatus status = AROSAppleTimerRefresh(
         &kernel_timer, kernel_timer.owner);
-    timer_delivery_ready(AROSAppleTimerArmed(&kernel_timer));
+    AROSPlatformTimerDeliveryReady(AROSAppleTimerArmed(&kernel_timer));
     if (status != AROS_APPLE_TIMER_OK)
         fiq_report("[KT] FAIL timer refresh status=", status);
     return status;
@@ -176,6 +180,26 @@ int AROSAppleKernelTimerControl(struct AROSAppleTimerControl *control)
         control->size != sizeof(*control) ||
         (AROSApplePlatformTimer.kpt_Flags & KPTF_DEADLINE_READY) == 0)
         return AROS_APPLE_TIMER_ARGUMENT;
+#if defined(__AROSEXEC_SMP__)
+    /* CNTV belongs to this CPU. Remote callers may only send a notification,
+     * never query/mutate the BSP state or touch their scheduler's registers. */
+    if (control->operation == AROS_APPLE_TIMER_OP_NOTIFY) {
+        if (!kernel_timer.claimed || control->owner != kernel_timer.owner)
+            return AROS_APPLE_TIMER_OWNERSHIP;
+        if (AROSAppleSMPIsSecondary())
+            AROSAppleSMPSendIPI(AROS_APPLE_TIMER_IPI, 0,
+                1U << AROSCPUMonitorTopology()->boot_cpu);
+        else {
+            status = AROSAppleKernelTimerNotify();
+            control->status = status;
+            return status;
+        }
+        control->status = AROS_APPLE_TIMER_OK;
+        return AROS_APPLE_TIMER_OK;
+    }
+    if (AROSAppleSMPIsSecondary())
+        return AROS_APPLE_TIMER_OWNERSHIP;
+#endif
     operation = control->operation;
     owner = control->owner;
     switch (operation) {
@@ -194,17 +218,17 @@ int AROSAppleKernelTimerControl(struct AROSAppleTimerControl *control)
     case AROS_APPLE_TIMER_OP_ARM:
         status = AROSAppleTimerArm(&kernel_timer, owner, control->deadline);
         if (status == AROS_APPLE_TIMER_OK)
-            timer_delivery_ready(1);
+            AROSPlatformTimerDeliveryReady(1);
         break;
     case AROS_APPLE_TIMER_OP_DISARM:
         status = AROSAppleTimerDisarm(&kernel_timer, owner);
         if (status == AROS_APPLE_TIMER_OK)
-            timer_delivery_ready(0);
+            AROSPlatformTimerDeliveryReady(0);
         break;
     case AROS_APPLE_TIMER_OP_RELEASE:
         status = AROSAppleTimerRelease(&kernel_timer, owner);
         if (status == AROS_APPLE_TIMER_OK)
-            timer_delivery_ready(0);
+            AROSPlatformTimerDeliveryReady(0);
         break;
     default:
         status = AROS_APPLE_TIMER_ARGUMENT;
@@ -310,7 +334,8 @@ int AROSAppleKernelTimerHandleFIQ(struct AROSAppleRuntimeFrame *frame)
          * A source that is neither our timer nor this echo is still a fault.
          */
         if (kernel_timer.claimed != 0) {
-            timer_delivery_ready(AROSAppleTimerArmed(&kernel_timer));
+            AROSAppleKernelDebugTouchSink();
+            AROSPlatformTimerDeliveryReady(AROSAppleTimerArmed(&kernel_timer));
             cpu_IdleInterrupted(frame);
             return 1;
         }
@@ -321,10 +346,10 @@ int AROSAppleKernelTimerHandleFIQ(struct AROSAppleRuntimeFrame *frame)
         fiq_unhandled((uint32_t)status);
         target_write_control(NULL, AROS_APPLE_TIMER_CTL_IMASK);
         target_synchronize(NULL);
-        timer_delivery_ready(0);
+        AROSPlatformTimerDeliveryReady(0);
         return 0;
     }
-    timer_delivery_ready(AROSAppleTimerArmed(&kernel_timer));
+    AROSPlatformTimerDeliveryReady(AROSAppleTimerArmed(&kernel_timer));
     /* A task (lower-EL vector) takes the ordinary scheduler exit; the idle
      * context (current-EL vector) dispatches directly, see kernel_cpu.c. */
     if (frame->vector == 10)
@@ -367,7 +392,8 @@ static int platform_timer_Init(struct KernelBase *KernelBase)
     if (AROSAppleTimerInitialize(&kernel_timer, frequency, &io, NULL) !=
             AROS_APPLE_TIMER_OK)
         return FALSE;
-    if (retained_fdt(&fdt, &fdt_size) && AROSVMKernelTimerInitialize(fdt, fdt_size, KernelBase))
+    if (retained_fdt(&fdt, &fdt_size) &&
+        AROSPlatformTimerInitialize(fdt, fdt_size, KernelBase))
         AROSApplePlatformTimer.kpt_Flags |= KPTF_DEADLINE_READY;
     return TRUE;
 }

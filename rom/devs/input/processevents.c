@@ -12,6 +12,7 @@
 #include <exec/interrupts.h>
 #include <exec/alerts.h>
 #include <exec/memory.h>
+#include <exec/errors.h>
 #include <devices/inputevent.h>
 #include <devices/input.h>
 #include <devices/timer.h>
@@ -90,6 +91,36 @@ asm(".global is_Code_Wrapper\n"
     "jsr (%a2)\n" "movem.l %sp@+,%d2-%d4/%a2\n" "rts\n");
 #endif
 
+/* A capture bypasses the handler chain, so commodities cannot record it.
+ * Reply-port ownership is containment in AROS shared memory. */
+static void ClearSecretInput(struct inputbase *base)
+{
+    volatile UBYTE *p = (volatile UBYTE *)base->SecretEvents;
+    ULONG n = sizeof(base->SecretEvents);
+    while (n--) *p++ = 0;
+    base->SecretHead = base->SecretCount = 0;
+    base->SecretOverflow = FALSE;
+    base->SecretTicks = 0;
+    base->SecretOwner = NULL;
+}
+
+/* Complete the private keyboard request before releasing a capture. CMD_CLEAR
+ * drops the reader backlog, including events that arrived before cancellation.
+ * The caller removes the stale wakeup bit before reissuing the read. */
+static void ResetSecretKeyboard(struct IOStdReq *request, struct InputEvent *event)
+{
+    volatile UBYTE *p = (volatile UBYTE *)event;
+    ULONG n = sizeof(*event);
+    if (!CheckIO((struct IORequest *)request))
+        AbortIO((struct IORequest *)request);
+    WaitIO((struct IORequest *)request);
+    while (n--) *p++ = 0;
+    request->io_Command = CMD_CLEAR;
+    DoIO((struct IORequest *)request);
+    SetSignal(0, 1UL << request->io_Message.mn_ReplyPort->mp_SigBit);
+    SEND_KBD_REQUEST(request, event);
+}
+
 /* Forwards a chain of events to the inputhandlers */
 VOID ForwardQueuedEvents(struct inputbase *InputDevice)
 {
@@ -99,6 +130,12 @@ VOID ForwardQueuedEvents(struct inputbase *InputDevice)
     ie_chain = GetEventsFromQueue(InputDevice);
     if (ie_chain)
     {
+        if (InputDevice->SecretOwner)
+        {
+            struct InputEvent *event;
+            for (event = ie_chain; event; event = event->ie_NextEvent)
+                event->ie_Qualifier &= ~KEY_QUALIFIERS;
+        }
         ForeachNode(&(InputDevice->HandlerList), ihiterator)
         {
             D(bug("ipe: calling inputhandler %s at %p\n",
@@ -277,8 +314,78 @@ void ProcessEvents(struct inputbase *InputDevice)
                     (struct IOStdReq *)GetMsg(InputDevice->CommandPort)))
             {
 
+                ioreq->io_Error = 0;
+                ioreq->io_Actual = 0;
+                /* Injection cannot influence qualifiers, repeats or dialogs. */
+                if (InputDevice->SecretOwner &&
+                    (ioreq->io_Command == IND_ADDEVENT ||
+                     ioreq->io_Command == IND_WRITEEVENT))
+                {
+                    ioreq->io_Error = IOERR_UNITBUSY;
+                    ReplyMsg((struct Message *)ioreq);
+                    continue;
+                }
                 switch (ioreq->io_Command)
                 {
+                case IND_SECRETBEGIN:
+                    if (InputDevice->SecretOwner ||
+                        !ioreq->io_Message.mn_ReplyPort)
+                    {
+                        ioreq->io_Error = IOERR_UNITBUSY;
+                        break;
+                    }
+                    if (keyrepeat_state > 0)
+                    {
+                        ABORT_KEYTIMER_REQUEST;
+                        keyrepeat_state = 0;
+                    }
+                    /* Drain events generated before the capture began. */
+                    ForwardQueuedEvents(InputDevice);
+                    ClearSecretInput(InputDevice);
+                    InputDevice->SecretOwner = ioreq->io_Message.mn_ReplyPort;
+                    ResetSecretKeyboard(kbdio, kbdie);
+                    wakeupsigs &= ~kbdsig;
+                    break;
+                case IND_SECRETREAD:
+                case IND_SECRETEND:
+                    if (!InputDevice->SecretOwner ||
+                        InputDevice->SecretOwner != ioreq->io_Message.mn_ReplyPort)
+                    {
+                        ioreq->io_Error = IOERR_BADADDRESS;
+                        break;
+                    }
+                    if (ioreq->io_Command == IND_SECRETEND)
+                    {
+                        ClearSecretInput(InputDevice);
+                        ResetSecretKeyboard(kbdio, kbdie);
+                        wakeupsigs &= ~kbdsig;
+                        break;
+                    }
+                    InputDevice->SecretTicks = 0;
+                    if (InputDevice->SecretOverflow)
+                    {
+                        ioreq->io_Error = IOERR_BADLENGTH;
+                        break;
+                    }
+                    if (!ioreq->io_Data || ioreq->io_Length != sizeof(struct InputEvent))
+                    {
+                        ioreq->io_Error = IOERR_BADLENGTH;
+                        break;
+                    }
+                    if (InputDevice->SecretCount)
+                    {
+                        struct InputEvent *event = &InputDevice->SecretEvents[InputDevice->SecretHead];
+                        *(struct InputEvent *)ioreq->io_Data = *event;
+                        {
+                            volatile UBYTE *p = (volatile UBYTE *)event;
+                            ULONG n = sizeof(*event);
+                            while (n--) *p++ = 0;
+                        }
+                        InputDevice->SecretHead = (InputDevice->SecretHead + 1) % 32;
+                        InputDevice->SecretCount--;
+                        ioreq->io_Actual = sizeof(struct InputEvent);
+                    }
+                    break;
                 case CMD_STOP:
                     InputDevice->Stopped = TRUE;
                     break;
@@ -439,6 +546,14 @@ void ProcessEvents(struct inputbase *InputDevice)
             struct InputEvent timer_ie;
 
             GetMsg(timermp);
+            /* An abandoned owner releases the keyboard within ten seconds.
+             * The prompt polls every 20 ms and aborts if ownership expires. */
+            if (InputDevice->SecretOwner && ++InputDevice->SecretTicks >= 100)
+            {
+                ClearSecretInput(InputDevice);
+                ResetSecretKeyboard(kbdio, kbdie);
+                wakeupsigs &= ~kbdsig;
+            }
 
             timer_ie.ie_NextEvent = NULL;
             timer_ie.ie_Class = IECLASS_TIMER;
@@ -456,7 +571,8 @@ void ProcessEvents(struct inputbase *InputDevice)
             SEND_TIMER_REQUEST(timerio);
         }
 
-        if (!InputDevice->Stopped && (wakeupsigs & keytimersig))
+        if (!InputDevice->Stopped && !InputDevice->SecretOwner &&
+            keyrepeat_state > 0 && (wakeupsigs & keytimersig))
         {
             struct InputEvent ie;
 
@@ -481,7 +597,7 @@ void ProcessEvents(struct inputbase *InputDevice)
 
         if (!InputDevice->Stopped && (wakeupsigs & kbdsig))
         {
-            GetMsg(kbdmp);      /* Only one message */
+            if (!GetMsg(kbdmp)) continue; /* A cleared capture can leave a wakeup. */
             if (kbdio->io_Error != 0)
                 continue;
 
@@ -492,6 +608,27 @@ void ProcessEvents(struct inputbase *InputDevice)
             kbdie->ie_Qualifier &= ~MOUSE_QUALIFIERS;
             kbdie->ie_Qualifier |=
                 (InputDevice->ActQualifier & MOUSE_QUALIFIERS);
+
+            if (InputDevice->SecretOwner)
+            {
+                if (InputDevice->SecretCount == 32)
+                    InputDevice->SecretOverflow = TRUE;
+                else if (!InputDevice->SecretOverflow)
+                {
+                    UBYTE slot = (InputDevice->SecretHead + InputDevice->SecretCount) % 32;
+                    InputDevice->SecretEvents[slot] = *kbdie;
+                    InputDevice->SecretEvents[slot].ie_NextEvent = NULL;
+                    InputDevice->SecretCount++;
+                }
+                /* Secret events never enter the handler chain or repeat queue. */
+                {
+                    volatile UBYTE *p = (volatile UBYTE *)kbdie;
+                    ULONG n = sizeof(*kbdie);
+                    while (n--) *p++ = 0;
+                }
+                SEND_KBD_REQUEST(kbdio, kbdie);
+                continue;
+            }
 
             /* Add event to queue */
             AddEQTail(kbdie, InputDevice);

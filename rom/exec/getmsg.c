@@ -63,7 +63,7 @@
      */
     Disable();
 #if defined(__AROSEXEC_SMP__)
-    EXEC_SPINLOCK_LOCK(&port->mp_SpinLock, NULL, SPINLOCK_MODE_WRITE);
+    EXEC_PORT_LOCK(port);
 #endif
     msg=(struct Message *)RemHead(&port->mp_MsgList);
 #if defined(__AROSEXEC_SMP__)

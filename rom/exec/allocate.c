@@ -131,6 +131,8 @@
             return NULL;
 
         res = stdAlloc(freeList, NULL /* by design */, byteSize, 0, &tp, SysBase);
+        /* The caller serialises freeList; it may Wait() under that. */
+        mmPostPendingAlert(SysBase);
 
         if ((PrivExecBase(SysBase)->IntFlags & EXECF_MungWall) && res) {
             MUNGE_BLOCK(res, MEMFILL_ALLOC, byteSize);

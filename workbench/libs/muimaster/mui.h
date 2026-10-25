@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * Licensed under the AROS Public License (APL) Version 1.1. */
 /*
     Copyright  2002-2018, The AROS Development Team. All rights reserved.
 */
@@ -57,6 +59,7 @@ struct __MUIBuiltinClass {
         AROS_UFPA(Object *, obj, A2),
         AROS_UFPA(Msg     , msg, A1));
 #endif
+    ULONG capabilities; /* Exact class declaration; never inherited. */
 };
 
 /* END PRIV */
@@ -245,6 +248,13 @@ enum
 #define MUIKEYF_HELP         (1<<MUIKEY_HELP)
 #define MUIKEYF_POPUP        (1<<MUIKEY_POPUP)
 
+#define MUI_CLASS_SCALE_AWARE (1UL << 0)
+
+/* MUI_SetClassCapabilities declares an unpublished exact class before objects
+ * or subclasses are created. Declaration is immutable; an identical repeat is
+ * allowed. Covers this dispatcher/private resources only, never unknown
+ * superclasses/children/callbacks. MUIM_ScaleContextSupported is a side-effect
+ * free per-instance resource veto. Failure keeps the whole window logical. */
 struct MUI_CustomClass
 {
     APTR mcc_UserData;                  /* freely usable */

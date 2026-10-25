@@ -6,6 +6,7 @@
 
 #include <stdlib.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <libraries/fd.h>
 #include "__fdesc.h"
 
@@ -76,28 +77,22 @@
     oldfdesc = __getfdesc(oldfd);
     if (!oldfdesc)
     {
-        /* oldfd may be owned by another subsystem (e.g. a bsdsocket socket).
-           Duplicate it through the owner's hook, which installs the same
-           object at newfd and reserves newfd in fd.library. */
-        APTR data;
-        const struct fd_hooks *hooks = __getfdhooks(oldfd, &data);
-        if (hooks && hooks->fdh_dup)
+        /* oldfd may be owned by another subsystem (e.g. a bsdsocket socket),
+           whose hook duplicates it onto newfd. */
+        LONG err = 0;
+        SIPTR hookresult;
+        __fdesc_unlock();
+        if (oldfd == newfd)
         {
-            LONG err = 0;
-            if (oldfd == newfd)
-                { result = newfd; goto done; }
-            /* Vacate newfd first (close a posixc file or free a reservation). */
-            if (__getfdesc(newfd))
-                close(newfd);
-            if (hooks->fdh_dup(data, oldfd, newfd, &err) < 0)
-            {
-                errno = err;
-                { result = -1; goto done; }
-            }
-            { result = newfd; goto done; }
+            /* Validate admission even when no duplication is needed. */
+            hookresult = __fdhook(oldfd, __FDH_FCNTL, F_GETFD, 0, 0, &err);
+            if (hookresult < 0) { errno = err; return -1; }
+            return newfd;
         }
-        errno = EBADF;
-        { result = -1; goto done; }
+        if (newfd < 0) { errno = EBADF; return -1; }
+        hookresult = __fdhook(oldfd, __FDH_DUP, newfd, 0, 0, &err);
+        if (hookresult < 0) { errno = err; return -1; }
+        return newfd;
     }
 
     /* Do nothing if FDs are identical */

@@ -361,12 +361,6 @@ static void dispatch_boot_probe(struct AROSAppleDispatchProof *proof)
     AROSAppleRuntimeReturnEL1(proof->status);
 }
 
-/* Match the runtime entry callback while retaining the dispatch proof type. */
-static void dispatch_runtime_entry(struct AROSAppleRuntimeProof *argument)
-{
-    dispatch_boot_probe((struct AROSAppleDispatchProof *)(void *)argument);
-}
-
 int AROSAppleKernelProveDispatch(
     uintptr_t user_stack, uint64_t user_stack_size,
     struct AROSAppleDispatchProof *proof)
@@ -422,11 +416,16 @@ int AROSAppleKernelProveDispatch(
     }
     proof->boot_task = (uintptr_t)boot_task.task;
     proof->dispatch_count_before = SysBase->DispCount;
-    proof->return_status = AROSAppleRuntimeEnterEL0(dispatch_runtime_entry,
+    proof->return_status = AROSAppleRuntimeEnterEL0(dispatch_boot_probe,
         proof, stack_top);
 
     if (GET_THIS_TASK == boot_task.task) {
+#if defined(__AROSEXEC_SMP__)
+        exec_TaskRemoveRunning(boot_task.task);
+        TLS_SET(ThisTask, NULL);
+#else
         SET_THIS_TASK(NULL);
+#endif
         boot_task.task->tc_State = TS_READY;
         Enqueue(&SysBase->TaskReady, &boot_task.task->tc_Node);
         RemTask(boot_task.task);

@@ -1,4 +1,6 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
+    Licensed under the AROS Public License, version 1.1.
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
 */
@@ -19,6 +21,13 @@
 #include <proto/layers.h>
 #include <exec/ports.h>
 #include "intuition_intern.h"
+#include "windowcomposition.h"
+#include "windowfit.h"
+#include "windowtitle.h"
+#include "visualoverlay.h"
+#include "rendercontextbinding.h"
+#include "windowframe.h"
+#include "screenrendercontext.h"
 #include "intuition_customize.h"
 #include "inputhandler.h"
 #include "inputhandler_actions.h"
@@ -36,6 +45,107 @@
 #define DEBUG DEBUG_OpenWindow
 #   include <aros/debug.h>
 
+/* Called only while IBase is held, before IntWindow allocation (attempt) or
+ * at the actual FirstWindow list publication (open). Never retain pointers. */
+static VOID CaptureFirstWindowEvidence(struct Screen *screen, struct Window *window,
+    BOOL hidden, BOOL aware, ULONG phase, struct IntuitionBase *IntuitionBase)
+{
+    const struct ScreenRenderContext *context = CurrentScreenRenderContext(screen);
+    struct IntDrawInfo *frame = window ? WindowFrameDrawInfo(window) : NULL;
+    struct FirstWindowEvidenceRecord record = {0};
+    record.screenType = screen->Flags & SCREENTYPE;
+    record.workbench = record.screenType == WBENCHSCREEN;
+    record.hidden = !!hidden;
+    record.aware = !!aware;
+    record.contextReady = context != NULL;
+    if (context)
+    {
+        record.scale = context->src_Scale;
+        record.factor = context->src_LegacyScaleFactor;
+        record.baseFont = context->src_BaseFont.tta_YSize;
+        if (context->src_PhysicalDrawInfo && context->src_PhysicalDrawInfo->dri_Font)
+            record.physicalFont = context->src_PhysicalDrawInfo->dri_Font->tf_YSize;
+        record.barHeight = context->src_PhysicalBarHeight;
+    }
+    record.frameReady = frame && frame->dri_Font;
+    if (record.frameReady) record.frameFont = frame->dri_Font->tf_YSize;
+    FirstWindowEvidenceCapture(&IBase->FirstWindowEvidence, phase, &record);
+}
+
+/* Only a Process outside our GUI locks may print. The attempt may be emitted
+ * before construction; publication is emitted after the synchronous action and
+ * optional WindowLock have returned. Nested input-task/GUI-locked calls leave
+ * immutable records pending for a later safe OpenWindow. No diagnostic I/O
+ * occurs in the publication action. */
+static VOID EmitFirstWindowEvidence(struct Screen *screen, struct Window *window,
+    struct IntuitionBase *IntuitionBase)
+{
+    struct Task *me = FindTask(NULL);
+    struct FirstWindowEvidenceRecord records[2];
+    struct Screen *other;
+    struct Window *otherWindow;
+    ULONG pending, phase;
+    LONG lock;
+    if (me->tc_Node.ln_Type != NT_PROCESS ||
+        me == ((struct IIHData *)IBase->InputHandler->is_Data)->InputDeviceTask ||
+        IBase->IBaseLock->ss_Owner == me || IBase->GadgetLock.ss_Owner == me ||
+        IBase->WindowLock.ss_Owner == me || IBase->IntuiActionLock.ss_Owner == me ||
+        IBase->InputHandlerLock.ss_Owner == me || IBase->MenuLock.ss_Owner == me ||
+        IBase->ViewLordLock.ss_Owner == me || IBase->PubScrListLock.ss_Owner == me ||
+        IBase->ScreenNotificationListLock.ss_Owner == me ||
+        IBase->WinDecorSem.ss_Owner == me || IBase->ScrDecorSem.ss_Owner == me ||
+        IBase->MenuDecorSem.ss_Owner == me)
+        return;
+    lock = LockIBase(0);
+    if (IBase->FirstWindowEvidence.captured == IBase->FirstWindowEvidence.emitted)
+    {
+        UnlockIBase(lock);
+        return;
+    }
+    /* Include custom targets, partially constructed private canvases and all
+     * published screen/window roots. Only test ownership, never acquire a
+     * Layer_Info here; this preserves the GUI lock order. */
+    if (screen->LayerInfo.Lock.ss_Owner == me ||
+        (window && WindowCompositionLayerInfo(window)->Lock.ss_Owner == me))
+    {
+        UnlockIBase(lock);
+        return;
+    }
+    for (other = IntuitionBase->FirstScreen; other; other = other->NextScreen)
+    {
+        if (other->LayerInfo.Lock.ss_Owner == me)
+        {
+            UnlockIBase(lock);
+            return;
+        }
+        for (otherWindow = other->FirstWindow; otherWindow;
+             otherWindow = otherWindow->NextWindow)
+            if (WindowCompositionLayerInfo(otherWindow)->Lock.ss_Owner == me)
+            {
+                UnlockIBase(lock);
+                return;
+            }
+    }
+    pending = FirstWindowEvidenceTake(&IBase->FirstWindowEvidence, records);
+    UnlockIBase(lock);
+    for (phase = 0; phase < 2; ++phase)
+        if (pending & (1UL << phase))
+        {
+            const struct FirstWindowEvidenceRecord *r = &records[phase];
+            /* One bug call per line. KLog can still wrap/interleave: missing or
+             * malformed retained bytes cannot qualify a native boot. Hidden
+             * publication is explicitly not evidence of a later Show's pixels. */
+            bug("[ScaleFirstWindow] phase=%s wb=%lu type=%lu hidden=%lu aware=%lu context=%lu scale=%lu factor=%lu base_font=%lu physical_font=%lu frame_ready=%lu frame_font=%lu bar_height=%lu\n",
+                phase ? "open" : "attempt", (unsigned long)r->workbench,
+                (unsigned long)r->screenType, (unsigned long)r->hidden,
+                (unsigned long)r->aware, (unsigned long)r->contextReady,
+                (unsigned long)r->scale, (unsigned long)r->factor,
+                (unsigned long)r->baseFont, (unsigned long)r->physicalFont,
+                (unsigned long)r->frameReady, (unsigned long)r->frameFont,
+                (unsigned long)r->barHeight);
+        }
+}
+
 struct OpenWindowActionMsg
 {
     struct IntuiActionMsg    msg;
@@ -47,7 +157,9 @@ struct OpenWindowActionMsg
     struct Layer                *parentlayer;
     BOOL                             invisible;
     BOOL                             tileoverlay;
+    BOOL                             visualoverlay;
     BOOL                             success;
+    BOOL                             layers_ready;
 };
 
 static VOID int_openwindow(struct OpenWindowActionMsg *msg,
@@ -92,7 +204,8 @@ static VOID int_openwindow(struct OpenWindowActionMsg *msg,
 
     struct GfxBase              *GfxBase = GetPrivIBase(IntuitionBase)->GfxBase;
     struct Library              *UtilityBase = GetPrivIBase(IntuitionBase)->UtilityBase;
-    struct OpenWindowActionMsg   msg;
+    struct LayersBase           *LayersBase = GetPrivIBase(IntuitionBase)->LayersBase;
+    struct OpenWindowActionMsg   msg = {0};
     struct NewWindow                 nw;
     struct Window                       *w = NULL, *helpgroupwindow = NULL, *parentwin = NULL;
     struct TagItem                      *tag, *shapeti = NULL, *shapehookti = NULL;
@@ -125,6 +238,11 @@ static VOID int_openwindow(struct OpenWindowActionMsg *msg,
   //ULONG                                      lock;
     ULONG                            windowinvisible = FALSE;
     BOOL                             tileoverlay = FALSE;
+    BOOL                             visualoverlay = FALSE;
+    BOOL                             hasrendercontext = FALSE;
+    const struct ScreenRenderContext *expectedcontext = NULL;
+    BOOL                             scaleaware = FALSE;
+    const struct ScaleWindowGeometry *scalegeometry = NULL;
     BOOL                                 driver_init_done = FALSE, have_helpgroup = FALSE;
     BOOL                             do_setwindowpointer = FALSE;
 
@@ -549,6 +667,23 @@ moreFlags |= (name); else moreFlags &= ~(name)
                 break;
 #endif
 
+            case WA_ScaleGeometry:
+                scalegeometry = (const struct ScaleWindowGeometry *)tag->ti_Data;
+                break;
+
+            case WA_ScaleAware:
+                scaleaware = !!tag->ti_Data;
+                break;
+
+            case WA_RenderContext:
+                hasrendercontext = TRUE;
+                expectedcontext = (const struct ScreenRenderContext *)tag->ti_Data;
+                break;
+
+            case WA_VisualOverlay:
+                visualoverlay = !!tag->ti_Data;
+                break;
+
             case WA_TileOverlay:
                 tileoverlay = !!tag->ti_Data;
                 break;
@@ -563,6 +698,13 @@ moreFlags |= (name); else moreFlags &= ~(name)
         } /* while ((tag = NextTagItem (&tagList))) */
 
     } /* if (tagList) */
+
+    if (hasrendercontext && (!expectedcontext || !windowinvisible ||
+        (nw.Flags & WFLG_ACTIVATE))) goto exit;
+
+    if (visualoverlay && !ValidVisualOverlay(&nw, scaleaware,
+        windowinvisible, parentl, shape, shapehook, tileoverlay))
+        goto exit;
 
     /* Protected overlays cannot activate or acquire a parent/secondary layer.
      * Validate before allocation so incompatible requests fail without effects. */
@@ -655,6 +797,14 @@ moreFlags |= (name); else moreFlags &= ~(name)
         goto failexit;
     }
 
+    {
+        LONG evidenceLock = LockIBase(0);
+        CaptureFirstWindowEvidence(nw.Screen, NULL, windowinvisible, scaleaware,
+            0, IntuitionBase);
+        UnlockIBase(evidenceLock);
+    }
+    EmitFirstWindowEvidence(nw.Screen, NULL, IntuitionBase);
+
     w  = AllocMem (sizeof(struct IntWindow), MEMF_CLEAR);
 
     DEBUG_OPENWINDOW(dprintf("OpenWindow: Window 0x%lx\n", w));
@@ -681,6 +831,31 @@ moreFlags |= (name); else moreFlags &= ~(name)
 
     DEBUG_OPENWINDOW(dprintf("OpenWindow: Flags 0x%lx MoreFlags 0x%lx IDCMP 0x%lx\n",
                 nw.Flags, moreFlags, nw.IDCMPFlags));
+    /* A live screen scale must not change the metrics of an existing
+       window. Scale-aware clients reopen on CHANGESCALE after relayout;
+       legacy windows retain their initial title font and gadget metrics. */
+    IW(w)->ScaleAware = scaleaware;
+    if (scalegeometry && !scaleaware) goto failexit;
+    IW(w)->ExpectedRenderContext = expectedcontext;
+    ULONG metadataLock = LockIBase(0);
+    if (expectedcontext)
+    {
+        LOCK_REFRESH(nw.Screen);
+        if (!BoundScreenRenderContext(expectedcontext, nw.Screen) ||
+            GetPrivIBase(IntuitionBase)->NextBoundWindowGeneration == (IPTR)-1)
+        {
+            UNLOCK_REFRESH(nw.Screen);
+            UnlockIBase(metadataLock);
+            goto failexit;
+        }
+        IW(w)->BoundWindowGeneration = ++GetPrivIBase(IntuitionBase)->NextBoundWindowGeneration;
+    }
+    BOOL frameReady = InitializeWindowFrame(w, nw.Screen,
+        CurrentScreenRenderContext(nw.Screen), IntuitionBase);
+    if (expectedcontext) UNLOCK_REFRESH(nw.Screen);
+    UnlockIBase(metadataLock);
+    if (!frameReady) goto failexit;
+
     IPTR        userbuffersize;
 
     GetAttr(WDA_UserBuffer, ((struct IntScreen *)(nw.Screen))->WinDecorObj, &userbuffersize);
@@ -695,6 +870,7 @@ moreFlags |= (name); else moreFlags &= ~(name)
         }
     }
 
+    AdoptWindowFrameBuffer(w, FALSE);
     struct wdpInitWindow       initmsg;
     BOOL                       ok;
 
@@ -711,6 +887,7 @@ moreFlags |= (name); else moreFlags &= ~(name)
         goto failexit;
     }
 
+    AdoptWindowFrameBuffer(w, TRUE);
     w->WScreen = nw.Screen;
 
     #ifdef SKINS
@@ -742,14 +919,18 @@ moreFlags |= (name); else moreFlags &= ~(name)
 
     if (!(w->Flags & WFLG_BORDERLESS))
     {
-        w->BorderLeft   = w->WScreen->WBorLeft;
-        w->BorderRight  = w->WScreen->WBorRight;
+        LONG left, top, right, bottom;
+        if (!WindowFrameBaseBorders(w, &left, &top, &right, &bottom) ||
+            left < 0 || top < 0 || right < 0 || bottom < 0 ||
+            left > 127 || top > 127 || right > 127 || bottom > 127)
+            goto failexit;
+        w->BorderLeft = left; w->BorderRight = right;
     #ifdef TITLEHACK
-        w->BorderTop    = w->WScreen->WBorBottom;
+        w->BorderTop = bottom;
     #else
-        w->BorderTop    = w->WScreen->WBorTop;
+        w->BorderTop = top;
     #endif
-        w->BorderBottom = w->WScreen->WBorBottom;
+        w->BorderBottom = bottom;
     }
 
     if (nw.Title || (w->Flags & (WFLG_DRAGBAR | WFLG_CLOSEGADGET | WFLG_DEPTHGADGET)))
@@ -766,7 +947,11 @@ moreFlags |= (name); else moreFlags &= ~(name)
     #endif
         /* Georg Steger: ??? font ??? */
         if (w->WScreen->Font)
-            w->BorderTop += ((struct IntScreen *)(w->WScreen))->DInfo.dri_Font->tf_YSize + 1;
+        {
+            LONG titleBorder = WindowFrameTitleBorder(w);
+            if (titleBorder < 0 || titleBorder > 127) goto failexit;
+            w->BorderTop = titleBorder;
+        }
         else
             w->BorderTop += GfxBase->DefaultFont->tf_YSize + 1;
     #ifndef TITLEHACK
@@ -785,6 +970,8 @@ moreFlags |= (name); else moreFlags &= ~(name)
         #endif
     #endif
     }
+
+    RememberWindowFrameBorders(w);
 
     /* look for GACT_???BORDER gadgets which increase the BorderSizes */
 
@@ -832,12 +1019,16 @@ moreFlags |= (name); else moreFlags &= ~(name)
 
     } /* if (nw.FirstGadget) */
 
-    if (!(w->Flags & WFLG_SIZEBRIGHT)) if (w->BorderRight > w->WScreen->WBorRight)
+    CaptureWindowFrameClientBorders(w);
+    LONG baseLeft, baseTop, baseRight, baseBottom;
+    if (!WindowFrameBaseBorders(w, &baseLeft, &baseTop, &baseRight, &baseBottom))
+        goto failexit;
+    if (!(w->Flags & WFLG_SIZEBRIGHT)) if (w->BorderRight > baseRight)
     {
         w->Flags |= WFLG_SIZEBRIGHT;
     }
 
-    if (!(w->Flags & WFLG_SIZEBBOTTOM)) if (w->BorderBottom > w->WScreen->WBorBottom)
+    if (!(w->Flags & WFLG_SIZEBBOTTOM)) if (w->BorderBottom > baseBottom)
     {
         w->Flags |= WFLG_SIZEBBOTTOM;
     }
@@ -850,11 +1041,13 @@ moreFlags |= (name); else moreFlags &= ~(name)
         struct Image         *im;
         struct DrawInfo *dri;
 
-        if ((dri = GetScreenDrawInfo(w->WScreen)))
+        if ((dri = (struct DrawInfo *)WindowFrameDrawInfo(w)))
         {
             struct TagItem imtags[] =
             {
                 {SYSIA_DrawInfo , (STACKIPTR)dri                                                                                    },
+                {SYSIA_RenderContext, scaleaware ? (IPTR)WindowFrameContext(w) : 0},
+                {SYSIA_Logical, !scaleaware},
                 {SYSIA_Which        , SIZEIMAGE                                                                                             },
                 {SYSIA_Size         , w->WScreen->Flags & SCREENHIRES ? SYSISIZE_MEDRES : SYSISIZE_LOWRES        },
                 {TAG_DONE                                                                                                                       }
@@ -867,7 +1060,8 @@ moreFlags |= (name); else moreFlags &= ~(name)
 
                 DisposeObject(im);
             }
-            FreeScreenDrawInfo(w->WScreen, dri);
+            else if (scaleaware) goto failexit;
+            /* Metadata is generation-owned, not a public acquired DrawInfo. */
         }
 
         if (w->Flags & WFLG_SIZEBRIGHT)
@@ -901,6 +1095,8 @@ moreFlags |= (name); else moreFlags &= ~(name)
     IW(w)->DefaultWindowShapeHook.h_SubEntry = (HOOKFUNC)w;
     IW(w)->DefaultWindowShapeHook.h_Data = (APTR)IntuitionBase;
 
+    /* The explicit outer geometry descriptor owns these values. */
+    if (scalegeometry) innerWidth = innerHeight = ~0;
     if (innerWidth != ~0) nw.Width = innerWidth + w->BorderLeft + w->BorderRight;
     if (innerHeight != ~0) nw.Height = innerHeight + w->BorderTop + w->BorderBottom;
 
@@ -910,6 +1106,12 @@ moreFlags |= (name); else moreFlags &= ~(name)
 
         parentwidth  = parentwin ? parentwin->Width : w->WScreen->Width;
         parentheight = parentwin ? parentwin->Height : w->WScreen->Height;
+        if (!parentwin && !WindowFitViewport(w, &parentwidth, &parentheight)) goto failexit;
+        if (parentwin && !WindowCompositionChildExtent(parentwin, w->WScreen,
+                scaleaware, &parentwidth, &parentheight)) goto failexit;
+
+        if (scalegeometry && !WindowFitInitializeGeometry(w, scalegeometry,
+                parentwidth, parentheight, autoAdjust, (struct NewWindow *)&nw)) goto failexit;
 
         w->Width   = (nw.Width  != ~0) ? nw.Width  : parentwidth - nw.LeftEdge;
         w->Height  = (nw.Height != ~0) ? nw.Height : parentheight - nw.TopEdge;
@@ -951,8 +1153,13 @@ moreFlags |= (name); else moreFlags &= ~(name)
     }
     else
     {
-        w->LeftEdge    = nw.LeftEdge + parentwin->LeftEdge;
-        w->TopEdge     = nw.TopEdge  + parentwin->TopEdge;
+        LONG left, top;
+        if (!WindowCompositionChildPosition(parentwin, w->WScreen, scaleaware,
+                nw.LeftEdge, nw.TopEdge, &left, &top) ||
+            left < -32768 || left > 32767 || top < -32768 || top > 32767)
+            goto failexit;
+        w->LeftEdge = left;
+        w->TopEdge = top;
     }
 
 #ifndef __MORPHOS__
@@ -1001,24 +1208,20 @@ moreFlags |= (name); else moreFlags &= ~(name)
     /* Amiga and checkmark images for menus */
 
     IW(w)->Checkmark = Checkmark ? Checkmark :
-                                           ((struct IntScreen *)(w->WScreen))->DInfo.dri_CheckMark;
+                                           WindowFrameDrawInfo(w)->dri_CheckMark;
 
     IW(w)->AmigaKey  = AmigaKey  ? AmigaKey  :
-                                           ((struct IntScreen *)(w->WScreen))->DInfo.dri_AmigaKey;
-    IW(w)->SubMenuImage = ((struct IntScreen *)(w->WScreen))->DInfo.dri_Customize->submenu;
+                                           WindowFrameDrawInfo(w)->dri_AmigaKey;
+    IW(w)->SubMenuImage = WindowFrameDrawInfo(w)->dri_Customize->submenu;
+    IW(w)->FrameDefaultMenuImages = (Checkmark ? 0 : 1) | (AmigaKey ? 0 : 2) | 4;
 
 #ifndef __MORPHOS__
     /* child support */
-    if (NULL != parentwin)
-    {
-        if (parentwin->firstchild)
-            parentwin->firstchild->prevchild = w;
-
-        w->nextchild = parentwin->firstchild;
-        parentwin->firstchild = w;
-        w->parent = parentwin;
-    }
+    /* Publish the sibling links only after all constructor allocations pass. */
+    w->parent = parentwin;
 #endif
+    if (!WindowFitPrepareOpen(w, IntuitionBase)) goto failexit;
+    if (!PrepareInitialWindowFrameLayout(w, IntuitionBase)) goto failexit;
 
 #ifdef SKINS
     if (hasskininfo) ((struct IntWindow *)(w))->specialflags = SPFLAG_SKININFO;
@@ -1046,10 +1249,17 @@ moreFlags |= (name); else moreFlags &= ~(name)
     }
 
     w->Title = nw.Title;
+    WindowTitleCopy(w, nw.Title); /* unpublished: no lock needed */
 
     /* as mentioned in the OpenScreen() autodoc/SA_SysFont settings the default
        window font will be either screenfont (sysfont=0) or defaultfont (sysfont=1) */
-    w->IFont = SafeReopenFont(IntuitionBase, (IS(w->WScreen)->SysFont) ? &GfxBase->DefaultFont : &IS(w->WScreen)->DInfo.dri_Font);
+    IW(w)->ScaleAware = scaleaware;
+    /* Legacy clients keep their original content font. Native has no
+       window resampler; layout clients explicitly opt in to the scale. */
+    w->IFont = SafeReopenFont(IntuitionBase,
+        !scaleaware && IS(w->WScreen)->Scale > SA_SCALE_MIN
+            ? (IS(w->WScreen)->ScaleSysFont ? &GfxBase->DefaultFont : &IS(w->WScreen)->ScaleBaseFont)
+            : (IS(w->WScreen)->SysFont ? &GfxBase->DefaultFont : &IS(w->WScreen)->DInfo.dri_Font));
 
     if (w->IFont == NULL) goto failexit;
 
@@ -1082,6 +1292,7 @@ moreFlags |= (name); else moreFlags &= ~(name)
     msg.parentlayer = parentl;
     msg.invisible = windowinvisible;
     msg.tileoverlay = tileoverlay;
+    msg.visualoverlay = visualoverlay;
     msg.success = FALSE;
 
     /* int_openwindow() may activate and render the window before returning.
@@ -1098,6 +1309,8 @@ moreFlags |= (name); else moreFlags &= ~(name)
         ReleaseSemaphore(&GetPrivIBase(IntuitionBase)->WindowLock);
     }
 #endif
+
+    EmitFirstWindowEvidence(nw.Screen, w, IntuitionBase);
 
     if (!msg.success) {
         D(bug("OpenWindow: DoSyncAction failed\n"));
@@ -1139,7 +1352,7 @@ moreFlags |= (name); else moreFlags &= ~(name)
 
     if (nw.FirstGadget)
     {
-            struct IntDrawInfo                   *dri = &((struct IntScreen *)(w->WScreen))->DInfo;
+            struct IntDrawInfo                   *dri = WindowFrameDrawInfo(w);
             struct wdpLayoutBorderGadgets  msg;
 
         msg.MethodID                     = WDM_LAYOUT_BORDERGADGETS;
@@ -1227,15 +1440,18 @@ failexit:
            }
         */
 
-        if (driver_init_done)
+        if (driver_init_done || msg.layers_ready)
             intui_CloseWindow(w, IntuitionBase);
+        WindowCompositionDispose(w, IntuitionBase);
 
         if (w->IFont) CloseFont(w->IFont);
 
-        if (((struct IntWindow *)w)->DecorUserBuffer)
+        if (IW(w)->OutlineShape)
         {
-            FreeMem((APTR)((struct IntWindow *)w)->DecorUserBuffer, ((struct IntWindow *)w)->DecorUserBufferSize);
+            DisposeRegion(IW(w)->OutlineShape);
+            IW(w)->OutlineShape = NULL;
         }
+        FreeWindowFrames(w, IntuitionBase);
 
         FreeMem (w, sizeof(struct IntWindow));
 
@@ -1261,7 +1477,37 @@ exit:
 
 /**********************************************************************************/
 
+static VOID int_openwindow_body(struct OpenWindowActionMsg *msg,
+    struct IntuitionBase *IntuitionBase);
+
 static VOID int_openwindow(struct OpenWindowActionMsg *msg,
+    struct IntuitionBase *IntuitionBase)
+{
+    struct LayersBase *LayersBase = GetPrivIBase(IntuitionBase)->LayersBase;
+    struct Window *window = msg->window;
+    const struct ScreenRenderContext *expected = WindowBoundRenderContext(window);
+    if (!expected && !IW(window)->ScaleAware)
+    {
+        int_openwindow_body(msg, IntuitionBase);
+        return;
+    }
+    ULONG lock = LockIBase(0);
+    struct Screen *screen = window->WScreen;
+    if (ResourceExisting(screen, RESOURCE_SCREEN, IntuitionBase))
+    {
+        LOCK_REFRESH(screen);
+        if ((!expected || BoundScreenRenderContext(expected, screen)) &&
+            (!IW(window)->ScaleAware ||
+             WindowFrameContext(window) == CurrentScreenRenderContext(screen)))
+            int_openwindow_body(msg, IntuitionBase);
+        else msg->success = FALSE;
+        UNLOCK_REFRESH(screen);
+    }
+    else msg->success = FALSE;
+    UnlockIBase(lock);
+}
+
+static VOID int_openwindow_body(struct OpenWindowActionMsg *msg,
                            struct IntuitionBase *IntuitionBase)
 {
     struct GfxBase * GfxBase = GetPrivIBase(IntuitionBase)->GfxBase;
@@ -1273,6 +1519,9 @@ static VOID int_openwindow(struct OpenWindowActionMsg *msg,
     struct Hook   * shapehook = msg->shapehook;
     struct Layer  * parent = msg->parentlayer;
     BOOL            invisible = msg->invisible;
+    struct Layer_Info *windowli;
+    struct BitMap *windowbm;
+    LONG layerleft, layertop;
 
 #ifdef SKINS
     BOOL            installtransphook = FALSE;
@@ -1280,7 +1529,9 @@ static VOID int_openwindow(struct OpenWindowActionMsg *msg,
 #endif
 
     /* Create a layer for the window */
-    LONG layerflags = msg->tileoverlay ? LAYERPROTECTED : 0;
+    LONG layerflags = msg->visualoverlay ?
+        LAYERPROTECTED | LAYERINPUTTRANSPARENT :
+        (msg->tileoverlay ? LAYERPROTECTED : 0);
 
     EnterFunc(bug("int_OpenWindow(w=%p)\n", w));
 
@@ -1359,7 +1610,19 @@ static VOID int_openwindow(struct OpenWindowActionMsg *msg,
     }
 #endif
 
-//  LockLayers(&w->WScreen->LayerInfo);
+//  LockLayers(windowli);
+
+    if (!WindowCompositionPrepare(w, IntuitionBase))
+    {
+        msg->success = FALSE;
+        return;
+    }
+    windowli = WindowCompositionLayerInfo(w);
+    windowbm = WindowCompositionBitMap(w);
+    layerleft = IW(w)->Composition ? w->LeftEdge : w->RelLeftEdge;
+    layertop = IW(w)->Composition ? w->TopEdge : w->RelTopEdge;
+    if (IW(w)->Composition) parent = NULL;
+    else if (w->parent) parent = WindowCompositionLayer(w->parent);
 
     /* A GimmeZeroZero window??? */
     if (w->Flags & WFLG_GIMMEZEROZERO)
@@ -1391,13 +1654,13 @@ static VOID int_openwindow(struct OpenWindowActionMsg *msg,
 
         /* First create outer window */
         struct Layer * L = CreateUpfrontLayerTagList(
-                                   &w->WScreen->LayerInfo
-                                   , w->WScreen->RastPort.BitMap
+                                   windowli
+                                   , windowbm
 #ifndef __MORPHOS
-                                   , w->RelLeftEdge
-                                   , w->RelTopEdge
-                                   , w->RelLeftEdge + w->Width - 1
-                                   , w->RelTopEdge  + w->Height - 1
+                                   , layerleft
+                                   , layertop
+                                   , layerleft + w->Width - 1
+                                   , layertop  + w->Height - 1
 #else
                                    , w->LeftEdge
                                    , w->TopEdge
@@ -1411,7 +1674,7 @@ static VOID int_openwindow(struct OpenWindowActionMsg *msg,
         if (NULL == L)
         {
             msg->success = FALSE;
-//            UnlockLayers(&w->WScreen->LayerInfo);
+//            UnlockLayers(windowli);
             ReturnVoid("intui_OpenWindow(No GimmeZeroZero layer)");
         }
 
@@ -1435,13 +1698,13 @@ static VOID int_openwindow(struct OpenWindowActionMsg *msg,
         }
 
         w->WLayer = CreateUpfrontLayerTagList(
-                &w->WScreen->LayerInfo
-                , w->WScreen->RastPort.BitMap
+                windowli
+                , windowbm
 #ifndef __MORPHOS__
-                , w->RelLeftEdge + w->BorderLeft
-                , w->RelTopEdge  + w->BorderTop
-                , w->RelLeftEdge + w->BorderLeft + w->GZZWidth - 1
-                , w->RelTopEdge  + w->BorderTop + w->GZZHeight - 1
+                , layerleft + w->BorderLeft
+                , layertop  + w->BorderTop
+                , layerleft + w->BorderLeft + w->GZZWidth - 1
+                , layertop  + w->BorderTop + w->GZZHeight - 1
 #else
                 , w->LeftEdge + w->BorderLeft
                 , w->TopEdge  + w->BorderTop
@@ -1451,12 +1714,16 @@ static VOID int_openwindow(struct OpenWindowActionMsg *msg,
                 , layerflags
                 , (struct TagItem *)&layertags);
 
+        WLAYER(w) = w->WLayer;
+        msg->layers_ready = w->WLayer != NULL;
         /* could this layer be created? If not then delete the outer window and exit */
         if (NULL == w->WLayer)
         {
             DeleteLayer(0, L);
+            BLAYER(w) = NULL;
+            w->BorderRPort = NULL;
             msg->success = FALSE;
-//            UnlockLayers(&w->WScreen->LayerInfo);
+//            UnlockLayers(windowli);
             ReturnVoid("intui_OpenWindow(No window layer)");
         }
 
@@ -1494,13 +1761,13 @@ static VOID int_openwindow(struct OpenWindowActionMsg *msg,
 
         D(dprintf("CreateUpfrontLayerTagList(taglist 0x%lx)\n", &layertags));
 
-        w->WLayer = CreateUpfrontLayerTagList(      &w->WScreen->LayerInfo,
-                                w->WScreen->RastPort.BitMap,
+        w->WLayer = CreateUpfrontLayerTagList(      windowli,
+                                windowbm,
 #ifndef __MORPHOS__
-                                w->RelLeftEdge,
-                                w->RelTopEdge,
-                                w->RelLeftEdge + w->Width - 1,
-                                w->RelTopEdge  + w->Height - 1,
+                                layerleft,
+                                layertop,
+                                layerleft + w->Width - 1,
+                                layertop  + w->Height - 1,
 #else
                                 w->LeftEdge,
                                 w->TopEdge,
@@ -1510,6 +1777,8 @@ static VOID int_openwindow(struct OpenWindowActionMsg *msg,
                                 layerflags,
                                 (struct TagItem *)&layertags);
 
+        WLAYER(w) = w->WLayer;
+        msg->layers_ready = w->WLayer != NULL;
         /* Install the BorderRPort here! see GZZ window above  */
         if (NULL != w->WLayer)
         {
@@ -1529,8 +1798,9 @@ static VOID int_openwindow(struct OpenWindowActionMsg *msg,
             {
                 /* no memory for RastPort! Simply close the window */
                 intui_CloseWindow(w, IntuitionBase);
+                msg->layers_ready = FALSE;
                 msg->success = FALSE;
-//                UnlockLayers(&w->WScreen->LayerInfo);
+//                UnlockLayers(windowli);
                 ReturnVoid("intui_OpenWindow(No BorderRPort)");
             }
         }
@@ -1543,6 +1813,18 @@ static VOID int_openwindow(struct OpenWindowActionMsg *msg,
 
     if (w->WLayer)
     {
+
+        /* Layer gets pointer to the window */
+        WLAYER(w) = w->WLayer;
+        msg->layers_ready = TRUE;
+        if (!WindowCompositionActivate(w, IntuitionBase, invisible, layerflags))
+        {
+            intui_CloseWindow(w, IntuitionBase);
+            msg->layers_ready = FALSE;
+            msg->success = FALSE;
+            return;
+        }
+
 
         if ((layerflags & LAYERBACKDROP) && (w->WScreen->Flags & SHOWTITLE))
         {
@@ -1571,12 +1853,9 @@ static VOID int_openwindow(struct OpenWindowActionMsg *msg,
 #endif
         }
 
-        /* Layer gets pointer to the window */
-        WLAYER(w) = w->WLayer;
-
         CheckLayers(w->WScreen,IntuitionBase);
 
-//        UnlockLayers(&w->WScreen->LayerInfo);
+//        UnlockLayers(windowli);
 
 #ifndef __MORPHOS__
         w->WLayer->Window = (APTR)w;
@@ -1589,8 +1868,17 @@ static VOID int_openwindow(struct OpenWindowActionMsg *msg,
         if (CreateWinSysGadgets(w, IntuitionBase))
         {
             LONG lock;
+            CaptureWindowFrameSystemImages(w);
             
             lock = LockIBase (0);
+#ifndef __MORPHOS__
+            if (w->parent)
+            {
+                w->nextchild = w->parent->firstchild;
+                if (w->nextchild) w->nextchild->prevchild = w;
+                w->parent->firstchild = w;
+            }
+#endif
 
             /* insert new window into parent/descendant list
             **
@@ -1634,6 +1922,8 @@ static VOID int_openwindow(struct OpenWindowActionMsg *msg,
 
             w->NextWindow = w->WScreen->FirstWindow;
             w->WScreen->FirstWindow = w;
+            CaptureFirstWindowEvidence(w->WScreen, w, invisible,
+                IW(w)->ScaleAware, 1, IntuitionBase);
 
             w->WindowPort = GetPrivIBase(IntuitionBase)->IntuiReplyPort;
 
@@ -1654,12 +1944,12 @@ static VOID int_openwindow(struct OpenWindowActionMsg *msg,
             ReturnVoid("int_openwindow");
         }
 
-        CloseWindow(w);
-        //int_closewindow(w, IntuitionBase);
+        intui_CloseWindow(w, IntuitionBase);
+        msg->layers_ready = FALSE;
 
     } /* if (layer created) */
 
-//    UnlockLayers(&w->WScreen->LayerInfo);
+//    UnlockLayers(windowli);
 
 
     D(bug("int_openwindow(General failure)"));

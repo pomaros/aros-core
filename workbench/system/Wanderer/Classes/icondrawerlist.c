@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
 Copyright  2002-2009, The AROS Development Team. All rights reserved.
 */
 
@@ -366,4 +367,17 @@ const struct __MUIBuiltinClass _MUI_IconDrawerList_desc = {
     sizeof(struct IconDrawerList_DATA),
     (void*)IconDrawerList_Dispatcher
 };
+#endif
+
+#if !defined(WANDERER_BUILTIN_ICONDRAWERLIST)
+#include <aros/symbolsets.h>
+struct MUI_CustomClass *IconDrawerListScaleClass;
+static int IconDrawerListScaleStartup(struct Library *base)
+{
+    (void)base;
+    return IconDrawerListScaleClass && MUI_SetClassCapabilities(
+        IconDrawerListScaleClass->mcc_Class, MUI_CLASS_SCALE_AWARE);
+}
+/* The generated .mui class initializer runs at priority -1. */
+ADD2SET(IconDrawerListScaleStartup, CLASSESINIT, 0);
 #endif

@@ -10,6 +10,7 @@
 #include "numtostr.h"
 #include "hid.class.h"
 #include "hidcontroller.h"
+#include "hidkeyboard.h"
 
 #if defined(__AROS__)
 #include <hidd/hidd.h>
@@ -103,6 +104,7 @@ static int GM_UNIQUENAME(libClose)(LIBBASETYPEPTR nh)
 
 static int GM_UNIQUENAME(libExpunge)(LIBBASETYPEPTR nh)
 {
+    nKeyboardExit(nh);
     nCtrlExit(nh);
     KPRINTF(10, ("libExpunge nh: 0x%08lx\n", nh));
 
@@ -910,6 +912,30 @@ AROS_UFH0(void, GM_UNIQUENAME(nHidTask))
                             buflen = psdGetPipeActual(pp);
                             wacomgood = FALSE;
                             errcount = 0;
+#if defined(AROS_VM_GUEST)
+                            /* Only the successful interrupt-IN completion can
+                             * produce physical keyboard events. Classify before
+                             * Wacom, user actions, GUI tracking or raw reports. */
+                            if(buflen>nch->nch_MaxInSize) continue;
+                            if(buflen) {
+                                ULONG physical_id=nch->nch_UsesReportID?buf[0]:0;
+                                ULONG prefix=nch->nch_UsesReportID?1:0;
+                                BOOL physical_valid=FALSE;
+                                if(physical_id<=nch->nch_MaxReportID &&
+                                   nKeyboardReport(nch,nch->nch_ReportMap[physical_id],buf+prefix,buflen-prefix,&physical_valid)) {
+                                    struct NepHidReport *physical=nch->nch_ReportMap[physical_id];
+                                    ULONG field;
+                                    /* Composite report fields may retain normal
+                                     * non-keyboard actions, but never expose its
+                                     * complete raw bytes to GUI/controller hooks. */
+                                    for(field=0;physical_valid && field<physical->nhr_InItemCount;field++) {
+                                        struct NepHidItem *item=physical->nhr_InItemMap[field];
+                                        if(item && !nKeyboardItem(item)) nProcessItem(nch,item,buf+prefix);
+                                    }
+                                    continue;
+                                }
+                            }
+#endif
                             if(nch->nch_WacomMode)
                             {
                                 wacomgood = nParseWacom(nch, buf, buflen);
@@ -1038,6 +1064,7 @@ AROS_UFH0(void, GM_UNIQUENAME(nHidTask))
                     Wait(1L<<nch->nch_ReadySignal);
                 }
                 //FreeSignal(nch->nch_ReadySignal);
+                nKeyboardDetach(nch);
                 nCtrlDetach(nch);
                 Forbid();
                 nhr = (struct NepHidReport *) nch->nch_HidReports.lh_Head;
@@ -1342,6 +1369,7 @@ struct NepClassHid * GM_UNIQUENAME(nAllocHid)(void)
 /* /// "nFreeHid()" */
 void GM_UNIQUENAME(nFreeHid)(struct NepClassHid *nch)
 {
+    nKeyboardDetach(nch);
     nCtrlDetach(nch);
     struct NepHidReport *nhr;
     nhr = (struct NepHidReport *) nch->nch_HidReports.lh_Head;
@@ -4872,6 +4900,8 @@ BOOL nProcessItem(struct NepClassHid *nch, struct NepHidItem *nhi, UBYTE *buf)
     BOOL found;
     BOOL bytealigned = ((ioffset & 7) == 0);
     struct NepHidAction *nha;
+
+    if(nKeyboardItem(nhi)) return FALSE; /* VM physical keyboard is HIDD-only. */
 
     if(nhi->nhi_Flags & RPF_MAIN_VARIABLE)
     {

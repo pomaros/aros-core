@@ -10,7 +10,7 @@ struct IntuitionCustomize
 
 BOOL int_LoadDecorator(const char *name, struct IntScreen *screen, struct IntuitionBase *IntuitionBase);
 void int_UnloadDecorator(struct NewDecorator *tnd, struct IntuitionBase *IntuitionBase);
-BOOL int_InitDecorator(struct Screen *screen);
+BOOL int_InitDecorator(struct Screen *screen, struct TextFont *basefont, ULONG scale);
 void int_CalcSkinInfo(struct Screen *screen, struct IntuitionBase *IntuitionBase);
 
 /* Push ExitScreen Message to the Screensdecoration Class */

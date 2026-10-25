@@ -16,6 +16,7 @@ parser.add_argument('--cc', default='clang')
 args = parser.parse_args()
 core = args.core.resolve()
 native = (core / 'arch/aarch64-native/kernel/kernel_ipi.c').read_text()
+apple = (core / 'arch/aarch64-apple/kernel/kernel_ipi.c').read_text()
 
 
 def between(text, start, end):
@@ -41,7 +42,7 @@ resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 template = (here / 'harness.c.in').read_text()
 with tempfile.TemporaryDirectory(prefix='aros-ipi-host-') as temporary:
     temp = Path(temporary)
-    for backend, source, expected in [('native', native, '0x40')]:
+    for backend, source, expected in [('native', native, '0x40'), ('apple', apple, '0xc0')]:
         production = predicate(source) + helpers
         assert production.count('EXEC_IRQFIQ_RESTORE(daif);') == 1
         variants = {
@@ -49,7 +50,10 @@ with tempfile.TemporaryDirectory(prefix='aros-ipi-host-') as temporary:
             # Regress the restore to lose the incoming masked state.
             'lost-mask': production.replace('EXEC_IRQFIQ_RESTORE(daif);',
                                            '(void)daif; EXEC_IRQFIQ_RESTORE(0);'),
+            # Regress the Apple predicate to the native FIQ-only transport.
         }
+        if backend == 'apple':
+            variants['fiq-only'] = predicate(native) + helpers
         for label, body in variants.items():
             cfile = temp / f'{backend}-{label}.c'
             binary = cfile.with_suffix('')

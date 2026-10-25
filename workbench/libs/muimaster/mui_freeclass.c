@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * Licensed under the AROS Public License (APL) Version 1.1. */
 /*
     Copyright (C) 2002-2007, The AROS Development Team. All rights reserved.
 */
@@ -53,7 +55,7 @@
     if (cl->cl_Flags & CLF_INLIST)
     {
         Class *super = cl->cl_Super;
-        char *count = (char *)cl->cl_Dispatcher.h_Data;
+        IPTR count = (IPTR)cl->cl_Dispatcher.h_Data;
 
         if (--count == 0)
         {
@@ -64,6 +66,9 @@
                 CloseLibrary(MUIMasterBase);
                 if (strcmp(super->cl_ID, ROOTCLASS) != 0)
                     MUI_FreeClass(super);
+                /* FreeClass consumed cl; do not store through it below. */
+                ReleaseSemaphore(&MUIMB(MUIMasterBase)->ZuneSemaphore);
+                return;
             }
             else
             {
@@ -74,7 +79,7 @@
                 count++;
             }
         }
-        cl->cl_Dispatcher.h_Data = count;
+        cl->cl_Dispatcher.h_Data = (APTR)count;
 
         ReleaseSemaphore(&MUIMB(MUIMasterBase)->ZuneSemaphore);
     }

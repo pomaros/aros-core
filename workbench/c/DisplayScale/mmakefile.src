@@ -1,0 +1,12 @@
+# Copyright (C) 2026 John Knipper.
+# Distributed under the AROS Public License, version 1.1.
+include $(SRCDIR)/config/aros.cfg
+
+#MM- workbench-c : workbench-c-displayscale
+#MM- workbench-c-quick : workbench-c-displayscale-quick
+#MM workbench-c-displayscale : includes linklibs workbench-libs-settings-includes
+
+%build_prog mmake=workbench-c-displayscale progname=DisplayScale \
+    files=DisplayScale targetdir=$(AROS_C)
+
+%common

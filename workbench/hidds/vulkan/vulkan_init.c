@@ -10,6 +10,9 @@
 #include <hidd/vulkan_hidd.h>
 #include <proto/oop.h>
 #include <proto/exec.h>
+#include <proto/dos.h>
+#include <dos/dosextens.h>
+#include <dos/var.h>
 
 #include "vulkan_intern.h"
 
@@ -139,9 +142,67 @@ AROS_LH5(BOOL, VulkanHidd_IsGPUPSPLoaded,
     AROS_LIBFUNC_EXIT
 }
 
+/*
+ * An application that loads Vulkan by itself (dlopen of libvulkan.so, as
+ * wgpu, Dawn and ANGLE do) never opens a driver HIDD, so no GPU registers.
+ * As gallium.library takes its driver from ENV:SYS/Gallium.default, the
+ * first request for a GPU with none registered opens the drivers that
+ * ENV:SYS/Vulkan.default names (separated by spaces, commas or newlines);
+ * they register as when an application opens them, and one that does not
+ * open leaves the others to try. They stay open: the registry holds their
+ * callbacks. DOS needs a process, which the loader's caller is; a call from
+ * a plain task leaves discovery for a later process.
+ */
+void VulkanDiscoverDrivers(struct vulkanstaticdata *sd)
+{
+    struct Library *DOSBase;
+    struct Task    *me = FindTask(NULL);
+    char            list[256], *name, *end;
+    ULONG           count = 0;
+
+    if (sd->gpu_count || sd->discovered || me->tc_Node.ln_Type != NT_PROCESS)
+        return;
+
+    ObtainSemaphore(&sd->discovery_lock);
+    if (!sd->discovered && !sd->gpu_count &&
+        (DOSBase = OpenLibrary("dos.library", 36)) != NULL)
+    {
+        sd->discovered = TRUE;
+        if (GetVar("SYS/Vulkan.default", list, sizeof(list), GVF_GLOBAL_ONLY | LV_VAR) > 0)
+        {
+            for (name = list; *name && count < VULKAN_MAX_GPUS; name = end)
+            {
+                while (*name == ' ' || *name == ',' || *name == '\n' || *name == '\t')
+                    name++;
+                for (end = name; *end && *end != ' ' && *end != ',' && *end != '\n' && *end != '\t'; end++)
+                    ;
+                if (end == name)
+                    break;
+                if (*end)
+                    *end++ = '\0';
+                sd->drivers[count] = OpenLibrary(name, 0);
+                if (sd->drivers[count])
+                    count++;
+                else
+                    bug("[Vulkan] ENV:SYS/Vulkan.default: %s did not open\n", name);
+            }
+        }
+        D(bug("[Vulkan] discovery: %lu driver(s), %lu GPU(s)\n",
+              (unsigned long)count, (unsigned long)sd->gpu_count));
+        CloseLibrary(DOSBase);
+    }
+    ReleaseSemaphore(&sd->discovery_lock);
+}
+
 static int HiddVulkan_ExpungeLib(LIBBASETYPEPTR LIBBASE)
 {
+    ULONG i;
+
     vulkan_global_sd = NULL;
+
+    for (i = 0; i < VULKAN_MAX_GPUS; i++)
+        if (LIBBASE->sd.drivers[i])
+            CloseLibrary(LIBBASE->sd.drivers[i]);
 
     if (LIBBASE->sd.vulkanAttrBase)
         OOP_ReleaseAttrBase((STRPTR)IID_Hidd_Vulkan);
@@ -161,6 +222,7 @@ static int HiddVulkan_InitLib(LIBBASETYPEPTR LIBBASE)
             LIBBASE->sd.gpus[i].in_use = FALSE;
         LIBBASE->sd.gpu_count = 0;
         InitSemaphore(&LIBBASE->sd.registry_lock);
+        InitSemaphore(&LIBBASE->sd.discovery_lock);
 
         /* Publish for driver HIDDs */
         vulkan_global_sd = &LIBBASE->sd;

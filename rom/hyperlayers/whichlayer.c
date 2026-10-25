@@ -1,4 +1,6 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
+    Licensed under the AROS Public License, version 1.1.
     Copyright (C) 1995-2007, The AROS Development Team. All rights reserved.
 
     Desc:
@@ -30,7 +32,8 @@
 
 /*  FUNCTION
         Determines in which layer the point (x,y) is to be found.
-        Starts with the frontmost layer.
+        Starts with the frontmost layer. Visual-only input-transparent layers
+        are skipped; their normal visual backing and occlusion are unchanged.
 
     INPUTS
         li - pointer to Layers_Info structure
@@ -67,7 +70,8 @@
     for
     (
         l = li->top_layer;
-        l != NULL && !(IS_VISIBLE(l) && IsPointInRegion(l->visibleshape, x, y));
+        l != NULL && !(!(l->Flags & LAYERINPUTTRANSPARENT) && IS_VISIBLE(l) &&
+            IsPointInRegion(l->visibleshape, x, y));
         l = l->back
     );
 

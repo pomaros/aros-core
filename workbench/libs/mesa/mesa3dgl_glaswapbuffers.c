@@ -50,14 +50,19 @@
 *****************************************************************************/
 {
     struct mesa3dgl_context *_ctx = (struct mesa3dgl_context *)ctx;
+    /* The drawable the context draws to now (its own one after
+     * glAMakeCurrent, an EGL surface's after glAMakeCurrentDrawables). */
+    struct mesa3dgl_drawable *d = _ctx ? _ctx->draw : NULL;
 
     D(bug("[MESA3DGL] %s()\n", __func__));
 
-    if (_ctx->framebuffer->render_resource)
+    if (!d)
+        return;
+    if (d->framebuffer->render_resource)
     {
         struct pipe_context *pipe = _ctx->st->pipe;
         struct pipe_resource *zs =
-            _ctx->framebuffer->textures[ST_ATTACHMENT_DEPTH_STENCIL];
+            d->framebuffer->textures[ST_ATTACHMENT_DEPTH_STENCIL];
 
         /* Depth/stencil is undefined after a swap: invalidate it before
          * the flush, so a tiler skips storing it (as Mesa's DRI does). */
@@ -67,14 +72,18 @@
         /* Flush rendering cache before blitting */
         st_context_flush(_ctx->st, ST_FLUSH_FRONT, NULL, NULL, NULL);
 
+        /* An offscreen target is read back with glReadPixels, never shown */
+        if (d->offscreen_bm)
+            return;
+
         /* gallium.library tries the whole-window DisplayResourceRP method
          * first (vc4 presents zero-copy there) and falls back to the
          * per-cliprect DisplayResource loop (softpipe). */
-        BltPipeResourceRastPort(_ctx->driver, _ctx->framebuffer->render_resource, 0, 0,
-            _ctx->visible_rp, _ctx->left, _ctx->top,
-            _ctx->framebuffer->width, _ctx->framebuffer->height);
+        BltPipeResourceRastPort(d->driver, d->framebuffer->render_resource, 0, 0,
+            d->visible_rp, d->left, d->top,
+            d->framebuffer->width, d->framebuffer->height);
     }
 
 
-    MESA3DGLCheckAndUpdateBufferSize(_ctx);
+    MESA3DGLCheckAndUpdateBufferSize(d);
 }

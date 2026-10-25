@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
 */
 
@@ -24,6 +25,7 @@
 #include "intuition_intern.h"
 #include "monitorclass_intern.h"
 #include "monitorclass_private.h"
+#include "pointerscale.h"
 
 /*i***************************************************************************
 
@@ -57,14 +59,17 @@ Object *DisplayDriverNotify(APTR obj, BOOL add, struct IntuitionBase *IntuitionB
         D(bug("[Monitor] %s: Monitor object 0x%p\n", __func__, mon));
         if (mon) {
             /* Install default mouse pointer on the new monitor */
+            ULONG lock = LockIBase(0);
             Object *ptr = GetPrivIBase(IntuitionBase)->DefaultPointer;
 
             if (ptr) {
                 struct msSetPointerShape pmsg;
                 pmsg.MethodID = MM_SetPointerShape;
+                pmsg.screen = NULL;
                 GetAttr(POINTERA_SharedPointer, ptr, (IPTR *)&pmsg.pointer);
                 DoMethodA(mon, &pmsg);
             }
+            UnlockIBase(lock);
         }
 
         return mon;
@@ -1071,6 +1076,7 @@ IPTR MonitorClass__OM_SET(Class *cl, Object *o, struct opSet *msg)
 IPTR MonitorClass__OM_DISPOSE(Class *cl, Object *o, Msg msg)
 {
     struct IntuitionBase *IntuitionBase = (struct IntuitionBase *)cl->cl_UserData;
+    struct GfxBase *GfxBase = GetPrivIBase(IntuitionBase)->GfxBase;
     struct Library *OOPBase = GetPrivIBase(IntuitionBase)->OOPBase;
     OOP_AttrBase HiddGfxAttrBase = GetPrivIBase(IntuitionBase)->HiddGfxAttrBase;
     OOP_AttrBase HiddDisplayAttrBase = GetPrivIBase(IntuitionBase)->HiddDisplayAttrBase;
@@ -1104,6 +1110,8 @@ IPTR MonitorClass__OM_DISPOSE(Class *cl, Object *o, Msg msg)
 
     ReleaseSemaphore(&GetPrivIBase(IntuitionBase)->MonitorListSem);
 
+    DisposeMonitorPointerScale(data, IntuitionBase);
+    if (data->tmpPtr) FreeBitMap(data->tmpPtr);
     if (data->gamma)
         FreeMem(data->gamma, 256 * 3);
 
@@ -1930,50 +1938,12 @@ IPTR MonitorClass__MM_CheckID(Class *cl, Object *obj, struct msGetCompositionFla
 IPTR MonitorClass__MM_SetPointerShape(Class *cl, Object *obj, struct msSetPointerShape *msg)
 {
     struct IntuitionBase *IntuitionBase = (struct IntuitionBase *)cl->cl_UserData;
-    struct GfxBase *GfxBase = GetPrivIBase(IntuitionBase)->GfxBase;
-    OOP_MethodID HiddGfxBase = GetPrivIBase(IntuitionBase)->ib_HiddGfxBase;
-    OOP_MethodID HiddDisplayBase = GetPrivIBase(IntuitionBase)->ib_HiddDisplayBase;
-    OOP_MethodID HiddDMEnumBase = GetPrivIBase(IntuitionBase)->ib_HiddDMEnumBase;
     struct IMonitorNode *data = INST_DATA(cl, obj);
-    struct BitMap *bm;
-    BOOL res;
-
-    DEBUG_POINTER(
-      bug("[Monitor] %s(0x%p)\n", __func__, msg->pointer);
-      bug("[Monitor] %s: old pointer 0x%p\n", __func__, data->pointer);
-     )
-    /* Don't do anything if already set */
-    if (data->pointer == msg->pointer)
-        return TRUE;
-
-    DEBUG_POINTER(bug("[Monitor] %s: Display SpriteType = %08x\n", __func__, data->SpriteType);)
-
-    bm = msg->pointer->sprite->es_BitMap;
-    if (!IS_HIDD_BM(bm))
-    {
-        ULONG bmwid, bmhigh;
-
-        /* Create a temporary hidd bitmap to use */
-        if (data->tmpPtr)
-            FreeBitMap(data->tmpPtr);
-        bmwid = GetBitMapAttr(bm, BMA_WIDTH);
-        bmhigh = GetBitMapAttr(bm, BMA_HEIGHT);
-        DEBUG_POINTER(bug("[Monitor] %s: %dx%d\n", __func__, bmwid, bmhigh);)
-        data->tmpPtr = AllocBitMap(bmwid, bmhigh,
-                                                GetBitMapAttr(bm, BMA_DEPTH), BMF_DISPLAYABLE, NULL);
-        BltBitMap(bm, 0, 0, data->tmpPtr, 0, 0, bmwid, bmhigh, 0xC0, ~0L, NULL);
-        bm = data->tmpPtr;
-    }
-
-    res = SetDisplayPointerShape(data->handle->display, msg->pointer, bm, IntuitionBase);
-    DEBUG_POINTER(bug("[Monitor] %s: SetCursorShape() returned %d\n", __func__, res));
-    if (res) {
-        data->pointer = msg->pointer;
-        /* Fix up sprite position incase the hotspot changed */
-        SetPointerPos(data, IntuitionBase);
-    }
-
-    return res;
+    ULONG lock = LockIBase(0);
+    BOOL result = SetMonitorPointerScale(data, msg->screen, msg->pointer, IntuitionBase);
+    if (result) SetPointerPos(data, IntuitionBase);
+    UnlockIBase(lock);
+    return result;
 }
 
 void MonitorClass__MM_SetScreenGamma(Class *cl, Object *obj, struct msSetScreenGamma *msg)

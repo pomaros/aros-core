@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
 */
 
@@ -34,6 +35,8 @@
 
 #include "intuition_intern.h"
 #include "gadgets.h"
+#include "windowframe.h"
+#include "windowsystemimage.h"
 
 /**************************************************************************************************/
 
@@ -215,6 +218,9 @@ IPTR WinDecorClass__OM_GET(Class *cl, Object *obj, struct opGet *msg)
 
     switch(msg->opg_AttrID)
     {
+        case WDA_PreparedScaleWindow:
+            *msg->opg_Storage = OCLASS(obj) == cl;
+            break;
         case WDA_UserBuffer:
         *msg->opg_Storage = (IPTR) data->userbuffersize;
         break;
@@ -930,6 +936,7 @@ IPTR WinDecorClass__WDM_DRAW_SYSIMAGE(Class *cl, Object *obj, struct wdpDrawSysI
 static void findtitlearea(struct Window *win, LONG *left, LONG *right)
 {
     struct Gadget *g;
+    LONG gap = (WindowFrameScale(win) + 50) / 100;
 
     *left = 0;
     *right = win->Width - 1;
@@ -945,8 +952,8 @@ static void findtitlearea(struct Window *win, LONG *left, LONG *right)
             }
             else
             {
-                if (g->LeftEdge + win->Width - 1 - 1 < *right)
-                    *right = g->LeftEdge + win->Width - 1 - 1;
+                if (g->LeftEdge + win->Width - 1 - gap < *right)
+                    *right = g->LeftEdge + win->Width - 1 - gap;
             }
         }
     }
@@ -962,12 +969,13 @@ IPTR INTERNAL_WDM_DRAW_WINTITLE(Class *cl, Object *obj, struct wdpDrawWinBorder 
     struct Window        *window = msg->wdp_Window;
     UWORD                *pens = DRI(msg->wdp_Dri)->dri_Pens;
     LONG                  right, left;
+    LONG unit = (WindowFrameScale(window) + 50) / 100;
 
     findtitlearea(window, &left, &right);
 
     SetDrMd(rp, JAM1);
     SetAPen(rp, pens[(window->Flags & WFLG_WINDOWACTIVE) ? FILLPEN : BACKGROUNDPEN]);
-    CheckRectFill(rp, left + 1, 1, right - 1, window->BorderTop - 2, IntuitionBase);
+    CheckRectFill(rp, left + unit, unit, right - unit, window->BorderTop - unit * 2, IntuitionBase);
 
     if (right - left > (window->BorderLeft + window->BorderRight))
     {
@@ -977,6 +985,8 @@ IPTR INTERNAL_WDM_DRAW_WINTITLE(Class *cl, Object *obj, struct wdpDrawWinBorder 
         UWORD                   xunused, ypad;
 
         getintframesizes(IntuitionBase, &xunused, &ypad);
+        if (IW(window)->ScaleAware) ypad = 1;
+        ypad = (ypad * WindowFrameScale(window) + 50) / 100;
 
         tf = DRI(msg->wdp_Dri)->dri_Font;
         SetFont(rp, tf);
@@ -994,7 +1004,7 @@ IPTR INTERNAL_WDM_DRAW_WINTITLE(Class *cl, Object *obj, struct wdpDrawWinBorder 
         if (textlen)
         {
 #define WINTITLEPAD 3
-            left = left + WINTITLEPAD;
+            left = left + (WINTITLEPAD * WindowFrameScale(window) + 50) / 100;
 
             SetAPen(rp, pens[(window->Flags & WFLG_WINDOWACTIVE) ? FILLTEXTPEN : TEXTPEN]);
 
@@ -1016,6 +1026,7 @@ IPTR WinDecorClass__WDM_DRAW_WINBORDER(Class *cl, Object *obj, struct wdpDrawWin
     struct Window        *window = msg->wdp_Window;
     UWORD                *pens = DRI(msg->wdp_Dri)->dri_Pens;
     LONG                  left, right;
+    LONG unit = (WindowFrameScale(window) + 50) / 100;
 
     SetDrMd(rp, JAM1);
     SetAPen(rp, pens[SHINEPEN]);
@@ -1024,7 +1035,7 @@ IPTR WinDecorClass__WDM_DRAW_WINBORDER(Class *cl, Object *obj, struct wdpDrawWin
     {
         /* Outer shine edge on top side */
 
-        CheckRectFill(rp, 0, 0, window->Width - 1, 0, IntuitionBase);
+        CheckRectFill(rp, 0, 0, window->Width - 1, unit - 1, IntuitionBase);
     }
 
     if (!(msg->wdp_Flags & WDF_DWB_TOP_ONLY))
@@ -1033,26 +1044,26 @@ IPTR WinDecorClass__WDM_DRAW_WINBORDER(Class *cl, Object *obj, struct wdpDrawWin
         {
             /* Outer shine edge on left side */
 
-            CheckRectFill(rp, 0, 0, 0, window->Height - 1, IntuitionBase);
+            CheckRectFill(rp, 0, 0, unit - 1, window->Height - 1, IntuitionBase);
         }
 
-        if (window->BorderRight > 1)
+        if (window->BorderRight > unit)
         {
             /* Inner shine edge on right side */
 
             CheckRectFill(rp,
                       window->Width - window->BorderRight, window->BorderTop,
-                          window->Width - window->BorderRight, window->Height - window->BorderBottom,
+                          window->Width - window->BorderRight + unit - 1, window->Height - window->BorderBottom + unit - 1,
                           IntuitionBase);
         }
 
-        if (window->BorderBottom > 1)
+        if (window->BorderBottom > unit)
         {
             /* Inner shine edge on bottom side */
 
             CheckRectFill(rp,
                           window->BorderLeft, window->Height - window->BorderBottom,
-                          window->Width - window->BorderRight, window->Height - window->BorderBottom,
+                          window->Width - window->BorderRight + unit - 1, window->Height - window->BorderBottom + unit - 1,
                           IntuitionBase);
         }
     }
@@ -1065,7 +1076,7 @@ IPTR WinDecorClass__WDM_DRAW_WINBORDER(Class *cl, Object *obj, struct wdpDrawWin
         {
             /* Outer shadow edge on right side */
 
-            CheckRectFill(rp, window->Width - 1, 1,
+            CheckRectFill(rp, window->Width - unit, unit,
                       window->Width - 1, window->Height - 1, IntuitionBase);
         }
 
@@ -1073,61 +1084,61 @@ IPTR WinDecorClass__WDM_DRAW_WINBORDER(Class *cl, Object *obj, struct wdpDrawWin
         {
             /* Outer shadow edge on bottom side */
 
-            CheckRectFill(rp, 1, window->Height - 1,
+            CheckRectFill(rp, unit, window->Height - unit,
                   window->Width - 1, window->Height - 1, IntuitionBase);
         }
 
-        if (window->BorderLeft > 1)
+        if (window->BorderLeft > unit)
         {
             /* Inner shadow edge on left side */
 
-            CheckRectFill(rp, window->BorderLeft - 1, window->BorderTop - 1,
-                      window->BorderLeft - 1, window->Height - window->BorderBottom,
+            CheckRectFill(rp, window->BorderLeft - unit, window->BorderTop - unit,
+                      window->BorderLeft - 1, window->Height - window->BorderBottom + unit - 1,
                       IntuitionBase);
         }
     }
 
-    if (window->BorderTop > 1)
+    if (window->BorderTop > unit)
     {
         /* Inner shadow edge on top side */
 
-        CheckRectFill(rp, window->BorderLeft - 1, window->BorderTop - 1,
-                      window->Width - window->BorderRight, window->BorderTop - 1,
+        CheckRectFill(rp, window->BorderLeft - unit, window->BorderTop - unit,
+                      window->Width - window->BorderRight + unit - 1, window->BorderTop - 1,
                       IntuitionBase);
     }
 
     SetAPen(rp, pens[(window->Flags & WFLG_WINDOWACTIVE) ? FILLPEN : BACKGROUNDPEN]);
 
-    if (window->BorderTop > 2)
+    if (window->BorderTop > unit * 2)
     {
         /* Fill on top side */
 
-        CheckRectFill(rp, 1, 1, window->Width - 2, window->BorderTop - 2, IntuitionBase);
+        CheckRectFill(rp, unit, unit, window->Width - unit - 1, window->BorderTop - unit - 1, IntuitionBase);
     }
 
     if (!(msg->wdp_Flags & WDF_DWB_TOP_ONLY))
     {
-        if (window->BorderLeft > 2)
+        if (window->BorderLeft > unit * 2)
         {
             /* Fill on left side */
 
-            CheckRectFill(rp, 1, 1, window->BorderLeft - 2, window->Height - 2, IntuitionBase);
+            CheckRectFill(rp, unit, unit, window->BorderLeft - unit - 1, window->Height - unit - 1, IntuitionBase);
         }
 
-        if (window->BorderRight > 2)
+        if (window->BorderRight > unit * 2)
         {
             /* Fill on right side */
 
-            CheckRectFill(rp, window->Width - window->BorderRight + 1, 1,
-                      window->Width - 2, window->Height - 2, IntuitionBase);
+            CheckRectFill(rp, window->Width - window->BorderRight + unit, unit,
+                      window->Width - unit - 1, window->Height - unit - 1, IntuitionBase);
         }
 
-        if (window->BorderBottom > 2)
+        if (window->BorderBottom > unit * 2)
         {
             /* Fill on bottom side */
 
-            CheckRectFill(rp, 1, window->Height - window->BorderBottom + 1,
-                          window->Width - 2, window->Height - 2, IntuitionBase);
+            CheckRectFill(rp, unit, window->Height - window->BorderBottom + unit,
+                          window->Width - unit - 1, window->Height - unit - 1, IntuitionBase);
         }
     }
 
@@ -1138,8 +1149,7 @@ IPTR WinDecorClass__WDM_DRAW_WINBORDER(Class *cl, Object *obj, struct wdpDrawWin
         /* Left edge of title area */
 
         SetAPen(rp, pens[SHINEPEN]);
-        Move(rp, left, 1);
-        Draw(rp, left, window->BorderTop - 2);
+        CheckRectFill(rp, left, unit, left + unit - 1, window->BorderTop - unit - 1, IntuitionBase);
     }
 
     if (right != window->Width - 1)
@@ -1147,8 +1157,7 @@ IPTR WinDecorClass__WDM_DRAW_WINBORDER(Class *cl, Object *obj, struct wdpDrawWin
         /* Right edges of title area */
 
         SetAPen(rp, pens[SHADOWPEN]);
-        Move(rp, right, 1);
-        Draw(rp, right, window->BorderTop - 2);
+        CheckRectFill(rp, right - unit + 1, unit, right, window->BorderTop - unit - 1, IntuitionBase);
     }
 
     if (window->Title) INTERNAL_WDM_DRAW_WINTITLE(cl, obj, msg);
@@ -1158,7 +1167,7 @@ IPTR WinDecorClass__WDM_DRAW_WINBORDER(Class *cl, Object *obj, struct wdpDrawWin
 
 /**************************************************************************************************/
 
-IPTR WinDecorClass__WDM_LAYOUT_BORDERGADGETS(Class *cl, Object *obj, struct wdpLayoutBorderGadgets *msg)
+static IPTR window_layout_border_gadgets(struct wdpLayoutBorderGadgets *msg)
 {
     struct Gadget        *gadget = msg->wdp_Gadgets;
 
@@ -1168,6 +1177,12 @@ IPTR WinDecorClass__WDM_LAYOUT_BORDERGADGETS(Class *cl, Object *obj, struct wdpL
     {
         switch(gadget->GadgetType & GTYP_SYSTYPEMASK)
         {
+        case GTYP_SIZING:
+            gadget->LeftEdge = -gadget->Width + 1;
+            gadget->TopEdge = -gadget->Height + 1;
+            gadget->Flags &= ~(GFLG_RELWIDTH | GFLG_RELHEIGHT);
+            gadget->Flags |= GFLG_RELRIGHT | GFLG_RELBOTTOM;
+            break;
         case GTYP_CLOSE:
             gadget->LeftEdge = 0;
             gadget->Width = gadget->Height;
@@ -1220,6 +1235,12 @@ IPTR WinDecorClass__WDM_LAYOUT_BORDERGADGETS(Class *cl, Object *obj, struct wdpL
     }
 
     return TRUE;
+}
+
+IPTR WinDecorClass__WDM_LAYOUT_BORDERGADGETS(Class *cl, Object *obj,
+    struct wdpLayoutBorderGadgets *msg)
+{
+    return window_layout_border_gadgets(msg);
 }
 
 /**************************************************************************************************/
@@ -1351,4 +1372,237 @@ IPTR WinDecorClass__WDM_EXITWINDOW(Class *cl, Object *obj, struct wdpExitWindow 
 IPTR WinDecorClass__WDM_WINDOWSHAPE(Class *cl, Object *obj, struct wdpWindowShape *msg)
 {
     return 0;
+}
+
+IPTR WinDecorClass__WDM_PREPARESCALESHAPE(Class *cl, Object *obj,
+    struct wdpPrepareScaleShape *msg)
+{
+    if (!msg->wdp_Result) return FALSE;
+    *msg->wdp_Result = NULL;
+    if (OCLASS(obj) != cl || !msg->wdp_Window || !msg->wdp_Font ||
+        msg->wdp_Width <= 0 || msg->wdp_Width > 32767 ||
+        msg->wdp_Height <= 0 || msg->wdp_Height > 32767 ||
+        msg->wdp_BorderTop < 0 || msg->wdp_BorderTop > 127 ||
+        msg->wdp_BorderTop > msg->wdp_Height) return FALSE;
+    return TRUE; /* built-in default is a rectangle, distinct from OOM */
+}
+
+/* Explicit immutable render-domain images. These vectors use physical stroke
+ * widths while their dimensions originate once from the100% baseline. */
+static ULONG window_scale_metric(ULONG value, ULONG scale)
+{
+    return (value * scale + 50) / 100;
+}
+
+BOOL WindowScaleVectorSize(struct wdpGetScaleDefSizeSysImage *msg,
+    struct IntuitionBase *IntuitionBase)
+{
+    ULONG width, height, scale;
+    (void)IntuitionBase;
+    if (!msg->base.wdp_Width || !msg->base.wdp_Height || !msg->context ||
+        !msg->context->src_LogicalDrawInfo || !msg->context->src_PhysicalDrawInfo ||
+        msg->context->src_Scale < 100 || msg->context->src_Scale > 400 ||
+        msg->context->src_Scale % 25) return FALSE;
+    if (msg->prepared) *msg->prepared = NULL; /* vectors own no bitmap */
+    switch (msg->base.wdp_Which)
+    {
+        case LEFTIMAGE: case RIGHTIMAGE: case UPIMAGE: case DOWNIMAGE:
+        case CLOSEIMAGE: case DEPTHIMAGE: case ZOOMIMAGE: case SIZEIMAGE:
+        case ICONIFYIMAGE: case LOCKIMAGE: case MUIIMAGE: case POPUPIMAGE:
+        case SNAPSHOTIMAGE: case JUMPIMAGE: break;
+        default: return FALSE;
+    }
+    scale = msg->logical ? 100 : msg->context->src_Scale;
+    width = height = window_scale_metric(DEFSIZE_WIDTH, scale);
+    if (msg->requestedHeight > 32767 || msg->requestedWidth > 32767) return FALSE;
+    if (msg->requestedHeight && !msg->requestedWidth)
+    {
+        UQUAD aspect = ((UQUAD)width * msg->requestedHeight + height / 2) / height;
+        if (!aspect || aspect > 32767) return FALSE;
+        width = aspect;
+    }
+    if (msg->requestedWidth) width = msg->requestedWidth;
+    if (msg->requestedHeight) height = msg->requestedHeight;
+    if (!width || !height || width > 32767 || height > 32767) return FALSE;
+    *msg->base.wdp_Width = width; *msg->base.wdp_Height = height;
+    return TRUE;
+}
+
+/* Every primitive clips to the requested image box, including tiny explicit
+ * caller extents smaller than a normal stroke or inset. */
+static void window_scale_rect(struct wdpDrawSysImage *m, LONG l, LONG t, LONG r, LONG b,
+    LONG logicalWidth, LONG logicalHeight, struct IntuitionBase *IntuitionBase)
+{
+    struct GfxBase *GfxBase = GetPrivIBase(IntuitionBase)->GfxBase;
+    if (l < 0) l = 0;
+    if (t < 0) t = 0;
+    if (r >= logicalWidth) r = logicalWidth - 1;
+    if (b >= logicalHeight) b = logicalHeight - 1;
+    if (l <= r && t <= b)
+    {
+        LONG left = ((UQUAD)l * m->wdp_Width + logicalWidth / 2) / logicalWidth;
+        LONG top = ((UQUAD)t * m->wdp_Height + logicalHeight / 2) / logicalHeight;
+        LONG right = ((UQUAD)(r + 1) * m->wdp_Width + logicalWidth / 2) / logicalWidth - 1;
+        LONG bottom = ((UQUAD)(b + 1) * m->wdp_Height + logicalHeight / 2) / logicalHeight - 1;
+        if (left <= right && top <= bottom)
+            RectFill(m->wdp_RPort, m->wdp_X + left, m->wdp_Y + top,
+                m->wdp_X + right, m->wdp_Y + bottom);
+    }
+}
+
+BOOL WindowScaleVectorDraw(struct wdpDrawScaleSysImage *msg,
+    struct IntuitionBase *IntuitionBase)
+{
+    struct GfxBase *GfxBase = GetPrivIBase(IntuitionBase)->GfxBase;
+    struct wdpDrawSysImage *m = &msg->base;
+    ULONG scale;
+    LONG stroke, inset, w, h, i;
+    UWORD *pens;
+    BOOL selected;
+    if (!msg->context || !msg->context->src_LogicalDrawInfo ||
+        !msg->context->src_PhysicalDrawInfo || msg->prepared || !m->wdp_Dri ||
+        !m->wdp_RPort || m->wdp_Width < 1 || m->wdp_Height < 1 ||
+        m->wdp_Width > 32767 || m->wdp_Height > 32767 ||
+        msg->context->src_Scale < 100 || msg->context->src_Scale > 400 ||
+        msg->context->src_Scale % 25) return FALSE;
+    switch (m->wdp_Which)
+    {
+        case LEFTIMAGE: case RIGHTIMAGE: case UPIMAGE: case DOWNIMAGE:
+        case CLOSEIMAGE: case DEPTHIMAGE: case ZOOMIMAGE: case SIZEIMAGE:
+        case ICONIFYIMAGE: case LOCKIMAGE: case MUIIMAGE: case POPUPIMAGE:
+        case SNAPSHOTIMAGE: case JUMPIMAGE: break;
+        default: return FALSE;
+    }
+    scale = msg->logical ? 100 : msg->context->src_Scale;
+    /* Construct vectors in canonical units, then round each rectangle edge
+     * once into the final image. Integer scales preserve all glyph/stroke
+     * pixels; fractional scales draw directly with sharp raster boundaries. */
+    w = ((UQUAD)m->wdp_Width * 100 + scale / 2) / scale;
+    h = ((UQUAD)m->wdp_Height * 100 + scale / 2) / scale;
+    if (!w) w = 1;
+    if (!h) h = 1;
+    stroke = 1;
+    inset = 3;
+    pens = m->wdp_Dri->dri_Pens;
+    selected = m->wdp_State == IDS_SELECTED || m->wdp_State == IDS_INACTIVESELECTED;
+    SetDrMd(m->wdp_RPort, JAM1);
+    SetAPen(m->wdp_RPort, getbgpen(m->wdp_State, pens));
+    window_scale_rect(m, 0, 0, w - 1, h - 1, w, h, IntuitionBase);
+    SetAPen(m->wdp_RPort, pens[selected ? SHADOWPEN : SHINEPEN]);
+    window_scale_rect(m, 0, 0, w - 1, stroke - 1, w, h, IntuitionBase);
+    window_scale_rect(m, 0, 0, stroke - 1, h - 1, w, h, IntuitionBase);
+    SetAPen(m->wdp_RPort, pens[selected ? SHINEPEN : SHADOWPEN]);
+    window_scale_rect(m, w - stroke, stroke, w - 1, h - 1, w, h, IntuitionBase);
+    window_scale_rect(m, stroke, h - stroke, w - 1, h - 1, w, h, IntuitionBase);
+    SetAPen(m->wdp_RPort, pens[selected ? SHINEPEN : SHADOWPEN]);
+    if (inset * 2 >= w || inset * 2 >= h) return TRUE;
+    switch (m->wdp_Which)
+    {
+        case CLOSEIMAGE:
+            window_scale_rect(m, inset, inset, w - inset - 1, h - inset - 1, w, h, IntuitionBase);
+            break;
+        case ZOOMIMAGE: case DEPTHIMAGE: case SNAPSHOTIMAGE:
+            window_scale_rect(m, inset, inset, w - inset - 1, inset + stroke - 1, w, h, IntuitionBase);
+            window_scale_rect(m, inset, inset, inset + stroke - 1, h - inset - 1, w, h, IntuitionBase);
+            window_scale_rect(m, w - inset - stroke, inset, w - inset - 1, h - inset - 1, w, h, IntuitionBase);
+            window_scale_rect(m, inset, h - inset - stroke, w - inset - 1, h - inset - 1, w, h, IntuitionBase);
+            if (m->wdp_Which != ZOOMIMAGE)
+                window_scale_rect(m, inset + stroke, h / 2, w - inset - stroke, h / 2 + stroke - 1, w, h, IntuitionBase);
+            break;
+        case LEFTIMAGE: case RIGHTIMAGE:
+            for (i = 0; i < (h - inset * 2 + 1) / 2; ++i)
+            {
+                LONG x = m->wdp_Which == LEFTIMAGE ? inset + i : w - inset - 1 - i;
+                window_scale_rect(m, x, h / 2 - i, x + stroke - 1, h / 2 + i, w, h, IntuitionBase);
+            }
+            break;
+        case UPIMAGE: case DOWNIMAGE:
+            for (i = 0; i < (w - inset * 2 + 1) / 2; ++i)
+            {
+                LONG y = m->wdp_Which == UPIMAGE ? inset + i : h - inset - 1 - i;
+                window_scale_rect(m, w / 2 - i, y, w / 2 + i, y + stroke - 1, w, h, IntuitionBase);
+            }
+            break;
+        case SIZEIMAGE:
+            for (i = inset; i < w - inset; i += stroke * 3)
+                window_scale_rect(m, i, h - inset - stroke, i + stroke - 1, h - inset - 1, w, h, IntuitionBase);
+            break;
+        case LOCKIMAGE:
+            window_scale_rect(m, inset, h / 2, w - inset - 1, h - inset - 1, w, h, IntuitionBase);
+            window_scale_rect(m, inset + stroke, inset, w - inset - stroke - 1, inset + stroke - 1, w, h, IntuitionBase);
+            window_scale_rect(m, inset + stroke, inset, inset + stroke * 2 - 1, h / 2, w, h, IntuitionBase);
+            window_scale_rect(m, w - inset - stroke * 2, inset, w - inset - stroke - 1, h / 2, w, h, IntuitionBase);
+            break;
+        default:
+            window_scale_rect(m, inset, h / 2, w - inset - 1, h / 2 + stroke - 1, w, h, IntuitionBase);
+            window_scale_rect(m, w / 2, inset, w / 2 + stroke - 1, h - inset - 1, w, h, IntuitionBase);
+            break;
+    }
+    return TRUE;
+}
+
+static void window_scale_refuse(struct wdpScaleRefusal *refusal, ULONG code)
+{
+    if (refusal) refusal->wsr_Code = code;
+}
+IPTR WinDecorClass__WDM_GETSCALEDEFSIZE_SYSIMAGE(Class *cl, Object *obj,
+    struct wdpGetScaleDefSizeSysImage *msg)
+{
+    if (OCLASS(obj) != cl)
+    {
+        window_scale_refuse(msg->refusal, WDP_REFUSE_UNSUPPORTED);
+        return WDP_SCALE_FAILED;
+    }
+    return WindowScaleVectorSize(msg, (struct IntuitionBase *)cl->cl_UserData);
+}
+IPTR WinDecorClass__WDM_DRAWSCALE_SYSIMAGE(Class *cl, Object *obj,
+    struct wdpDrawScaleSysImage *msg)
+{
+    return OCLASS(obj) == cl && WindowScaleVectorDraw(msg,
+        (struct IntuitionBase *)cl->cl_UserData);
+}
+IPTR WinDecorClass__WDM_RELEASESCALE_SYSIMAGE(Class *cl, Object *obj,
+    struct wdpReleaseScaleSysImage *msg)
+{
+    return OCLASS(obj) == cl && !msg->prepared;
+}
+IPTR WinDecorClass__WDM_PREPARESCALEWINDOW(Class *cl, Object *obj,
+    struct wdpPrepareScaleWindow *msg)
+{
+    if (OCLASS(obj) != cl)
+    {
+        window_scale_refuse(msg->refusal, WDP_REFUSE_UNSUPPORTED);
+        return FALSE;
+    }
+    if (!msg->context || !msg->font || msg->width <= 0 || msg->height <= 0)
+    {
+        if (msg->refusal)
+        {
+            msg->refusal->wsr_Code = WDP_REFUSE_ARGUMENTS;
+            msg->refusal->wsr_Value[0] = msg->context ? msg->context->src_Scale : 0;
+            msg->refusal->wsr_Value[1] = msg->width;
+            msg->refusal->wsr_Value[2] = msg->height;
+        }
+        return FALSE;
+    }
+    return TRUE;
+}
+/* Not exact-class: an admitted subclass (WDA_PreparedScaleWindow, exact
+ * WDM_PREPARESCALEWINDOW) delegates its generic gadget placement here
+ * through DoSuperMethodA, where OCLASS(obj) is that subclass. */
+IPTR WinDecorClass__WDM_LAYOUTSCALEBORDERGADGETS(Class *cl, Object *obj,
+    struct wdpLayoutScaleBorderGadgets *msg)
+{
+    if (!msg->context || !msg->base.wdp_Window || !msg->base.wdp_Gadgets)
+    {
+        if (msg->refusal)
+        {
+            msg->refusal->wsr_Code = WDP_REFUSE_ARGUMENTS;
+            msg->refusal->wsr_Value[0] = msg->context ? msg->context->src_Scale : 0;
+            msg->refusal->wsr_Value[1] = msg->base.wdp_Window ? msg->base.wdp_Window->Width : 0;
+            msg->refusal->wsr_Value[2] = msg->base.wdp_Window ? msg->base.wdp_Window->Height : 0;
+        }
+        return FALSE;
+    }
+    return window_layout_border_gadgets(&msg->base);
 }

@@ -28,6 +28,8 @@
 #include "prefseditor_private.h"
 
 #define NAME_MAX 96
+#define CHOICES_MAX 1024
+#define LIST_ENTRIES_MAX 128
 
 struct walk
 {
@@ -134,6 +136,56 @@ static void choice_text(Object *group, char *out, ULONG capacity)
     }
 }
 
+/* A list's choices are its entries as the list displays them, through
+ * MUIM_List_Display, without the text engine's escape sequences. */
+static void list_text(Object *list, char *out, ULONG capacity)
+{
+    LONG i;
+    for (i = 0; i < LIST_ENTRIES_MAX; i++)
+    {
+        APTR entry = NULL;
+        STRPTR columns[9], preparses[9];
+        ULONG c;
+
+        DoMethod(list, MUIM_List_GetEntry, i, (IPTR)&entry);
+        if (entry == NULL)
+            break;
+        memset(columns, 0, sizeof(columns));
+        memset(preparses, 0, sizeof(preparses));
+        /* The display hook may read the entry's position before the array. */
+        DoMethod(list, MUIM_List_Display, (IPTR)entry, (IPTR)&columns[1], i, (IPTR)preparses);
+        for (c = 1; c < 9 && columns[c] != NULL; c++)
+        {
+            CONST_STRPTR p = columns[c];
+            ULONG used = strlen(out);
+            if (*p == 0)
+                continue;
+            if (used && used + 1 < capacity)
+                out[used++] = ' ';
+            while (*p && used + 1 < capacity)
+            {
+                if (*p == '\033')
+                {
+                    /* ESC x, or ESC x[...] */
+                    p++;
+                    if (*p)
+                        p++;
+                    if (*p == '[')
+                    {
+                        while (*p && *p != ']')
+                            p++;
+                        if (*p)
+                            p++;
+                    }
+                    continue;
+                }
+                out[used++] = *p++;
+            }
+            out[used] = 0;
+        }
+    }
+}
+
 /* Returns TRUE when something under group matched (Filter) or was found. */
 static BOOL walk_group(struct walk *w, Object *group, CONST_STRPTR section, Object *section_group)
 {
@@ -190,11 +242,15 @@ static BOOL walk_group(struct walk *w, Object *group, CONST_STRPTR section, Obje
 
             if (GetAttr(MUIA_Group_ChildList, child, (IPTR *)&pages) && pages != NULL)
             {
+                LONG counts[32];
                 page_state = (Object *)pages->lh_Head;
                 while ((page = NextObject(&page_state)) != NULL)
                 {
+                    ULONG before = w->data->ped_MarkedCount;
                     if (is_a(page, MUIC_Group))
                         any |= walk_group(w, page, section, section_group);
+                    if (index < 32)
+                        counts[index] = w->data->ped_MarkedCount - before;
                     if (w->found != NULL)
                     {
                         if (w->found_register == NULL)
@@ -205,6 +261,12 @@ static BOOL walk_group(struct walk *w, Object *group, CONST_STRPTR section, Obje
                         return TRUE;
                     }
                     index++;
+                }
+                /* The tabs carry their counts, or are dimmed without one. */
+                if (w->filtering && index <= 32 && w->data->ped_RegisterCount < 8)
+                {
+                    SET(child, MUIA_Register_SearchCounts, (IPTR)counts);
+                    w->data->ped_Registers[w->data->ped_RegisterCount++] = child;
                 }
             }
             continue;
@@ -232,7 +294,7 @@ static BOOL walk_group(struct walk *w, Object *group, CONST_STRPTR section, Obje
         }
         {
             struct PrefsEditorRecord record;
-            char choices[512] = {0};
+            char choices[CHOICES_MAX] = {0};
             ULONG id = XGET(child, MUIA_ObjectID);
 
             /* A checkmark is often followed by its label instead. */
@@ -263,6 +325,7 @@ static BOOL walk_group(struct walk *w, Object *group, CONST_STRPTR section, Obje
                 clean(w->name, (CONST_STRPTR)XGET(child, MUIA_Text_DisplayText));
             }
             if (role == PREFSEDITOR_ROLE_CHOICE) choice_text(child, choices, sizeof(choices));
+            if (role == PREFSEDITOR_ROLE_LIST) list_text(child, choices, sizeof(choices));
             record.per_Choices = (CONST_STRPTR)choices;
             record.per_ID = id != 0 ? id : (PREFSEDITOR_PATH_ID | w->index);
             w->index++;
@@ -304,6 +367,9 @@ static void restore(struct PrefsEditor_DATA *data)
         SET(data->ped_MarkedGadget[i], MUIA_Area_SearchMark, data->ped_PreviousMark[i]);
     }
     data->ped_MarkedCount = 0;
+    for (i = 0; i < data->ped_RegisterCount; i++)
+        SET(data->ped_Registers[i], MUIA_Register_SearchCounts, (IPTR)NULL);
+    data->ped_RegisterCount = 0;
 }
 
 IPTR PrefsEditor__MUIM_PrefsEditor_Describe(Class *CLASS, Object *self,

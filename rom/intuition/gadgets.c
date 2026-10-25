@@ -718,7 +718,7 @@ void SetupGInfo(struct GadgetInfo *gi, struct Window *win, struct Requester *req
             gi->gi_Pens.BlockPen  = tw->BlockPen;
         }
         gi->gi_Requester = req;
-        gi->gi_DrInfo    = GetScreenDrawInfo (gi->gi_Screen);
+        gi->gi_DrInfo    = WindowDrawInfo(gi->gi_Screen, gi->gi_Window);
 
         SET_GI_RPORT(gi, tw, req, gad);
 

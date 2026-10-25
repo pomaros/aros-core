@@ -2,6 +2,7 @@
 #define _MUI_CLASSES_ICONLIST_H
 
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright  2002-2010, The AROS Development Team. All rights reserved.
     $Id$
 */
@@ -131,12 +132,14 @@ struct IconEntry
 
     struct IconList_Entry       ie_IconListEntry;
 
+    struct DiskObject           *ie_RenderDiskObj; /* private scaled raster generation */
+    ULONG                        ie_RenderScale;
     struct DiskObject           *ie_DiskObj;                     /* The icons disk objects */
     struct FileInfoBlock        *ie_FileInfoBlock;
 
     LONG                        ie_IconX,                       /* Top Left Co-ords of Icons "AREA" */
                                 ie_IconY,
-                                ie_ProvidedIconX,               /* Co-ords of last known "provided" position */
+                                ie_ProvidedIconX,               /* Point coordinates of last known "provided" position */
                                 ie_ProvidedIconY;
 
     ULONG                       ie_IconWidth,                    /* Width/Height of Icon "Image" */

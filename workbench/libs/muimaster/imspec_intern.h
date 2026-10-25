@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright  2003, The AROS Development Team.
     All rights reserved.
 
@@ -50,6 +51,8 @@ typedef void (*VECTOR_DRAW_FUNC)(struct MUI_RenderInfo *mri, LONG left, LONG top
 struct MUI_ImageSpec_intern /* _intern */
 {
     ImageSpecType type;
+    ULONG scale;
+    ULONG density[2];
 /*      UWORD flags;          */         /* see MUI_ImageSpec_Flags */
 /*      struct MUI_RenderInfo *mri; */
     union {

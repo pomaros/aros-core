@@ -201,6 +201,67 @@ workbench-datatypes-webp-generated : $(GENDIR)/$(CURDIR)/src/webp/config.h
 
 USER_LDFLAGS := -L$(GENDIR)/$(CURDIR)/lib -lwebpencode -lwebpdecode -lwebpdsp -lwebputils -lsharpyuv -lstdc_rel
 
+#
+# The library for other programs: libwebp.a (the whole codec), libwebpdemux.a
+# and libsharpyuv.a in the SDK, with the public headers and pkg-config files,
+# as the upstream build installs them. Static, as the AROS ports of WebKit and
+# other image consumers link them; the datatype keeps its private copies.
+#
+#MM- linklibs-webp : linklibs-webp-includes linklibs-webp-pkgconfig \
+#MM     linklibs-webp-lib linklibs-webp-demux-lib linklibs-webp-sharpyuv-lib
+#MM linklibs-webp-includes : linklibs-webp-fetch
+#MM linklibs-webp-lib : linklibs-webp-fetch workbench-datatypes-webp-generated
+#MM linklibs-webp-demux-lib : linklibs-webp-fetch workbench-datatypes-webp-generated
+#MM linklibs-webp-sharpyuv-lib : linklibs-webp-fetch workbench-datatypes-webp-generated
+
+WEBPINCLUDE_FILES := decode.h encode.h demux.h mux.h mux_types.h types.h format_constants.h
+
+%copy_includes mmake=linklibs-webp-includes dir=$(WEBPARCHSRCDIR)/src/webp \
+    includes="$(WEBPINCLUDE_FILES)" path=webp
+
+%build_linklib mmake=linklibs-webp-lib libname=webp \
+    files="$(addprefix $(WEBPARCHSRCDIR)/,$(WEBPDECODEFILES) $(WEBPENCODEFILES) $(WEBPDSPFILES) $(WEBPUTILSFILES))" \
+    objdir=$(GENDIR)/$(CURDIR)/libwebp
+
+WEBPDEMUXFILES := \
+        src/demux/demux \
+        src/demux/anim_decode
+
+%build_linklib mmake=linklibs-webp-demux-lib libname=webpdemux \
+    files="$(addprefix $(WEBPARCHSRCDIR)/,$(WEBPDEMUXFILES))" \
+    objdir=$(GENDIR)/$(CURDIR)/libwebpdemux
+
+%build_linklib mmake=linklibs-webp-sharpyuv-lib libname=sharpyuv \
+    files="$(addprefix $(WEBPARCHSRCDIR)/,$(WEBPSYUVFILES))" \
+    objdir=$(GENDIR)/$(CURDIR)/libsharpyuv
+
+#MM
+linklibs-webp-pkgconfig : $(AROS_LIB)/pkgconfig/libwebp.pc $(AROS_LIB)/pkgconfig/libwebpdemux.pc $(AROS_LIB)/pkgconfig/libsharpyuv.pc
+
+$(AROS_LIB)/pkgconfig/libwebp.pc :
+	@$(ECHO) "Generating /Developer/lib/pkgconfig/libwebp.pc ..."
+	%mkdir_q dir=$(AROS_LIB)/pkgconfig
+	@printf '%s\n' 'prefix=/Developer' 'exec_prefix=$${prefix}' 'libdir=$${prefix}/lib' \
+	    'includedir=$${prefix}/include' '' 'Name: libwebp' \
+	    'Description: Library for the WebP graphics format' 'Version: $(LIBWEBPVERSION)' \
+	    'Requires.private: libsharpyuv' 'Libs: -L$${libdir} -lwebp' 'Cflags: -I$${includedir}' > $@
+
+$(AROS_LIB)/pkgconfig/libwebpdemux.pc :
+	@$(ECHO) "Generating /Developer/lib/pkgconfig/libwebpdemux.pc ..."
+	%mkdir_q dir=$(AROS_LIB)/pkgconfig
+	@printf '%s\n' 'prefix=/Developer' 'exec_prefix=$${prefix}' 'libdir=$${prefix}/lib' \
+	    'includedir=$${prefix}/include' '' 'Name: libwebpdemux' \
+	    'Description: Library for parsing the WebP graphics format containers' 'Version: $(LIBWEBPVERSION)' \
+	    'Requires: libwebp' 'Libs: -L$${libdir} -lwebpdemux' 'Cflags: -I$${includedir}' > $@
+
+$(AROS_LIB)/pkgconfig/libsharpyuv.pc :
+	@$(ECHO) "Generating /Developer/lib/pkgconfig/libsharpyuv.pc ..."
+	%mkdir_q dir=$(AROS_LIB)/pkgconfig
+	@printf '%s\n' 'prefix=/Developer' 'exec_prefix=$${prefix}' 'libdir=$${prefix}/lib' \
+	    'includedir=$${prefix}/include' '' 'Name: libsharpyuv' \
+	    'Description: Library for sharp RGB to YUV conversion' 'Version: $(LIBWEBPVERSION)' \
+	    'Libs: -L$${libdir} -lsharpyuv' 'Cflags: -I$${includedir}' > $@
+
 WEBPFILES := webpclass
 
 %build_module mmake=workbench-datatypes-webp \

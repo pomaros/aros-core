@@ -102,14 +102,25 @@
             id = AROS_BE2LONG(id);
             for (i = 0; i < num_funcs; i++) {
                 if (funcs[i].id == id) {
+                    /* A stale error must not pass for the loader's own. */
+                    if (DOSBase != NULL)
+                        SetIoErr(0);
                     segs = (*funcs[i].func)(fh, BNULL, (SIPTR *)funcarray,
                         stack, DOSBase);
                     D(bug("[InternalLoadSeg] %s loading %p as an %s object.\n",
                         segs ? "Succeeded" : "FAILED", fh, funcs[i].format));
                     if (segs)
                         return segs;
-                    else
-                        break;
+                    /*
+                     * The format was recognised: its loader's own error
+                     * (ERROR_NO_FREE_STORE when the code arena is full,
+                     * ERROR_BAD_HUNK for a relocation it cannot apply) is
+                     * the real cause, so do not hide it behind
+                     * ERROR_NOT_EXECUTABLE.
+                     */
+                    if (DOSBase != NULL && IoErr() == 0)
+                        SetIoErr(ERROR_NOT_EXECUTABLE);
+                    return BNULL;
                 }
             }
         }

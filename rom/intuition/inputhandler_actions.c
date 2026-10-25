@@ -1,5 +1,6 @@
 /*
     Copyright  1995-2017, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright  2001-2003, The MorphOS Development Team. All Rights Reserved.
 
     Responsible for executing deferred Intuition actions like MoveWindow,
@@ -31,6 +32,8 @@
 #include "propgadgets.h"
 #include "strgadgets.h"
 #include "gadgets.h"
+#include "windowcomposition.h"
+#include "windowfit.h"
 #include "intuition_intern.h" /* EWFLG_xxx */
 #include "inputhandler_support.h"
 #include "inputhandler_actions.h"
@@ -43,9 +46,6 @@
 #define LOCK_ACTIONS()      ObtainSemaphore(&GetPrivIBase(IntuitionBase)->IntuiActionLock);
 #define UNLOCK_ACTIONS()    ReleaseSemaphore(&GetPrivIBase(IntuitionBase)->IntuiActionLock);
 
-#ifndef __MORPHOS__
-static void move_family(struct Window *, int , int);
-#endif
 
 /*******************************************************************************************************/
 
@@ -62,6 +62,12 @@ static void CheckLayerRefresh(struct Layer *lay, struct Screen *targetscreen,
         }
         else if (win)
         {
+            if (IW(win)->Composition && lay == WindowCompositionLayer(win))
+            {
+                WindowCompositionPresent(win, IntuitionBase);
+                lay->Flags &= ~LAYERREFRESH;
+                return;
+            }
             /* Does it belong to a GZZ window and is it
                the outer window of that GZZ window? */
             if (IS_GZZWINDOW(win) && (lay == BLAYER(win)))
@@ -115,7 +121,38 @@ void CheckLayers(struct Screen *screen, struct IntuitionBase *IntuitionBase)
         }
     }
 
+    /* Logical layers live outside the physical screen's layer stack. */
+    {
+        struct Window *window;
+        for (window = screen->FirstWindow; window; window = window->NextWindow)
+        {
+            if (!IW(window)->Composition) continue;
+            WindowCompositionSync(window, IntuitionBase);
+            for (L = WindowCompositionLayerInfo(window)->top_layer; L; L = L->back)
+                if (L->Flags & LAYERREFRESH)
+                    CheckLayerRefresh(L, screen, IntuitionBase);
+        }
+    }
+    WindowCompositionPresentScreen(screen, IntuitionBase);
     UNLOCK_REFRESH(screen);
+}
+
+/* Prepared scale already reserved client refresh messages. Render only the
+ * OS-owned border/requester/bar/proxy work here, after transaction publication,
+ * without reentering CheckLayers' geometry sync or allocating duplicate events. */
+void DrawAuxiliaryLayerRefresh(struct Screen *screen, struct IntuitionBase *IntuitionBase)
+{
+    struct Layer *layer;
+    struct Window *window;
+    for (layer = screen->LayerInfo.top_layer; layer; layer = layer->back)
+        if ((layer->Flags & LAYERREFRESH) &&
+            (!layer->Window || layer != WLAYER((struct Window *)layer->Window)))
+            CheckLayerRefresh(layer, screen, IntuitionBase);
+    for (window = screen->FirstWindow; window; window = window->NextWindow)
+        if (IW(window)->Composition)
+            for (layer = WindowCompositionLayerInfo(window)->top_layer; layer; layer = layer->back)
+                if ((layer->Flags & LAYERREFRESH) && layer != WLAYER(window))
+                    CheckLayerRefresh(layer, screen, IntuitionBase);
 }
 
 void WindowSizeWillChange(struct Window *targetwindow, WORD dx, WORD dy,
@@ -249,7 +286,7 @@ void WindowSizeHasChanged(struct Window *targetwindow, WORD dx, WORD dy,
         GetGadgetDomain(iihdata->ActiveSysGadget ? iihdata->ActiveSysGadget : iihdata->ActiveGadget,
                         iihdata->GadgetInfo.gi_Screen,
                         iihdata->GadgetInfo.gi_Window,
-                        NULL,
+                        iihdata->GadgetInfo.gi_Requester,
                         &iihdata->GadgetInfo.gi_Domain);
     }
 
@@ -403,20 +440,20 @@ void WindowSizeHasChanged(struct Window *targetwindow, WORD dx, WORD dy,
 
 /*******************************************************************************************************/
 
-void DoMoveSizeWindow(struct Window *targetwindow, LONG NewLeftEdge, LONG NewTopEdge,
+BOOL DoMoveSizeWindow(struct Window *targetwindow, LONG NewLeftEdge, LONG NewTopEdge,
                       LONG NewWidth, LONG NewHeight, BOOL send_newsize, struct IntuitionBase *IntuitionBase)
 {
     struct LayersBase *LayersBase = GetPrivIBase(IntuitionBase)->LayersBase;
-    struct IIHData      *iihdata = (struct IIHData *)GetPrivIBase(IntuitionBase)->InputHandler->is_Data;
   //struct IntWindow    *w       = (struct IntWindow *)targetwindow;
     struct Layer        *targetlayer = WLAYER(targetwindow)/*, *L*/;
     struct Requester    *req;
-    struct InputEvent   *ie;
     LONG                 OldLeftEdge  = targetwindow->LeftEdge;
     LONG                 OldTopEdge   = targetwindow->TopEdge;
     LONG                 OldWidth     = targetwindow->Width;
     LONG                 OldHeight    = targetwindow->Height;
     LONG                 pos_dx, pos_dy, size_dx, size_dy;
+    BOOL geometryok = TRUE;
+    BOOL batch = IS(targetwindow->WScreen)->FitBatch != 0;
 
     /* correct new window coords if necessary */
 
@@ -456,10 +493,10 @@ void DoMoveSizeWindow(struct Window *targetwindow, LONG NewLeftEdge, LONG NewTop
         if (BLAYER(targetwindow))
         {
             /* move outer window first */
-            MoveSizeLayer(BLAYER(targetwindow), pos_dx, pos_dy, size_dx, size_dy);
+            if (!MoveSizeLayer(BLAYER(targetwindow), pos_dx, pos_dy, size_dx, size_dy)) geometryok = FALSE;
         }
 
-        MoveSizeLayer(targetlayer, pos_dx, pos_dy, size_dx, size_dy);
+        if (!MoveSizeLayer(targetlayer, pos_dx, pos_dy, size_dx, size_dy)) geometryok = FALSE;
 
         for (req = targetwindow->FirstRequest; req; req = req->OlderRequest)
         {
@@ -492,7 +529,7 @@ void DoMoveSizeWindow(struct Window *targetwindow, LONG NewLeftEdge, LONG NewTop
                 dw = right - left - layer->bounds.MaxX + layer->bounds.MinX;
                 dh = bottom - top - layer->bounds.MaxY + layer->bounds.MinY;
 
-                MoveSizeLayer(layer, dx, dy, dw, dh);
+                if (!MoveSizeLayer(layer, dx, dy, dw, dh)) geometryok = FALSE;
             }
         }
 
@@ -503,13 +540,14 @@ void DoMoveSizeWindow(struct Window *targetwindow, LONG NewLeftEdge, LONG NewTop
         if (w->ZipHeight   != ~0) w->ZipHeight   = OldHeight;
 #endif
 
-        if (pos_dx || pos_dy)
+        WindowFitRecordChange(targetwindow, (pos_dx ? WINDOWFIT_X : 0) |
+            (pos_dy ? WINDOWFIT_Y : 0) | (size_dx ? WINDOWFIT_WIDTH : 0) |
+            (size_dy ? WINDOWFIT_HEIGHT : 0));
+
+        if (!batch && (pos_dx || pos_dy))
         {
+            WindowCompositionSync(targetwindow, IntuitionBase);
             UpdateMouseCoords(targetwindow);
-#ifndef __MORPHOS__
-            if (HAS_CHILDREN(targetwindow))
-                move_family(targetwindow, pos_dx, pos_dy);
-#endif
         }
 
 //    } /* if (pos_dx || pos_dy || size_dx || size_dy) */
@@ -519,6 +557,47 @@ void DoMoveSizeWindow(struct Window *targetwindow, LONG NewLeftEdge, LONG NewTop
         WindowSizeHasChanged(targetwindow, size_dx, size_dy, FALSE, IntuitionBase);
     }
 
+    if (!batch)
+    {
+        NotifyWindowGeometry(targetwindow, send_newsize, IntuitionBase);
+        if (!WindowCompositionSync(targetwindow, IntuitionBase)) geometryok = FALSE;
+        CheckLayers(targetwindow->WScreen, IntuitionBase);
+    }
+    UNLOCK_REFRESH(targetwindow->WScreen);
+    
+#if 0
+    if (size_dx || size_dy)
+    {
+        if (!(((struct IntWindow *)targetwindow)->CustomShape))
+        {
+            struct wdpWindowShape       shapemsg;
+            struct Region               *shape;
+            shapemsg.MethodID           = WDM_WINDOWSHAPE;
+            shapemsg.wdp_Width      = targetwindow->Width;
+            shapemsg.wdp_Height     = targetwindow->Height;
+            shapemsg.wdp_Window = targetwindow;
+            shapemsg.wdp_TrueColor      = (((struct IntScreen *)targetwindow->WScreen)->DInfo.dri.dri_Flags & DRIF_DIRECTCOLOR);
+            shapemsg.wdp_UserBuffer     = ((struct IntWindow *)targetwindow)->DecorUserBuffer;
+            shape = DoMethodA(((struct IntScreen *)(targetwindow->WScreen))->WinDecorObj, (Msg)&shapemsg);
+
+            if (((struct IntWindow *)targetwindow)->OutlineShape) DisposeRegion(((struct IntWindow *)targetwindow)->OutlineShape);
+            ((struct IntWindow *)targetwindow)->OutlineShape = shape;
+            ChangeWindowShape(targetwindow, shape, NULL);
+            ((struct IntWindow *)targetwindow)->CustomShape = FALSE;
+        }
+    }
+#endif
+    
+    return geometryok;
+}
+
+/*******************************************************************************************************/
+
+void NotifyWindowGeometry(struct Window *targetwindow, BOOL send_newsize,
+                          struct IntuitionBase *IntuitionBase)
+{
+    struct IIHData *iihdata = (struct IIHData *)GetPrivIBase(IntuitionBase)->InputHandler->is_Data;
+    struct InputEvent *ie;
     ih_fire_intuimessage(targetwindow,
                  IDCMP_CHANGEWINDOW,
                  CWCODE_MOVESIZE,
@@ -546,39 +625,8 @@ void DoMoveSizeWindow(struct Window *targetwindow, LONG NewLeftEdge, LONG NewTop
         }
     }
 
-    // jDc: CheckLayers calls LOCK_REFRESH, so there's no reason to UNLOCK here!
-    //    UNLOCK_REFRESH(targetwindow->WScreen);
-
-    CheckLayers(targetwindow->WScreen, IntuitionBase);
-
-    UNLOCK_REFRESH(targetwindow->WScreen);
-    
-#if 0
-    if (size_dx || size_dy)
-    {
-        if (!(((struct IntWindow *)targetwindow)->CustomShape))
-        {
-            struct wdpWindowShape       shapemsg;
-            struct Region               *shape;
-            shapemsg.MethodID           = WDM_WINDOWSHAPE;
-            shapemsg.wdp_Width      = targetwindow->Width;
-            shapemsg.wdp_Height     = targetwindow->Height;
-            shapemsg.wdp_Window = targetwindow;
-            shapemsg.wdp_TrueColor      = (((struct IntScreen *)targetwindow->WScreen)->DInfo.dri.dri_Flags & DRIF_DIRECTCOLOR);
-            shapemsg.wdp_UserBuffer     = ((struct IntWindow *)targetwindow)->DecorUserBuffer;
-            shape = DoMethodA(((struct IntScreen *)(targetwindow->WScreen))->WinDecorObj, (Msg)&shapemsg);
-
-            if (((struct IntWindow *)targetwindow)->OutlineShape) DisposeRegion(((struct IntWindow *)targetwindow)->OutlineShape);
-            ((struct IntWindow *)targetwindow)->OutlineShape = shape;
-            ChangeWindowShape(targetwindow, shape, NULL);
-            ((struct IntWindow *)targetwindow)->CustomShape = FALSE;
-        }
-    }
-#endif
-    
 }
 
-/*******************************************************************************************************/
 
 void DoSyncAction(void (*func)(struct IntuiActionMsg *, struct IntuitionBase *),
                   struct IntuiActionMsg *msg,
@@ -715,18 +763,48 @@ void HandleIntuiActions(struct IIHData *iihdata,
     D(bug("Intuition action messages handled\n"));
 }
 
-#ifndef __MORPHOS__
-static void move_family(struct Window * w, int dx, int dy)
+BOOL WindowCompositionSyncFamily(struct Window *window,
+                                 struct IntuitionBase *IntuitionBase)
 {
-    struct Window * _w = w->firstchild;
-
-    while (_w)
+#ifndef __MORPHOS__
+    struct LayersBase *LayersBase = GetPrivIBase(IntuitionBase)->LayersBase;
+    struct Window *child;
+    BOOL success = TRUE;
+    if (!window->firstchild) return TRUE;
+    /* A proxy inherits physical parent motion. A private logical canvas
+     * needs its own move, in the child's units. Relative child positions
+     * stay unchanged, including odd-pixel motion of an aware parent. */
+    LOCK_REFRESH(window->WScreen);
+    for (child = window->firstchild; child; child = child->nextchild)
     {
-        _w->LeftEdge  += dx,
-                 _w->TopEdge   += dy;
-        if (HAS_CHILDREN(_w))
-            move_family(_w,dx,dy);
-        _w=_w->nextchild;
+        LONG left, top, dx, dy;
+        struct Requester *requester;
+        if (!WindowCompositionChildPosition(window, child->WScreen,
+                IW(child)->ScaleAware, child->RelLeftEdge, child->RelTopEdge,
+                &left, &top) || left < -32768 || left > 32767 ||
+                top < -32768 || top > 32767)
+        { success = FALSE; continue; }
+        dx = left - child->LeftEdge;
+        dy = top - child->TopEdge;
+        if (IW(child)->Composition && (dx || dy))
+        {
+            if (BLAYER(child) && !MoveSizeLayer(BLAYER(child), dx, dy, 0, 0))
+                success = FALSE;
+            if (WLAYER(child) && !MoveSizeLayer(WLAYER(child), dx, dy, 0, 0))
+                success = FALSE;
+        }
+        for (requester = child->FirstRequest; requester; requester = requester->OlderRequest)
+            if (requester->ReqLayer && (dx || dy) &&
+                !MoveSizeLayer(requester->ReqLayer, dx, dy, 0, 0))
+                success = FALSE;
+        child->LeftEdge = left;
+        child->TopEdge = top;
+        if (!WindowCompositionSync(child, IntuitionBase)) success = FALSE;
+        UpdateMouseCoords(child);
     }
-}
+    UNLOCK_REFRESH(window->WScreen);
+    return success;
+#else
+    return TRUE;
 #endif
+}

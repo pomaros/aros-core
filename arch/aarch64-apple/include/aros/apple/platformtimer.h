@@ -9,6 +9,7 @@
  * Desc: ARM architectural counter shared by the Apple kernel and timer.device.
  */
 
+#include <stddef.h>
 #include <stdint.h>
 
 #if defined(AROS_APPLE_TIMER_HOST_TEST)
@@ -19,9 +20,6 @@ typedef int32_t LONG;
 #include <exec/types.h>
 #endif
 
-
-
-#define AROS_APPLE_TIMER_FDT_VERSION UINT32_C(1)
 #define AROS_APPLE_TIMER_STATE_VERSION UINT32_C(1)
 #define AROS_APPLE_TIMER_CONTROL_VERSION UINT32_C(1)
 
@@ -30,10 +28,6 @@ typedef int32_t LONG;
 #define AROS_APPLE_TIMER_CTL_ENABLE UINT32_C(1U << 0)
 #define AROS_APPLE_TIMER_CTL_IMASK UINT32_C(1U << 1)
 #define AROS_APPLE_TIMER_CTL_ISTATUS UINT32_C(1U << 2)
-
-#define AROS_APPLE_TIMER_FIQ_TYPE UINT32_C(1)
-#define AROS_APPLE_TIMER_GUEST_VIRTUAL UINT32_C(3)
-#define AROS_APPLE_TIMER_LEVEL_HIGH UINT32_C(4)
 
 enum AROSAppleTimerStatus
 {
@@ -55,17 +49,6 @@ enum AROSAppleTimerOperation
     AROS_APPLE_TIMER_OP_DISARM,
     AROS_APPLE_TIMER_OP_RELEASE,
     AROS_APPLE_TIMER_OP_NOTIFY
-};
-
-struct AROSAppleTimerFDT
-{
-    uint32_t version;
-    uint32_t size;
-    uint32_t interrupt_parent_phandle;
-    uint32_t interrupt_cells;
-    uint32_t virtual_specifier_index;
-    uint32_t virtual_interrupt[4];
-    uint32_t reserved;
 };
 
 struct AROSAppleTimerIO
@@ -120,9 +103,9 @@ struct AROSAppleTimerControl
 
 /*
  * The system counter is the first half of the Apple platform timer contract.
- * It is usable before AIC exists and provides an advancing EClock to AROS.
- * Deadline ownership is enabled only after the retained final FDT identifies
- * the EL1 guest virtual timer FIQ.  EL0 may read the counter, but only the
+ * It provides an advancing EClock before the interrupt controller is ready.
+ * Deadline ownership is enabled after the selected platform binds the timer.
+ * EL0 may read the counter, but only the
  * kernel-owned control boundary may program CNTV_CVAL_EL0/CNTV_CTL_EL0.
  */
 struct KrnPlatformTimer
@@ -152,7 +135,6 @@ static inline LONG KrnPlatformTimerControl(
     return (LONG)value;
 }
 
-
 enum AROSAppleTimerStatus AROSAppleTimerInitialize(
     struct AROSAppleTimerState *state, uint64_t frequency,
     const struct AROSAppleTimerIO *io, void *io_context);
@@ -173,8 +155,6 @@ enum AROSAppleTimerStatus AROSAppleTimerHandle(
 int AROSAppleTimerArmed(const struct AROSAppleTimerState *state);
 const char *AROSAppleTimerStatusName(enum AROSAppleTimerStatus status);
 
-_Static_assert(sizeof(struct AROSAppleTimerFDT) == 40,
-    "Apple timer FDT contract size");
 _Static_assert(sizeof(struct AROSAppleTimerControl) == 80,
     "Apple timer control size");
 

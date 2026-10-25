@@ -67,7 +67,8 @@ static BOOL has_parent_reference(CONST_STRPTR name)
     AROS_LIBFUNC_INIT
 
     struct DevProc *olddvp, *newdvp;
-    LONG status;
+    LONG status, error;
+    CONST_STRPTR old_relative, new_relative;
     struct Process *me = (struct Process *)FindTask(NULL);
     char buf1[256], vol[32];
     char buf2[256];
@@ -174,9 +175,14 @@ static BOOL has_parent_reference(CONST_STRPTR name)
 
 send:
     /* get device pointers */
-    if ((olddvp = GetDeviceProc(oldName, NULL)) == NULL ||
-        (newdvp = GetDeviceProc(newName, NULL)) == NULL) {
+    olddvp = GetDeviceProc(oldName, NULL);
+    if (olddvp == NULL)
+        return DOSFALSE;
+    newdvp = GetDeviceProc(newName, NULL);
+    if (newdvp == NULL) {
+        error = IoErr();
         FreeDeviceProc(olddvp);
+        SetIoErr(error);
         return DOSFALSE;
     }
 
@@ -189,15 +195,34 @@ send:
         return DOSFALSE;
     }
 
-    bstrNewName = C2BSTR(newName);
-    bstrOldName = C2BSTR(oldName);
+    /* GetDeviceProc resolved the assign. Handler paths are relative to
+     * its lock, even if the caller used a device/assign prefix. */
+    new_relative = strchr(newName, ':');
+    old_relative = strchr(oldName, ':');
+    bstrNewName = C2BSTR(new_relative ? new_relative + 1 : newName);
+    if (!bstrNewName) {
+        FreeDeviceProc(olddvp);
+        FreeDeviceProc(newdvp);
+        SetIoErr(ERROR_NO_FREE_STORE);
+        return DOSFALSE;
+    }
+    bstrOldName = C2BSTR(old_relative ? old_relative + 1 : oldName);
+    if (!bstrOldName) {
+        FREEC2BSTR(bstrNewName);
+        FreeDeviceProc(olddvp);
+        FreeDeviceProc(newdvp);
+        SetIoErr(ERROR_NO_FREE_STORE);
+        return DOSFALSE;
+    }
     status = dopacket4(DOSBase, NULL, olddvp->dvp_Port, ACTION_RENAME_OBJECT, olddvp->dvp_Lock, bstrOldName, newdvp->dvp_Lock, bstrNewName);
+    error = IoErr();
     FREEC2BSTR(bstrOldName);
     FREEC2BSTR(bstrNewName);
 
     FreeDeviceProc(olddvp);
     FreeDeviceProc(newdvp);
 
+    SetIoErr(error);
     return status;
 
     AROS_LIBFUNC_EXIT

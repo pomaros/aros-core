@@ -2,7 +2,11 @@
  * Licensed under the AROS Public License (APL) Version 1.1. */
 #include <aros/config.h>
 #include "cpu_monitor.h"
+#include "jit_protect.h"
 #include "../exec/tls.h"
+#if defined(__AROSEXEC_SMP__)
+#include "../exec/smp_api.h"
+#endif
 #include <aros/apple/runtime_local.h>
 static struct AROSCPUTopology topology;
 /* The anchor belongs to a CPU, never to a task context. EL1 installs it;
@@ -47,12 +51,16 @@ void AROSCPUInitMonitor(const void *blob, uint64_t bytes)
     records[topology.boot_cpu].runtime=bootstrap_runtime;
     for (unsigned i=0;i<topology.count;i++) {
         records[i].runtime.exec_tls=&records[i].exec;
+#if defined(__AROSEXEC_SMP__)
+        records[i].runtime.exec_smp_api=&AROSAppleExecSMPAPI;
+#endif
         records[i].exec.CPUNumber=i;
         records[i].exec.IDNestCnt=-1;
         records[i].exec.TDNestCnt=-1;
         records[i].exec.Quantum=4;
     }
     if (!AROSCPUBindCurrent()) return;
+    AROSAppleJitProtectInitCPU();
     stats.version = AROS_APPLE_CPU_STATS_VERSION;
     stats.size = sizeof(stats);
     stats.boot_index = topology.boot_cpu;

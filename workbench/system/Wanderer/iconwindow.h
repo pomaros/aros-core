@@ -2,6 +2,7 @@
 #define _ICONWINDOW_H_
 
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 2004 - 2011, The AROS Development Team. All rights reserved.
     $Id$
 */
@@ -102,6 +103,10 @@ struct IconWindow_Panel_Data
 
 struct IconWindow_DATA
 {
+    LONG iwd_PointLeft, iwd_PointTop, iwd_PointWidth, iwd_PointHeight;
+    LONG iwd_ObservedLeft, iwd_ObservedTop, iwd_ObservedWidth, iwd_ObservedHeight;
+    ULONG iwd_GeometryScale;
+    BOOL iwd_ObservedGeometry;
     struct Screen                       *iwd_Screen;
     char                                *iwd_Title;
     char                                iwd_DirectoryPath[IWD_MAX_DIRECTORYPATHLEN];

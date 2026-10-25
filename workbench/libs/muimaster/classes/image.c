@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright  2002-2020, The AROS Development Team. All rights reserved.
 */
 
@@ -381,7 +382,8 @@ IPTR Image__MUIM_AskMinMax(struct IClass *cl, Object *obj, struct MUIP_AskMinMax
 
         if (data->flags & MIF_FONTMATCHWIDTH)
         {
-            msg->MinMaxInfo->DefWidth *= _font(obj)->tf_XSize / 8;
+            msg->MinMaxInfo->DefWidth = msg->MinMaxInfo->DefWidth *
+                _font(obj)->tf_XSize / zune_scale(obj, 8);
         }
 
 
@@ -400,7 +402,8 @@ IPTR Image__MUIM_AskMinMax(struct IClass *cl, Object *obj, struct MUIP_AskMinMax
 
         if (data->flags & MIF_FONTMATCHHEIGHT)
         {
-            msg->MinMaxInfo->DefHeight *= _font(obj)->tf_YSize / 8;
+            msg->MinMaxInfo->DefHeight = msg->MinMaxInfo->DefHeight *
+                _font(obj)->tf_YSize / zune_scale(obj, 8);
         }
     }
     else if (data->old_image)
@@ -554,6 +557,13 @@ BOOPSI_DISPATCHER(IPTR, Image_Dispatcher, cl, obj, msg)
 {
     switch (msg->MethodID)
     {
+        case MUIM_ScaleContextSupported:
+        {
+            struct MUI_ImageData *data = INST_DATA(cl, obj);
+            return DoSuperMethodA(cl, obj, msg) &&
+                (muiAreaData(obj)->mad_ScaleAwareHooks ||
+                 (!data->old_image && zune_imspec_scale_supported(obj, (IPTR)data->spec)));
+        }
         case OM_NEW:         return Image__OM_NEW(cl, obj, (struct opSet *)msg);
         case OM_DISPOSE:     return Image__OM_DISPOSE(cl, obj, msg);
         case OM_SET:         return Image__OM_SET(cl, obj, (APTR)msg);
@@ -577,6 +587,7 @@ const struct __MUIBuiltinClass _MUI_Image_desc = {
     MUIC_Image,
     MUIC_Area,
     sizeof(struct MUI_ImageData),
-    (void*)Image_Dispatcher
+    (void*)Image_Dispatcher,
+    MUI_CLASS_SCALE_AWARE
 };
 

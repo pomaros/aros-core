@@ -30,7 +30,16 @@ for name in ['query','dereference_before_validation']:
  if name=='query':assert r.returncode==0 and r.stdout=='apple-task-query-host PASS\n' and not r.stderr,r
  else:assert r.returncode!=0 and ('AddressSanitizer' in r.stderr or 'runtime error:' in r.stderr or 'Assertion failed:' in r.stderr),r
  results[name]={'exit':r.returncode,'command':cmd,'source_sha256':hashlib.sha256(query.encode()).hexdigest()}
-# This public VM target is UP-only; configure rejects the SMP variant.
-# Its extracted query has no SMP branch, so do not compile a fictitious variant.
-results['smp_unavailable']={'result':'SKIP','reason':'Public VM target is single-CPU; configure rejects SMP.'}
-(out/'result.json').write_text(json.dumps({'result':'PASS','source_sha256':hashlib.sha256(header.encode()).hexdigest(),'runs':results},indent=2)+'\n');print('apple-task-cpu-host PASS plus four rejected mutants including lifetime; SMP unavailable SKIP (public UP target)')
+# Compile the actual SMP conditional: preserve existing non-CPU task pointer,
+# while deliberately returning unavailable (zero) CPU accounting.
+d=out/'smp_unavailable';d.mkdir();(d/'task_accounting.h').write_text(header)
+smp=unit[:unit.index('int main(void)')]+"""int main(void){struct TaskResBase base={{&entry},{NULL}};struct AppleTaskSample sample;struct IntETask snapshot;
+setup();assert(apple_cpu_query(&base,allocated,&sample,&snapshot)==GetIntETask(allocated));
+assert(!sample.seconds&&!sample.micros&&!sample.usage&&!opens&&!closes);retire();puts("smp unavailable PASS");}
+"""
+(d/'query.c').write_text(smp)
+cmd=['clang','-std=c99','-Wall','-Wextra','-Werror','-Wno-unused-function','-Wno-unused-variable','-D__AROSEXEC_SMP__','-g','-fsanitize=address,undefined','-I'+str(d),str(d/'query.c'),'-o',str(d/'test')]
+r=subprocess.run(cmd,capture_output=True,text=True,timeout=60);(d/'build.log').write_text(r.stdout+r.stderr);assert not r.returncode,r.stderr
+r=subprocess.run([str(d/'test')],capture_output=True,text=True,timeout=20);(d/'run.log').write_text(r.stdout+r.stderr);assert r.returncode==0 and r.stdout=='smp unavailable PASS\n' and not r.stderr,r
+results['smp_unavailable']={'exit':r.returncode,'command':cmd}
+(out/'result.json').write_text(json.dumps({'result':'PASS','source_sha256':hashlib.sha256(header.encode()).hexdigest(),'runs':results},indent=2)+'\n');print('apple-task-cpu-host PASS plus four rejected mutants including lifetime')

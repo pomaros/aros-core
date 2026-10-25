@@ -11,10 +11,16 @@
 #include <proto/graphics.h>
 #include <proto/intuition.h>
 #include <proto/utility.h>
+#include <proto/diskfont.h>
+#include <graphics/gfxbase.h>
+#include <graphics/text.h>
+#include <diskfont/diskfont.h>
+#include <intuition/screens.h>
 
 #include <intuition/intuition.h>
 #include <graphics/rastport.h>
 #include <exec/rawfmt.h>
+#include <exec/nodes.h>
 #include <aros/asmcall.h>
 
 #include <string.h>
@@ -34,6 +40,12 @@ struct stdcondata
 
     PLANEPTR charScratch;
     UWORD charScratchHeight;
+    UWORD charScratchWidth;
+
+    BOOL scaleaware;
+    ULONG scale;
+    struct TextFont *basefont;
+    struct TextFont *scaledfont;
 
     /* Libraries */
     struct Library *scd_GfxBase;
@@ -42,6 +54,166 @@ struct stdcondata
 
 #undef ConsoleDevice
 #define ConsoleDevice ((struct ConsoleBase *)cl->cl_UserData)
+
+/* Open one independently owned face. Tagged font attributes borrow their
+ * extension only while the source font remains referenced by this unit. */
+static struct TextFont *stdcon_openfont(struct Library *GfxBase,
+    struct TextFont *base, ULONG scale)
+{
+    struct TTextAttr attr;
+    struct TextFont *font;
+    struct Library *DiskfontBase;
+    ULONG height;
+
+    if (!base || scale < 100 || scale > 400 || scale % 25) return NULL;
+    height = ((ULONG)base->tf_YSize * scale + 50) / 100;
+    if (!height || height > 32767) return NULL;
+    attr.tta_Name = base->tf_Message.mn_Node.ln_Name;
+    attr.tta_YSize = height;
+    attr.tta_Style = base->tf_Style & ~FSF_TAGGED;
+    attr.tta_Flags = base->tf_Flags &
+        ~(FPF_DESIGNED | FPF_ROMFONT | FPF_DISKFONT | FPF_REMOVED);
+    attr.tta_Tags = NULL;
+    if ((base->tf_Style & FSF_TAGGED) && base->tf_Extension)
+    {
+        attr.tta_Tags = ((struct TextFontExtension *)base->tf_Extension)->tfe_Tags;
+        if (attr.tta_Tags) attr.tta_Style |= FSF_TAGGED;
+    }
+    font = OpenFont((struct TextAttr *)&attr);
+    if (font && font->tf_YSize != height)
+    {
+        CloseFont(font);
+        font = NULL;
+    }
+    if (!font && scale != 100)
+    {
+        DiskfontBase = OpenLibrary("diskfont.library", 0);
+        if (DiskfontBase)
+        {
+            font = OpenDiskFont((struct TextAttr *)&attr);
+            if (font && font->tf_YSize != height)
+            {
+                CloseFont(font);
+                font = NULL;
+            }
+            if (!font)
+            {
+                struct DiskFontHeader *scaled =
+                    NewScaledDiskFont(base, (struct TextAttr *)&attr);
+                if (scaled) font = &scaled->dfh_TF;
+            }
+            CloseLibrary(DiskfontBase);
+        }
+    }
+    if (font && (!font->tf_XSize || font->tf_XSize > 32767 ||
+        font->tf_YSize != height))
+    {
+        CloseFont(font);
+        font = NULL;
+    }
+    return font;
+}
+
+/* Prepare every resource before touching the live RastPort or scratch plane.
+ * A failed request retains the old font and metrics for a later retry. */
+static BOOL stdcon_scalefont(Class *cl, struct stdcondata *data, Object *o)
+{
+    struct Library *GfxBase = data->scd_GfxBase;
+    struct TextFont *font, *oldfont, *basefont, *oldbasefont;
+    PLANEPTR scratch, oldscratch;
+    UWORD oldheight, oldwidth;
+    IPTR scale = 100;
+
+    if (!data->scaleaware) return TRUE;
+    /* Diskfont uses DOS Process fields. SIZEWINDOW also reaches this class
+     * from the device Task; that path must only update existing geometry. */
+    if (FindTask(NULL)->tc_Node.ln_Type != NT_PROCESS) return FALSE;
+    if (!GetAttr(SA_Scale, (Object *)WINDOW(o)->WScreen, &scale)) return FALSE;
+    /* DefaultFont owns its reference for its lifetime (SetIPrefs retains
+     * replaced default faces). OpenFont acquires its font semaphore itself. */
+    basefont = stdcon_openfont(GfxBase,
+        ((struct GfxBase *)GfxBase)->DefaultFont, 100);
+    if (!basefont) return FALSE;
+    if (data->scaledfont && data->scale == scale && data->basefont == basefont)
+    {
+        BOOL fits = WINDOW(o)->Width - WINDOW(o)->BorderLeft - WINDOW(o)->BorderRight >=
+                data->scaledfont->tf_XSize &&
+            WINDOW(o)->Height - WINDOW(o)->BorderTop - WINDOW(o)->BorderBottom >=
+                data->scaledfont->tf_YSize;
+        CloseFont(basefont);
+        /* A same-percentage screen-font change can alter the title border
+         * while the console content face is unchanged. */
+        if (fits)
+        {
+            CU(o)->cu_XROrigin = WINDOW(o)->Flags & WFLG_GIMMEZEROZERO ?
+                0 : WINDOW(o)->BorderLeft;
+            CU(o)->cu_YROrigin = WINDOW(o)->Flags & WFLG_GIMMEZEROZERO ?
+                0 : WINDOW(o)->BorderTop;
+        }
+        return fits;
+    }
+    font = stdcon_openfont(GfxBase, basefont, scale);
+    if (!font)
+    {
+        CloseFont(basefont);
+        return FALSE;
+    }
+    if (WINDOW(o)->Width - WINDOW(o)->BorderLeft - WINDOW(o)->BorderRight < font->tf_XSize ||
+        WINDOW(o)->Height - WINDOW(o)->BorderTop - WINDOW(o)->BorderBottom < font->tf_YSize)
+    {
+        CloseFont(font);
+        CloseFont(basefont);
+        return FALSE;
+    }
+    scratch = AllocRaster(font->tf_XSize, font->tf_YSize);
+    if (!scratch)
+    {
+        CloseFont(font);
+        CloseFont(basefont);
+        return FALSE;
+    }
+    oldbasefont = data->basefont;
+    oldfont = data->scaledfont;
+    oldscratch = data->charScratch;
+    oldheight = data->charScratchHeight;
+    oldwidth = data->charScratchWidth;
+    SetFont(RASTPORT(o), font);
+    data->basefont = basefont;
+    data->scaledfont = font;
+    data->charScratch = scratch;
+    data->charScratchHeight = font->tf_YSize;
+    data->charScratchWidth = font->tf_XSize;
+    data->scale = scale;
+    CU(o)->cu_Font = font;
+    CU(o)->cu_XRSize = font->tf_XSize;
+    CU(o)->cu_YRSize = font->tf_YSize;
+    CU(o)->cu_TxWidth = font->tf_XSize;
+    CU(o)->cu_TxHeight = font->tf_YSize;
+    CU(o)->cu_TxBaseline = font->tf_Baseline;
+    CU(o)->cu_XROrigin = WINDOW(o)->Flags & WFLG_GIMMEZEROZERO ?
+        0 : WINDOW(o)->BorderLeft;
+    CU(o)->cu_YROrigin = WINDOW(o)->Flags & WFLG_GIMMEZEROZERO ?
+        0 : WINDOW(o)->BorderTop;
+    if (oldscratch) FreeRaster(oldscratch, oldwidth, oldheight);
+    if (oldfont) CloseFont(oldfont);
+    if (oldbasefont) CloseFont(oldbasefont);
+    return TRUE;
+}
+
+/* A font preparation failure must not remove the Shell. Keep the window's
+ * existing referenced font and let a later Process CMD_UPDATE retry. The
+ * scratch plane is optional: drawing also supports a NULL temporary plane. */
+static VOID stdcon_initialfont(Class *cl, struct stdcondata *data, Object *o)
+{
+    struct Library *GfxBase = data->scd_GfxBase;
+    if (data->scaleaware && stdcon_scalefont(cl, data, o)) return;
+    if (data->scaleaware)
+        bug("[CONSOLE-SCALE] result=FAIL reason=initial-font-prepare window=%p\n", WINDOW(o));
+    data->charScratchHeight = RASTPORT(o)->Font->tf_YSize;
+    data->charScratchWidth = RASTPORT(o)->Font->tf_XSize;
+    data->charScratch = AllocRaster(data->charScratchWidth, data->charScratchHeight);
+    (void)GfxBase;
+}
 
 /***********  StdCon::New()  **********************/
 
@@ -71,16 +243,20 @@ static Object *stdcon_new(Class *cl, Object *o, struct opSet *msg)
             data->dri = GetScreenDrawInfo(CU(o)->cu_Window->WScreen);
             if (data->dri)
             {
-                struct Library *GfxBase = data->scd_GfxBase;
-
                 data->penmap[0] = &data->dri->dri_Pens[BACKGROUNDPEN];
                 data->penmap[1] = &data->dri->dri_Pens[TEXTPEN];
 
                 CU(o)->cu_BgPen = (BYTE)*(data->penmap[0]);
                 CU(o)->cu_FgPen = (BYTE)*(data->penmap[1]);
 
-                data->charScratchHeight = RASTPORT(o)->Font->tf_YSize;
-                data->charScratch = AllocRaster(8, data->charScratchHeight);
+                data->scaleaware = GetTagData(A_Console_ScaleAware, FALSE,
+                    msg->ops_AttrList);
+                stdcon_initialfont(cl, data, o);
+                if (data->scaledfont)
+                {
+                    struct P_Console_NewWindowSize size = { M_Console_NewWindowSize };
+                    DoSuperMethodA(cl, o, (Msg)&size);
+                }
 
                 data->cursorvisible = TRUE;
                 data->windowactive =
@@ -104,7 +280,14 @@ static VOID stdcon_dispose(Class *cl, Object *o, Msg msg)
     struct Library *GfxBase = data->scd_GfxBase;
 
     if (data->charScratch)
-        FreeRaster(data->charScratch, 8, data->charScratchHeight);
+        FreeRaster(data->charScratch, data->charScratchWidth, data->charScratchHeight);
+
+    if (data->scaledfont)
+    {
+        SetFont(RASTPORT(o), WINDOW(o)->IFont);
+        CloseFont(data->scaledfont);
+    }
+    if (data->basefont) CloseFont(data->basefont);
 
     if (data->scd_GfxBase)
         CloseLibrary(data->scd_GfxBase);
@@ -145,7 +328,7 @@ static void stdcon_text(struct stdcondata *data, struct RastPort *rp,
     struct TmpRas *savedTmpRas = rp->TmpRas;
     struct TmpRas charTmpRas;
     struct Library *GfxBase = data->scd_GfxBase;
-    ULONG scratchSize = RASSIZE(8, data->charScratchHeight);
+    ULONG scratchSize = RASSIZE(data->charScratchWidth, data->charScratchHeight);
 
     if (len == 1 && data->charScratch &&
         (!savedTmpRas || savedTmpRas->Size < scratchSize))
@@ -937,21 +1120,26 @@ static VOID stdcon_newwindowsize(Class *cl, Object *o,
     struct RastPort *rp = RASTPORT(o);
     struct stdcondata *data = INST_DATA(cl, o);
     struct Library *GfxBase = data->scd_GfxBase;
-    WORD old_xmax = CHAR_XMAX(o);
-    WORD old_ymax = CHAR_YMAX(o);
     WORD old_xcp = XCP;
     WORD old_ycp = YCP;
 
     WORD x1, y1, x2, y2;
 
+    Console_UnRenderCursor(o);
+    CU(o)->cu_XROrigin = WINDOW(o)->Flags & WFLG_GIMMEZEROZERO ?
+        0 : WINDOW(o)->BorderLeft;
+    CU(o)->cu_YROrigin = WINDOW(o)->Flags & WFLG_GIMMEZEROZERO ?
+        0 : WINDOW(o)->BorderTop;
     DoSuperMethodA(cl, o, (Msg) msg);
+    Console_RenderCursor(o);
 
-    if (CHAR_XMAX(o) < old_xmax)
     {
         x1 = GFX_XMAX(o) + 1;
         y1 = GFX_YMIN(o);
-        x2 = GFX_XMAX(o);
-        y2 = GFX_YMAX(o) - 1;
+        x2 = CU(o)->cu_XROrigin + WINDOW(o)->Width -
+            WINDOW(o)->BorderLeft - WINDOW(o)->BorderRight - 1;
+        y2 = CU(o)->cu_YROrigin + WINDOW(o)->Height -
+            WINDOW(o)->BorderTop - WINDOW(o)->BorderBottom - 1;
 
         if ((x2 >= x1) && (y2 >= y1))
         {
@@ -960,12 +1148,13 @@ static VOID stdcon_newwindowsize(Class *cl, Object *o,
         }
     }
 
-    if (CHAR_YMAX(o) < old_ymax)
     {
         x1 = GFX_XMIN(o);
         y1 = GFX_YMAX(o) + 1;
-        x2 = WINDOW(o)->Width - WINDOW(o)->BorderRight - 1;
-        y2 = WINDOW(o)->Height - WINDOW(o)->BorderBottom - 1;
+        x2 = CU(o)->cu_XROrigin + WINDOW(o)->Width -
+            WINDOW(o)->BorderLeft - WINDOW(o)->BorderRight - 1;
+        y2 = CU(o)->cu_YROrigin + WINDOW(o)->Height -
+            WINDOW(o)->BorderTop - WINDOW(o)->BorderBottom - 1;
 
         if ((x2 >= x1) && (y2 >= y1))
         {
@@ -985,6 +1174,22 @@ static VOID stdcon_newwindowsize(Class *cl, Object *o,
     return;
 }
 
+/* Called synchronously by CMD_UPDATE in the requesting Process. The device
+ * Task continues to use the installed font for spontaneous resize events. */
+static BOOL stdcon_updatescale(Class *cl, Object *o)
+{
+    struct stdcondata *data = INST_DATA(cl, o);
+    BOOL prepared;
+
+    Console_UnRenderCursor(o);
+    prepared = stdcon_scalefont(cl, data, o);
+    /* A failed preparation preserves the font; geometry must nevertheless
+     * follow the current window, including character-map resize dispatch. */
+    Console_NewWindowSize(o);
+    Console_RenderCursor(o);
+    return prepared;
+}
+
 IPTR stdcon_getpencolor(Class *cl, Object *o, struct P_Console_GetColorPen *msg)
 {
     struct stdcondata *data = INST_DATA(cl, o);
@@ -1002,6 +1207,10 @@ AROS_UFH3S(IPTR, dispatch_stdconclass,
 
     switch (msg->MethodID)
     {
+    case M_Console_UpdateScale:
+        retval = stdcon_updatescale(cl, o);
+        break;
+
     case M_Console_GetColorPen:
         retval = (IPTR) stdcon_getpencolor(cl, o, (struct P_Console_GetColorPen *)msg);
         break;

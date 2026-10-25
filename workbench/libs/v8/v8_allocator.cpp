@@ -1,0 +1,421 @@
+/*
+    Copyright (C) 2026, The AROS Development Team. All rights reserved.
+
+    Desc: v8.library's allocator seam - one heap per process, chosen once.
+
+    WHY THIS FILE EXISTS
+
+    On AROS each Chromium component that becomes a .library gets its own
+    operator new/delete, and that is a correctness problem rather than a
+    tidiness one. Today:
+
+        v8.library        operator new -> libstdc++ -> stdc.library malloc
+        node.library      operator new -> libstdc++ -> stdc.library malloc
+        cef-blink.library operator new -> PartitionAlloc  (PA-E is on there)
+
+    Two heaps in one process that know nothing about each other. Anything
+    allocated on one side and destroyed on the other is freed to the wrong
+    allocator. That is the proven root cause of the CEF crash on script-heavy
+    pages: Blink's background script streamer allocates a chunk vector in
+    cef-blink.library and hands it to V8 to destroy, so the free lands in
+    stdc's TLSF with a PartitionAlloc pointer and corrupts the free list
+    ("FREE outside TLSF area").
+
+    THE FIX THAT WAS TRIED FIRST, AND WHY THIS IS BETTER
+
+    The first attempt turned PA-E off in the CEF build so everything used
+    stdc's malloc. It removed the corruption and replaced it with something
+    worse: stdc's malloc needs a library base, and on a Chromium-created
+    thread that base is NULL, so every page faulted early
+    (CR2 = offsetof(StdCIntBase, mempool)). A late crash on some pages became
+    an early crash on all of them.
+
+    PartitionAlloc needs no AROS library base, so the shared heap should be
+    PartitionAlloc and the redirection should happen HERE - in the library
+    that currently has no allocator of its own - rather than in the one that
+    does.
+
+    ORDERING IS THE WHOLE DESIGN
+
+    Electron's lifecycle runs node FIRST and only then initialises CEF
+    (see workbench/libs/electron/test_electron_lifecycle.c). Node uses V8. So
+    switching allocator when CEF arrives would leave every V8 object created
+    during node's phase allocated by stdc and freed by PartitionAlloc - the
+    same bug, inverted, and harder to see.
+
+    Therefore the allocator is chosen ONCE, before anything allocates, and is
+    then immutable:
+
+      * The default is malloc/free, i.e. exactly today's behaviour. A process
+        that only loads node.library and v8.library is bit-for-bit unchanged.
+      * An embedder that will also load cef-blink.library (Electron) installs
+        PartitionAlloc BEFORE calling anything else.
+      * Once a single allocation has been served, the choice latches. A late
+        install is REFUSED and reported rather than honoured, because honouring
+        it would corrupt the heap exactly like the bug this file exists to fix.
+
+    Refusing loudly is the point: a diagnostic beats a heap corruption that
+    surfaces minutes later inside an unrelated free.
+*/
+
+#include <proto/exec.h>
+
+#include <stdlib.h>
+#include <new>
+
+#include "v8_allocator.h"
+
+namespace
+{
+
+/* Default: the C library this module already used before this file existed. */
+void *DefaultAlloc(size_t size)
+{
+    return malloc(size);
+}
+
+void DefaultFree(void *ptr)
+{
+    free(ptr);
+}
+
+V8AllocFunc  g_alloc = DefaultAlloc;
+V8FreeFunc   g_free  = DefaultFree;
+
+/* Set on the first allocation served. After this the vtable is frozen: see
+   the ordering note at the top of the file. */
+volatile BOOL g_allocator_used = FALSE;
+BOOL          g_allocator_installed = FALSE;
+
+inline void *V8HeapAllocate(size_t size)
+{
+    /* operator new(0) must return a distinct non-null pointer. */
+    if (size == 0)
+        size = 1;
+
+    g_allocator_used = TRUE;
+
+    void *p = g_alloc(size);
+    /* V8 is built without exceptions on this target, so a throwing operator
+       new cannot actually throw here; returning NULL lets the caller's own
+       OOM handling run instead of unwinding through a nothrow boundary. */
+    return p;
+}
+
+/*
+ * OWNED RANGES - frees go back to the heap that owns the block.
+ *
+ * AROS has one address space, so a pointer handed from one module to another
+ * - or from one process to another - means the same thing everywhere. What
+ * has to be right is who frees it. An embedder whose heap lives in known
+ * address ranges (PartitionAlloc's pools, in Chromium) registers each range
+ * with the free function that owns it; a pointer inside a registered range is
+ * given back to that function, whatever thread or process is dropping it.
+ * Everything else goes to this library's own allocator as before.
+ *
+ * That is the half the embedder cannot do for us: Chromium's allocator shim
+ * already hands pointers it does not own to stdc's free, but a Blink-allocated
+ * buffer that V8 destroys (a code-cache CachedData, a streaming chunk) reaches
+ * THIS operator delete, which used to free it to stdc and corrupt the TLSF free
+ * list.
+ *
+ * Lookup is lock-free: a slot is published by writing base and free function
+ * first and the size last (release), and retired by clearing the size first,
+ * so a reader either sees a complete range or none. Ranges are keyed by
+ * address, not by caller, so several processes registering their own heaps
+ * at once is fine. Writers are rare (process start and exit) and serialise on
+ * a semaphore.
+ */
+struct OwnedRange
+{
+    IPTR       base;
+    IPTR       size;   /* 0 = slot free; written last on add, first on remove */
+    V8FreeFunc free;
+};
+
+enum { V8_OWNED_RANGES = 32 };
+OwnedRange             g_owned[V8_OWNED_RANGES];
+struct SignalSemaphore g_owned_lock;
+volatile BOOL          g_owned_lock_ready = FALSE;
+
+/*
+ * OWNER CHECKS - for a heap scattered over many blocks (PartitionAlloc
+ * reserving super pages one at a time), a predicate instead of ranges.
+ * Published like a range: free function first, predicate last (release);
+ * retired predicate first.
+ */
+struct OwnerCheck
+{
+    V8OwnsFunc owns;   /* nullptr = slot free; written last on add */
+    V8FreeFunc free;
+};
+
+enum { V8_OWNER_CHECKS = 8 };
+OwnerCheck g_checks[V8_OWNER_CHECKS];
+
+inline V8FreeFunc OwnerOf(void *ptr)
+{
+    const IPTR p = (IPTR)ptr;
+    for (int i = 0; i < V8_OWNED_RANGES; i++)
+    {
+        const IPTR size = __atomic_load_n(&g_owned[i].size, __ATOMIC_ACQUIRE);
+        if (size != 0 && p - g_owned[i].base < size)
+            return g_owned[i].free;
+    }
+    for (int i = 0; i < V8_OWNER_CHECKS; i++)
+    {
+        const V8OwnsFunc owns =
+            __atomic_load_n(&g_checks[i].owns, __ATOMIC_ACQUIRE);
+        if (owns != nullptr && owns(ptr))
+            return g_checks[i].free;
+    }
+    return nullptr;
+}
+
+inline void V8HeapRelease(void *ptr)
+{
+    if (ptr == nullptr)
+        return;
+
+    if (V8FreeFunc owner = OwnerOf(ptr))
+    {
+        owner(ptr);
+        return;
+    }
+
+    /* Deliberately NOT gated on g_allocator_used: a free can only reach here
+       after an allocation, and setting the flag on the free path would hide an
+       ordering mistake rather than expose it. */
+    g_free(ptr);
+}
+
+} /* namespace */
+
+/*****************************************************************************
+
+    Install the process-wide allocator for this library.
+
+    Returns TRUE if installed, FALSE if it is already too late - see the
+    ordering note at the top of this file. A FALSE return must be treated as
+    fatal by the embedder: continuing means two heaps.
+
+*****************************************************************************/
+extern "C" BOOL V8AllocatorInstallImpl(V8AllocFunc allocFn, V8FreeFunc freeFn)
+{
+    if (allocFn == nullptr || freeFn == nullptr)
+        return FALSE;
+
+    if (g_allocator_installed)
+    {
+        /* Idempotent only if it is the same pair; a DIFFERENT pair is the
+           dangerous case and is refused. */
+        return (g_alloc == allocFn && g_free == freeFn);
+    }
+
+    if (g_allocator_used)
+    {
+        /* Too late: memory has already been served from the default heap, and
+           honouring this would free those objects to a different allocator.
+           Reported by return value ONLY - deliberately no bug()/kprintf here.
+           v8.library is a DISK library, and on a pc target kprintf needs
+           _arosdebuglock, a symbol that lives in the kernel ROM, so any
+           disk-loaded library calling it fails to LINK. Hosted builds hide
+           that because their arossupport uses a different vkprintf.
+           See aros-kprintf-unlinkable-in-disk-libraries. */
+        return FALSE;
+    }
+
+    g_alloc = allocFn;
+    g_free = freeFn;
+    g_allocator_installed = TRUE;
+    return TRUE;
+}
+
+extern "C" BOOL V8AllocatorIsInstalledImpl(void)
+{
+    return g_allocator_installed;
+}
+
+/* Called once from the library's init (V8_InitLib), which runs single-threaded
+   before any caller can reach the range functions. Not done lazily: Forbid()
+   is per-CPU on SMP and would not serialise two first callers on different
+   cores. */
+extern "C" void V8OwnerRangesInitImpl(void)
+{
+    InitSemaphore(&g_owned_lock);
+    g_owned_lock_ready = TRUE;
+}
+
+static inline BOOL OwnedLockInit(void)
+{
+    return g_owned_lock_ready;
+}
+
+/*****************************************************************************
+
+    Register [base, base+size) as owned by freeFn. Returns FALSE if the range
+    is empty, overlaps a registered range, or the table is full.
+
+*****************************************************************************/
+extern "C" BOOL V8OwnerRangeAddImpl(APTR base, IPTR size, V8FreeFunc freeFn)
+{
+    if (base == nullptr || size == 0 || freeFn == nullptr)
+        return FALSE;
+
+    if (!OwnedLockInit())
+        return FALSE;
+    ObtainSemaphore(&g_owned_lock);
+
+    const IPTR lo = (IPTR)base;
+    const IPTR hi = lo + size;
+    int slot = -1;
+    for (int i = 0; i < V8_OWNED_RANGES; i++)
+    {
+        const IPTR s = g_owned[i].size;
+        if (s == 0)
+        {
+            if (slot < 0)
+                slot = i;
+            continue;
+        }
+        if (lo < g_owned[i].base + s && g_owned[i].base < hi)
+        {
+            ReleaseSemaphore(&g_owned_lock);
+            return FALSE;       /* overlaps a range someone else owns */
+        }
+    }
+    if (slot < 0)
+    {
+        ReleaseSemaphore(&g_owned_lock);
+        return FALSE;
+    }
+
+    g_owned[slot].base = lo;
+    g_owned[slot].free = freeFn;
+    __atomic_store_n(&g_owned[slot].size, size, __ATOMIC_RELEASE);
+
+    ReleaseSemaphore(&g_owned_lock);
+    return TRUE;
+}
+
+/*****************************************************************************
+
+    Retire the range starting at base. Call it when the heap that owns it is
+    about to go away (process exit), after the last pointer from it has been
+    released. Returns FALSE if no range starts at base.
+
+*****************************************************************************/
+extern "C" BOOL V8OwnerRangeRemoveImpl(APTR base)
+{
+    if (!OwnedLockInit())
+        return FALSE;
+    ObtainSemaphore(&g_owned_lock);
+
+    BOOL found = FALSE;
+    for (int i = 0; i < V8_OWNED_RANGES; i++)
+    {
+        if (g_owned[i].size != 0 && g_owned[i].base == (IPTR)base)
+        {
+            __atomic_store_n(&g_owned[i].size, (IPTR)0, __ATOMIC_RELEASE);
+            g_owned[i].free = nullptr;
+            g_owned[i].base = 0;
+            found = TRUE;
+            break;
+        }
+    }
+
+    ReleaseSemaphore(&g_owned_lock);
+    return found;
+}
+
+/*****************************************************************************
+
+    Register a predicate that says whether a pointer belongs to the heap whose
+    free function is freeFn. Returns FALSE if an argument is NULL, the
+    predicate is already registered, or the table is full.
+
+*****************************************************************************/
+extern "C" BOOL V8OwnerCheckAddImpl(V8OwnsFunc ownsFn, V8FreeFunc freeFn)
+{
+    if (ownsFn == nullptr || freeFn == nullptr)
+        return FALSE;
+
+    if (!OwnedLockInit())
+        return FALSE;
+    ObtainSemaphore(&g_owned_lock);
+
+    int slot = -1;
+    for (int i = 0; i < V8_OWNER_CHECKS; i++)
+    {
+        if (g_checks[i].owns == ownsFn)
+        {
+            ReleaseSemaphore(&g_owned_lock);
+            return FALSE;
+        }
+        if (g_checks[i].owns == nullptr && slot < 0)
+            slot = i;
+    }
+    if (slot < 0)
+    {
+        ReleaseSemaphore(&g_owned_lock);
+        return FALSE;
+    }
+
+    g_checks[slot].free = freeFn;
+    __atomic_store_n(&g_checks[slot].owns, ownsFn, __ATOMIC_RELEASE);
+
+    ReleaseSemaphore(&g_owned_lock);
+    return TRUE;
+}
+
+/*****************************************************************************
+
+    Retire a predicate. Call it before the heap goes away (process exit),
+    after the last pointer from it has been released. Returns FALSE if the
+    predicate is not registered.
+
+*****************************************************************************/
+extern "C" BOOL V8OwnerCheckRemoveImpl(V8OwnsFunc ownsFn)
+{
+    if (!OwnedLockInit())
+        return FALSE;
+    ObtainSemaphore(&g_owned_lock);
+
+    BOOL found = FALSE;
+    for (int i = 0; i < V8_OWNER_CHECKS; i++)
+    {
+        if (ownsFn != nullptr && g_checks[i].owns == ownsFn)
+        {
+            __atomic_store_n(&g_checks[i].owns, (V8OwnsFunc)nullptr,
+                             __ATOMIC_RELEASE);
+            g_checks[i].free = nullptr;
+            found = TRUE;
+            break;
+        }
+    }
+
+    ReleaseSemaphore(&g_owned_lock);
+    return found;
+}
+
+/*
+ * These definitions win over libstdc++'s weak ones for everything linked into
+ * this module, which is what redirects V8's own new/delete. All the standard
+ * shapes are provided together: a partial set silently leaves some
+ * allocations on libstdc++'s malloc path, which would reintroduce exactly the
+ * split this file removes.
+ */
+void *operator new(size_t size)                            { return V8HeapAllocate(size); }
+void *operator new[](size_t size)                          { return V8HeapAllocate(size); }
+void *operator new(size_t size, const std::nothrow_t &) noexcept   { return V8HeapAllocate(size); }
+void *operator new[](size_t size, const std::nothrow_t &) noexcept { return V8HeapAllocate(size); }
+
+void operator delete(void *ptr) noexcept                   { V8HeapRelease(ptr); }
+void operator delete[](void *ptr) noexcept                 { V8HeapRelease(ptr); }
+void operator delete(void *ptr, const std::nothrow_t &) noexcept   { V8HeapRelease(ptr); }
+void operator delete[](void *ptr, const std::nothrow_t &) noexcept { V8HeapRelease(ptr); }
+
+/* Sized deletes (C++14). GCC emits these in preference to the unsized forms,
+   so omitting them would leave most of V8's deallocations on libstdc++. */
+void operator delete(void *ptr, size_t) noexcept           { V8HeapRelease(ptr); }
+void operator delete[](void *ptr, size_t) noexcept         { V8HeapRelease(ptr); }

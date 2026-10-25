@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2011, The AROS Development Team. All rights reserved.
 
     Desc:
@@ -58,13 +59,15 @@ IPTR AslButton__OM_NEW(Class * cl, Object * o, struct opSet * msg)
     if (g)
     {
         data = INST_DATA(cl, g);
+        data->ld = (struct LayoutData *)GetTagData(GA_UserData, 0, msg->ops_AttrList);
 
         /* {GA_Image, whatever} means, a frame shall be created */
 
         if (FindTagItem(GA_Image, msg->ops_AttrList))
         {
             if (g->GadgetText) fitags[1].ti_Tag = TAG_IGNORE;
-            data->frame = NewObjectA(NULL, FRAMEICLASS, fitags);
+            data->frame = AslFrame((struct LayoutData *)GetTagData(GA_UserData, 0, msg->ops_AttrList), fitags, AslBase);
+            if (!data->frame) { CoerceMethod(cl, (Object *)g, OM_DISPOSE); return 0; }
         }
 
         data->coolimage = (struct CoolImage *)GetTagData(ASLBT_CoolImage, 0, msg->ops_AttrList);
@@ -97,7 +100,24 @@ IPTR AslButton__OM_NEW(Class * cl, Object * o, struct opSet * msg)
                     }
 
                 } else {
-                    data->coolimage = NULL;
+                    CoerceMethod(cl, (Object *)g, OM_DISPOSE);
+                    return 0;
+                }
+                data->coolwidth = AslScaleValue(data->ld, data->coolimage->width);
+                data->coolheight = AslScaleValue(data->ld, data->coolimage->height);
+                data->coolpixels = AllocVec((ULONG)data->coolwidth * data->coolheight, MEMF_ANY);
+                if (!data->coolpixels)
+                {
+                    CoerceMethod(cl, (Object *)g, OM_DISPOSE);
+                    return 0;
+                }
+                {
+                    ULONG x, y;
+                    for (y = 0; y < data->coolheight; ++y)
+                        for (x = 0; x < data->coolwidth; ++x)
+                            data->coolpixels[y * data->coolwidth + x] = data->coolimage->data[
+                                (y * data->coolimage->height / data->coolheight) * data->coolimage->width +
+                                x * data->coolimage->width / data->coolwidth];
                 }
             } else {
                 data->coolimage = NULL;
@@ -119,6 +139,7 @@ IPTR AslButton__OM_DISPOSE(Class * cl, Object * o, Msg msg)
     data = INST_DATA(cl, o);
     if (data->frame) DisposeObject(data->frame);
     if (data->coolimagepal) FreeVec(data->coolimagepal);
+    if (data->coolpixels) FreeVec(data->coolpixels);
 
     retval = DoSuperMethodA(cl, o, msg);
 
@@ -345,7 +366,7 @@ IPTR AslButton__GM_RENDER(Class *cl, struct Gadget *g, struct gpRender *msg)
                        x,
                        y,
                        (!text || (g->Flags & GFLG_SELECTED)) ? IDS_SELECTED : IDS_NORMAL,
-                       msg->gpr_GInfo->gi_DrInfo);
+                       ((struct LayoutData *)g->UserData)->ld_Dri);
     }
 
     if (text)
@@ -357,8 +378,8 @@ IPTR AslButton__GM_RENDER(Class *cl, struct Gadget *g, struct gpRender *msg)
 
         if (data->coolimage)
         {
-            tx += BORDERIMAGESPACINGX + data->coolimage->width + BORDERIMAGESPACINGX;
-            w  -= (BORDERIMAGESPACINGX + data->coolimage->width + BORDERIMAGESPACINGX + BORDERIMAGESPACINGX);
+            tx += AslScaleValue(data->ld, BORDERIMAGESPACINGX) + data->coolwidth + AslScaleValue(data->ld, BORDERIMAGESPACINGX);
+            w  -= (AslScaleValue(data->ld, BORDERIMAGESPACINGX) + data->coolwidth + AslScaleValue(data->ld, BORDERIMAGESPACINGX) + AslScaleValue(data->ld, BORDERIMAGESPACINGX));
         }
 
         tx += (w - TextLength(msg->gpr_RPort, text, len)) / 2;
@@ -405,8 +426,8 @@ IPTR AslButton__GM_RENDER(Class *cl, struct Gadget *g, struct gpRender *msg)
     }
     else
     {
-        x += 3; w -= 6;
-        y += 3; h -= 6;
+        x += AslScaleValue(data->ld, 3); w -= AslScaleValue(data->ld, 3) * 2;
+        y += AslScaleValue(data->ld, 3); h -= AslScaleValue(data->ld, 3) * 2;
 
     #if AVOID_FLICKER
         if (data->frame)
@@ -447,16 +468,16 @@ IPTR AslButton__GM_RENDER(Class *cl, struct Gadget *g, struct gpRender *msg)
         GetRGB32(cm, data->ld->ld_Dri->dri_Pens[(g->Flags & GFLG_SELECTED) ? FILLPEN : BACKGROUNDPEN], 1, bg);
         data->coolimagepal[0] = ((bg[0] & 0xFF000000) >> 8) + ((bg[1] & 0xFF000000) >> 16) + ((bg[2] & 0xFF000000) >> 24);
 
-        WriteLUTPixelArray((APTR)data->coolimage->data,
+        WriteLUTPixelArray((APTR)data->coolpixels,
                             0,
                             0,
-                            data->coolimage->width,
+                            data->coolwidth,
                             msg->gpr_RPort,
                             data->coolimagepal,
-                            x + BORDERIMAGESPACINGX,
-                            y + (h - data->coolimage->height) / 2,
-                            data->coolimage->width,
-                            data->coolimage->height,
+                            x + AslScaleValue(data->ld, BORDERIMAGESPACINGX),
+                            y + (h - data->coolheight) / 2,
+                            data->coolwidth,
+                            data->coolheight,
                             CTABFMT_XRGB8);
 
     }
@@ -470,9 +491,9 @@ IPTR AslButton__GM_LAYOUT(Class * cl, struct Gadget * g, struct gpLayout * msg)
 {
     struct AslButtonData *data;
     IPTR retval;
-    WORD innerwidth;
-    WORD spacing;
-    WORD x;
+    LONG innerwidth;
+    LONG spacing;
+    LONG x;
 
     data = INST_DATA(cl, g);
 
@@ -487,12 +508,12 @@ IPTR AslButton__GM_LAYOUT(Class * cl, struct Gadget * g, struct gpLayout * msg)
 
             /* multiply width 16 for sub-pixel accuracy */
 
-            x = (data->ld->ld_WBorLeft + OUTERSPACINGX) * 16 + 8;
+            x = (data->ld->ld_WBorLeft + AslScaleValue(data->ld, OUTERSPACINGX)) * 16 + 8;
 
             innerwidth = msg->gpl_GInfo->gi_Window->Width -
                          msg->gpl_GInfo->gi_Window->BorderLeft -
                          msg->gpl_GInfo->gi_Window->BorderRight -
-                         OUTERSPACINGX * 2;
+                         AslScaleValue(data->ld, OUTERSPACINGX) * 2;
 
             /* multiply width 16 for sub-pixel accuracy */
 
@@ -509,3 +530,12 @@ IPTR AslButton__GM_LAYOUT(Class * cl, struct Gadget * g, struct gpLayout * msg)
 
 /***********************************************************************************/
 
+
+/* Exact private receiver for stable string-dialog resource publication. */
+IPTR AslButton__ASLGM_INSTALLSCALE(Class *cl, Object *object, Msg message)
+{
+    struct AslInstallScale *install = (struct AslInstallScale *)message;
+    if (!install->live || !install->candidate || OCLASS(object) != cl || cl != AslBase->aslbuttonclass ||
+        object != (Object *)install->live->ld_GList) return FALSE;
+    return AslPublishScale(install->live,install->candidate,install->ginfo,AslBase);
+}

@@ -455,6 +455,9 @@ struct NepHidReport
     struct NepHidItem **nhr_InItemMap;    /* Array to items at bitpos */
     struct NepHidItem **nhr_OutItemMap;   /* Array to items at bitpos */
     struct NepHidItem **nhr_FeatItemMap;  /* Array to items at bitpos */
+#if defined(AROS_VM_GUEST)
+    UBYTE               nhr_PhysicalKeys[32]; /* raw page07 state, never action state */
+#endif
     UWORD               nhr_ItemIDBase;   /* Starting offset for items (lh_Type) in this report */
 };
 
@@ -744,6 +747,9 @@ struct NepClassHid
     Object             *nch_HCMUIPrefsMI;
 
     struct NepHidCtrl  *nch_Ctrl;         /* game controller device (hidcontroller.c) */
+#if defined(AROS_VM_GUEST)
+    APTR                nch_KeyboardDevice;
+#endif
     BOOL                nch_CtrlWanted;   /* attach requested from another context */
 };
 
@@ -785,6 +791,12 @@ struct NepHidBase
 
     LONG                nh_Seed;          /* seed variable for random numbers */
 
+#if defined(AROS_VM_GUEST)
+    struct Library     *nh_KeyboardHiddBase;
+    APTR                nh_KeyboardClass, nh_KeyboardHW;
+    IPTR                nh_KeyboardAB[3];
+    IPTR                nh_KeyboardMB[2];
+#endif
     /* game controller support (hidcontroller.c) */
     struct SignalSemaphore nh_CtrlLock;
     BOOL                nh_DOSAvailable;  /* UCM_DOSAvailableEvent seen */

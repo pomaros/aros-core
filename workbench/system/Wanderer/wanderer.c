@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 2004-2026, The AROS Development Team. All rights reserved.
 */
 #include "tile_transaction.h"
@@ -56,6 +57,7 @@
 #include "iconwindow.h"
 #include "iconwindow_attributes.h"
 #include "iconwindow_iconlist.h"
+#include "wandererscale.h"
 #include "wandererprefs.h"
 #include "filesystems.h"
 #include "filesystems_utilities.h"
@@ -2078,8 +2080,8 @@ void wanderer_menufunc_icon_snapshot(IPTR *flags)
             {
                 if (snapshot)
                 {
-                    node->ie_DiskObj->do_CurrentX = node->ie_IconX;
-                    node->ie_DiskObj->do_CurrentY = node->ie_IconY;
+                    node->ie_DiskObj->do_CurrentX = WandererUnscalePoint(node->ie_IconX, XGET(iconList, MUIA_RenderScale));
+                    node->ie_DiskObj->do_CurrentY = WandererUnscalePoint(node->ie_IconY, XGET(iconList, MUIA_RenderScale));
                 }
                 else
                 {
@@ -3116,7 +3118,7 @@ VOID Wanderer__Func_UpdateMenuStates(Object *WindowObj, Object *IconlistObj)
 {
     IPTR   isRoot = 0, current_DispFlags = 0, current_SortFlags = 0;
     Object *current_Menustrip = NULL, *current_MenuItem = NULL;
-    struct IconList_Entry *icon_entry    = (IPTR)MUIV_IconList_NextIcon_Start;
+    struct IconList_Entry *icon_entry    = (struct IconList_Entry *)MUIV_IconList_NextIcon_Start;
     ULONG iconmenustate = 0xFFFFFFFF; /* All enabled */
     LONG selectedcount = 0;
 

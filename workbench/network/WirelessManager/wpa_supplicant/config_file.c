@@ -23,6 +23,7 @@
 #include "base64.h"
 #include "uuid.h"
 #include "eap_peer/eap_methods.h"
+#include <libraries/wifi_keyring.h>
 
 
 /**
@@ -127,10 +128,77 @@ static int wpa_config_validate_network(struct wpa_ssid *ssid, int line)
 }
 
 
+static int aros_unsupported_secret(const char *field)
+{
+    const char *names[]={"password","private_key_passwd","private_key2_passwd","pin","pin2","new_password"};
+    size_t i;
+    for(i=0;i<sizeof(names)/sizeof(names[0]);i++) {
+        size_t n=strlen(names[i]);
+        if(strncmp(field,names[i],n)) continue;
+        while(field[n]==' ' || field[n]=='\t') n++;
+        if(!field[n]) return 1;
+    }
+    return 0;
+}
+
+/* The metadata file never carries a PSK. The service context is attributed
+ * to the installed WirelessManager executable by keyring.library. */
+static int aros_keyring_network(struct wpa_ssid *ssid, int store, int wep)
+{
+    struct wifi_secret secret;
+    char name[33], value[132];
+    int result;
+    if (!ssid->ssid || !ssid->ssid_len || ssid->ssid_len > 32) return -1;
+    memcpy(name, ssid->ssid, ssid->ssid_len);
+    name[ssid->ssid_len] = 0;
+    memset(&secret, 0, sizeof(secret));
+    if (store) {
+        char *encoded;
+        const char *field;
+        if (ssid->key_mgmt & (WPA_KEY_MGMT_PSK | WPA_KEY_MGMT_FT_PSK |
+                              WPA_KEY_MGMT_WPA_NONE)) {
+            secret.security = 2;
+            field = "psk";
+        } else if (ssid->wep_key_len[0]) {
+            secret.security = 1;
+            field = "wep_key0";
+        } else return 0;
+        encoded = wpa_config_get(ssid, field);
+        if (!encoded) return -1;
+        secret.version = 1;
+        secret.hex = encoded[0] != '"';
+        if (strlen(encoded) > (secret.hex ? 64 : 66)) {
+            wifi_secret_wipe(encoded, strlen(encoded)); os_free(encoded); return -1;
+        }
+        if (secret.hex) strcpy(secret.key, encoded);
+        else {
+            size_t len = strlen(encoded);
+            if (len < 2) { os_free(encoded); return -1; }
+            memcpy(secret.key, encoded + 1, len - 2);
+        }
+        wifi_secret_wipe(encoded, strlen(encoded));
+        os_free(encoded);
+        result = wifi_keyring(NULL, 1, (CONST_STRPTR)name, &secret);
+    } else {
+        if (!(ssid->key_mgmt & (WPA_KEY_MGMT_PSK | WPA_KEY_MGMT_FT_PSK |
+                                WPA_KEY_MGMT_WPA_NONE)) &&
+            !wep) return 0;
+        result = wifi_keyring(NULL, 0, (CONST_STRPTR)name, &secret);
+        if (result == KR_SUCCESS) {
+            if (secret.hex) snprintf(value, sizeof(value), "%s", secret.key);
+            else snprintf(value, sizeof(value), "\"%s\"", secret.key);
+            result = wpa_config_set(ssid, secret.security == 2 ? "psk" : "wep_key0", value, 0);
+            wifi_secret_wipe(value, sizeof(value));
+        }
+    }
+    wifi_secret_wipe(&secret, sizeof(secret));
+    return result == 0 ? 0 : -1;
+}
+
 static struct wpa_ssid * wpa_config_read_network(FILE *f, int *line, int id)
 {
 	struct wpa_ssid *ssid;
-	int errors = 0, end = 0;
+	int errors = 0, end = 0, keyring_wep = 0;
 	char buf[256], *pos, *pos2;
 
 	wpa_printf(MSG_MSGDUMP, "Line: %d - start of a new network block",
@@ -150,17 +218,22 @@ static struct wpa_ssid * wpa_config_read_network(FILE *f, int *line, int id)
 
 		pos2 = os_strchr(pos, '=');
 		if (pos2 == NULL) {
-			wpa_printf(MSG_ERROR, "Line %d: Invalid SSID line "
-				   "'%s'.", *line, pos);
+			wpa_printf(MSG_ERROR, "Line %d: Invalid network metadata field.", *line);
 			errors++;
 			continue;
 		}
 
 		*pos2++ = '\0';
+        /* Refuse obsolete cleartext credential fields, including secret echo. */
+        if (!os_strcmp(pos, "psk") || !os_strncmp(pos, "wep_key", 7) || aros_unsupported_secret(pos)) {
+            wifi_secret_wipe(pos2, os_strlen(pos2));
+            errors++;
+            continue;
+        }
+        if (!os_strcmp(pos, "keyring_security")) { keyring_wep = 1; continue; }
 		if (*pos2 == '"') {
 			if (os_strchr(pos2 + 1, '"') == NULL) {
-				wpa_printf(MSG_ERROR, "Line %d: invalid "
-					   "quotation '%s'.", *line, pos2);
+				wpa_printf(MSG_ERROR, "Line %d: invalid network metadata quotation.", *line);
 				errors++;
 				continue;
 			}
@@ -176,6 +249,7 @@ static struct wpa_ssid * wpa_config_read_network(FILE *f, int *line, int id)
 		errors++;
 	}
 
+    if (aros_keyring_network(ssid, 0, keyring_wep)) errors++;
 	errors += wpa_config_validate_network(ssid, *line);
 
 	if (errors) {
@@ -187,87 +261,7 @@ static struct wpa_ssid * wpa_config_read_network(FILE *f, int *line, int id)
 }
 
 
-#ifndef CONFIG_NO_CONFIG_BLOBS
-static struct wpa_config_blob * wpa_config_read_blob(FILE *f, int *line,
-						     const char *name)
-{
-	struct wpa_config_blob *blob;
-	char buf[256], *pos;
-	unsigned char *encoded = NULL, *nencoded;
-	int end = 0;
-	size_t encoded_len = 0, len;
 
-	wpa_printf(MSG_MSGDUMP, "Line: %d - start of a new named blob '%s'",
-		   *line, name);
-
-	while (wpa_config_get_line(buf, sizeof(buf), f, line, &pos)) {
-		if (os_strcmp(pos, "}") == 0) {
-			end = 1;
-			break;
-		}
-
-		len = os_strlen(pos);
-		nencoded = os_realloc(encoded, encoded_len + len);
-		if (nencoded == NULL) {
-			wpa_printf(MSG_ERROR, "Line %d: not enough memory for "
-				   "blob", *line);
-			os_free(encoded);
-			return NULL;
-		}
-		encoded = nencoded;
-		os_memcpy(encoded + encoded_len, pos, len);
-		encoded_len += len;
-	}
-
-	if (!end) {
-		wpa_printf(MSG_ERROR, "Line %d: blob was not terminated "
-			   "properly", *line);
-		os_free(encoded);
-		return NULL;
-	}
-
-	blob = os_zalloc(sizeof(*blob));
-	if (blob == NULL) {
-		os_free(encoded);
-		return NULL;
-	}
-	blob->name = os_strdup(name);
-	blob->data = base64_decode(encoded, encoded_len, &blob->len);
-	os_free(encoded);
-
-	if (blob->name == NULL || blob->data == NULL) {
-		wpa_config_free_blob(blob);
-		return NULL;
-	}
-
-	return blob;
-}
-
-
-static int wpa_config_process_blob(struct wpa_config *config, FILE *f,
-				   int *line, char *bname)
-{
-	char *name_end;
-	struct wpa_config_blob *blob;
-
-	name_end = os_strchr(bname, '=');
-	if (name_end == NULL) {
-		wpa_printf(MSG_ERROR, "Line %d: no blob name terminator",
-			   *line);
-		return -1;
-	}
-	*name_end = '\0';
-
-	blob = wpa_config_read_blob(f, line, bname);
-	if (blob == NULL) {
-		wpa_printf(MSG_ERROR, "Line %d: failed to read blob %s",
-			   *line, bname);
-		return -1;
-	}
-	wpa_config_set_blob(config, blob);
-	return 0;
-}
-#endif /* CONFIG_NO_CONFIG_BLOBS */
 
 
 struct global_parse_data {
@@ -522,6 +516,11 @@ struct wpa_config * wpa_config_read(const char *name)
 	}
 
 	while (wpa_config_get_line(buf, sizeof(buf), f, &line, &pos)) {
+        if (!os_strncmp(pos,"blob-base64-",12)) {
+            wpa_printf(MSG_ERROR,"Line %d: unsupported credential blob refused.",line);
+            errors++;
+            break;
+        }
 		if (os_strcmp(pos, "network={") == 0) {
 			ssid = wpa_config_read_network(f, &line, id++);
 			if (ssid == NULL) {
@@ -543,17 +542,10 @@ struct wpa_config * wpa_config_read(const char *name)
 				errors++;
 				continue;
 			}
-#ifndef CONFIG_NO_CONFIG_BLOBS
-		} else if (os_strncmp(pos, "blob-base64-", 12) == 0) {
-			if (wpa_config_process_blob(config, f, &line, pos + 12)
-			    < 0) {
-				errors++;
-				continue;
-			}
-#endif /* CONFIG_NO_CONFIG_BLOBS */
+
 		} else if (wpa_config_process_global(config, pos, line) < 0) {
 			wpa_printf(MSG_ERROR, "Line %d: Invalid configuration "
-				   "line '%s'.", line, pos);
+				   "line.", line);
 			errors++;
 			continue;
 		}
@@ -600,16 +592,6 @@ static void write_bssid(FILE *f, struct wpa_ssid *ssid)
 	if (value == NULL)
 		return;
 	fprintf(f, "\tbssid=%s\n", value);
-	os_free(value);
-}
-
-
-static void write_psk(FILE *f, struct wpa_ssid *ssid)
-{
-	char *value = wpa_config_get(ssid, "psk");
-	if (value == NULL)
-		return;
-	fprintf(f, "\tpsk=%s\n", value);
 	os_free(value);
 }
 
@@ -710,25 +692,8 @@ static void write_eap(FILE *f, struct wpa_ssid *ssid)
 #endif /* IEEE8021X_EAPOL */
 
 
-static void write_wep_key(FILE *f, int idx, struct wpa_ssid *ssid)
-{
-	char field[20], *value;
-	int res;
-
-	res = os_snprintf(field, sizeof(field), "wep_key%d", idx);
-	if (res < 0 || (size_t) res >= sizeof(field))
-		return;
-	value = wpa_config_get(ssid, field);
-	if (value) {
-		fprintf(f, "\t%s=%s\n", field, value);
-		os_free(value);
-	}
-}
-
-
 static void wpa_config_write_network(FILE *f, struct wpa_ssid *ssid)
 {
-	int i;
 
 #define STR(t) write_str(f, #t, ssid)
 #define INT(t) write_int(f, #t, ssid->t, 0)
@@ -739,7 +704,6 @@ static void wpa_config_write_network(FILE *f, struct wpa_ssid *ssid)
 	STR(ssid);
 	INT(scan_ssid);
 	write_bssid(f, ssid);
-	write_psk(f, ssid);
 	write_proto(f, ssid);
 	write_key_mgmt(f, ssid);
 	write_pairwise(f, ssid);
@@ -749,12 +713,10 @@ static void wpa_config_write_network(FILE *f, struct wpa_ssid *ssid)
 	write_eap(f, ssid);
 	STR(identity);
 	STR(anonymous_identity);
-	STR(password);
 	STR(ca_cert);
 	STR(ca_path);
 	STR(client_cert);
 	STR(private_key);
-	STR(private_key_passwd);
 	STR(dh_file);
 	STR(subject_match);
 	STR(altsubject_match);
@@ -762,20 +724,17 @@ static void wpa_config_write_network(FILE *f, struct wpa_ssid *ssid)
 	STR(ca_path2);
 	STR(client_cert2);
 	STR(private_key2);
-	STR(private_key2_passwd);
 	STR(dh_file2);
 	STR(subject_match2);
 	STR(altsubject_match2);
 	STR(phase1);
 	STR(phase2);
 	STR(pcsc);
-	STR(pin);
 	STR(engine_id);
 	STR(key_id);
 	STR(cert_id);
 	STR(ca_cert_id);
 	STR(key2_id);
-	STR(pin2);
 	STR(engine2_id);
 	STR(cert2_id);
 	STR(ca_cert2_id);
@@ -783,8 +742,7 @@ static void wpa_config_write_network(FILE *f, struct wpa_ssid *ssid)
 	INTe(engine2);
 	INT_DEF(eapol_flags, DEFAULT_EAPOL_FLAGS);
 #endif /* IEEE8021X_EAPOL */
-	for (i = 0; i < 4; i++)
-		write_wep_key(f, i, ssid);
+    if (ssid->wep_key_len[0]) fprintf(f, "\tkeyring_security=WEP\n");
 	INT(wep_tx_keyidx);
 	INT(priority);
 #ifdef IEEE8021X_EAPOL
@@ -807,20 +765,7 @@ static void wpa_config_write_network(FILE *f, struct wpa_ssid *ssid)
 }
 
 
-#ifndef CONFIG_NO_CONFIG_BLOBS
-static int wpa_config_write_blob(FILE *f, struct wpa_config_blob *blob)
-{
-	unsigned char *encoded;
 
-	encoded = base64_encode(blob->data, blob->len, NULL);
-	if (encoded == NULL)
-		return -1;
-
-	fprintf(f, "\nblob-base64-%s={\n%s}\n", blob->name, encoded);
-	os_free(encoded);
-	return 0;
-}
-#endif /* CONFIG_NO_CONFIG_BLOBS */
 
 
 static void wpa_config_write_global(FILE *f, struct wpa_config *config)
@@ -905,12 +850,24 @@ int wpa_config_write(const char *name, struct wpa_config *config)
 #ifndef CONFIG_NO_CONFIG_WRITE
 	FILE *f;
 	struct wpa_ssid *ssid;
-#ifndef CONFIG_NO_CONFIG_BLOBS
-	struct wpa_config_blob *blob;
-#endif /* CONFIG_NO_CONFIG_BLOBS */
+
 	int ret = 0;
 
 	wpa_printf(MSG_DEBUG, "Writing configuration file '%s'", name);
+
+#ifndef CONFIG_NO_CONFIG_BLOBS
+    if(config->blobs) return -1;
+#endif
+#ifdef IEEE8021X_EAPOL
+    for(ssid=config->ssid;ssid;ssid=ssid->next)
+        if(ssid->eap.password || ssid->eap.private_key_passwd ||
+           ssid->eap.private_key2_passwd || ssid->eap.pin || ssid->eap.pin2 ||
+           ssid->eap.new_password) return -1;
+#endif
+    /* Refuse save before truncating metadata if a secret cannot commit. */
+    for (ssid = config->ssid; ssid; ssid = ssid->next)
+        if (ssid->key_mgmt != WPA_KEY_MGMT_WPS && aros_keyring_network(ssid, 1, 0))
+            return -1;
 
 	f = fopen(name, "w");
 	if (f == NULL) {
@@ -928,15 +885,10 @@ int wpa_config_write(const char *name, struct wpa_config *config)
 		fprintf(f, "}\n");
 	}
 
-#ifndef CONFIG_NO_CONFIG_BLOBS
-	for (blob = config->blobs; blob; blob = blob->next) {
-		ret = wpa_config_write_blob(f, blob);
-		if (ret)
-			break;
-	}
-#endif /* CONFIG_NO_CONFIG_BLOBS */
 
-	fclose(f);
+
+	if(ferror(f)) ret=-1;
+	if(fclose(f)) ret=-1;
 
 	wpa_printf(MSG_DEBUG, "Configuration file '%s' written %ssuccessfully",
 		   name, ret ? "un" : "");

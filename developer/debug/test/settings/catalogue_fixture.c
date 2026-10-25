@@ -44,7 +44,7 @@ static size_t load_dir(struct catalogue *c, const char *dir, int rows)
         text = slurp(path, &length);
         if (rows) {
             if (c->row_count < CAT_ROWS && cat_parse_row(text, length, &c->rows[c->row_count]) == 0)
-                { c->row_count++; loaded++; }
+                { snprintf(c->rows[c->row_count].id, CAT_ID, "%s", e->d_name); c->row_count++; loaded++; }
             else
                 printf("FAIL row file %s\n", e->d_name), failures++;
         } else {
@@ -85,6 +85,17 @@ int main(int argc, char **argv)
               "a keyword finds Fonts, case-insensitive");
         CHECK(cat_row_matches(&c, &c.rows[i], ""), "empty query matches");
         CHECK(!cat_row_matches(&c, &c.rows[i], "zzzz"), "unrelated query misses");
+    }
+    /* Page requests: the indicators ask for battery, network, bluetooth. */
+    {
+        int b = cat_find_row(&c, "battery"), n = cat_find_row(&c, "Network");
+        CHECK(b >= 0 && strcmp(c.rows[b].class_name, "BatteryEditor.mcc") == 0, "SHOW PAGE battery");
+        CHECK(n >= 0 && strcmp(c.rows[n].class_name, "WiFiEditor.mcc") == 0, "SHOW PAGE network");
+        CHECK(cat_find_row(&c, "bluetooth") >= 0, "SHOW PAGE bluetooth");
+        CHECK(cat_find_row(&c, "FontEditor.mcc") >= 0 && cat_find_row(&c, "fonteditor") >= 0 &&
+              cat_find_row(&c, "font") >= 0 && cat_find_row(&c, "Fonts") >= 0,
+              "a page by class, class stem, id or name");
+        CHECK(cat_find_row(&c, "sound") < 0, "no Sound page: the window searches instead");
     }
     /* Refusals and edge cases. */
     CHECK(cat_parse_group("name X\n", strlen("name X\n"), &g) != 0, "group without id refused");

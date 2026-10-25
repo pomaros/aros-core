@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
 
     Desc:
@@ -291,6 +292,8 @@ struct AslBase_intern
     struct MinList              ReqList;
     struct SignalSemaphore      ReqListSem;
     struct AslPrefs             Prefs;
+    struct SignalSemaphore      PrefsSem;       /* guards Prefs while it is reloaded */
+    struct DateStamp            PrefsDate;      /* of the ENV: file Prefs came from */
     struct AslReqInfo           ReqInfo[3];
     Class                       *aslpropclass;
     Class                       *aslarrowclass;
@@ -302,6 +305,7 @@ struct AslBase_intern
     Class                       *aslfontstyleclass;
     Class                       *aslcolorpickerclass;
     Class                       *asleraserclass;
+    Class                       *aslframeclass;
 };
 
 /*****************************************************************************************/
@@ -315,8 +319,8 @@ VOID ParseCommonTags(struct IntReq *, struct TagItem *, struct AslBase_intern *)
 UWORD BiggestTextLength(STRPTR *, UWORD, struct RastPort *, struct AslBase_intern *);
 VOID StripRequester(APTR, UWORD, struct AslBase_intern *AslBase);
 
-WORD CountNodes(struct List *list, WORD flag);
-struct Node *FindListNode(struct List *list, WORD which);
+LONG CountNodes(struct List *list, WORD flag);
+struct Node *FindListNode(struct List *list, LONG which);
 void SortInNode(APTR req, struct List *list, struct Node *node,
                 WORD (*compare)(APTR, APTR, APTR, struct AslBase_intern *),
                 struct AslBase_intern *AslBase);
@@ -332,6 +336,7 @@ char *VecPooledCloneString(const char *name1, const char *name2, APTR pool,
                            struct AslBase_intern *AslBase);
 char *PooledIntegerToString(CONST_STRPTR fmt, IPTR value, APTR pool, struct AslBase_intern *AslBase);
 void CloseWindowSafely(struct Window *window, struct AslBase_intern *AslBase);
+VOID RefreshPrefs(struct AslBase_intern *);
 VOID SetBusyPointer(struct LayoutData *, struct AslBase_intern *);
 VOID ClearBusyPointer(struct LayoutData *, struct AslBase_intern *);
 
@@ -350,13 +355,13 @@ void PaintBoxFrame(struct RastPort *rp, struct IBox *outerbox, struct IBox *inne
 
 BOOL makescrollergadget(struct ScrollerGadget *scrollergad, struct LayoutData *ld,
                         struct TagItem *tags, struct AslBase_intern *AslBase);
-void killscrollergadget(struct ScrollerGadget *scrollergad, struct AslBase_intern *AslBase);
+void killscrollergadget(struct ScrollerGadget *scrollergad, struct LayoutData *ld, struct AslBase_intern *AslBase);
 void getgadgetcoords(struct Gadget *gad, struct GadgetInfo *gi, WORD *x, WORD *y, WORD *w, WORD *h);
 void getgadgetbounds(struct Gadget *gad, struct GadgetInfo *gi, WORD *x, WORD *y, WORD *w, WORD *h);
 
 void connectscrollerandlistview(struct ScrollerGadget *scrollergad, Object *listview,
                                 struct AslBase_intern *AslBase);
-void FreeObjects(Object **first, Object **last, struct AslBase_intern *AslBase);
+void FreeObjects(Object **first, Object **last, struct LayoutData *ld, struct AslBase_intern *AslBase);
 
 /* locale.c */
 
@@ -429,8 +434,10 @@ AROS_UFP3(ULONG, SMGadgetryHook,
 /* AslProp class */
 struct AslPropData
 {
+    struct LayoutData *ld;
     Object *frame;
     LONG    deltafactor;
+    Object *listview;
 };
 
 /* AslArrow class */
@@ -469,8 +476,8 @@ struct AslListViewData
     LONG                visiblepixels;
     LONG                toppixel;
     LONG                totalpixels;
-    WORD                rendersingleitem;
-    WORD                scroll;
+    LONG                rendersingleitem;
+    LONG                scroll;
     BYTE                layouted;
     BYTE                doubleclicked;
     BYTE                dosavemode;
@@ -486,6 +493,8 @@ struct AslButtonData
     struct LayoutData   *ld;
     struct CoolImage    *coolimage;
     ULONG               *coolimagepal;
+    UBYTE               *coolpixels;
+    UWORD               coolwidth, coolheight;
 };
 
 #define BUTTON_OWN_INPUT_HANDLING 1
@@ -498,6 +507,7 @@ struct AslButtonData
 /* AslString class */
 struct AslStringData
 {
+    struct LayoutData *ld;
     Object *frame;
 };
 
@@ -511,6 +521,8 @@ struct CycleItem
 
 struct AslCycleData
 {
+    const struct ScreenRenderContext *popupcontext;
+    struct LayoutData *ld;
     Object                      *frame;
     struct CycleItem            *itemmemory;
     struct RastPort             *rp;
@@ -554,6 +566,7 @@ struct AslCycleData
 /* AslFontPreview class */
 struct AslFontPreviewData
 {
+    struct LayoutData *ld;
     Object              *frame;
     struct TextFont     *font;
     STRPTR               previewtext;
@@ -563,6 +576,7 @@ struct AslFontPreviewData
 /* ASlFontStyle class */
 struct AslFontStyleData
 {
+    struct LayoutData *ld;
     Object              *frame;
     STRPTR               text[3];
     UBYTE                style;
@@ -571,6 +585,8 @@ struct AslFontStyleData
 /* AslColorPicker class */
 struct AslColorPickerData
 {
+    const struct ScreenRenderContext *popupcontext;
+    struct LayoutData *ld;
     Object             *frame;
     struct Window      *popupwindow;
     struct RastPort    *rp;
@@ -601,5 +617,9 @@ struct AslColorPickerData
     BYTE                sentgadgetup;
 };
 
+
+
+/* Private ASL vector frame: its context is owned by the requester generation. */
+struct AslFrameData { struct LayoutData *ld; UWORD type; BOOL recessed, edges; };
 
 #endif /* ASL_INTERN_H */

@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * Licensed under the AROS Public License (APL) Version 1.1. */
 /* 
     Copyright  1999, David Le Corfec.
     Copyright  2002, The AROS Development Team.
@@ -33,6 +35,7 @@
  * zune_imspec_cleanup() (called in MUIM_Cleanup) will free an internal specification.
  */
 
+BOOL zune_imspec_scale_supported(Object *obj, IPTR spec);
 struct MUI_ImageSpec_intern *zune_imspec_setup(IPTR s,
     struct MUI_RenderInfo *mri);
 struct MUI_ImageSpec_intern *zune_imspec_setup_dummy(IPTR s);

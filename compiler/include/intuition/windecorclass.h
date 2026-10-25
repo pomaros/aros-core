@@ -3,6 +3,7 @@
 
 /*
     Copyright  1995-2001, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     $Id$
 
     Desc: Headerfile for Intuitions' WINDECORCLASS
@@ -31,6 +32,10 @@
 #define WDA_Screen  	    	    (WDA_Dummy + 2) 	    /* I.G */
 #define WDA_TrueColorOnly	    (WDA_Dummy + 3) 	    /* ..G */
 #define WDA_UserBuffer              (WDA_Dummy + 4)         /* I.G */
+/* Read-only BOOL: this exact decorator class implements prepared scale
+ * window resources/layout. Custom subclasses explicitly implement this getter
+ * to opt in; inheriting a built-in implementation returns FALSE. */
+#define WDA_PreparedScaleWindow (WDA_Dummy + 5) /* ..G */
 
 
 /* Methods for WINDECORCLASS */
@@ -47,6 +52,12 @@
 #define WDM_INITWINDOW              (WDM_Dummy + 9)
 #define WDM_EXITWINDOW              (WDM_Dummy + 10)
 #define WDM_WINDOWSHAPE             (WDM_Dummy + 11)
+#define WDM_PREPARESCALESHAPE       (WDM_Dummy + 12)
+#define WDM_GETSCALEDEFSIZE_SYSIMAGE (WDM_Dummy + 13)
+#define WDM_DRAWSCALE_SYSIMAGE      (WDM_Dummy + 14)
+#define WDM_RELEASESCALE_SYSIMAGE   (WDM_Dummy + 15)
+#define WDM_PREPARESCALEWINDOW      (WDM_Dummy + 16)
+#define WDM_LAYOUTSCALEBORDERGADGETS (WDM_Dummy + 17)
 
 
 struct wdpGetDefSizeSysImage
@@ -148,6 +159,93 @@ struct wdpExitWindow
     STACKED ULONG       MethodID;
     STACKED BYTE        wdp_TrueColor;
     STACKED IPTR	     wdp_UserBuffer;
+};
+
+/* Caller-owned refusal record for the typed scale methods below. The caller
+ * clears it; a refusing provider may store one WDP_REFUSE_* cause, up to three
+ * cause values and a NUL-terminated resource/key name. Intuition copies it into
+ * the scale receipt and never retains it. NULL means no record is wanted. */
+struct wdpScaleRefusal
+{
+    ULONG wsr_Code;
+    LONG wsr_Value[3];
+    UBYTE wsr_Name[64];
+};
+#define WDP_REFUSE_NONE 0         /* provider stated no cause */
+#define WDP_REFUSE_UNSUPPORTED 1  /* class does not implement the prepared method */
+#define WDP_REFUSE_ARGUMENTS 2    /* message invalid: [0] scale, [1] width, [2] height */
+#define WDP_REFUSE_STATE 3        /* userbuffer absent, already prepared or not prepared */
+#define WDP_REFUSE_NO_MEMORY 4    /* [0] bytes requested */
+#define WDP_REFUSE_CONFIG 5       /* Name key; [0] theme value, [1] scale */
+#define WDP_REFUSE_IMAGE_GRID 6   /* Name image; [0] width, [1] height, [2] cols*100+rows */
+#define WDP_REFUSE_IMAGE_EXTENT 7 /* Name image; [0] cell width, [1] cell height */
+#define WDP_REFUSE_ELEMENT 8      /* Name image; [0] offset, [1] size, [2] image extent */
+#define WDP_REFUSE_FONT 9         /* [0] font height, [1] theme bar height */
+#define WDP_REFUSE_SUPERCLASS 10  /* superclass refused the delegated method [0] */
+
+/* Explicit immutable-generation methods. Existing message layouts remain
+ * unchanged. Unsupported inherited subclasses must refuse typed preparation.
+ * A successful prepare owns only the detached caller-provided userbuffer.
+ * Failure disposes all partial provider resources before returning; callers
+ * free the empty buffer without invoking an unsupported old Exit method.
+ * Admission is exact-class at WDA_PreparedScaleWindow and
+ * WDM_PREPARESCALEWINDOW only: a subclass that implements the typed methods
+ * may delegate WDM_LAYOUTSCALEBORDERGADGETS to its superclass. */
+struct wdpPrepareScaleWindow
+{
+    struct wdpInitWindow base;
+    STACKED const struct ScreenRenderContext *context;
+    STACKED BOOL logical;
+    STACKED struct TextFont *font;
+    STACKED LONG width, height, borderTop;
+    STACKED struct wdpScaleRefusal *refusal;
+};
+struct wdpLayoutScaleBorderGadgets
+{
+    struct wdpLayoutBorderGadgets base;
+    STACKED const struct ScreenRenderContext *context;
+    STACKED BOOL logical;
+    STACKED struct wdpScaleRefusal *refusal;
+};
+struct wdpGetScaleDefSizeSysImage
+{
+    struct wdpGetDefSizeSysImage base;
+    STACKED const struct ScreenRenderContext *context;
+    STACKED BOOL logical;
+    STACKED ULONG requestedWidth, requestedHeight;
+    STACKED APTR *prepared;
+    STACKED struct wdpScaleRefusal *refusal;
+};
+struct wdpDrawScaleSysImage
+{
+    struct wdpDrawSysImage base;
+    STACKED const struct ScreenRenderContext *context;
+    STACKED BOOL logical;
+    STACKED APTR prepared;
+};
+struct wdpReleaseScaleSysImage
+{
+    STACKED ULONG MethodID;
+    STACKED APTR prepared;
+};
+#define WDP_SCALE_FAILED 0
+#define WDP_SCALE_READY 1
+#define WDP_SCALE_UNAVAILABLE 2
+
+/* Read-only preparation for an explicitly admitted default window shape hook.
+ * TRUE with *Result==NULL means rectangular; FALSE means unsupported/OOM.
+ * A returned Region is caller-owned. All geometry/font inputs are proposed,
+ * not yet installed. The live Window and userbuffer/cache must stay unchanged.
+ * Inheriting subclasses must explicitly implement their own capability.
+ */
+struct wdpPrepareScaleShape
+{
+    STACKED ULONG MethodID;
+    STACKED struct Window *wdp_Window;
+    STACKED LONG wdp_Width, wdp_Height, wdp_BorderTop;
+    STACKED struct TextFont *wdp_Font;
+    STACKED IPTR wdp_UserBuffer;
+    STACKED struct Region **wdp_Result;
 };
 
 struct wdpWindowShape

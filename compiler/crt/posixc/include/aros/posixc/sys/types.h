@@ -28,18 +28,7 @@
 #include <aros/types/nlink_t.h>
 
 #include <aros/types/pid_t.h>
-/* NOTIMPL
-    pthread_attr_t
-    pthread_cond_t
-    pthread_condattr_t
-    pthread_key_t
-    pthread_mutex_t
-    pthread_mutexattr_t
-    pthread_once_t
-    pthread_rwlock_t
-    pthread_rwlockattr_t
-    pthread_t
-*/
+#include <aros/types/pthread_types.h>
 #include <aros/types/size_t.h>
 #include <aros/types/ssize_t.h>
 #include <aros/types/socklen_t.h>

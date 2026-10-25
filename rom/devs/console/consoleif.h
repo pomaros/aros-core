@@ -17,7 +17,8 @@
 
 enum
 {
-    A_Console_Window = TAG_USER + 1
+    A_Console_Window = TAG_USER + 1,
+    A_Console_ScaleAware
 };
 
 enum
@@ -37,7 +38,8 @@ enum
     M_Console_HandleGadgets,
     M_Console_Copy,
     M_Console_Paste,
-    M_Console_GetColorPen = M_Console_Paste + 5
+    M_Console_GetColorPen = M_Console_Paste + 5,
+    M_Console_UpdateScale
 };
 
 struct P_Console_ScrollDown

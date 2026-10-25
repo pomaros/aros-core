@@ -5,6 +5,7 @@
 */
 
 #include "__stdc_intbase.h"
+#include "__malloc.h"
 
 #include <errno.h>
 #include <stdint.h>
@@ -39,6 +40,8 @@
         the memory will be freed for you when the application exits.
 
     NOTES
+        The block records its originating pool, allowing free() through
+        another stdc opener while the originating opener remains open.
 
     EXAMPLE
 
@@ -52,27 +55,8 @@
 ******************************************************************************/
 {
     struct StdCIntBase *StdCBase = (struct StdCIntBase *)__aros_getbase_StdCBase();
-    UBYTE *mem = NULL;
-
-    /* Guard against (size + header) wrapping size_t, which would otherwise
-       under-allocate the block and let the caller overrun it. */
-    if (size > SIZE_MAX - AROS_ALIGN(sizeof(size_t)))
-    {
-        errno = ENOMEM;
-        return NULL;
-    }
-
-    /* Allocate the memory */
-    mem = AllocPooled (StdCBase->mempool, size + AROS_ALIGN(sizeof(size_t)));
-    if (mem)
-    {
-        *((size_t *)mem) = size;
-        mem += AROS_ALIGN(sizeof(size_t));
-    }
-    else
-        errno = ENOMEM;
-
-    return mem;
+    return __stdc_alloc_from_pool(StdCBase->mempool, size,
+                                  __alignof__(max_align_t));
 
 } /* malloc */
 

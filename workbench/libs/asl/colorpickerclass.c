@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2011, The AROS Development Team. All rights reserved.
 */
 
@@ -65,20 +66,15 @@ static void RenderObject_Update(Class *cl, struct Gadget *g, struct GadgetInfo *
 
 /***********************************************************************************/
 
-static void DrawArrow(Class *cl, struct RastPort *rp, WORD x1, WORD y1, WORD type)
+static void DrawArrow(Class *cl, struct LayoutData *ld, struct RastPort *rp, WORD x1, WORD y1, WORD type)
 {
-    WORD dy = 1;
-
-    if (type == ARROW_UP)
+    LONG row;
+    for (row = 0; row < 4; ++row)
     {
-        y1 += 3; dy = -1;
+        LONG y = type == ARROW_UP ? 3 - row : row;
+        RectFill(rp, x1 + AslScaleValue(ld, row), y1 + AslScaleValue(ld, y),
+            x1 + AslScaleValue(ld, 7 - row) - 1, y1 + AslScaleValue(ld, y + 1) - 1);
     }
-
-    RectFill(rp, x1, y1, x1 + 6, y1); y1 += dy;
-    RectFill(rp, x1 + 1, y1, x1 + 5, y1); y1 += dy;
-    RectFill(rp, x1 + 2, y1, x1 + 4, y1); y1 += dy;
-
-    WritePixel(rp, x1 + 3, y1);
 }
 
 /***********************************************************************************/
@@ -110,20 +106,22 @@ static void DrawCellMark(Class *cl, struct AslColorPickerData  *data, struct Dra
     row = index % data->columns;
     col = index / data->columns;
 
-    x1 = data->menux1 + row * (data->cellwidth + data->cellspacex) - 2;
-    y1 = data->menuy1 + col * (data->cellheight + data->cellspacey) - 2;
+    x1 = data->menux1 + row * (data->cellwidth + data->cellspacex) - AslScaleValue(data->ld, 2);
+    y1 = data->menuy1 + col * (data->cellheight + data->cellspacey) - AslScaleValue(data->ld, 2);
 
-    x2 = x1 + data->cellwidth - 1 + 4;
-    y2 = y1 + data->cellheight - 1 + 4;
+    x2 = x1 + data->cellwidth - 1 + AslScaleValue(data->ld, 4);
+    y2 = y1 + data->cellheight - 1 + AslScaleValue(data->ld, 4);
 
     SetDrMd(data->rp, JAM1);
     SetAPen(data->rp, dri->dri_Pens[selected ? SHADOWPEN : SHINEPEN]);
 
-    Move(data->rp, x1, y1);
-    Draw(data->rp, x2, y1);
-    Draw(data->rp, x2, y2);
-    Draw(data->rp, x1, y2);
-    Draw(data->rp, x1, y1);
+    {
+        LONG stroke = AslScaleValue(data->ld, 1);
+        RectFill(data->rp, x1, y1, x2, y1 + stroke - 1);
+        RectFill(data->rp, x2 - stroke + 1, y1 + stroke, x2, y2);
+        RectFill(data->rp, x1, y2 - stroke + 1, x2 - stroke, y2);
+        RectFill(data->rp, x1, y1 + stroke, x1 + stroke - 1, y2 - stroke);
+    }
 }
 
 /***********************************************************************************/
@@ -154,12 +152,13 @@ IPTR AslColorPicker__OM_NEW(Class * cl, Object * o, struct opSet *msg)
     if (g)
     {
         data = INST_DATA(cl, g);
+        data->ld = (struct LayoutData *)GetTagData(GA_UserData, 0, msg->ops_AttrList);
 
         /* We want to get a GM_LAYOUT message, no matter if gadget is GFLG_RELRIGHT/RELBOTTOM/
            RELWIDTH/RELHEIGHT or not */
         g->Flags |= GFLG_RELSPECIAL;
 
-        data->frame = NewObjectA(NULL, FRAMEICLASS, fitags);
+        data->frame = AslFrame((struct LayoutData *)GetTagData(GA_UserData, 0, msg->ops_AttrList), fitags, AslBase);
         if (data->frame)
         {
             AslColorPicker__OM_SET(cl, g, msg);
@@ -257,7 +256,7 @@ IPTR AslColorPicker__GM_RENDER(Class * cl, struct Gadget * g, struct gpRender *m
 {
     struct AslColorPickerData   *data = INST_DATA(cl, g);
     struct RastPort             *rp   = msg->gpr_RPort;
-    struct DrawInfo             *dri  = msg->gpr_GInfo->gi_DrInfo;
+    struct DrawInfo             *dri  = ((struct LayoutData *)g->UserData)->ld_Dri;
     WORD                         gadx, gady, gadw, gadh, x, y, y2, a1, a2;
 
     if (rp)
@@ -283,32 +282,32 @@ IPTR AslColorPicker__GM_RENDER(Class * cl, struct Gadget * g, struct gpRender *m
                            gadx,
                            gady,
                            (g->Flags & GFLG_SELECTED) ? IDS_SELECTED : IDS_NORMAL,
-                           msg->gpr_GInfo->gi_DrInfo);
+                           ((struct LayoutData *)g->UserData)->ld_Dri);
 
-            x = gadx + gadw - CYCLEIMAGEWIDTH;
-            y = gady + 2;
-            y2 = gady + gadh - 1 - 2;
+            x = gadx + gadw - AslScaleValue(data->ld, CYCLEIMAGEWIDTH);
+            y = gady + AslScaleValue(data->ld, 2);
+            y2 = gady + gadh - 1 - AslScaleValue(data->ld, 2);
 
             /* separator bar */
 
             SetAPen(rp, dri->dri_Pens[SHINEPEN]);
-            RectFill(rp, x + 1, y , x + 1, y2);
+            RectFill(rp, x + AslScaleValue(data->ld, 1), y, x + AslScaleValue(data->ld, 2) - 1, y2);
             SetAPen(rp, dri->dri_Pens[SHADOWPEN]);
-            RectFill(rp, x, y, x, y2);
+            RectFill(rp, x, y, x + AslScaleValue(data->ld, 1) - 1, y2);
 
-            y = gady + (gadh - 4) / 2;
-            x += 6;
+            y = gady + (gadh - AslScaleValue(data->ld, 4)) / 2;
+            x += AslScaleValue(data->ld, 6);
 
-            DrawArrow(cl, rp, x, y, ARROW_DOWN);
+            DrawArrow(cl, data->ld, rp, x, y, ARROW_DOWN);
         }
 
         /* color */
 
-        a1 = gadx + 3;
-        a2 = gadx + gadw - CYCLEIMAGEWIDTH - 3;
+        a1 = gadx + AslScaleValue(data->ld, 3);
+        a2 = gadx + gadw - AslScaleValue(data->ld, CYCLEIMAGEWIDTH) - AslScaleValue(data->ld, 3);
 
         SetAPen(rp, data->color);
-        RectFill(rp, a1, gady + 3, a2, gady + gadh - 1 - 3);
+        RectFill(rp, a1, gady + AslScaleValue(data->ld, 3), a2, gady + gadh - 1 - AslScaleValue(data->ld, 3));
 
     } /* if (rp) */
 
@@ -320,20 +319,22 @@ IPTR AslColorPicker__GM_RENDER(Class * cl, struct Gadget * g, struct gpRender *m
 IPTR AslColorPicker__GM_GOACTIVE(Class * cl, struct Gadget * g, struct gpInput *msg)
 {
     struct AslColorPickerData   *data = INST_DATA(cl, g);
-    struct DrawInfo             *dri = msg->gpi_GInfo->gi_DrInfo;
+    struct DrawInfo             *dri = ((struct LayoutData *)g->UserData)->ld_Dri;
     WORD                         x, y, x2, y2, gadx, gady, gadw, gadh;
     IPTR                         rc = GMR_MEACTIVE;
 
     if (!msg->gpi_IEvent || !data->numcolors) return GMR_NOREUSE;
 
+    data->popupcontext = AslPopupContext(data->ld);
+    if (!data->popupcontext) return GMR_NOREUSE;
     data->sentgadgetup = FALSE;
 
     getgadgetcoords(g, msg->gpi_GInfo, &gadx, &gady, &gadw, &gadh);
 
-    data->borderleft    = 4;
-    data->bordertop     = 4;
-    data->borderright   = 4;
-    data->borderbottom  = 4;
+    data->borderleft    = AslScaleValue(data->ld, 4);
+    data->bordertop     = AslScaleValue(data->ld, 4);
+    data->borderright   = AslScaleValue(data->ld, 4);
+    data->borderbottom  = AslScaleValue(data->ld, 4);
 
     if (!data->colortable && data->numcolors > (1L << dri->dri_Depth))
     {
@@ -358,8 +359,8 @@ IPTR AslColorPicker__GM_GOACTIVE(Class * cl, struct Gadget * g, struct gpInput *
 #endif
     data->columns = (data->numcolors + data->rows - 1) / data->rows;
 
-    data->cellspacex = 3;
-    data->cellspacey = 3;
+    data->cellspacex = AslScaleValue(data->ld, 3);
+    data->cellspacey = AslScaleValue(data->ld, 3);
 
     data->cellwidth = dri->dri_Font->tf_YSize;
     data->cellheight = data->cellwidth;
@@ -384,15 +385,15 @@ IPTR AslColorPicker__GM_GOACTIVE(Class * cl, struct Gadget * g, struct gpInput *
     y = msg->gpi_GInfo->gi_Window->TopEdge + gady + gadh;
 
     if (x < 0) x = 0;
-    if ((x + data->menuwidth) > msg->gpi_GInfo->gi_Screen->Width)
+    if ((x + data->menuwidth) > (msg->gpi_GInfo->gi_Screen->Width / (data->ld->ld_ScaleAware ? 1 : (data->popupcontext ? data->popupcontext : data->ld->ld_RenderContext)->src_LegacyScaleFactor)))
     {
-        x = msg->gpi_GInfo->gi_Screen->Width - data->menuwidth;
+        x = (msg->gpi_GInfo->gi_Screen->Width / (data->ld->ld_ScaleAware ? 1 : (data->popupcontext ? data->popupcontext : data->ld->ld_RenderContext)->src_LegacyScaleFactor)) - data->menuwidth;
     }
 
     if (y < 0) y = 0;
-    if ((y + data->menuheight) > msg->gpi_GInfo->gi_Screen->Height)
+    if ((y + data->menuheight) > (msg->gpi_GInfo->gi_Screen->Height / (data->ld->ld_ScaleAware ? 1 : (data->popupcontext ? data->popupcontext : data->ld->ld_RenderContext)->src_LegacyScaleFactor)))
     {
-        y = msg->gpi_GInfo->gi_Screen->Height - data->menuheight;
+        y = (msg->gpi_GInfo->gi_Screen->Height / (data->ld->ld_ScaleAware ? 1 : (data->popupcontext ? data->popupcontext : data->ld->ld_RenderContext)->src_LegacyScaleFactor)) - data->menuheight;
     }
 
     x2 = x + data->menuwidth - 1;
@@ -404,6 +405,9 @@ IPTR AslColorPicker__GM_GOACTIVE(Class * cl, struct Gadget * g, struct gpInput *
                                               WA_Width          , data->menuwidth           ,
                                               WA_Height         , data->menuheight          ,
                                               WA_Flags          , WFLG_BORDERLESS           ,
+                                              WA_ScaleAware, data->ld->ld_ScaleAware,
+                                              WA_RenderContext, (IPTR)data->popupcontext,
+                                              WA_Hidden, TRUE,
                                               WA_BackFill       , (IPTR) LAYERS_NOBACKFILL          ,
                                               TAG_DONE)))
     {
@@ -420,16 +424,20 @@ IPTR AslColorPicker__GM_GOACTIVE(Class * cl, struct Gadget * g, struct gpInput *
         x2 = x + data->menuwidth - 1;
         y2 = y + data->menuheight - 1;
 
-        SetAPen(data->rp, dri->dri_Pens[SHADOWPEN]);
-        RectFill(data->rp, x, y, x2, y);
-        RectFill(data->rp, x2, y + 1, x2, y2);
-        RectFill(data->rp, x, y2, x2 - 1, y2);
-        RectFill(data->rp, x, y + 1, x, y2 - 1);
-
-        SetAPen (data->rp, dri->dri_Pens[SHINEPEN]);
-        RectFill(data->rp, x + 1, y  + 1, x2  - 1, y2 - 1);
+        {
+            LONG stroke = AslScaleValue(data->ld, 1);
+            SetAPen(data->rp, dri->dri_Pens[SHADOWPEN]);
+            RectFill(data->rp, x, y, x2, y + stroke - 1);
+            RectFill(data->rp, x2 - stroke + 1, y + stroke, x2, y2);
+            RectFill(data->rp, x, y2 - stroke + 1, x2 - stroke, y2);
+            RectFill(data->rp, x, y + stroke, x + stroke - 1, y2 - stroke);
+            SetAPen(data->rp, dri->dri_Pens[SHINEPEN]);
+            RectFill(data->rp, x + stroke, y + stroke, x2 - stroke, y2 - stroke);
+        }
 
         DrawAllCells(cl, data);
+        if (!ShowWindow(data->popupwindow, NULL))
+        { CloseWindow(data->popupwindow); data->popupwindow = NULL; rc = GMR_NOREUSE; }
     }
     else
     {
@@ -484,7 +492,7 @@ IPTR AslColorPicker__GM_HANDLEINPUT(Class * cl, struct Gadget * g, struct gpInpu
             {
                 if (data->selected != -1)
                 {
-                    DrawCellMark(cl, data, msg->gpi_GInfo->gi_DrInfo, data->selected, FALSE);
+                    DrawCellMark(cl, data, ((struct LayoutData *)g->UserData)->ld_Dri, data->selected, FALSE);
                     data->selected = -1;
                 }
             }
@@ -502,14 +510,14 @@ IPTR AslColorPicker__GM_HANDLEINPUT(Class * cl, struct Gadget * g, struct gpInpu
                 {
                     if (data->selected != -1)
                     {
-                        DrawCellMark(cl, data, msg->gpi_GInfo->gi_DrInfo, data->selected, FALSE);
+                        DrawCellMark(cl, data, ((struct LayoutData *)g->UserData)->ld_Dri, data->selected, FALSE);
                         data->selected = -1;
                     }
 
                     if (sel < data->numcolors)
                     {
                         data->selected = sel;
-                        DrawCellMark(cl, data, msg->gpi_GInfo->gi_DrInfo, data->selected, TRUE);
+                        DrawCellMark(cl, data, ((struct LayoutData *)g->UserData)->ld_Dri, data->selected, TRUE);
                     }
                 }
 

@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2001, The AROS Development Team. All rights reserved.
 
     Desc:
@@ -69,15 +70,15 @@ static const struct TagItem arrowdec_to_prop [] =
 
 static const struct TagItem prop_to_lv [] =
 {
-    {PGA_Top            , ASLLV_TopPixel},
+    {PGA_Top            , ASLLV_PropTop},
     {TAG_DONE                           }
 };
 
 static const struct TagItem lv_to_prop [] =
 {
-    {ASLLV_TopPixel     , PGA_Top           },
-    {ASLLV_TotalPixels  , PGA_Total         },
-    {ASLLV_VisiblePixels, PGA_Visible       },
+    {ASLLV_PropTop      , PGA_Top           },
+    {ASLLV_PropTotal    , PGA_Total         },
+    {ASLLV_PropVisible  , PGA_Visible       },
     {ASLLV_DeltaFactor  , ASLSC_DeltaFactor },
     {TAG_DONE                               }
 
@@ -88,6 +89,7 @@ static const struct TagItem lv_to_prop [] =
 BOOL makescrollergadget(struct ScrollerGadget *scrollergad, struct LayoutData *ld,
                         struct TagItem *tags, struct AslBase_intern *AslBase)
 {
+    if (ld->ld_Rebuilding) memset(scrollergad, 0, sizeof(*scrollergad));
     struct TagItem extraproptags[] =
     {
         {PGA_NotifyBehaviour, PG_BEHAVIOUR_NICE},
@@ -145,7 +147,7 @@ BOOL makescrollergadget(struct ScrollerGadget *scrollergad, struct LayoutData *l
     }
 
     extraproptags[2].ti_Data = (IPTR)tags;
-    if ((scrollergad->prop = NewObjectA(AslBase->aslpropclass, NULL, extraproptags)))
+    if ((scrollergad->prop = AslLayoutObject(ld, AslBase->aslpropclass, NULL, extraproptags, NULL, AslBase)))
     {
         struct TagItem arrow_tags[] =
         {
@@ -174,7 +176,7 @@ BOOL makescrollergadget(struct ScrollerGadget *scrollergad, struct LayoutData *l
             if (!freehoriz) arrow_tags[1].ti_Data += 2;
         }
 
-        if ((scrollergad->arrow1 = NewObjectA(AslBase->aslarrowclass, NULL, arrow_tags)))
+        if ((scrollergad->arrow1 = AslLayoutObject(ld, AslBase->aslarrowclass, NULL, arrow_tags, NULL, AslBase)))
         {
             if (freehoriz)
             {
@@ -185,12 +187,14 @@ BOOL makescrollergadget(struct ScrollerGadget *scrollergad, struct LayoutData *l
             arrow_tags[6].ti_Data = (IPTR)scrollergad->arrow1;
             arrow_tags[7].ti_Data = ID_ARROWINC;
 
-            if ((scrollergad->arrow2 = NewObjectA(AslBase->aslarrowclass, NULL, arrow_tags)))
+            if ((scrollergad->arrow2 = AslLayoutObject(ld, AslBase->aslarrowclass, NULL, arrow_tags, NULL, AslBase)))
             {
                 struct TagItem image_tags[] =
                 {
                     {SYSIA_Which        , freehoriz ? LEFTIMAGE : UPIMAGE       },
                     {SYSIA_DrawInfo     , (IPTR)ld->ld_Dri                      },
+                    {SYSIA_RenderContext, (IPTR)ld->ld_RenderContext},
+                    {SYSIA_Logical, !ld->ld_ScaleAware},
                     {SYSIA_Style        , SYSISTYLE_GADTOOLS                    },
                     {IA_Width           , aw                                    },
                     {IA_Height          , ah                                    },
@@ -198,14 +202,14 @@ BOOL makescrollergadget(struct ScrollerGadget *scrollergad, struct LayoutData *l
                 };
                 struct Image *im;
 
-                if ((im = NewObjectA(NULL, SYSICLASS, image_tags)))
+                if ((im = (struct Image *)AslLayoutObject(ld, NULL, SYSICLASS, image_tags, NULL, AslBase)))
                 {
                     SetAttrs(scrollergad->arrow1, GA_Image, (IPTR)im,
                                                   TAG_DONE);
 
                     image_tags[0].ti_Data = (freehoriz ? RIGHTIMAGE : DOWNIMAGE);
 
-                    if ((im = NewObjectA(NULL, SYSICLASS, image_tags)))
+                    if ((im = (struct Image *)AslLayoutObject(ld, NULL, SYSICLASS, image_tags, NULL, AslBase)))
                     {
                     #if USE_SAFE_NOTIFYING
                         struct TagItem ic_tags [] =
@@ -214,11 +218,11 @@ BOOL makescrollergadget(struct ScrollerGadget *scrollergad, struct LayoutData *l
                             {TAG_DONE                    }
                         };
 
-                        if ((scrollergad->prop_ic = NewObjectA(NULL, ICCLASS, ic_tags)))
+                        if ((scrollergad->prop_ic = AslLayoutObject(ld, NULL, ICCLASS, ic_tags, NULL, AslBase)))
                         {
                             ic_tags[0].ti_Data = (IPTR)lv_to_prop;
 
-                            if ((scrollergad->listview_ic = NewObjectA(NULL, ICCLASS, ic_tags)))
+                            if ((scrollergad->listview_ic = AslLayoutObject(ld, NULL, ICCLASS, ic_tags, NULL, AslBase)))
                             {
                     #endif
                                 struct TagItem set_tags [] =
@@ -239,53 +243,55 @@ BOOL makescrollergadget(struct ScrollerGadget *scrollergad, struct LayoutData *l
 
                     #if USE_SAFE_NOTIFYING
 
-                            } /* if ((scrollergad->listview_ic = NewObjectA(NULL, ICCLASS, ic_tags))) */
+                            } /* if ((scrollergad->listview_ic = AslLayoutObject(ld, NULL, ICCLASS, ic_tags, NULL, AslBase))) */
 
-                        } /* if ((scrollergad->prop_ic = NewObjectA(NULL, ICCLASS, ic_tags))) */
+                        } /* if ((scrollergad->prop_ic = AslLayoutObject(ld, NULL, ICCLASS, ic_tags, NULL, AslBase))) */
 
                     #endif
 
-                    } /* if ((im = NewObjectA(NULL, SYSICLASS, image_tags))) */
+                    } /* if ((im = (struct Image *)AslLayoutObject(ld, NULL, SYSICLASS, image_tags, NULL, AslBase))) */
 
                 } /* if ((im = NewObject(NULL, SYSICLASS, image_tags))) */
 
-            } /* if ((scrollergad->arrow2 = NewObjectA(NULL, BUTTONGCLASS, arrow_tags))) */
+            } /* if ((scrollergad->arrow2 = AslLayoutObject(ld, NULL, BUTTONGCLASS, arrow_tags, NULL, AslBase))) */
 
-        } /* if (scrollergad->arrow1 = NewObjectA(NULL, BUTTONGCLASS, arrow_tags)) */
+        } /* if (scrollergad->arrow1 = AslLayoutObject(ld, NULL, BUTTONGCLASS, arrow_tags, NULL, AslBase)) */
 
-    } /* if ((scrollergad->prop = NewObjectA(AslBase->aslpropclass, NULL, tags))) */
+    } /* if ((scrollergad->prop = AslLayoutObject(ld, AslBase->aslpropclass, NULL, tags, NULL, AslBase))) */
 
-    if (!result) killscrollergadget(scrollergad, AslBase);
+    if (!result) killscrollergadget(scrollergad, ld, AslBase);
 
     return result;
 }
 
 /*******************************************************************************************/
 
-void killscrollergadget(struct ScrollerGadget *scrollergad, struct AslBase_intern *AslBase)
+void killscrollergadget(struct ScrollerGadget *scrollergad, struct LayoutData *ld, struct AslBase_intern *AslBase)
 {
-    if (scrollergad->prop) DisposeObject(scrollergad->prop);
+    if (scrollergad->prop) { AslForgetObject(ld, scrollergad->prop, AslBase); DisposeObject(scrollergad->prop); }
     scrollergad->prop = NULL;
 
     if (scrollergad->arrow1)
     {
-        if (G(scrollergad->arrow1)->GadgetRender) DisposeObject(G(scrollergad->arrow1)->GadgetRender);
+        if (G(scrollergad->arrow1)->GadgetRender) { AslForgetObject(ld, (Object *)G(scrollergad->arrow1)->GadgetRender, AslBase); DisposeObject(G(scrollergad->arrow1)->GadgetRender); }
+        AslForgetObject(ld, scrollergad->arrow1, AslBase);
         DisposeObject(scrollergad->arrow1);
     }
     scrollergad->arrow1 = NULL;
 
     if (scrollergad->arrow2)
     {
-        if (G(scrollergad->arrow2)->GadgetRender) DisposeObject(G(scrollergad->arrow2)->GadgetRender);
+        if (G(scrollergad->arrow2)->GadgetRender) { AslForgetObject(ld, (Object *)G(scrollergad->arrow2)->GadgetRender, AslBase); DisposeObject(G(scrollergad->arrow2)->GadgetRender); }
+        AslForgetObject(ld, scrollergad->arrow2, AslBase);
         DisposeObject(scrollergad->arrow2);
     }
     scrollergad->arrow2 = NULL;
 
 #if USE_SAFE_NOTIFYING
-    if (scrollergad->prop_ic) DisposeObject(scrollergad->prop_ic);
+    if (scrollergad->prop_ic) { AslForgetObject(ld, scrollergad->prop_ic, AslBase); DisposeObject(scrollergad->prop_ic); }
     scrollergad->prop_ic = NULL;
 
-    if (scrollergad->listview_ic) DisposeObject(scrollergad->listview_ic);
+    if (scrollergad->listview_ic) { AslForgetObject(ld, scrollergad->listview_ic, AslBase); DisposeObject(scrollergad->listview_ic); }
     scrollergad->listview_ic = NULL;
 #endif
 }
@@ -321,6 +327,7 @@ void getgadgetbounds(struct Gadget *gad, struct GadgetInfo *gi, WORD *x, WORD *y
 void connectscrollerandlistview(struct ScrollerGadget *scrollergad, Object *listview,
                                 struct AslBase_intern *AslBase)
 {
+    SetAttrs(scrollergad->prop, ASLSC_ListView, (IPTR)listview, TAG_DONE);
 #if USE_SAFE_NOTIFYING
 
     struct TagItem ic_tags[] =
@@ -367,7 +374,7 @@ void connectscrollerandlistview(struct ScrollerGadget *scrollergad, Object *list
 
 /*******************************************************************************************/
 
-void FreeObjects(Object **first, Object **last, struct AslBase_intern *AslBase)
+void FreeObjects(Object **first, Object **last, struct LayoutData *ld, struct AslBase_intern *AslBase)
 {
     Object **objptr;
 
@@ -375,6 +382,7 @@ void FreeObjects(Object **first, Object **last, struct AslBase_intern *AslBase)
     {
         if (*objptr)
         {
+            AslForgetObject(ld, *objptr, AslBase);
             DisposeObject(*objptr);
             *objptr = NULL;
         }

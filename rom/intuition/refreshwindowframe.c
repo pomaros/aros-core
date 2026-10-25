@@ -1,4 +1,6 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
+    Licensed under the AROS Public License, version 1.1.
     Copyright (C) 1995-2013, The AROS Development Team. All rights reserved.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
 */
@@ -17,6 +19,7 @@
 
 #include "inputhandler_actions.h"
 #include "intuition_intern.h"
+#include "windowframe.h"
 
 // #define GADGETCLIPPING
 
@@ -86,7 +89,7 @@ VOID int_RefreshWindowFrame(struct Window *window,
 
     if (!(window->Flags & WFLG_BORDERLESS))
     {
-        dri = GetScreenDrawInfo(window->WScreen);
+        dri = (struct DrawInfo *)WindowFrameDrawInfo(window);
         if (dri)
         {
             LOCK_REFRESH(window->WScreen);

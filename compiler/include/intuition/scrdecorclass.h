@@ -3,6 +3,7 @@
 
 /*
     Copyright  1995-2001, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     $Id$
 
     Desc: Headerfile for Intuitions' SCRDECORCLASS
@@ -47,6 +48,35 @@
 #define SDM_LAYOUT_SCREENGADGETS    (SDM_Dummy + 6)
 #define SDM_INITSCREEN              (SDM_Dummy + 7)
 #define SDM_EXITSCREEN              (SDM_Dummy + 8)
+#define SDM_PREPARESCALE            (SDM_Dummy + 9)
+#define SDM_QUERYCAPABILITIES       (SDM_Dummy + 10)
+/* Pure identity query. An unsupported provider returns zero; a supported
+ * prepare failure stays fatal and must never trigger a legacy retry. */
+#define SDM_CAP_PREPARESCALE        (1UL << 0)
+
+
+/* Read-only scale preparation capability. Only the exact class implementing
+ * this method may accept it: inherited acceptance is unsafe for subclasses.
+ * No theme/userbuffer/gadget mutation, allocation or application callback is
+ * permitted. The output starts with current metrics and proposed BarHeight.
+ */
+struct ScreenScaleMetrics
+{
+    LONG BarHeight, BarVBorder, BarHBorder, MenuVBorder, MenuHBorder;
+    /* Public Screen border metrics remain logical for legacy clients. */
+    LONG WBorTop, WBorLeft, WBorRight, WBorBottom;
+    LONG DepthRightInset, DepthTop;
+};
+struct sdpPrepareScale
+{
+    STACKED ULONG MethodID;
+    STACKED struct Screen *sdp_Screen;
+    STACKED struct TextFont *sdp_Font; /* proposed physical raster font */
+    STACKED struct TextFont *sdp_BaseFont; /* proposed unscaled font */
+    STACKED ULONG sdp_Scale; /* proposed percentage, independent of font height */
+    STACKED IPTR sdp_UserBuffer;
+    STACKED struct ScreenScaleMetrics *sdp_Metrics;
+};
 
 struct sdpGetDefSizeSysImage
 {
@@ -109,7 +139,9 @@ struct sdpInitScreen
     STACKED BYTE        sdp_TrueColor;
     STACKED struct DrawInfo *sdp_Dri;
     STACKED struct Screen   *sdp_Screen;
-    STACKED ULONG       sdp_FontHeight;
+    STACKED ULONG       sdp_FontHeight; /* physical raster font */
+    STACKED ULONG       sdp_BaseFontHeight; /* logical font */
+    STACKED ULONG       sdp_Scale;
     STACKED LONG        sdp_TitleHack;
     STACKED ULONG       sdp_BarHeight;
     STACKED ULONG       sdp_BarVBorder;

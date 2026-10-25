@@ -15,6 +15,11 @@ and current-only changes, which source notifications do not report. Cleanup
 removes handlers, unregisters the subscription, drains its port and closes the
 library. Refresh reads the same published sample. No page operation calls SMC.
 
-This page does not configure charge limits or low-battery actions and does not
-list CPU consumers. Those controls require their service interfaces. It has no
-preferences file, and Use, Save and Test are unavailable.
+The page lists the three tasks using the most processor time, read through
+`task.resource` with the battery indicator's own reader and refreshed with the
+sample; on a build without per-task accounting it says so.
+
+This page does not configure charge limits or low-battery actions: the SMC
+charge-limit key and a low-battery sleep or hibernate are not implemented by
+the power service. It has no preferences file, and Use, Save and Test are
+unavailable.

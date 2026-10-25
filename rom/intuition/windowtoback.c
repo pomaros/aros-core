@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2013, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
 
     Move window behind all other windows.
@@ -7,6 +8,7 @@
 
 #include <proto/layers.h>
 #include "intuition_intern.h"
+#include "windowcomposition.h"
 #include "inputhandler_actions.h"
 
 struct WindowToBackActionMsg
@@ -106,6 +108,9 @@ static VOID int_windowtoback(struct WindowToBackActionMsg *msg,
                */
             BehindLayer(0, BLAYER(window));
         }
+
+        if (WindowCompositionLayer(window) != layer)
+            BehindLayer(0, WindowCompositionLayer(window));
 
         CheckLayers(screen, IntuitionBase);
 

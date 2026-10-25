@@ -237,10 +237,12 @@ tsleep_main(struct SocketBase *p, ULONG wakemask)
          *
          * If p->p_wchan is zero then the wakener has removed us from
          * the sleep queue.
-         * Wait may return for a timer or another signal while wakeup is
-         * running on another CPU. Observe its queue state under the same
-         * semaphore used by the writer, then release it before returning
-         * or processing timer messages.
+         *
+         * Wait() may return for the timer or another signal while wakeup()
+         * runs on another CPU. wakeup() clears p_wchan before it signals
+         * p->thisTask through p->timerPort, so read it under the same
+         * semaphore: once it reads zero here, wakeup() is done with this
+         * base and the caller may close it.
          */
         ObtainSemaphore(&sleep_semaphore);
         awakened = (p->p_wchan == 0);

@@ -13,7 +13,11 @@ enum AArch64Protection {
     AARCH64_PROTECT_EXEC = 4,
     AARCH64_PROTECT_USER = 8,
     /* Shared OS code may execute at both EL0 and EL1, but remains read-only. */
-    AARCH64_PROTECT_EXEC_BOTH = 16
+    AARCH64_PROTECT_EXEC_BOTH = 16,
+    /* READ | WRITE | EXEC | USER only: the descriptor the platform remaps
+     * into its JIT permission (AP[0] set, AP[1] clear, PXN set, UXN clear).
+     * Without remapping it is EL0 read-write-execute; the platform decides. */
+    AARCH64_PROTECT_JIT = 32
 };
 
 /* Platform contract, deliberately independent of an allocator or privilege

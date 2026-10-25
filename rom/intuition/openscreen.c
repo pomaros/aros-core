@@ -1,4 +1,6 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
+    Licensed under the AROS Public License, version 1.1.
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
     Copyright (C) 2001-2013, The MorphOS Development Team. All Rights Reserved.
 
@@ -49,6 +51,7 @@
 #include <string.h>
 
 #include "intuition_intern.h"
+#include "screenrendercontext.h"
 #include "intuition_customize.h"
 #include "intuition_extend.h"
 #include "inputhandler.h"
@@ -140,6 +143,7 @@ static const char THIS_FILE[] = __FILE__;
     UWORD                 *customdripens = NULL;
     ULONG                 *colors32 = NULL;
     WORD                   sysfont = -1;
+    ULONG                  scale = SA_SCALE_MIN;
     BOOL                   ok = TRUE, rp_inited = FALSE, li_inited = FALSE, sharepens = FALSE, likewb = FALSE;
 #ifdef USEWINDOWLOCK
     BOOL                   windowlock = FALSE;
@@ -562,6 +566,11 @@ static const char THIS_FILE[] = __FILE__;
             case SA_SysFont:
                 DEBUG_OPENSCREEN(dprintf("OpenScreen: SA_SysFont 0x%lx\n",tag->ti_Data));
                 sysfont = (WORD)tag->ti_Data;
+                break;
+
+            case SA_Scale:
+                DEBUG_OPENSCREEN(dprintf("OpenScreen: SA_Scale %lu\n",tag->ti_Data));
+                scale = ClampScreenScale((ULONG)tag->ti_Data);
                 break;
 
             case SA_BitMap:
@@ -1224,7 +1233,6 @@ static const char THIS_FILE[] = __FILE__;
 
         if(ok && (screen->Screen.RastPort.BitMap == NULL))
         {
-            struct msGetRootBitMap rbmmsg;
 #ifdef __AROS__ /* AROS: BitMap needs ModeID */
             ULONG Depth = (dimensions.MaxDepth > 8) ? dimensions.MaxDepth : ns.Depth;
             struct TagItem bmtags[] =
@@ -1620,7 +1628,6 @@ static const char THIS_FILE[] = __FILE__;
     {
         struct Color32 *p;
         int k;
-        UWORD *q;
 
         DEBUG_OPENSCREEN(dprintf("OpenScreen: Set first 4 colors\n"));
 
@@ -1679,7 +1686,7 @@ static const char THIS_FILE[] = __FILE__;
         {
             DEBUG_OPENSCREEN(dprintf("OpenScreen: Obtain Mousepointer colors\n"));
 
-            for (k = 1; k < 4; ++k, ++q)
+            for (k = 1; k < 4; ++k)
             {
                 DEBUG_OPENSCREEN(dprintf("OpenScreen: ColorMap 0x%P Pen %d R 0x%08X G 0x08X B 0x%08X\n",
                                          screen->Screen.ViewPort.ColorMap,
@@ -1878,7 +1885,27 @@ static const char THIS_FILE[] = __FILE__;
             screen->DInfo.dri_Font = SafeReopenFont(IntuitionBase, &GfxBase->DefaultFont);
         }
 
-        if (!screen->DInfo.dri_Font) ok = FALSE;
+        /* A scaled screen renders its font at the asked points times the
+           scale: the title bar, menus and window titles follow. A font
+           that has no such size (a bitmap font without diskfont) keeps
+           the unscaled one, and SA_Scale still reports the scale. */
+        screen->Scale = (UWORD)scale;
+        screen->ScaleSysFont = screen->SysFont;
+        screen->ScaleBaseFont = SafeReopenFont(IntuitionBase, &screen->DInfo.dri_Font);
+        if (scale != SA_SCALE_MIN && screen->DInfo.dri_Font)
+        {
+            struct TextFont *scaled = OpenScaledScreenFont(IntuitionBase,
+                                                           screen->DInfo.dri_Font, scale);
+
+            if (scaled)
+            {
+                CloseFont(screen->DInfo.dri_Font);
+                screen->DInfo.dri_Font = scaled;
+                screen->SysFont = FALSE;
+            }
+        }
+
+        if (!screen->DInfo.dri_Font || !screen->ScaleBaseFont) ok = FALSE;
 
     } /* if (ok) */
 
@@ -2138,11 +2165,17 @@ static const char THIS_FILE[] = __FILE__;
 
     if (ok)
     {
+        struct LogicalScreenInfo *logical = PrepareLogicalScreenInfo(screen,
+            screen->ScaleBaseFont, IntuitionBase);
+        if (!logical) ok = FALSE;
+        else CommitLogicalScreenInfo(screen, logical);
+    }
+
+    if (ok)
+    {
         SetFont(&screen->Screen.RastPort, screen->DInfo.dri_Font);
 
         AskFont(&screen->Screen.RastPort, (struct TextAttr *) &screen->textattr);
-
-        screen->Screen.Font = (struct TextAttr *) &screen->textattr;
 
         DEBUG_OPENSCREEN(dprintf("OpenScreen: Font %s/%d\n",
                      screen->textattr.tta_Name, screen->textattr.tta_YSize));
@@ -2159,7 +2192,8 @@ static const char THIS_FILE[] = __FILE__;
          * AROS: Get size information from decorator.
          * This has to be done before we create gadgets because here we may adjust BarHeight.
          */
-        ok = int_InitDecorator(&screen->Screen);
+        ok = int_InitDecorator(&screen->Screen, screen->ScaleBaseFont, screen->Scale);
+        if (ok) ok = InitializeScreenRenderContext(screen, IntuitionBase);
         if (ok)
         {
 #define SDEPTH_HEIGHT (screen->Screen.BarHeight + 1)
@@ -2179,24 +2213,7 @@ static const char THIS_FILE[] = __FILE__;
                 {TAG_DONE,     0UL          }
             };
 
-            struct TagItem image_tags[] =
-            {
-                {IA_Left         , 0                   },
-                //{IA_Width        , SDEPTH_WIDTH + 1    },
-                {IA_Height       , SDEPTH_HEIGHT       },
-                {SYSIA_Which     , SDEPTHIMAGE         },
-                {SYSIA_DrawInfo  , (IPTR)&screen->DInfo},
-                {SYSIA_Size      , screen->Screen.Flags & SCREENHIRES ?
-                                   SYSISIZE_MEDRES : SYSISIZE_LOWRES},
-                {TAG_DONE                              }
-            };
-
-            struct Object *im = 0;
-
-            if (!(screen->Screen.Flags & SCREENQUIET))
-            {
-                im = NewObjectA(NULL, SYSICLASS, image_tags);
-            }
+            Object *im = ScreenRenderContextDepthImage(CurrentScreenRenderContext(&screen->Screen));
 
             sdepth_tags[0].ti_Data = (IPTR)im;
 
@@ -2220,8 +2237,6 @@ static const char THIS_FILE[] = __FILE__;
                 gadtags[0].ti_Data = -width + 1;
                 SetAttrsA(screen->depthgadget, gadtags);
                 screen->Screen.FirstGadget->GadgetType |= GTYP_SCRGADGET;
-            } else {
-                if (im) DisposeObject(im);
             }
 
 #if DEBUG
@@ -2346,6 +2361,15 @@ static const char THIS_FILE[] = __FILE__;
             ThinLayerInfo(&screen->Screen.LayerInfo);
         }
 
+        if (screen->depthgadget)
+        {
+            DisposeObject(screen->depthgadget);
+            screen->depthgadget = NULL;
+            screen->Screen.FirstGadget = NULL;
+        }
+        FreeScreenRenderContexts(screen, IntuitionBase);
+        FreeLogicalScreenInfo(screen, IntuitionBase);
+
         if (screen->Screen.ViewPort.ColorMap)
         {
 #ifdef __MORPHOS__
@@ -2442,7 +2466,6 @@ VOID int_openscreen(struct OpenScreenActionMsg *msg,
     struct IntScreen *screen = msg->Screen;
     struct NewScreen *ns = msg->NewScreen;
     struct List *list = msg->List;
-    struct Screen *oldFirstScreen;
     struct RethinkDisplayActionMsg rmsg;
     ULONG lock = 0;
 
@@ -2461,7 +2484,6 @@ VOID int_openscreen(struct OpenScreenActionMsg *msg,
 
     if (!ILOCKCHECK(((struct IntuiActionMsg *)msg))) lock = LockIBase((IPTR)NULL);
 
-    oldFirstScreen = IntuitionBase->FirstScreen;
     if (ns->Type & SCREENBEHIND)
     {
         struct Screen **ptr = &IntuitionBase->FirstScreen;

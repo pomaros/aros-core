@@ -39,17 +39,31 @@ static CONST_STRPTR position_labels[7], size_labels[3];
 
 /*********************************************************************************************/
 
+/* Offsets apply to the corner positions, percentages to the relative size. */
+static void EnableGeometry(struct AslEditor_DATA *data)
+{
+    IPTR position = XGET(data->positionobj, MUIA_Cycle_Active);
+    BOOL corner = position == ASLPREFS_POS_TOPLEFTWIN || position == ASLPREFS_POS_TOPLEFTSCR;
+    BOOL relative = XGET(data->sizeobj, MUIA_Cycle_Active) != 0;
+
+    NNSET(data->offsetxobj, MUIA_Disabled, !corner);
+    NNSET(data->offsetyobj, MUIA_Disabled, !corner);
+    NNSET(data->widthpercentobj, MUIA_Disabled, !relative);
+    NNSET(data->heightpercentobj, MUIA_Disabled, !relative);
+}
+
 static void SelectDefaultsHook(struct Hook *hook, Object *self, struct AslEditor_DATA **data)
 {
     struct AslPrefs *prefs = &aslprefs;
+    ULONG position = prefs->ap_SizePosition & ASLPREFS_POS_MASK;
 
     D(bug("[AslEditor.class] %s()\n", __PRETTY_FUNCTION__));
-    
-    /* Hardcode for now */
-    NNSET((*data)->positionobj, MUIA_Cycle_Active, prefs->ap_SizePosition & 0x7);
-    NNSET((*data)->sizeobj, MUIA_Cycle_Active, (prefs->ap_SizePosition & 0x10) >> 4);
 
-    /* Use prefs */
+    if (position > ASLPREFS_POS_POINTER)
+        position = ASLPREFS_POS_DEFAULT;
+    NNSET((*data)->positionobj, MUIA_Cycle_Active, position);
+    NNSET((*data)->sizeobj, MUIA_Cycle_Active, (prefs->ap_SizePosition & ASLPREFS_SIZE_RELATIVE) ? 1 : 0);
+
     (*data)->noupdatehook = TRUE;
     NNSET((*data)->offsetxobj, MUIA_String_Integer, prefs->ap_RelativeLeft);
     NNSET((*data)->offsetyobj, MUIA_String_Integer, prefs->ap_RelativeTop);
@@ -58,11 +72,7 @@ static void SelectDefaultsHook(struct Hook *hook, Object *self, struct AslEditor
     NNSET((*data)->widthpercentobj, MUIA_Numeric_Value, prefs->ap_RelativeWidth);
     NNSET((*data)->heightpercentobj, MUIA_Numeric_Value, prefs->ap_RelativeHeight);
 
-    /* Disable non-editable for now */
-    NNSET((*data)->positionobj, MUIA_Disabled, TRUE);
-    NNSET((*data)->sizeobj, MUIA_Disabled, TRUE);
-    NNSET((*data)->offsetxobj, MUIA_Disabled, TRUE);
-    NNSET((*data)->offsetyobj, MUIA_Disabled, TRUE);
+    EnableGeometry(*data);
 }
 
 static void UpdateDefaultsHook(struct Hook *hook, Object *self, struct AslEditor_DATA **data)
@@ -76,9 +86,12 @@ static void UpdateDefaultsHook(struct Hook *hook, Object *self, struct AslEditor
 
     D(bug("[AslEditor.class] %s()\n", __PRETTY_FUNCTION__));
 
-    // TODO: implement reading from gadgets
-    prefs->ap_SizePosition = 0x40 /* override */ | 0x10 /* relative */ | 0x02 /* center on screen */;
-
+    tmpval = prefs->ap_SizePosition;
+    prefs->ap_SizePosition = (prefs->ap_SizePosition & ~(ASLPREFS_POS_MASK | ASLPREFS_SIZE_RELATIVE))
+        | (XGET((*data)->positionobj, MUIA_Cycle_Active) & ASLPREFS_POS_MASK)
+        | (XGET((*data)->sizeobj, MUIA_Cycle_Active) ? ASLPREFS_SIZE_RELATIVE : 0);
+    if (prefs->ap_SizePosition != tmpval)
+        changed = TRUE;
     tmpval = prefs->ap_RelativeWidth;
     if ((prefs->ap_RelativeWidth = XGET((*data)->widthpercentobj, MUIA_Numeric_Value)) != tmpval)
         changed = TRUE;
@@ -92,6 +105,8 @@ static void UpdateDefaultsHook(struct Hook *hook, Object *self, struct AslEditor
     if ((prefs->ap_RelativeTop = XGET((*data)->offsetyobj, MUIA_String_Integer)) != tmpval)
         changed = TRUE;
 
+    EnableGeometry(*data);
+
     if (changed)
     {
         SET(self, MUIA_PrefsEditor_Changed, TRUE);   /* the hook runs on the editor */
@@ -102,7 +117,11 @@ static void UpdateDefaultsHook(struct Hook *hook, Object *self, struct AslEditor
 
 BOOL Gadgets2AslPrefs(struct AslEditor_DATA *data)
 {
+    struct AslPrefs *prefs = &aslprefs;
+
     D(bug("[AslEditor.class] %s()\n", __PRETTY_FUNCTION__));
+
+    prefs->ap_SortDrawers = XGET(data->drawersfirstobj, MUIA_Selected) ? 0 : 1;
 
     return TRUE;
 }
@@ -118,9 +137,6 @@ BOOL AslPrefs2Gadgets(struct AslEditor_DATA *data)
     NNSET(data->drawersfirstobj, MUIA_Selected, (prefs->ap_SortDrawers == 0) ? 1 : 0);
 
     SelectDefaultsHook(NULL, NULL, &data);
-
-    /* Disable non-editable for now */
-    NNSET(data->drawersfirstobj, MUIA_Disabled, TRUE);
 
     return TRUE;
 }

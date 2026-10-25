@@ -1,4 +1,6 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+    Distributed under the AROS Public License, version 1.1.
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
 
     Desc: Implements AROS's generic/amiga-like boot sequence.
@@ -317,7 +319,17 @@ void __dos_Boot(struct DosLibrary *DOSBase, ULONG BootFlags, UBYTE Flags)
             cis = Open("NIL:", MODE_OLDFILE);
         } else
 #endif
+        {
+#ifdef DOS_INITIAL_CONSOLE_NAME
+            CONST_STRPTR name = DOS_INITIAL_CONSOLE_NAME(BootFlags);
+            /* The native quiet bootstrap keeps serial diagnostics even
+               though its ordinary startup stdout has no visible window. */
+            bug("[DOS-BOOT] initial-console=%s flags=0x%lx\n", name, BootFlags);
+            cis = Open(name, MODE_OLDFILE);
+#else
             cis = Open("CON:////AROS/AUTO/CLOSE/SMART/BOOT", MODE_OLDFILE);
+#endif
+        }
     }
 
     if (cis) {
@@ -333,6 +345,10 @@ void __dos_Boot(struct DosLibrary *DOSBase, ULONG BootFlags, UBYTE Flags)
             if (!(BootFlags & BF_NO_STARTUP_SEQUENCE))
                 cas = Open("S:Startup-Sequence", MODE_OLDFILE);
 
+#ifdef DOS_INITIAL_CONSOLE_NAME
+            if (C) bug("%s", C);
+            bug("[DOS-BOOT] initial-cli script=%ld\n", cas != BNULL);
+#endif
             /* Inject the banner */
             if (Flags & EBF_SILENTSTART) {
                 if (SetVBuf(cos, NULL, BUF_FULL, sizeof(C)) == 0) {
@@ -367,6 +383,9 @@ void __dos_Boot(struct DosLibrary *DOSBase, ULONG BootFlags, UBYTE Flags)
                            SYS_ScriptInput, cas,
                            TAG_END);
             }
+#ifdef DOS_INITIAL_CONSOLE_NAME
+            bug("[DOS-BOOT] initial-cli returned=%ld\n", shellrc);
+#endif
             if (shellrc == -1) {
                 D(bug("[DOS] %s:  .. failed!\n", __func__);)
                 Alert(AT_DeadEnd | AN_BootStrap);
@@ -386,8 +405,14 @@ void __dos_Boot(struct DosLibrary *DOSBase, ULONG BootFlags, UBYTE Flags)
             Close(cos);
             /* NOTE: 'cas' will already have been closed by the Shell */
         }
+#ifdef DOS_INITIAL_CONSOLE_NAME
+        if (!cos) bug("[DOS-BOOT] initial-output=FAIL\n");
+#endif
         FreeVec(C);
     } else {
+#ifdef DOS_INITIAL_CONSOLE_NAME
+        bug("[DOS-BOOT] initial-console=FAIL\n");
+#endif
         D(bug("[DOS] %s:  .. failed!\n", __func__);)
         Alert(AN_NoWindow);
     }

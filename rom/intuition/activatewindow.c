@@ -1,4 +1,6 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
+    Licensed under the AROS Public License, version 1.1.
     Copyright (C) 1995-2020, The AROS Development Team. All rights reserved.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
 */
@@ -7,6 +9,7 @@
 #include <proto/timer.h>
 #include <intuition/gadgetclass.h>
 #include "intuition_intern.h"
+#include <graphics/layers.h>
 #include "inputhandler.h"
 #include "inputhandler_actions.h"
 #include "inputhandler_support.h"
@@ -105,6 +108,10 @@ static VOID int_activatewindow(struct ActivateWindowActionMsg *msg,
     struct InputEvent   *ie;
 
     if (window && !ResourceExisting(window, RESOURCE_WINDOW, IntuitionBase)) return;
+    /* Explicit ActivateWindow requests must obey the visual-only contract,
+     * just as mouse/menu/drag hit tests do. Run after resource validation. */
+    if (window && WLAYER(window) &&
+        (WLAYER(window)->Flags & LAYERINPUTTRANSPARENT)) return;
 //    if (window->Flags & WFLG_TOOLBOX) return;
 
     if ((!iihdata->ActiveGadget) ||
@@ -197,6 +204,7 @@ static VOID int_activatewindow(struct ActivateWindowActionMsg *msg,
             {
                 struct msSetPointerShape pmsg;
                 pmsg.MethodID = MM_SetPointerShape;
+                pmsg.screen = &scr->Screen;
                 pmsg.pointer = NULL;
 
                 if (!pointer)

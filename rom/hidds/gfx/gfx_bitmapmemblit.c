@@ -820,7 +820,7 @@ VOID BM__Hidd_BitMap__PutMemTemplate8(OOP_Class *cl, OOP_Object *o, struct pHidd
 {
     WORD                     x, y;
     UBYTE                   *bitarray, *buf;
-    UWORD                    bitmask;
+    UBYTE                    bitmask;
     OOP_Object              *gc = msg->gc;
     ULONG                    fg = GC_FG(gc);
     ULONG                    bg = GC_BG(gc);
@@ -844,16 +844,16 @@ VOID BM__Hidd_BitMap__PutMemTemplate8(OOP_Class *cl, OOP_Object *o, struct pHidd
     
     if (msg->inverttemplate) type++;
     
-    bitarray = msg->masktemplate + ((msg->srcx / 16) * 2);
-    bitmask = 0x8000 >> (msg->srcx & 0xF);
+    bitarray = msg->masktemplate + (msg->srcx / 8);
+    bitmask = 0x80 >> (msg->srcx & 7);
     
     buf = msg->dst + msg->y * msg->dstMod + msg->x;
     
     for(y = 0; y < msg->height; y++)
     {
         ULONG  mask = bitmask;
-        UWORD *array = (UWORD *)bitarray;
-        UWORD  bitword = AROS_BE2WORD(*array);
+        UBYTE *array = bitarray;
+        UBYTE  bitword = *array;
         UBYTE *xbuf = buf;
 
         switch(type)
@@ -864,11 +864,11 @@ VOID BM__Hidd_BitMap__PutMemTemplate8(OOP_Class *cl, OOP_Object *o, struct pHidd
                     if (bitword & mask) *xbuf = fg;
 
                     mask >>= 1;
-                    if (!mask)
+                    if (!mask && x + 1 < msg->width)
                     {
-                        mask = 0x8000;
+                        mask = 0x80;
                         array++;
-                        bitword = AROS_BE2WORD(*array);
+                        bitword = *array;
                     }
 
                 } /* for(x = 0; x < msg->width; x++) */
@@ -880,11 +880,11 @@ VOID BM__Hidd_BitMap__PutMemTemplate8(OOP_Class *cl, OOP_Object *o, struct pHidd
                     if (!(bitword & mask)) *xbuf = fg;
 
                     mask >>= 1;
-                    if (!mask)
+                    if (!mask && x + 1 < msg->width)
                     {
-                        mask = 0x8000;
+                        mask = 0x80;
                         array++;
-                        bitword = AROS_BE2WORD(*array);
+                        bitword = *array;
                     }
 
                 } /* for(x = 0; x < msg->width; x++) */
@@ -896,11 +896,11 @@ VOID BM__Hidd_BitMap__PutMemTemplate8(OOP_Class *cl, OOP_Object *o, struct pHidd
                     if (bitword & mask) *xbuf = ~(*xbuf);
 
                     mask >>= 1;
-                    if (!mask)
+                    if (!mask && x + 1 < msg->width)
                     {
-                        mask = 0x8000;
+                        mask = 0x80;
                         array++;
-                        bitword = AROS_BE2WORD(*array);
+                        bitword = *array;
                     }
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
@@ -911,11 +911,11 @@ VOID BM__Hidd_BitMap__PutMemTemplate8(OOP_Class *cl, OOP_Object *o, struct pHidd
                     if (!(bitword & mask)) *xbuf = ~(*xbuf);
 
                     mask >>= 1;
-                    if (!mask)
+                    if (!mask && x + 1 < msg->width)
                     {
-                        mask = 0x8000;
+                        mask = 0x80;
                         array++;
-                        bitword = AROS_BE2WORD(*array);
+                        bitword = *array;
                     }
                  } /* for(x = 0; x < msg->width; x++) */
                 break;
@@ -926,11 +926,11 @@ VOID BM__Hidd_BitMap__PutMemTemplate8(OOP_Class *cl, OOP_Object *o, struct pHidd
                     *xbuf++ = (bitword & mask) ? fg : bg;
 
                     mask >>= 1;
-                    if (!mask)
+                    if (!mask && x + 1 < msg->width)
                     {
-                        mask = 0x8000;
+                        mask = 0x80;
                         array++;
-                        bitword = AROS_BE2WORD(*array);
+                        bitword = *array;
                     }
 
                 } /* for(x = 0; x < msg->width; x++) */
@@ -942,11 +942,11 @@ VOID BM__Hidd_BitMap__PutMemTemplate8(OOP_Class *cl, OOP_Object *o, struct pHidd
                     *xbuf++ = (bitword & mask) ? bg : fg;
 
                     mask >>= 1;
-                    if (!mask)
+                    if (!mask && x + 1 < msg->width)
                     {
-                        mask = 0x8000;
+                        mask = 0x80;
                         array++;
-                        bitword = AROS_BE2WORD(*array);
+                        bitword = *array;
                     }
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
@@ -965,7 +965,7 @@ VOID BM__Hidd_BitMap__PutMemTemplate16(OOP_Class *cl, OOP_Object *o, struct pHid
 {
     WORD                     x, y;
     UBYTE                   *bitarray, *buf;
-    UWORD                    bitmask;
+    UBYTE                    bitmask;
     OOP_Object              *gc = msg->gc;
     ULONG                    fg = GC_FG(gc);
     ULONG                    bg = GC_BG(gc);
@@ -989,16 +989,16 @@ VOID BM__Hidd_BitMap__PutMemTemplate16(OOP_Class *cl, OOP_Object *o, struct pHid
     
     if (msg->inverttemplate) type++;
     
-    bitarray = msg->masktemplate + ((msg->srcx / 16) * 2);
-    bitmask = 0x8000 >> (msg->srcx & 0xF);
+    bitarray = msg->masktemplate + (msg->srcx / 8);
+    bitmask = 0x80 >> (msg->srcx & 7);
     
     buf = msg->dst + msg->y * msg->dstMod + msg->x * 2;
 
     for(y = 0; y < msg->height; y++)
     {
         ULONG  mask = bitmask;
-        UWORD *array = (UWORD *)bitarray;
-        UWORD  bitword = AROS_BE2WORD(*array);
+        UBYTE *array = bitarray;
+        UBYTE  bitword = *array;
         UWORD *xbuf = (UWORD *)buf;
 
         switch(type)
@@ -1009,11 +1009,11 @@ VOID BM__Hidd_BitMap__PutMemTemplate16(OOP_Class *cl, OOP_Object *o, struct pHid
                     if (bitword & mask) *xbuf = fg;
 
                     mask >>= 1;
-                    if (!mask)
+                    if (!mask && x + 1 < msg->width)
                     {
-                        mask = 0x8000;
+                        mask = 0x80;
                         array++;
-                        bitword = AROS_BE2WORD(*array);
+                        bitword = *array;
                     }
 
                 } /* for(x = 0; x < msg->width; x++) */
@@ -1025,11 +1025,11 @@ VOID BM__Hidd_BitMap__PutMemTemplate16(OOP_Class *cl, OOP_Object *o, struct pHid
                     if (!(bitword & mask)) *xbuf = fg;
 
                     mask >>= 1;
-                    if (!mask)
+                    if (!mask && x + 1 < msg->width)
                     {
-                        mask = 0x8000;
+                        mask = 0x80;
                         array++;
-                        bitword = AROS_BE2WORD(*array);
+                        bitword = *array;
                     }
 
                 } /* for(x = 0; x < msg->width; x++) */
@@ -1041,11 +1041,11 @@ VOID BM__Hidd_BitMap__PutMemTemplate16(OOP_Class *cl, OOP_Object *o, struct pHid
                     if (bitword & mask) *xbuf = ~(*xbuf);
 
                     mask >>= 1;
-                    if (!mask)
+                    if (!mask && x + 1 < msg->width)
                     {
-                        mask = 0x8000;
+                        mask = 0x80;
                         array++;
-                        bitword = AROS_BE2WORD(*array);
+                        bitword = *array;
                     }
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
@@ -1056,11 +1056,11 @@ VOID BM__Hidd_BitMap__PutMemTemplate16(OOP_Class *cl, OOP_Object *o, struct pHid
                     if (!(bitword & mask)) *xbuf = ~(*xbuf);
 
                     mask >>= 1;
-                    if (!mask)
+                    if (!mask && x + 1 < msg->width)
                     {
-                        mask = 0x8000;
+                        mask = 0x80;
                         array++;
-                        bitword = AROS_BE2WORD(*array);
+                        bitword = *array;
                     }
                  } /* for(x = 0; x < msg->width; x++) */
                 break;
@@ -1071,11 +1071,11 @@ VOID BM__Hidd_BitMap__PutMemTemplate16(OOP_Class *cl, OOP_Object *o, struct pHid
                     *xbuf++ = (bitword & mask) ? fg : bg;
 
                     mask >>= 1;
-                    if (!mask)
+                    if (!mask && x + 1 < msg->width)
                     {
-                        mask = 0x8000;
+                        mask = 0x80;
                         array++;
-                        bitword = AROS_BE2WORD(*array);
+                        bitword = *array;
                     }
 
                 } /* for(x = 0; x < msg->width; x++) */
@@ -1087,11 +1087,11 @@ VOID BM__Hidd_BitMap__PutMemTemplate16(OOP_Class *cl, OOP_Object *o, struct pHid
                     *xbuf++ = (bitword & mask) ? bg : fg;
 
                     mask >>= 1;
-                    if (!mask)
+                    if (!mask && x + 1 < msg->width)
                     {
-                        mask = 0x8000;
+                        mask = 0x80;
                         array++;
-                        bitword = AROS_BE2WORD(*array);
+                        bitword = *array;
                     }
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
@@ -1111,7 +1111,7 @@ VOID BM__Hidd_BitMap__PutMemTemplate24(OOP_Class *cl, OOP_Object *o, struct pHid
 {
     WORD                     x, y;
     UBYTE                   *bitarray, *buf;
-    UWORD                    bitmask;
+    UBYTE                    bitmask;
     OOP_Object              *gc = msg->gc;
     ULONG                    fg = GC_FG(gc);
     UBYTE                    fg1, fg2, fg3;
@@ -1155,16 +1155,16 @@ VOID BM__Hidd_BitMap__PutMemTemplate24(OOP_Class *cl, OOP_Object *o, struct pHid
     
     if (msg->inverttemplate) type++;
     
-    bitarray = msg->masktemplate + ((msg->srcx / 16) * 2);
-    bitmask = 0x8000 >> (msg->srcx & 0xF);
+    bitarray = msg->masktemplate + (msg->srcx / 8);
+    bitmask = 0x80 >> (msg->srcx & 7);
     
     buf = msg->dst + msg->y * msg->dstMod + msg->x * 3;
     
     for(y = 0; y < msg->height; y++)
     {
         ULONG  mask = bitmask;
-        UWORD *array = (UWORD *)bitarray;
-        UWORD  bitword = AROS_BE2WORD(*array);
+        UBYTE *array = bitarray;
+        UBYTE  bitword = *array;
         UBYTE *xbuf = buf;
 
         switch(type)
@@ -1180,11 +1180,11 @@ VOID BM__Hidd_BitMap__PutMemTemplate24(OOP_Class *cl, OOP_Object *o, struct pHid
                     }
 
                     mask >>= 1;
-                    if (!mask)
+                    if (!mask && x + 1 < msg->width)
                     {
-                        mask = 0x8000;
+                        mask = 0x80;
                         array++;
-                        bitword = AROS_BE2WORD(*array);
+                        bitword = *array;
                     }
 
                 } /* for(x = 0; x < msg->width; x++) */
@@ -1201,11 +1201,11 @@ VOID BM__Hidd_BitMap__PutMemTemplate24(OOP_Class *cl, OOP_Object *o, struct pHid
                     }
 
                     mask >>= 1;
-                    if (!mask)
+                    if (!mask && x + 1 < msg->width)
                     {
-                        mask = 0x8000;
+                        mask = 0x80;
                         array++;
-                        bitword = AROS_BE2WORD(*array);
+                        bitword = *array;
                     }
 
                 } /* for(x = 0; x < msg->width; x++) */
@@ -1222,11 +1222,11 @@ VOID BM__Hidd_BitMap__PutMemTemplate24(OOP_Class *cl, OOP_Object *o, struct pHid
                     }
 
                     mask >>= 1;
-                    if (!mask)
+                    if (!mask && x + 1 < msg->width)
                     {
-                        mask = 0x8000;
+                        mask = 0x80;
                         array++;
-                        bitword = AROS_BE2WORD(*array);
+                        bitword = *array;
                     }
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
@@ -1242,11 +1242,11 @@ VOID BM__Hidd_BitMap__PutMemTemplate24(OOP_Class *cl, OOP_Object *o, struct pHid
                     }
 
                     mask >>= 1;
-                    if (!mask)
+                    if (!mask && x + 1 < msg->width)
                     {
-                        mask = 0x8000;
+                        mask = 0x80;
                         array++;
-                        bitword = AROS_BE2WORD(*array);
+                        bitword = *array;
                     }
                  } /* for(x = 0; x < msg->width; x++) */
                 break;
@@ -1268,11 +1268,11 @@ VOID BM__Hidd_BitMap__PutMemTemplate24(OOP_Class *cl, OOP_Object *o, struct pHid
                     }
 
                     mask >>= 1;
-                    if (!mask)
+                    if (!mask && x + 1 < msg->width)
                     {
-                        mask = 0x8000;
+                        mask = 0x80;
                         array++;
-                        bitword = AROS_BE2WORD(*array);
+                        bitword = *array;
                     }
 
                 } /* for(x = 0; x < msg->width; x++) */
@@ -1295,11 +1295,11 @@ VOID BM__Hidd_BitMap__PutMemTemplate24(OOP_Class *cl, OOP_Object *o, struct pHid
                     }
 
                     mask >>= 1;
-                    if (!mask)
+                    if (!mask && x + 1 < msg->width)
                     {
-                        mask = 0x8000;
+                        mask = 0x80;
                         array++;
-                        bitword = AROS_BE2WORD(*array);
+                        bitword = *array;
                     }
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
@@ -1319,7 +1319,7 @@ VOID BM__Hidd_BitMap__PutMemTemplate32(OOP_Class *cl, OOP_Object *o, struct pHid
 {
     WORD                     x, y;
     UBYTE                   *bitarray, *buf;
-    UWORD                    bitmask;
+    UBYTE                    bitmask;
     OOP_Object              *gc = msg->gc;
     ULONG                    fg = GC_FG(gc);
     ULONG                    bg = GC_BG(gc);
@@ -1343,16 +1343,16 @@ VOID BM__Hidd_BitMap__PutMemTemplate32(OOP_Class *cl, OOP_Object *o, struct pHid
     
     if (msg->inverttemplate) type++;
     
-    bitarray = msg->masktemplate + ((msg->srcx / 16) * 2);
-    bitmask = 0x8000 >> (msg->srcx & 0xF);
+    bitarray = msg->masktemplate + (msg->srcx / 8);
+    bitmask = 0x80 >> (msg->srcx & 7);
     
     buf = msg->dst + msg->y * msg->dstMod + msg->x * 4;
     
     for(y = 0; y < msg->height; y++)
     {
         ULONG  mask = bitmask;
-        UWORD *array = (UWORD *)bitarray;
-        UWORD  bitword = AROS_BE2WORD(*array);
+        UBYTE *array = bitarray;
+        UBYTE  bitword = *array;
         ULONG *xbuf = (ULONG *)buf;
 
         switch(type)
@@ -1363,11 +1363,11 @@ VOID BM__Hidd_BitMap__PutMemTemplate32(OOP_Class *cl, OOP_Object *o, struct pHid
                     if (bitword & mask) *xbuf = fg;
 
                     mask >>= 1;
-                    if (!mask)
+                    if (!mask && x + 1 < msg->width)
                     {
-                        mask = 0x8000;
+                        mask = 0x80;
                         array++;
-                        bitword = AROS_BE2WORD(*array);
+                        bitword = *array;
                     }
 
                 } /* for(x = 0; x < msg->width; x++) */
@@ -1379,11 +1379,11 @@ VOID BM__Hidd_BitMap__PutMemTemplate32(OOP_Class *cl, OOP_Object *o, struct pHid
                     if (!(bitword & mask)) *xbuf = fg;
 
                     mask >>= 1;
-                    if (!mask)
+                    if (!mask && x + 1 < msg->width)
                     {
-                        mask = 0x8000;
+                        mask = 0x80;
                         array++;
-                        bitword = AROS_BE2WORD(*array);
+                        bitword = *array;
                     }
 
                 } /* for(x = 0; x < msg->width; x++) */
@@ -1395,11 +1395,11 @@ VOID BM__Hidd_BitMap__PutMemTemplate32(OOP_Class *cl, OOP_Object *o, struct pHid
                     if (bitword & mask) *xbuf = ~(*xbuf);
 
                     mask >>= 1;
-                    if (!mask)
+                    if (!mask && x + 1 < msg->width)
                     {
-                        mask = 0x8000;
+                        mask = 0x80;
                         array++;
-                        bitword = AROS_BE2WORD(*array);
+                        bitword = *array;
                     }
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
@@ -1410,11 +1410,11 @@ VOID BM__Hidd_BitMap__PutMemTemplate32(OOP_Class *cl, OOP_Object *o, struct pHid
                     if (!(bitword & mask)) *xbuf = ~(*xbuf);
 
                     mask >>= 1;
-                    if (!mask)
+                    if (!mask && x + 1 < msg->width)
                     {
-                        mask = 0x8000;
+                        mask = 0x80;
                         array++;
-                        bitword = AROS_BE2WORD(*array);
+                        bitword = *array;
                     }
                  } /* for(x = 0; x < msg->width; x++) */
                 break;
@@ -1425,11 +1425,11 @@ VOID BM__Hidd_BitMap__PutMemTemplate32(OOP_Class *cl, OOP_Object *o, struct pHid
                     *xbuf++ = (bitword & mask) ? fg : bg;
 
                     mask >>= 1;
-                    if (!mask)
+                    if (!mask && x + 1 < msg->width)
                     {
-                        mask = 0x8000;
+                        mask = 0x80;
                         array++;
-                        bitword = AROS_BE2WORD(*array);
+                        bitword = *array;
                     }
 
                 } /* for(x = 0; x < msg->width; x++) */
@@ -1441,11 +1441,11 @@ VOID BM__Hidd_BitMap__PutMemTemplate32(OOP_Class *cl, OOP_Object *o, struct pHid
                     *xbuf++ = (bitword & mask) ? bg : fg;
 
                     mask >>= 1;
-                    if (!mask)
+                    if (!mask && x + 1 < msg->width)
                     {
-                        mask = 0x8000;
+                        mask = 0x80;
                         array++;
-                        bitword = AROS_BE2WORD(*array);
+                        bitword = *array;
                     }
                 } /* for(x = 0; x < msg->width; x++) */
                 break;

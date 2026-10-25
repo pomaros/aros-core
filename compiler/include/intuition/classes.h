@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * Licensed under the AROS Public License (APL) Version 1.1. */
 #ifndef INTUITION_CLASSES_H
 #define INTUITION_CLASSES_H
 
@@ -44,6 +46,10 @@ typedef struct IClass
 
 /* cl_Flags */
 #define CLF_INLIST (1L<<0)
+/* Explicit exact-class rendering declaration; never inherited by MakeClass.
+ * Set with MUI_SetClassCapabilities before creating objects or subclasses. */
+#define CLF_SCALE_AWARE    (1UL<<1)
+#define CLF_SCALE_DECLARED (1UL<<2)
 
 /* This structure is situated before the pointer. It may grow in future,
    but o_Class will always stay at the end, so that you can subtract

@@ -339,6 +339,13 @@ static int apply_keywords(struct parse_state *state, const struct line *line,
             } else if (same(w, n, "default")) {
                 copy_text(record->dflt, SETTINGS_TEXT_MAX, v, vn);
                 record->has_default = 1;
+            } else if (same(w, n, "mask")) {
+                int32_t value;
+                if (!parse_int(v, vn, &value) || value <= 0)
+                    return fail(state, "mask is a positive number");
+                if (record->size < 4 && (uint32_t)value >> (8 * record->size) != 0)
+                    return fail(state, "mask is wider than its field");
+                record->mask = (uint32_t)value;
             } else if (same(w, n, "select")) {
                 int32_t value;
                 if (!parse_int(v, vn, &value) || value < 0)

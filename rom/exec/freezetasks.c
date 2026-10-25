@@ -15,6 +15,7 @@
 
 #include "exec_intern.h"
 #include "etask.h"
+#include "freeze_smp.h"
 
 /*****************************************************************************
 
@@ -44,16 +45,19 @@
         flags - reserved, pass 0.
 
     RESULT
-        The number of tasks frozen, or FREEZE_UNSUPPORTED on an SMP build,
-        where nothing was touched.
+        The number of tasks frozen, or FREEZE_UNSUPPORTED when nothing could
+        be frozen and nothing stays frozen.
 
     NOTES
         This is the machine-wide freeze of the power feature: the sleep
         transition stops every program through it, and the programs need
         no change. Private to this tree.
 
-        An SMP build refuses the call: parking a task that runs on another
-        CPU belongs to the SMP scheduler, which does not do it yet.
+        On an SMP build a task running on another CPU is marked and that
+        CPU rescheduled: the scheduler parks the task when it switches it
+        out. When the tasks do not all stop in time (one that stays in
+        Forbid() on another CPU), the ones already frozen are thawed and
+        the call returns FREEZE_UNSUPPORTED.
 
     SEE ALSO
         ThawTasks(), SetTaskFreezeExempt()
@@ -69,12 +73,8 @@
     D(bug("[Exec] FreezeTasks(0x%lx) from '%s'\n", flags, thisTask->tc_Node.ln_Name);)
 
 #if defined(__AROSEXEC_SMP__)
-    /*
-     * Refused on SMP builds: the SMP scheduler does not park a task that
-     * runs on another CPU, and the list walk below would need the task
-     * locks Signal() and SetTaskPri() take. Nothing is touched.
-     */
-    return FREEZE_UNSUPPORTED;
+    (void)task; (void)next; (void)frozen;
+    return exec_FreezeAllSMP();
 #else
     Disable();
 

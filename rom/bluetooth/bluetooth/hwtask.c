@@ -2431,7 +2431,11 @@ void bHandleChannel(LIBBASETYPEPTR BluetoothBase, struct BtHardware *bth, struct
                 bd->bd_AutoHold = FALSE;
                 btUnlockDevice(bd);
                 bth->bth_LEListsDirty = TRUE;
-                bStoreDevConfig(BluetoothBase, bd, TRUE);
+                if(!bStoreDevConfig(BluetoothBase, bd, TRUE)) {
+                    bd->bd_Flags &= ~BDFF_REGISTERED;
+                    bReplyChannel(BluetoothBase, bch, BTIOERR_NOTREADY, 0);
+                    return;
+                }
                 btAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname),
                                "Device %s registered.", bd->bd_Name);
                 btSendEvent(BEHMB_DEVICEREGISTERED, bd, NULL);
@@ -2448,12 +2452,18 @@ void bHandleChannel(LIBBASETYPEPTR BluetoothBase, struct BtHardware *bth, struct
             }
             btLockWriteDevice(bd);
             if(bd->bd_Flags & BDFF_REGISTERED) {
+                ULONG previous_flags=bd->bd_Flags;
                 bd->bd_Flags &= ~(BDFF_REGISTERED|BDFF_BONDED);
                 memset(&bd->bd_Keys, 0, sizeof(bd->bd_Keys));
                 bd->bd_CurAddrValid = FALSE;
                 btUnlockDevice(bd);
                 bth->bth_LEListsDirty = TRUE;
-                bStoreDevConfig(BluetoothBase, bd, TRUE);
+                if(!bStoreDevConfig(BluetoothBase, bd, TRUE)) {
+                    bd->bd_Flags=previous_flags;
+                    bLoadKeyringBond(BluetoothBase,bd);
+                    bReplyChannel(BluetoothBase, bch, BTIOERR_NOTREADY, 0);
+                    return;
+                }
                 btAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname),
                                "Device %s unregistered.", bd->bd_Name);
                 /* bindings are released by the event handler task */

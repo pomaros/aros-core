@@ -1,4 +1,6 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
+    Licensed under the AROS Public License, version 1.1.
     Copyright (C) 1995-2017, The AROS Development Team. All rights reserved.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
 */
@@ -122,12 +124,14 @@ static ULONG FindMode(ULONG width, ULONG height, ULONG depth, struct IntuitionBa
             { SA_Title,         (IPTR) "Workbench Screen" }, /* 6 */
             { SA_PubName,       (IPTR) "Workbench"        }, /* 7 */
             { SA_SharePens,            TRUE               }, /* 8 */
+            { SA_Scale,                SA_SCALE_MIN       }, /* 9 */
             { TAG_END,                 0                  }
         };
 
         if (!GetPrivIBase(IntuitionBase)->ScreenModePrefs)
             SetDisplayDefaults(IntuitionBase);
 
+        screenTags[9].ti_Data = ClampScreenScale(GetPrivIBase(IntuitionBase)->ScreenModePrefs->smp_Scale);
         width  = GetPrivIBase(IntuitionBase)->ScreenModePrefs->smp_Width;
         height = GetPrivIBase(IntuitionBase)->ScreenModePrefs->smp_Height;
         depth  = GetPrivIBase(IntuitionBase)->ScreenModePrefs->smp_Depth;

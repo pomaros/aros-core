@@ -1,0 +1,158 @@
+{
+  "result": "PASS",
+  "scope": "Native Apple AArch64 compilation only, no hardware execution",
+  "runtime_commit": "0236a083cb",
+  "final_build_session": 75086,
+  "final_build_exit": 0,
+  "final_probe_session": 78118,
+  "final_probe_exit": 0,
+  "shared_layout_guard": {
+    "/Users/jknipper/Source/aros-personal/aros-core-tiles-indicator-api/workbench/libs/workbench/tile.h": {
+      "mtime_ns": 1792102802854911688,
+      "sha256": "0eb464d06be91e67f3e973259c4ba9f8540250a189caac205ad14c980c0d28fb"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-tiles-indicator-api/bin/apple-aarch64/gen/workbench/system/Wanderer/appobjects.o": {
+      "mtime_ns": 1792105505107162124,
+      "sha256": "f32901a87bb50e4b70743c40beda76a9a5b04012efab98cce84be0b88114d733"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-tiles-indicator-api/bin/apple-aarch64/AROS/System/Wanderer/Wanderer": {
+      "mtime_ns": 1792105505797712097,
+      "sha256": "cbda1e8f6bd218ad812f2b0cb48258478c433aeb76b2428dfa5bb00fee2f910e"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-tiles-indicator-api/bin/apple-aarch64/gen/workbench/libs/workbench/workbench/tile.o": {
+      "mtime_ns": 1792103484136597328,
+      "sha256": "46c7b0b43f6c8a2e8a9e68a3ec0f3fa1a4b1a59595a05374d14d76b45c009192"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-tiles-indicator-api/bin/apple-aarch64/AROS/Libs/workbench.library": {
+      "mtime_ns": 1792103484414717695,
+      "sha256": "aa9fb5c24cbec5399945d84b8c8d1be652819e2ef2ff0b302b9c04ee23f47e7f"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-core-tiles-indicator-api/workbench/system/Wanderer/Classes/iconlist.c": {
+      "mtime_ns": 1792106142106514582,
+      "sha256": "f97af3e6957c57f678243bf5db1e8a4dd59485a7dfd0675bc2df7e364edb5fa1"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-tiles-indicator-api/bin/apple-aarch64/gen/workbench/system/Wanderer/Classes/IconList/iconlist.o": {
+      "mtime_ns": 1792106265182386195,
+      "sha256": "2aea9111629c23580927f3928af7b6fc145c109eab5bb203eb019943d4dd3164"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-tiles-indicator-api/bin/apple-aarch64/AROS/Classes/Zune/IconList.mui": {
+      "mtime_ns": 1792106265418399509,
+      "sha256": "5f98ea21c11a24d034a9f771105cb5c4b5ce7ceda5c614f3e3cc5543acba046e"
+    }
+  },
+  "binaries": {
+    "Libs/layers.library": {
+      "sha256": "4e3e3613bc90782232381ca48757f2b9d9cf71048f4bd679badbb8e3b98d8681",
+      "bytes": 50600,
+      "mtime_ns": 1792103324749825577
+    },
+    "Libs/intuition.library": {
+      "sha256": "bee545fae8cbae2d99d2cf009126dd49b8100a1d30ccfb11e0612886e66e6780",
+      "bytes": 360272,
+      "mtime_ns": 1792103409190366494
+    },
+    "Libs/workbench.library": {
+      "sha256": "aa9fb5c24cbec5399945d84b8c8d1be652819e2ef2ff0b302b9c04ee23f47e7f",
+      "bytes": 61472,
+      "mtime_ns": 1792103484414717695
+    },
+    "Classes/Zune/IconList.mui": {
+      "sha256": "5f98ea21c11a24d034a9f771105cb5c4b5ce7ceda5c614f3e3cc5543acba046e",
+      "bytes": 119488,
+      "mtime_ns": 1792106265418399509
+    },
+    "System/Wanderer/Wanderer": {
+      "sha256": "cbda1e8f6bd218ad812f2b0cb48258478c433aeb76b2428dfa5bb00fee2f910e",
+      "bytes": 380616,
+      "mtime_ns": 1792105505797712097
+    },
+    "System/Tiles": {
+      "sha256": "5fb65f2dc265f342a5fc08dbe2798b5f9c971a25c6f6876f1b7d9b3f3569947e",
+      "bytes": 134176,
+      "mtime_ns": 1792106262451147480
+    },
+    "System/TilesControl": {
+      "sha256": "8b6d91fd6f89e9d678d0b303c2a889920724ce3825403ec0d12bcc7fdb83c45b",
+      "bytes": 36368,
+      "mtime_ns": 1792103742445850410
+    },
+    "System/TilesControlSource": {
+      "sha256": "306fcc4e5f2c6abd8cd44b65dbc645ef86dfedd6932fb8ac80aa3fcecad17e9a",
+      "bytes": 30272,
+      "mtime_ns": 1792103818514172330
+    },
+    "Developer/Debug/Tests/workbench/appicon_control_probe": {
+      "sha256": "044ded34043e813c71259dab78a00674ef57339bafba869cfffad2845224db6b",
+      "bytes": 64008,
+      "mtime_ns": 1792104304325895633
+    }
+  },
+  "logs": {
+    "groups-layers-02.log": {
+      "sha256": "bcf0e6fa78615a04c8693181b5794fd62b67305b21765ba0adf8206b6c361989",
+      "bytes": 94075,
+      "mtime_ns": 1792103324754726358
+    },
+    "groups-intuition-02.log": {
+      "sha256": "595078b2bc00c22685b1f23a5f5e947a06982f28cf544457429af0ee18a7bff3",
+      "bytes": 60610,
+      "mtime_ns": 1792103409194616389
+    },
+    "groups-workbench-02.log": {
+      "sha256": "2cc4ba8a82711796dd5e13cbb2f15743e9158818c344732ea20e2328abaa8ed8",
+      "bytes": 9135,
+      "mtime_ns": 1792103484418069369
+    },
+    "groups-wanderer-02.log": {
+      "sha256": "42f326bee1a32019b9b3298ebb6693c6222094fa8458aff001f85f3a89784975",
+      "bytes": 12247,
+      "mtime_ns": 1792104187454605923
+    },
+    "groups-service-final-01.log": {
+      "sha256": "9cc426202cbf0c8482b204c9028941d32980c4d313e803cf619ec4d3f8951a48",
+      "bytes": 3611,
+      "mtime_ns": 1792104538492592376
+    },
+    "groups-wanderer-final-01.log": {
+      "sha256": "7e88e3d043257cf8e9f3e84e486685cff3684cb2c9d073394ddd5ef40704d48f",
+      "bytes": 11318,
+      "mtime_ns": 1792104637721343717
+    },
+    "groups-install-01.log": {
+      "sha256": "2ca7a6a3006abf2a0a324e6d3983051bc52f7d2379f2b3ae2bea06b7daf25bb7",
+      "bytes": 9850,
+      "mtime_ns": 1792103742454447161
+    },
+    "groups-clock-01.log": {
+      "sha256": "35bd3fbf4cedd447d092c8845c07882dba5b0d7809a942199db2ee34a502620d",
+      "bytes": 9873,
+      "mtime_ns": 1792103818525768360
+    },
+    "groups-probe-02.log": {
+      "sha256": "d6e32f92486f91044e648110c6a1e6a2beb4eaa020efa98a6c40889507393a31",
+      "bytes": 7827,
+      "mtime_ns": 1792104304331836174
+    },
+    "groups-wanderer-final-02.log": {
+      "sha256": "38cfeb0e85d35b1d92811c14206b5ee6b8add6dfd2dbec6704ba8a77b18af8da",
+      "bytes": 1478,
+      "mtime_ns": 1792105505804036954
+    },
+    "groups-service-geometry-01.log": {
+      "sha256": "a07fbbaddc5f3274fb135cdbcc47237e484b50712e0f389d35a1864b0759e0a6",
+      "bytes": 3422,
+      "mtime_ns": 1792106262457773137
+    },
+    "groups-iconlist-geometry-01.log": {
+      "sha256": "51fb9e2ee97fc14423fd300e21150497fd4d516ee0f81223f17beedafe25220e",
+      "bytes": 682,
+      "mtime_ns": 1792106265421928862
+    }
+  },
+  "duplicate_fix_build_session": 30916,
+  "duplicate_fix_build_exit": 0,
+  "final_geometry_build_session": 96893,
+  "final_geometry_build_exit": 0,
+  "geometry_build_session": 96893,
+  "geometry_build_exit": 0
+}

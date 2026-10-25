@@ -17,8 +17,11 @@
 #include <zune/prefseditor.h>
 #include <zune/prefswindow.h>
 
+#include <devices/timer.h>
+
 #include <proto/alib.h>
 #include <proto/exec.h>
+#include <proto/timer.h>
 #include <proto/dos.h>
 #include <proto/intuition.h>
 #include <proto/muimaster.h>
@@ -46,7 +49,7 @@ struct index_record
     char  name[96];
     char  help[96];
     char  section[48];
-    char  choices[512];
+    char  choices[1024];
 };
 
 /* A page is a group (kind 0) or a row (kind 1), by index in the catalogue. */
@@ -76,6 +79,7 @@ struct SettingsWindow_DATA
     struct index_record *swd_Index;          /* built at the first search */
     ULONG              swd_IndexCount;
     BOOL               swd_Indexed;
+    LONG               swd_CacheError;           /* of the last description written */
     char               swd_Query[CAT_NAME];
     Object            *swd_LevelCycle, *swd_ShowHidden, *swd_BootUndo;
     ULONG              swd_Level;                /* CAT_NOVICE..CAT_EXPERT */
@@ -245,7 +249,19 @@ static void filter_row(struct SettingsWindow_DATA *data, ULONG row)
         DoMethod(data->swd_Editor[row], MUIM_PrefsEditor_Reveal, ids[0]);
 }
 
-static void clear_results(struct SettingsWindow_DATA *data);
+static void clear_results(Object *self, struct SettingsWindow_DATA *data);
+
+/* Before a page or a card leaves the window, the focus leaves it: an
+ * active gadget detached and attached again would be activated twice and
+ * add its event handler twice, which loops the window's handler list. */
+static void release_focus(Object *self, struct SettingsWindow_DATA *data, Object *leaving)
+{
+    Object *active = (Object *)XGET(self, MUIA_Window_ActiveObject), *o;
+    for (o = active; o != NULL && o != leaving; o = (Object *)XGET(o, MUIA_Parent))
+        ;
+    if (active != NULL && o == leaving)
+        SET(self, MUIA_Window_ActiveObject, (IPTR)data->swd_Search);
+}
 
 static void show(Class *CLASS, Object *self, struct SettingsWindow_DATA *data,
     struct page_ref ref, BOOL record)
@@ -280,6 +296,8 @@ static void show(Class *CLASS, Object *self, struct SettingsWindow_DATA *data,
     }
     if (page != NULL && page != data->swd_Shown)
     {
+        if (data->swd_Shown != NULL)
+            release_focus(self, data, data->swd_Shown);
         DoMethod(data->swd_Content, MUIM_Group_InitChange);
         if (data->swd_Shown != NULL)
             DoMethod(data->swd_Content, OM_REMMEMBER, (IPTR)data->swd_Shown);
@@ -379,6 +397,31 @@ static void cache_directory(const char *path)
     if (lock) UnLock(lock);
 }
 
+/* The descriptions live in SYS:Prefs/Index/<language>; on a system volume
+ * that cannot be written (a read-only medium, the VM's image) they live in
+ * ENV:Settings/Index/<language> for the session. */
+static void index_root(char *directory, ULONG size, ULONG language)
+{
+    struct InfoData info;
+    BOOL writable = FALSE;
+    BPTR lock;
+
+    cache_directory("SYS:Prefs/Index");
+    if ((lock = Lock((CONST_STRPTR)"SYS:Prefs/Index", SHARED_LOCK)))
+    {
+        writable = Info(lock, &info) && info.id_DiskState == ID_VALIDATED;
+        UnLock(lock);
+    }
+    if (!writable)
+    {
+        cache_directory("ENV:Settings");
+        cache_directory("ENV:Settings/Index");
+    }
+    snprintf(directory, size, "%s/%08lx", writable ? "SYS:Prefs/Index" : "ENV:Settings/Index",
+        (unsigned long)language);
+    cache_directory(directory);
+}
+
 static BOOL cache_read(const char *path, struct index_header *key,
     struct SettingsWindow_DATA *data, ULONG row)
 {
@@ -409,25 +452,30 @@ out:
     return valid;
 }
 
-static void cache_write(const char *path, struct index_header *key,
+/* Returns 0, or the DOS error that kept the description from the disk. */
+static LONG cache_write(const char *path, struct index_header *key,
     const struct index_record *records)
 {
     char temporary[256];
     BPTR file;
     BOOL okay;
+    LONG error = 0;
     snprintf(temporary, sizeof(temporary), "%s.%lx.tmp", path, (unsigned long)FindTask(NULL));
     file = Open((CONST_STRPTR)temporary, MODE_NEWFILE);
-    if (!file) return;
+    if (!file) return IoErr();
     okay = Write(file, key, sizeof(*key)) == sizeof(*key) &&
         Write(file, (APTR)records, key->count * sizeof(*records)) == key->count * sizeof(*records);
-    if (!Close(file)) okay = FALSE;
-    if (okay)
+    if (!okay) error = IoErr();
+    if (!Close(file) && !error) error = IoErr();
+    if (!error)
     {
         /* A failed replace is harmless: the next process rebuilds the index. */
         DeleteFile((CONST_STRPTR)path);
-        Rename((CONST_STRPTR)temporary, (CONST_STRPTR)path);
+        if (!Rename((CONST_STRPTR)temporary, (CONST_STRPTR)path))
+            error = IoErr();
     }
     DeleteFile((CONST_STRPTR)temporary);
+    return error;
 }
 
 static void build_index(Class *CLASS, Object *self, struct SettingsWindow_DATA *data)
@@ -443,9 +491,7 @@ static void build_index(Class *CLASS, Object *self, struct SettingsWindow_DATA *
     data->swd_Indexed = TRUE;
     file_hash("ENV:SYS/locale.prefs", &language);
     file_hash("SYS:Classes/Zune/PrefsEditor.mcc", &api_hash);
-    snprintf(directory, sizeof(directory), "SYS:Prefs/Index/%08lx", (unsigned long)language);
-    cache_directory("SYS:Prefs/Index");
-    cache_directory(directory);
+    index_root(directory, sizeof(directory), language);
     memset(&hook, 0, sizeof(hook));
     hook.h_Entry = (HOOKFUNC)describe_hook;
     hook.h_Data = &context;
@@ -476,7 +522,9 @@ static void build_index(Class *CLASS, Object *self, struct SettingsWindow_DATA *
         if (editor != data->swd_Editor[r]) MUI_DisposeObject(editor);
         key.count = data->swd_IndexCount - start;
         if (cacheable && data->swd_IndexCount < INDEX_MAX)
-            cache_write(cachepath, &key, &data->swd_Index[start]);
+            data->swd_CacheError = cache_write(cachepath, &key, &data->swd_Index[start]);
+        else
+            data->swd_CacheError = cacheable ? ERROR_DISK_FULL : ERROR_OBJECT_NOT_FOUND;
     }
 }
 
@@ -526,14 +574,19 @@ static BOOL row_visible(struct SettingsWindow_DATA *data, ULONG row, const char 
 }
 
 /* A row above the level, shown because hidden rows are shown, is in
- * italics with its level after it. */
+ * italics with its level after it; under a query, a row with matching
+ * gadgets carries their count. */
 static void row_line(struct SettingsWindow_DATA *data, char *line, size_t size, ULONG row)
 {
     const struct cat_row *r = &data->swd_Catalogue->rows[row];
+    ULONG ids[64], n = row_matches(data, row, data->swd_Query, ids, 64);
+    char count[16] = "";
+    if (n > 0)
+        snprintf(count, sizeof(count), "  \33b%lu", (unsigned long)n);
     if ((ULONG)r->level > data->swd_Level)
-        snprintf(line, size, "   \33i%s (%s)", r->name, level_names[r->level]);
+        snprintf(line, size, "   \33i%s (%s)%s", r->name, level_names[r->level], count);
     else
-        snprintf(line, size, "   %s", r->name);
+        snprintf(line, size, "   %s%s", r->name, count);
 }
 
 /*** Sidebar ****************************************************************/
@@ -587,10 +640,11 @@ static void fill_sidebar(struct SettingsWindow_DATA *data, CONST_STRPTR query)
 
 /* Cards borrow their editors. Detach every editor before disposing a card,
  * so switching query/page never destroys edits and disposal has one owner. */
-static void clear_results(struct SettingsWindow_DATA *data)
+static void clear_results(Object *self, struct SettingsWindow_DATA *data)
 {
     ULONG r;
     if (!data->swd_ResultBody) return;
+    release_focus(self, data, data->swd_ResultBody);
     DoMethod(data->swd_ResultBody, MUIM_Group_InitChange);
     for (r = 0; r < CAT_ROWS; r++)
         if (data->swd_Card[r])
@@ -618,6 +672,8 @@ static void show_results(Class *CLASS, Object *self, struct SettingsWindow_DATA 
             MUIA_Scrollgroup_Contents, (IPTR)(data->swd_ResultBody = VirtgroupObject, End),
         End;
     if (!data->swd_Results) { data->swd_ResultBody = NULL; return; }
+    if (attaching && data->swd_Shown)
+        release_focus(self, data, data->swd_Shown);
     DoMethod(data->swd_Content, MUIM_Group_InitChange);
     if (attaching && data->swd_Shown)
         DoMethod(data->swd_Content, OM_REMMEMBER, (IPTR)data->swd_Shown);
@@ -783,20 +839,15 @@ static IPTR SettingsWindow__OM_NEW(Class *CLASS, Object *self, struct opSet *mes
         DoMethod(forward, MUIM_Notify, MUIA_Pressed, FALSE,
             (IPTR)self, 1, MUIM_SettingsWindow_Forward);
 
-        if (initial != NULL)
+        if (initial != NULL && (r = cat_find_row(catalogue, (const char *)initial)) != (ULONG)-1)
         {
-            for (r = 0; r < catalogue->row_count; r++)
-                if (Stricmp((CONST_STRPTR)catalogue->rows[r].class_name, initial) == 0)
-                {
-                    first.kind = 1;
-                    first.index = (UWORD)r;
-                    break;
-                }
-            if (first.kind == 0)
-                Printf("Settings: no page for class %s\n", (IPTR)initial);
+            first.kind = 1;
+            first.index = (UWORD)r;
         }
         if (first.kind == 1 || catalogue->group_count > 0)
             show(CLASS, self, data, first, TRUE);
+        if (initial != NULL && first.kind == 0)
+            SET(search, MUIA_String_Contents, (IPTR)initial);
     }
     return (IPTR)self;
 }
@@ -867,7 +918,7 @@ static IPTR SettingsWindow__MUIM_SettingsWindow_Search(Class *CLASS, Object *sel
         show_results(CLASS, self, data);
     else if (data->swd_Results && data->swd_Shown == data->swd_Results)
     {
-        clear_results(data);
+        clear_results(self, data);
         if (data->swd_HistoryCount)
             show(CLASS, self, data, data->swd_History[data->swd_HistoryAt], FALSE);
     }
@@ -1056,10 +1107,330 @@ static IPTR SettingsWindow__MUIM_SettingsWindow_Check(Class *CLASS, Object *self
             CHECKLINE("[SETCHECK] search opens %s\n", c->rows[first].name);
         }
     }
+    /* Page requests, as an indicator's "Settings..." entry makes them. */
+    {
+        static const char *pages[] = { "battery", "network", "sound", NULL };
+        for (i = 0; pages[i] != NULL; i++)
+        {
+            LONG row = cat_find_row(c, pages[i]);
+            BOOL shown;
+            DoMethod(self, MUIM_SettingsWindow_ShowPage, (IPTR)pages[i]);
+            shown = row >= 0 ? data->swd_Shown == data->swd_RowPage[row] && data->swd_Query[0] == 0
+                             : Stricmp((CONST_STRPTR)data->swd_Query, (CONST_STRPTR)pages[i]) == 0;
+            CHECKLINE("[SETCHECK] show page %s %s=%s\n", pages[i], row >= 0 ? "opens" : "searches",
+                shown ? "yes" : "no");
+            if (!shown)
+                failures++;
+        }
+        SET(data->swd_Search, MUIA_String_Contents, (IPTR)message->text);
+    }
     CHECKLINE("[SETCHECK] result=%s failures=%lu\n", failures == 0 ? "PASS" : "FAIL",
         (unsigned long)failures);
     Flush(Output());
     return failures;
+}
+
+/*** Search check ([SET9]) **************************************************/
+struct search_stats
+{
+    ULONG hidden, highlights, wrong, marks, tabs_counted, tabs_dimmed;
+};
+
+static BOOL object_is(Object *object, CONST_STRPTR name)
+{
+    Class *cl;
+    for (cl = OCLASS(object); cl != NULL; cl = cl->cl_Super)
+        if (cl->cl_ID != NULL && strcmp((const char *)cl->cl_ID, (const char *)name) == 0)
+            return TRUE;
+    return FALSE;
+}
+
+/* What Filter left in an editor: hidden sections, highlight ranges (each
+ * checked against the query's characters), marks and tab counts. */
+static void inspect(Object *object, const char *query, struct search_stats *s)
+{
+    struct List *children = NULL;
+    Object *child, *state;
+
+    if (XGET(object, MUIA_Area_SearchMark))
+        s->marks++;
+    if (object_is(object, MUIC_Text))
+    {
+        const struct MUI_TextHighlight *h = (const struct MUI_TextHighlight *)XGET(object, MUIA_Text_Highlight);
+        CONST_STRPTR text = (CONST_STRPTR)XGET(object, MUIA_Text_DisplayText);
+        ULONG i, k, len = strlen(query);
+        for (i = 0; h != NULL && i < h->count; i++)
+        {
+            const struct MUI_TextHighlightRange *r = &h->ranges[i];
+            BOOL right = text != NULL && r->length == len && r->start + len <= strlen((const char *)text);
+            for (k = 0; right && k < len; k++)
+                right = ToLower((UBYTE)text[r->start + k]) == ToLower((UBYTE)query[k]);
+            s->highlights++;
+            if (!right)
+                s->wrong++;
+        }
+    }
+    if (object_is(object, MUIC_Register))
+    {
+        const LONG *counts = (const LONG *)XGET(object, MUIA_Register_SearchCounts);
+        STRPTR *titles = (STRPTR *)XGET(object, MUIA_Register_Titles);
+        ULONG i;
+        for (i = 0; counts != NULL && titles != NULL && titles[i] != NULL; i++)
+        {
+            if (counts[i] > 0)
+                s->tabs_counted++;
+            else
+                s->tabs_dimmed++;
+        }
+    }
+    if (!GetAttr(MUIA_Group_ChildList, object, (IPTR *)&children) || children == NULL)
+        return;
+    state = (Object *)children->lh_Head;
+    while ((child = NextObject(&state)) != NULL)
+    {
+        if (XGET(child, MUIA_FrameTitle) && object_is(child, MUIC_Group) && !XGET(child, MUIA_ShowMe))
+            s->hidden++;
+        inspect(child, query, s);
+    }
+}
+
+static ULONG count_instantiated(struct SettingsWindow_DATA *data)
+{
+    ULONG r, n = 0;
+    for (r = 0; r < data->swd_Catalogue->row_count; r++)
+        if (data->swd_RowPage[r] != NULL)
+            n++;
+    return n;
+}
+
+static LONG row_of_class(struct SettingsWindow_DATA *data, const char *name)
+{
+    ULONG r;
+    for (r = 0; r < data->swd_Catalogue->row_count; r++)
+        if (strcmp(data->swd_Catalogue->rows[r].class_name, name) == 0)
+            return r;
+    return -1;
+}
+
+static ULONG elapsed_ms(struct Device *TimerBase, const struct timeval *a)
+{
+    struct timeval b;
+    GetSysTime(&b);
+    return (b.tv_secs - a->tv_secs) * 1000 + ((LONG)b.tv_micro - (LONG)a->tv_micro) / 1000;
+}
+
+/* The index directory of the current language, as build_index names it. */
+static void index_directory(char *directory, ULONG size)
+{
+    ULONG language = 0;
+    file_hash("ENV:SYS/locale.prefs", &language);
+    index_root(directory, size, language);
+}
+
+#define SEARCH_SAMPLES 64
+#define SEARCH_BOUND_MS 1000   /* the declared keystroke bound on this lane */
+
+static IPTR SettingsWindow__MUIM_SettingsWindow_SearchCheck(Class *CLASS, Object *self, Msg message)
+{
+    SETUP_INST_DATA;
+    static const char *queries[] = { "font", "AZERTY", "spacing", NULL };
+    const struct catalogue *c = data->swd_Catalogue;
+    struct MsgPort *port = CreateMsgPort();
+    struct timerequest *timer = port ? (struct timerequest *)CreateIORequest(port, sizeof(*timer)) : NULL;
+    struct Device *TimerBase = NULL;
+    ULONG samples[SEARCH_SAMPLES], sample_count = 0, failures = 0, q, r, i;
+    ULONG total_hidden = 0, total_highlights = 0, editors = 0, p99;
+    BOOL ever[CAT_ROWS], reveal = FALSE;
+    Object *shown_before = data->swd_Shown;
+    char directory[96], path[192];
+
+    if (!timer || OpenDevice("timer.device", UNIT_MICROHZ, &timer->tr_node, 0) != 0)
+    {
+        CHECKLINE("[SEARCHCHECK] timer.device unavailable\n");
+        if (timer) DeleteIORequest(&timer->tr_node);
+        if (port) DeleteMsgPort(port);
+        return 1;
+    }
+    TimerBase = timer->tr_node.io_Device;
+    memset(ever, 0, sizeof(ever));
+    CHECKLINE("[SEARCHCHECK] pages before the search=%lu\n", (unsigned long)count_instantiated(data));
+    if (count_instantiated(data) != 0)
+        failures++;
+
+    for (q = 0; queries[q] != NULL; q++)
+    {
+        const char *query = queries[q];
+        ULONG len = strlen(query), worst = 0, rows = 0, union_rows = 0;
+        struct search_stats st;
+        char prefix[CAT_NAME];
+
+        for (i = 1; i <= len; i++)
+        {
+            struct timeval start;
+            ULONG ms;
+            memcpy(prefix, query, i);
+            prefix[i] = 0;
+            GetSysTime(&start);
+            SET(data->swd_Search, MUIA_String_Contents, (IPTR)prefix);
+            ms = elapsed_ms(TimerBase, &start);
+            if (sample_count < SEARCH_SAMPLES)
+                samples[sample_count++] = ms;
+            if (ms > worst)
+                worst = ms;
+            for (r = 0; r < c->row_count; r++)
+                if (row_visible(data, r, prefix))
+                    ever[r] = TRUE;
+        }
+        memset(&st, 0, sizeof(st));
+        for (r = 0; r < c->row_count; r++)
+        {
+            if (ever[r])
+                union_rows++;
+            if (data->swd_Card[r] && XGET(data->swd_Card[r], MUIA_ShowMe))
+            {
+                rows++;
+                if (data->swd_Editor[r])
+                    inspect(data->swd_Editor[r], query, &st);
+            }
+        }
+        total_hidden += st.hidden;
+        total_highlights += st.highlights;
+        CHECKLINE("[SEARCHCHECK] query %s rows=%lu instantiated=%lu matched-ever=%lu hidden=%lu"
+            " highlights=%lu wrong=%lu marks=%lu tabs-counted=%lu tabs-dimmed=%lu slowest=%lums\n",
+            query, (unsigned long)rows, (unsigned long)count_instantiated(data),
+            (unsigned long)union_rows, (unsigned long)st.hidden, (unsigned long)st.highlights,
+            (unsigned long)st.wrong, (unsigned long)st.marks, (unsigned long)st.tabs_counted,
+            (unsigned long)st.tabs_dimmed, (unsigned long)worst);
+        /* Every page with a match is a card, no page without one was made,
+         * every highlight covers the query's characters. */
+        if (rows == 0 || st.marks == 0 || st.wrong != 0 || count_instantiated(data) != union_rows)
+            failures++;
+        if (strcmp(query, "AZERTY") == 0)
+        {
+            /* A match in a list's choices only: the keymap list is marked
+             * and its tab counted while the other tabs are dimmed. */
+            LONG input = row_of_class(data, "InputEditor.mcc");
+            struct search_stats in;
+            memset(&in, 0, sizeof(in));
+            if (input >= 0 && data->swd_Editor[input])
+                inspect(data->swd_Editor[input], query, &in);
+            CHECKLINE("[SEARCHCHECK] choice AZERTY input-row=%ld marks=%lu tabs-counted=%lu tabs-dimmed=%lu\n",
+                (long)input, (unsigned long)in.marks, (unsigned long)in.tabs_counted,
+                (unsigned long)in.tabs_dimmed);
+            if (input < 0 || in.marks == 0 || in.tabs_counted == 0 || in.tabs_dimmed == 0)
+                failures++;
+        }
+    }
+
+    /* Down and Up across pages, Enter reveals, Escape restores. */
+    SET(data->swd_Search, MUIA_String_Contents, (IPTR)"font");
+    SET(self, MUIA_Window_ActiveObject, (IPTR)data->swd_Search);
+    data->swd_ResultAt = -1;
+    {
+        LONG first_row = -1, crossed = 0, at_before;
+        BOOL down_ok = TRUE, up_ok, enter_ok, escape_ok;
+        for (i = 0; i < 64 && !crossed; i++)
+        {
+            down_ok &= DoMethod(self, MUIM_SettingsWindow_Step, SETTINGS_KEY_DOWN) != 0;
+            if (data->swd_ResultAt < 0)
+                break;
+            if (first_row < 0)
+                first_row = data->swd_Index[data->swd_ResultAt].row;
+            else if ((LONG)data->swd_Index[data->swd_ResultAt].row != first_row)
+                crossed = 1;
+        }
+        at_before = data->swd_ResultAt;
+        up_ok = DoMethod(self, MUIM_SettingsWindow_Step, SETTINGS_KEY_UP) != 0 &&
+            data->swd_ResultAt < at_before;
+        enter_ok = DoMethod(self, MUIM_SettingsWindow_Step, SETTINGS_KEY_ENTER) != 0 &&
+            (Object *)XGET(self, MUIA_Window_ActiveObject) != data->swd_Search;
+        escape_ok = DoMethod(self, MUIM_SettingsWindow_Step, SETTINGS_KEY_ESCAPE) != 0 &&
+            data->swd_Query[0] == 0 && data->swd_Shown == shown_before;
+        reveal = down_ok && crossed && up_ok && enter_ok && escape_ok;
+        CHECKLINE("[SEARCHCHECK] keys down=%s across-pages=%s up=%s enter=%s escape=%s\n",
+            down_ok ? "yes" : "no", crossed ? "yes" : "no", up_ok ? "yes" : "no",
+            enter_ok ? "yes" : "no", escape_ok ? "yes" : "no");
+        if (!reveal)
+            failures++;
+    }
+
+    /* A deleted description is rebuilt on the next search, and its matches
+     * return. */
+    {
+        LONG input = row_of_class(data, "InputEditor.mcc");
+        BPTR lock;
+        BOOL rebuilt = FALSE, found = FALSE;
+        BOOL existed = FALSE;
+        index_directory(directory, sizeof(directory));
+        snprintf(path, sizeof(path), "%s/InputEditor.mcc.idx", directory);
+        if ((lock = Lock((CONST_STRPTR)path, SHARED_LOCK)))
+        {
+            existed = TRUE;
+            UnLock(lock);
+        }
+        CHECKLINE("[SEARCHCHECK] cache before=%s records=%lu ioerr=%ld\n", existed ? "yes" : "no",
+            (unsigned long)data->swd_IndexCount, (long)IoErr());
+        DeleteFile((CONST_STRPTR)path);
+        FreeVec(data->swd_Index);
+        data->swd_Index = NULL;
+        data->swd_IndexCount = 0;
+        data->swd_Indexed = FALSE;
+        SET(data->swd_Search, MUIA_String_Contents, (IPTR)"AZERTY");
+        if ((lock = Lock((CONST_STRPTR)path, SHARED_LOCK)))
+        {
+            rebuilt = TRUE;
+            UnLock(lock);
+        }
+        found = input >= 0 && data->swd_Card[input] && XGET(data->swd_Card[input], MUIA_ShowMe);
+        CHECKLINE("[SEARCHCHECK] cache deleted=%s rebuilt=%s matches-return=%s write-status=%ld\n", path,
+            rebuilt ? "yes" : "no", found ? "yes" : "no", (long)data->swd_CacheError);
+        if (!rebuilt || !found)
+            failures++;
+        SET(data->swd_Search, MUIA_String_Contents, (IPTR)"");
+    }
+
+    for (r = 0; r < c->row_count; r++)
+        if (data->swd_Editor[r])
+            editors++;
+    /* p99 of the keystroke samples: with fewer than a hundred, the worst. */
+    for (i = 0, p99 = 0; i < sample_count; i++)
+        if (samples[i] > p99)
+            p99 = samples[i];
+    if (p99 > SEARCH_BOUND_MS)
+        failures++;
+    CHECKLINE("[SEARCHCHECK] keystrokes=%lu p99=%lums bound=%lums\n", (unsigned long)sample_count,
+        (unsigned long)p99, (unsigned long)SEARCH_BOUND_MS);
+    CHECKLINE("[SET9] %s search: editors=%lu default-api=%lu overridden=0 keystroke-p99=%lums"
+        " pages-instantiated=%lu sections-hidden=%lu highlights=%lu reveal=%d\n",
+        failures == 0 ? "PASS" : "FAIL", (unsigned long)editors, (unsigned long)editors,
+        (unsigned long)p99, (unsigned long)count_instantiated(data), (unsigned long)total_hidden,
+        (unsigned long)total_highlights, reveal ? 1 : 0);
+    CHECKLINE("[SEARCHCHECK] result=%s failures=%lu\n", failures == 0 ? "PASS" : "FAIL",
+        (unsigned long)failures);
+    CloseDevice(&timer->tr_node);
+    DeleteIORequest(&timer->tr_node);
+    DeleteMsgPort(port);
+    return failures;
+}
+
+static IPTR SettingsWindow__MUIM_SettingsWindow_ShowPage(Class *CLASS, Object *self,
+    struct MUIP_SettingsWindow_ShowPage *message)
+{
+    SETUP_INST_DATA;
+    LONG r = cat_find_row(data->swd_Catalogue, (const char *)message->page);
+
+    if (r >= 0)
+    {
+        if (data->swd_Query[0])
+            SET(data->swd_Search, MUIA_String_Contents, (IPTR)"");
+        DoMethod(self, MUIM_SettingsWindow_OpenRow, r);
+    }
+    else
+        SET(data->swd_Search, MUIA_String_Contents, (IPTR)message->page);
+    SET(self, MUIA_Window_Open, TRUE);
+    DoMethod(self, MUIM_Window_ToFront);
+    SET(self, MUIA_Window_Activate, TRUE);
+    return r >= 0;
 }
 
 static IPTR SettingsWindow__MUIM_SettingsWindow_SetSearch(Class *CLASS, Object *self,
@@ -1071,120 +1442,38 @@ static IPTR SettingsWindow__MUIM_SettingsWindow_SetSearch(Class *CLASS, Object *
 }
 
 /*** Settings as at boot ***************************************************/
-/* Copies one file over its ENV: counterpart when they differ; write to a
- * temporary name and take the old one, like settings.library. Returns 1
- * when the file was restored. */
-static ULONG restore_file(CONST_STRPTR from, CONST_STRPTR to)
-{
-    BPTR in, out;
-    UBYTE *a = NULL, *b = NULL;
-    LONG la = -1, lb = -1;
-    ULONG restored = 0;
-    char temporary[300];
-
-    if ((in = Open(from, MODE_OLDFILE)) == BNULL)
-        return 0;
-    Seek(in, 0, OFFSET_END);
-    la = Seek(in, 0, OFFSET_BEGINNING);
-    if (la >= 0 && la < 262144 && (a = AllocVec(la + 1, MEMF_ANY)) != NULL && Read(in, a, la) == la)
-    {
-        if ((out = Open(to, MODE_OLDFILE)) != BNULL)
-        {
-            Seek(out, 0, OFFSET_END);
-            lb = Seek(out, 0, OFFSET_BEGINNING);
-            if (lb == la && (b = AllocVec(lb + 1, MEMF_ANY)) != NULL && Read(out, b, lb) == lb &&
-                memcmp(a, b, la) == 0)
-                la = -2;            /* identical: nothing to do */
-            Close(out);
-        }
-        if (la >= 0)
-        {
-            snprintf(temporary, sizeof(temporary), "%s.new", (const char *)to);
-            if ((out = Open((CONST_STRPTR)temporary, MODE_NEWFILE)) != BNULL)
-            {
-                BOOL ok = Write(out, a, la) == la;
-                Close(out);
-                if (ok && (Rename((CONST_STRPTR)temporary, to) ||
-                    (IoErr() == ERROR_OBJECT_EXISTS && DeleteFile(to) && Rename((CONST_STRPTR)temporary, to))))
-                    restored = 1;
-                else
-                    DeleteFile((CONST_STRPTR)temporary);
-            }
-        }
-    }
-    if (a != NULL) FreeVec(a);
-    if (b != NULL) FreeVec(b);
-    Close(in);
-    return restored;
-}
-
-/* Walks the snapshot; dir is relative to it ("" at the top). */
-static ULONG restore_dir(CONST_STRPTR dir)
-{
-    char path[300], target[300];
-    struct FileInfoBlock *fib = AllocDosObject(DOS_FIB, NULL);
-    BPTR lock;
-    ULONG restored = 0;
-
-    snprintf(path, sizeof(path), "%s%s%s", SETTINGS_BOOT_SNAPSHOT, dir[0] ? "/" : "", (const char *)dir);
-    if (fib == NULL || (lock = Lock((CONST_STRPTR)path, SHARED_LOCK)) == BNULL)
-    {
-        if (fib != NULL) FreeDosObject(DOS_FIB, fib);
-        return 0;
-    }
-    if (Examine(lock, fib))
-        while (ExNext(lock, fib))
-        {
-            char child[300];
-            snprintf(child, sizeof(child), "%s%s%s", (const char *)dir, dir[0] ? "/" : "",
-                (const char *)fib->fib_FileName);
-            if (fib->fib_DirEntryType > 0)
-            {
-                BPTR made;
-                snprintf(target, sizeof(target), "ENV:%s", child);
-                if ((made = Lock((CONST_STRPTR)target, SHARED_LOCK)) == BNULL)
-                    made = CreateDir((CONST_STRPTR)target);
-                if (made != BNULL)
-                    UnLock(made);
-                restored += restore_dir((CONST_STRPTR)child);
-            }
-            else
-            {
-                snprintf(path, sizeof(path), "%s/%s", SETTINGS_BOOT_SNAPSHOT, child);
-                snprintf(target, sizeof(target), "ENV:%s", child);
-                restored += restore_file((CONST_STRPTR)path, (CONST_STRPTR)target);
-            }
-        }
-    UnLock(lock);
-    FreeDosObject(DOS_FIB, fib);
-    return restored;
-}
-
 static IPTR SettingsWindow__MUIM_SettingsWindow_BootUndo(Class *CLASS, Object *self, Msg message)
 {
     SETUP_INST_DATA;
-    static char text[96];
-    BPTR lock = Lock((CONST_STRPTR)SETTINGS_BOOT_SNAPSHOT, SHARED_LOCK);
-    ULONG restored, r;
-
-    if (lock == BNULL)
+    static char text[128];
+    char count[32], error[32];
+    ULONG r;
+    BPTR state = Lock((CONST_STRPTR)"RAM:Settings-Boot-State", SHARED_LOCK);
+    LONG result;
+    if (!state)
     {
-        /* Refused, with the reason: without the snapshot there is no boot
-         * state to go back to. */
         SET(data->swd_Description, MUIA_Text_Contents,
-            (IPTR)"No settings snapshot from this boot (" SETTINGS_BOOT_SNAPSHOT "): nothing to restore.");
+            (IPTR)"No complete settings capture from this boot: nothing to restore.");
         return FALSE;
     }
-    UnLock(lock);
-    restored = restore_dir((CONST_STRPTR)"");
-    /* Open pages show the restored values; IPrefs and the applications
-     * follow ENV: through their file notifications. */
+    UnLock(state);
+    result = SystemTags("C:SettingsBoot RESTORE QUIET", SYS_Asynch, FALSE, TAG_DONE);
+    if (result != RETURN_OK)
+    {
+        if (GetVar((CONST_STRPTR)"SettingsBootError", (STRPTR)error, sizeof(error), GVF_GLOBAL_ONLY) < 0)
+            strcpy(error, "unknown");
+        snprintf(text, sizeof(text), "Boot settings restore failed (DOS error %s); some files may have been restored.", error);
+        SET(data->swd_Description, MUIA_Text_Contents, (IPTR)text);
+        return FALSE;
+    }
     for (r = 0; r < data->swd_Catalogue->row_count; r++)
         if (data->swd_Editor[r] != NULL)
             DoMethod(data->swd_Editor[r], MUIM_PrefsEditor_ImportFromDirectory, (IPTR)"ENV:");
-    snprintf(text, sizeof(text), "Settings as at boot: %lu file(s) restored.", (unsigned long)restored);
+    if (GetVar("SettingsBootRestored", count, sizeof(count), GVF_GLOBAL_ONLY) < 0)
+        strcpy(count, "unknown");
+    snprintf(text, sizeof(text), "Settings as at boot: %s file(s) restored.", count);
     SET(data->swd_Description, MUIA_Text_Contents, (IPTR)text);
-    return restored;
+    return TRUE;
 }
 
 static IPTR SettingsWindow__MUIM_SettingsWindow_UpdateButtons(Class *CLASS, Object *self, Msg message)
@@ -1250,7 +1539,8 @@ static IPTR SettingsWindow__MUIM_PrefsWindow_Use(Class *CLASS, Object *self, Msg
 static IPTR SettingsWindow__MUIM_PrefsWindow_Cancel(Class *CLASS, Object *self, Msg message)
 {
     SETUP_INST_DATA;
-    each_editor(data, MUIM_PrefsEditor_Cancel, TRUE);
+    if (!each_editor(data, MUIM_PrefsEditor_Cancel, TRUE))
+        return FALSE;
     DoMethod(_app(self), MUIM_Application_ReturnID, MUIV_Application_ReturnID_Quit);
     return TRUE;
 }
@@ -1275,17 +1565,32 @@ static IPTR SettingsWindow__MUIM_HandleEvent(Class *CLASS, Object *self,
     struct MUIP_HandleEvent *message)
 {
     SETUP_INST_DATA;
-    ULONG i, code;
-    LONG first = -1, last = -1, chosen = -1;
+    ULONG code;
     if (!message->imsg || message->imsg->Class != IDCMP_RAWKEY || !data->swd_Query[0]) return 0;
     code = message->imsg->Code;
-    if (code == 0x45)
+    if (code != SETTINGS_KEY_ESCAPE &&
+        ((Object *)XGET(self, MUIA_Window_ActiveObject) != data->swd_Search ||
+         (code != SETTINGS_KEY_ENTER && code != SETTINGS_KEY_UP && code != SETTINGS_KEY_DOWN)))
+        return 0;
+    DoMethod(self, MUIM_SettingsWindow_Step, code);
+    return MUI_EventHandlerRC_Eat;
+}
+
+/* Escape closes the search; Down and Up move between the matches across
+ * pages, Enter reveals the current one and leaves the focus on it. */
+static IPTR SettingsWindow__MUIM_SettingsWindow_Step(Class *CLASS, Object *self,
+    struct MUIP_SettingsWindow_Step *message)
+{
+    SETUP_INST_DATA;
+    ULONG i, code = message->code;
+    LONG first = -1, last = -1, chosen = -1;
+    if (!data->swd_Query[0])
+        return FALSE;
+    if (code == SETTINGS_KEY_ESCAPE)
     {
         SET(data->swd_Search, MUIA_String_Contents, (IPTR)"");
-        return MUI_EventHandlerRC_Eat;
+        return TRUE;
     }
-    if ((Object *)XGET(self, MUIA_Window_ActiveObject) != data->swd_Search ||
-        (code != 0x44 && code != 0x4c && code != 0x4d)) return 0;
     for (i = 0; i < data->swd_IndexCount; i++)
     {
         const struct index_record *r = &data->swd_Index[i];
@@ -1293,19 +1598,21 @@ static IPTR SettingsWindow__MUIM_HandleEvent(Class *CLASS, Object *self,
             !record_matches(r, data->swd_Query)) continue;
         if (first < 0) first = i;
         last = i;
-        if (code == 0x4c && (LONG)i < data->swd_ResultAt) chosen = i;
-        if (code != 0x4c && chosen < 0 && (LONG)i > data->swd_ResultAt) chosen = i;
+        if (code == SETTINGS_KEY_UP && (LONG)i < data->swd_ResultAt) chosen = i;
+        if (code != SETTINGS_KEY_UP && chosen < 0 && (LONG)i > data->swd_ResultAt) chosen = i;
     }
-    if (code == 0x44) chosen = data->swd_ResultAt >= 0 ? data->swd_ResultAt : first;
-    if (chosen < 0) chosen = code == 0x4c ? last : first;
+    if (code == SETTINGS_KEY_ENTER) chosen = data->swd_ResultAt >= 0 ? data->swd_ResultAt : first;
+    if (chosen < 0) chosen = code == SETTINGS_KEY_UP ? last : first;
     if (chosen >= 0)
     {
         const struct index_record *r = &data->swd_Index[chosen];
+        BOOL revealed;
         data->swd_ResultAt = chosen;
-        DoMethod(data->swd_Editor[r->row], MUIM_PrefsEditor_Reveal, r->id);
-        if (code != 0x44) SET(self, MUIA_Window_ActiveObject, (IPTR)data->swd_Search);
+        revealed = DoMethod(data->swd_Editor[r->row], MUIM_PrefsEditor_Reveal, r->id);
+        if (code != SETTINGS_KEY_ENTER) SET(self, MUIA_Window_ActiveObject, (IPTR)data->swd_Search);
+        return revealed;
     }
-    return MUI_EventHandlerRC_Eat;
+    return FALSE;
 }
 
 static IPTR SettingsWindow__OM_DISPOSE(Class *CLASS, Object *self, Msg message)
@@ -1314,7 +1621,7 @@ static IPTR SettingsWindow__OM_DISPOSE(Class *CLASS, Object *self, Msg message)
     ULONG i;
 
     DoMethod(self, MUIM_Window_RemEventHandler, (IPTR)&data->swd_Keys);
-    clear_results(data);
+    clear_results(self, data);
     if (data->swd_Results && data->swd_Results != data->swd_Shown)
         MUI_DisposeObject(data->swd_Results);
     for (i = 0; i < CAT_GROUPS; i++)
@@ -1328,7 +1635,7 @@ static IPTR SettingsWindow__OM_DISPOSE(Class *CLASS, Object *self, Msg message)
     return DoSuperMethodA(CLASS, self, message);
 }
 
-ZUNE_CUSTOMCLASS_20
+ZUNE_CUSTOMCLASS_23
 (
     SettingsWindow, NULL, MUIC_PrefsWindow, NULL,
     OM_NEW,                              struct opSet *,
@@ -1346,6 +1653,9 @@ ZUNE_CUSTOMCLASS_20
     MUIM_SettingsWindow_BootUndo,        Msg,
     MUIM_SettingsWindow_Check,           struct MUIP_SettingsWindow_Check *,
     MUIM_SettingsWindow_SetSearch,       struct MUIP_SettingsWindow_SetSearch *,
+    MUIM_SettingsWindow_SearchCheck,     Msg,
+    MUIM_SettingsWindow_Step,            struct MUIP_SettingsWindow_Step *,
+    MUIM_SettingsWindow_ShowPage,        struct MUIP_SettingsWindow_ShowPage *,
     MUIM_PrefsWindow_Save,               Msg,
     MUIM_PrefsWindow_Use,                Msg,
     MUIM_PrefsWindow_Cancel,             Msg,

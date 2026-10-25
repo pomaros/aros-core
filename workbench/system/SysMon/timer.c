@@ -67,6 +67,7 @@ ULONG GetSIG_TIMER()
 
 struct SysMonModule timermodule =
 {
+    .Name = "timer",
     .Init = InitTimer,
     .DeInit = DeInitTimer,
 };

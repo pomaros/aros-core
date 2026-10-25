@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2011, The AROS Development Team. All rights reserved.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
 */
@@ -276,7 +277,7 @@ IPTR FrButtonClass__GM_HITTEST(Class *cl, struct Gadget * g, struct gpHitTest * 
     
     IPTR retval = GMR_GADGETHIT;
 
-    if (image)
+    if ((g->Flags & GFLG_GADGIMAGE) && image)
     {
         if (image->Depth == CUSTOMIMAGEDEPTH)
         {

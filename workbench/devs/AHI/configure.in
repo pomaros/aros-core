@@ -336,6 +336,14 @@ dnl Checks for Raspberry Pi (BCM2708) DMA resource driver support header files.
 AC_CHECK_HEADERS( proto/dma.h, [ AC_MSG_RESULT(DMA resource found - Raspberry Pi audio drivers will be built); HAVE_DMA_H=1],)
 AC_SUBST(HAVE_DMA_H)
 
+dnl An optional platform driver must supply both its source and SDK interface.
+AS_IF([test -f "$srcdir/Drivers/AppleMCA/Makefile.in"], [
+  AC_CHECK_HEADERS( aros/apple/audio.h, [ AC_MSG_RESULT(Apple audio core found - the Apple headphone driver will be built); HAVE_APPLE_AUDIO_H=1],)
+])
+AC_SUBST(HAVE_APPLE_AUDIO_H)
+AS_IF([test -n "$HAVE_APPLE_AUDIO_H"], [
+  AC_CONFIG_FILES([Drivers/AppleMCA/Makefile])
+])
 
 dnl Checks for AROS hosted driver header files.
 

@@ -11,9 +11,11 @@
 #include "stage2_loader.h"
 #include "stage2_prepare.h"
 #include "stage2_probe.h"
-#define STAGE2_EYES(checkpoint) ((void)(checkpoint))
-#define STAGE2_SPI_EYES() ((void)0)
-#define STAGE2_SPI_LISTEN() ((void)0)
+#include "stage2_platform.h"
+#define STAGE2_EYES(point) \
+    do { if (STAGE2_HAS_PLATFORM) \
+        STAGE2_PROVIDER(checkpoint)(boot_info, (point)); } while (0)
+
 
 #include <aros/apple/startup.h>
 #include <aros/apple/runtime.h>
@@ -86,9 +88,17 @@ static int boot_has_afs_handler(const struct AROSBootInfo *boot_info)
 static int coldstart_resident_order_valid(
     const struct AROSAppleColdStartProof *proof, int expect_afs)
 {
-    if (expect_afs || proof->pmgr_index != UINT32_MAX ||
-        proof->rtkit_index != UINT32_MAX)
+    if (proof->kernel_index != 0 || proof->exec_index != 1 ||
+        proof->expansion_index != 2)
         return 0;
+    if (STAGE2_HAS_PLATFORM) {
+        if (!STAGE2_PROVIDER(resident_order_valid)(proof)) return 0;
+        if (proof->resident_count < 54) return 1;
+    } else {
+        if (proof->pmgr_index != UINT32_MAX || proof->rtkit_index != UINT32_MAX)
+            return 0;
+        if (proof->resident_count < 54) {
+            if (expect_afs) return 0;
     return (proof->resident_count == 20 &&
             proof->kernel_index == 0 &&
             proof->exec_index == 1 &&
@@ -107,26 +117,34 @@ static int coldstart_resident_order_valid(
             proof->fat_index == 15 &&
             proof->appleboot_index == 16 &&
             proof->dos_index == 17 &&
-            proof->iffparse_index == 18) ||
-        (proof->resident_count == 58 &&
-            proof->kernel_index == 0 &&
-            proof->exec_index == 1 &&
-            proof->expansion_index == 2 &&
-            proof->utility_index == 3 &&
-            proof->aros_index == 5 &&
-            proof->bootloader_index == 6 &&
-            proof->task_index == 7 &&
-            proof->filesystem_index == 13 &&
-            proof->timer_index == 17 &&
-            proof->partition_index == 23 &&
-            proof->locale_index == 30 &&
-            proof->stdc_index == 31 &&
-            proof->stdcio_index == 32 &&
-            proof->posixc_index == 33 &&
-            proof->fat_index == 47 &&
-            proof->appleboot_index == 48 &&
-            proof->dos_index == 49 &&
-            proof->iffparse_index == 51);
+            proof->iffparse_index == 18);
+        }
+    }
+    /*
+     * The desktop family (54 residents and up): the kernel proof has already
+     * checked every position, name, priority and flag against its table, so
+     * this independent side checks that the recorded indices lie inside the
+     * list and keep the canonical order, whatever else the bundle carries.
+     */
+    if (proof->resident_count >= 54) {
+        return proof->utility_index < proof->aros_index &&
+            proof->aros_index < proof->bootloader_index &&
+            proof->bootloader_index < proof->task_index &&
+            proof->task_index < proof->filesystem_index &&
+            proof->filesystem_index < proof->timer_index &&
+            proof->timer_index < proof->partition_index &&
+            proof->partition_index < proof->locale_index &&
+            proof->stdc_index == proof->locale_index + 1U &&
+            proof->stdcio_index == proof->stdc_index + 1U &&
+            proof->posixc_index == proof->stdcio_index + 1U &&
+            proof->posixc_index < proof->fat_index &&
+            proof->appleboot_index == proof->fat_index + 1U +
+                (expect_afs ? 1U : 0U) &&
+            proof->appleboot_index < proof->dos_index &&
+            proof->dos_index < proof->iffparse_index &&
+            proof->iffparse_index < proof->resident_count;
+    }
+    return 0;
 }
 
 static int coldstart_wanderer_valid(
@@ -258,11 +276,8 @@ int AROSAppleStage2Main(
             AROS_APPLE_DEVICE_MAP_PROFILE_NONE &&
             (AROSAppleStage2KernelState.debug_uart_start != 0 ||
              AROSAppleStage2KernelState.debug_uart_end != 0)) ||
-        (AROSAppleStage2LastResult.device_map.profile ==
-            AROS_APPLE_DEVICE_MAP_PROFILE_APPLE &&
-            (console == NULL ||
-             AROSAppleStage2KernelState.debug_uart_start != console->start ||
-             AROSAppleStage2KernelState.debug_uart_end != console->end)))
+        (STAGE2_HAS_PLATFORM && !STAGE2_PROVIDER(console_valid)(
+            &AROSAppleStage2LastResult, &AROSAppleStage2KernelState, console)))
         return (int)AROS_APPLE_STAGE2_KERNEL_MEMORY;
     STAGE2_EYES(11);
 
@@ -308,9 +323,15 @@ int AROSAppleStage2Main(
      * loader-owned memory and is reclaimed once physical memory is imported,
      * so a later look finds a stale pointer rather than a tree.
      */
-    STAGE2_SPI_EYES();
 
     AROSAppleStage2Phase = STAGE2_PHASE_MEMORY_IMPORT;
+    if (STAGE2_HAS_PLATFORM && STAGE2_PROVIDER(has_import_observer)()) {
+        STAGE2_EYES(16);
+        if (!STAGE2_PROVIDER(before_import)(
+                boot_info, &AROSAppleStage2LastResult, memory_plan))
+            return (int)AROS_APPLE_STAGE2_OBSERVER;
+        STAGE2_EYES(17);
+    }
     STAGE2_EYES(18);
     kernel_status = ((enum AROSAppleKernelStartupStatus (*)(
         const struct AROSAppleTagItem *,
@@ -342,6 +363,14 @@ int AROSAppleStage2Main(
         AROSAppleStage2KernelState.total_free_bytes == 0)
         return (int)AROS_APPLE_STAGE2_MEMORY_IMPORT;
     STAGE2_EYES(19);
+    if (STAGE2_HAS_PLATFORM && STAGE2_PROVIDER(has_import_observer)()) {
+        STAGE2_EYES(20);
+        if (!STAGE2_PROVIDER(after_import)(
+                &AROSAppleStage2LastResult, memory_plan,
+                &AROSAppleStage2KernelState))
+            return (int)AROS_APPLE_STAGE2_OBSERVER;
+        STAGE2_EYES(21);
+    }
 
     user_stack = image_start +
         ((uintptr_t)__stage2_user_stack_start -
@@ -607,7 +636,6 @@ int AROSAppleStage2Main(
     AROSAppleStage2Phase = STAGE2_PHASE_READY;
     STAGE2_EYES(25);
     /* The desktop is up by here, so a person has a cue to type on. */
-    STAGE2_SPI_LISTEN();
     {
         uint64_t daif;
 

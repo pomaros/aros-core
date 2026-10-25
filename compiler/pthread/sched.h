@@ -23,7 +23,8 @@
 
 #include <time.h>
 
-#ifndef __AMIGA__
+#if !defined(__AMIGA__) && !defined(__AROS_SCHED_PARAM_DEFINED)
+#define __AROS_SCHED_PARAM_DEFINED
 struct sched_param
 {
     int sched_priority;

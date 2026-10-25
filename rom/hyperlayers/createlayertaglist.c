@@ -384,6 +384,27 @@ struct Layer *CreateLayerTagList(struct Layer_Info *li, struct BitMap *bm, LONG 
      */
     if (!IS_ROOTLAYER(l))
       _ShowLayer(l, LayersBase);
+
+    /*
+     * A hidden layer's VisibleRegion is what is visible at its depth, as
+     * ChangeLayerVisibility and the depth functions maintain it: a layer
+     * moved in front of this one takes it as its own. Its ClipRects were
+     * created above from the empty region, so all of them stay hidden.
+     */
+    if (!IS_VISIBLE(l) && !IS_ROOTLAYER(l))
+    {
+      struct Layer * _l = l->front;
+
+      while (_l && !IS_VISIBLE(_l))
+        _l = _l->front;
+      if (_l)
+      {
+        SetRegion(_l->VisibleRegion, l->VisibleRegion);
+        ClearRegionRegion(_l->visibleshape, l->VisibleRegion);
+      }
+      else
+        SetRegion(li->check_lp->shape, l->VisibleRegion);
+    }
   }
   else
     goto failexit;

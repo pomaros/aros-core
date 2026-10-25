@@ -2,6 +2,7 @@
 
 File: filesystem.c
 Author: Neil Cafferkey
+Copyright (C) 2026 John Knipper
 Copyright (C) 2001-2008 Neil Cafferkey
 Copyright (C) 2011-2026 The AROS Development Team
 
@@ -621,142 +622,149 @@ struct Object *GetObject(struct Handler *handler, struct Lock *lock,
 *
 */
 
+/* RAM is an early handler: zero data without a C-runtime dependency. */
+static VOID ClearData(UBYTE *buffer, UPINT length)
+{
+   while(length != 0)
+   {
+      *buffer++ = 0;
+      length--;
+   }
+}
+
+/* The logical position is independent of the cached data-block cursor.
+ * A NULL block is an unresolved cursor, including positions beyond EOF. */
+VOID SetOpeningPosition(struct Opening *opening, UPINT position)
+{
+   struct Object *file = opening->file;
+   struct Block *block;
+   UPINT remainder = position;
+
+   opening->pos = position;
+   if(position > file->length)
+   {
+      opening->block = NULL;
+      opening->block_pos = 0;
+      return;
+   }
+
+   if(position == file->length)
+   {
+      opening->block = GetLastBlock(file);
+      opening->block_pos = file->end_length;
+      return;
+   }
+   block = (APTR)file->elements.mlh_Head;
+   while(remainder > block->length)
+   {
+      remainder -= block->length;
+      block = (APTR)block->node.mln_Succ;
+   }
+   opening->block = block;
+   opening->block_pos = remainder;
+}
+
 PINT ChangeFileSize(struct Handler *handler, struct Opening *opening,
    PINT offset, LONG mode)
 {
-   PINT length, new_length, remainder, end_length, full_length;
-   UPINT diff, old_pos, block_count;
-   struct Block *block, *end_block;
-   struct Object *file;
-   LONG error = 0;
-   struct MinList *openings;
-   struct Opening *tail;
+   struct Object *file = opening->file;
+   struct Object staged;
+   struct Opening cursor, *other;
+   struct Block *block, *tail;
+   UPINT new_length, remaining, available, clear_length;
+   UPINT old_block_count = file->block_count;
+   BOOL shrinking;
 
-   /* Get origin */
-
-   file = opening->file;
-
-   if(mode == OFFSET_BEGINNING)
-      new_length = 0;
-   else if(mode == OFFSET_CURRENT)
-      new_length = opening->pos;
-   else
-      new_length = file->length;
-
-   /* Check new size won't be negative */
-
-   if(-offset > new_length)
-   {
-      SetIoErr(ERROR_SEEK_ERROR);
+   /* Only these two fields are read by the checked seek calculation. */
+   cursor.file = file;
+   cursor.pos = opening->pos;
+   if(CmdSeek(handler, &cursor, offset, mode) == (UPINT)-1)
       return -1;
-   }
+   new_length = cursor.pos;
+   shrinking = new_length < file->length;
 
-   /* Get new length */
-
-   new_length += offset;
-   length = file->length;
-   block_count = file->block_count;
-
-   /* Get full length (including any unused area in last block) */
-
-   old_pos = opening->pos;
-   full_length = length;
-   end_length = file->end_length;
-
-   block = GetLastBlock(file);
-   full_length += block->length - end_length;
-
-   /* Change size */
-
-   if(new_length > length)
+   if(new_length > file->length)
    {
-      /* Add the required number of data bytes */
+      block = GetLastBlock(file);
+      available = block->length - file->end_length;
+      remaining = new_length - file->length;
+      NewList((struct List *)&staged.elements);
+      staged.block_count = 0;
 
-      remainder = new_length - full_length;
-      end_length -= remainder;
-
-      while(remainder > 0)
+      /* Stage every allocation before exposing new bytes or changing any
+       * existing cursor, length, block list or volume accounting. */
+      if(remaining > available)
       {
-         block = AddDataBlock(handler, file, remainder);
-         if(block != NULL)
+         UPINT needed = remaining - available;
+         while(needed != 0)
          {
-            end_length = remainder;
-            remainder -= block->length;
+            tail = AddDataBlock(handler, &staged, needed);
+            if(tail == NULL)
+            {
+               LONG error = IoErr();
+               while((tail = (APTR)RemTail((struct List *)&staged.elements)) != NULL)
+                  FreeDataBlock(handler, &staged, tail);
+               SetIoErr(error);
+               return -1;
+            }
+            needed -= MIN(needed, tail->length);
          }
-         else
-            remainder = 0;
       }
 
-      /* Remove new blocks upon failure */
-
-      if(block == NULL)
+      clear_length = MIN(remaining, available);
+      ClearData((UBYTE *)block + sizeof(struct Block) + file->end_length,
+         clear_length);
+      file->end_length += clear_length;
+      remaining -= clear_length;
+      while((tail = (APTR)RemHead((struct List *)&staged.elements)) != NULL)
       {
-         new_length = -1;
-         error = IoErr();
-         ChangeFileSize(handler, opening, length, OFFSET_BEGINNING);
+         clear_length = MIN(remaining, tail->length);
+         ClearData((UBYTE *)tail + sizeof(struct Block), clear_length);
+         remaining -= clear_length;
+         AddTail((struct List *)&file->elements, (APTR)tail);
+         file->end_length = clear_length;
       }
-      else
-         file->end_length = end_length;
+      file->block_count += staged.block_count;
    }
-   else if(length != new_length)
+   else if(new_length < file->length)
    {
-      /* Remove surplus blocks from the file */
-
-      block = NULL;
-      while(full_length > new_length)
+      /* Retain the boundary block's capacity. Shrinking needs no allocation
+       * and does not copy bytes through a temporarily repositioned handle. */
+      block = (APTR)file->elements.mlh_Head;
+      remaining = new_length;
+      while(remaining > block->length)
       {
-         FreeDataBlock(handler, file, block);
-         block = (APTR)RemTail((APTR)&file->elements);
-         full_length -= block->length;
+         remaining -= block->length;
+         block = (APTR)block->node.mln_Succ;
       }
-      end_block = (APTR)file->elements.mlh_TailPred;
-      file->end_length = end_length = end_block->length;
-
-      /* Allocate a suitably sized end block and copy old data to it */
-
-      diff = new_length - full_length;
-      file->length = full_length;
-      CmdSeek(handler, opening, 0, OFFSET_END);
-
-      if(ChangeFileSize(handler, opening, diff, OFFSET_END) != -1)
+      while(GetLastBlock(file) != block)
       {
-         WriteData(handler, opening,
-            ((UBYTE *)block) + sizeof(struct Block), diff);
-         FreeDataBlock(handler, file, block);
+         tail = (APTR)RemTail((struct List *)&file->elements);
+         FreeDataBlock(handler, file, tail);
       }
-      else
-         AddTail((struct List *)&file->elements, (APTR)block);
+      file->end_length = remaining;
    }
 
-   /* Store new file size */
+   file->length = new_length;
+   if(file->block_count >= old_block_count)
+      handler->block_count += file->block_count - old_block_count;
+   else
+      handler->block_count -= old_block_count - file->block_count;
 
-   if(new_length != -1)
-      file->length = new_length;
-   handler->block_count += file->block_count - block_count;
-
-   /* Re-establish old seek position */
-
-   opening->pos = old_pos;
-
-   /* Adjust all openings for this file to ensure that their position isn't
-      past the new EOF and that their block and block position are valid */
-
-   openings = &file->lock->openings;
-   opening = (APTR)openings->mlh_Head;
-   tail = (APTR)&openings->mlh_Tail;
-
-   while(opening != tail)
+   /* Only shrink retires blocks. Growth leaves existing cursors valid;
+    * unresolved ones are rebased by their next read/write. Avoid walking
+    * every file block again on each packet of a streaming append. */
+   if(shrinking)
    {
-      if(opening->pos > file->length)
+      other = (APTR)file->lock->openings.mlh_Head;
+      while(other->node.mln_Succ != NULL)
       {
-         opening->pos = file->length;
+         SetOpeningPosition(other, other->pos);
+         other = (APTR)other->node.mln_Succ;
       }
-      CmdSeek(handler, opening, opening->pos, OFFSET_BEGINNING);
-      opening = (APTR)((struct MinNode *)opening)->mln_Succ;
    }
-
-   SetIoErr(error);
-   return new_length;
+   SetIoErr(0);
+   return (PINT)new_length;
 }
 
 
@@ -792,54 +800,39 @@ PINT ChangeFileSize(struct Handler *handler, struct Opening *opening,
 UPINT ReadData(struct Opening *opening, UBYTE *buffer, UPINT length)
 {
    struct Block *block;
-   UPINT block_pos, block_length, read_length = 0, remainder;
-   struct Object *file;
+   UPINT block_pos, block_length, read_length, remainder;
+   struct Object *file = opening->file;
 
-   /* Fill buffer until request has been fulfilled or EOF is reached */
-
+   /* Test before subtraction: a valid logical position may be beyond EOF. */
+   if(length == 0 || opening->pos >= file->length)
+   {
+      return 0;
+   }
+   if(opening->block == NULL)
+      SetOpeningPosition(opening, opening->pos);
    block = opening->block;
    block_pos = opening->block_pos;
-   file = opening->file;
-
-   remainder = file->length - opening->pos;
-   if(length > remainder)
-      length = remainder;
+   length = MIN(length, file->length - opening->pos);
    remainder = length;
-
    while(remainder > 0)
    {
-      /* Get number of remaining valid bytes in this block */
-
       block_length = block->length - block_pos;
-
-      /* Get next block if end of current one has been reached */
-
       if(block_length == 0)
       {
-         block = (struct Block *)((struct MinNode *)block)->mln_Succ;
+         block = (APTR)block->node.mln_Succ;
          block_pos = 0;
-         /*read_length = 0;*/
          block_length = block->length;
       }
-
-      /* Copy block contents into the caller's buffer */
-
       read_length = MIN(remainder, block_length);
-      CopyMem(((UBYTE *)block) + sizeof(struct Block) + block_pos, buffer,
+      CopyMem((UBYTE *)block + sizeof(struct Block) + block_pos, buffer,
          read_length);
       remainder -= read_length;
       buffer += read_length;
       block_pos += read_length;
    }
-
-   /* Record new position for next access */
-
    opening->block = block;
    opening->block_pos = block_pos;
    opening->pos += length;
-
-   /* Return number of bytes read */
-
    return length;
 }
 
@@ -876,81 +869,53 @@ UPINT ReadData(struct Opening *opening, UBYTE *buffer, UPINT length)
 UPINT WriteData(struct Handler *handler, struct Opening *opening,
    UBYTE *buffer, UPINT length)
 {
-   struct Block *block, *new_block, *end_block;
-   struct Object *file;
-   UPINT block_pos, block_length, write_length, remainder = length,
-      old_block_count, file_length, pos;
-   LONG error = 0;
+   struct Object *file = opening->file;
+   struct Block *block;
+   UPINT block_pos, block_length, write_length, remainder = length;
+   const UPINT max_position = ((UPINT)-1) >> 1;
 
-   file = opening->file;
-   file_length = file->length;
-   old_block_count = file->block_count;
-   pos = opening->pos;
+   if(length == 0)
+   {
+      SetIoErr(0);
+      return 0;
+   }
+   if(opening->pos > max_position || length > max_position - opening->pos)
+   {
+      SetIoErr(ERROR_SEEK_ERROR);
+      return (UPINT)-1;
+   }
+
+   /* Allocate and zero the whole new extent before transferring user data.
+    * A failed allocation leaves file bytes, cursors and accounting intact. */
+   if(opening->pos + length > file->length &&
+      ChangeFileSize(handler, opening, (PINT)(opening->pos + length),
+         OFFSET_BEGINNING) == -1)
+      return (UPINT)-1;
+   if(opening->block == NULL)
+      SetOpeningPosition(opening, opening->pos);
    block = opening->block;
    block_pos = opening->block_pos;
 
-   while(remainder > 0 && error == 0)
+   while(remainder > 0)
    {
       block_length = block->length - block_pos;
-
-      /* Move on to next block if end of current block reached */
-
       if(block_length == 0)
       {
-         block = (struct Block *)((struct MinNode *)block)->mln_Succ;
+         block = (APTR)block->node.mln_Succ;
          block_pos = 0;
-
-         /* Add another block to the file if required */
-
-         if(((struct MinNode *)block)->mln_Succ == NULL)
-         {
-            new_block = AddDataBlock(handler, opening->file, remainder);
-            if(new_block != NULL)
-            {
-               block = new_block;
-               file->end_length = 0;
-            }
-            else
-               error = IoErr();
-         }
-
          block_length = block->length;
       }
-
-      /* Write as much as possible to the current block */
-
-      if(error == 0)
-      {
-         write_length = MIN(remainder, block_length);
-         CopyMem(buffer,
-            ((UBYTE *)block) + sizeof(struct Block) + block_pos,
-            write_length);
-         remainder -= write_length;
-         buffer += write_length;
-         block_pos += write_length;
-      }
+      write_length = MIN(remainder, block_length);
+      CopyMem(buffer, (UBYTE *)block + sizeof(struct Block) + block_pos,
+         write_length);
+      remainder -= write_length;
+      buffer += write_length;
+      block_pos += write_length;
    }
-
-   /* Recalculate length of used portion of last block */
-
-   end_block = GetLastBlock(file);
-   if(block == end_block && block_pos >= file->end_length)
-      file->end_length = block_pos;
-
-   /* Update file size, volume size and current position */
-
-   length -= remainder;
-   pos += length;
-   if(pos > file_length)
-      file->length = pos;
-   opening->pos = pos;
+   opening->pos += length;
    opening->block = block;
    opening->block_pos = block_pos;
-   handler->block_count += file->block_count - old_block_count;
-
-   /* Return number of bytes written */
-
-   SetIoErr(error);
+   SetIoErr(0);
    return length;
 }
 

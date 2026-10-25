@@ -101,3 +101,4 @@ void Exec_SuicideSwitch(void)
     Enable();
     EXEC_FIQ_RESTORE(__fiq);
 }
+

@@ -13,6 +13,9 @@ FILES := \
     pubscreen \
     smallscreen \
     screenclass \
+    screenscale \
+    scalelegacy \
+    scalerefusal \
     screentest \
     scrollerwin 
 

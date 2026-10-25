@@ -4,6 +4,7 @@
 
 #include <aros/debug.h>
 
+#include <string.h>
 #include <proto/exec.h>
 #include <proto/utility.h>
 #include <proto/graphics.h>
@@ -15,7 +16,7 @@
 
     NAME */
 
-      void glASetRast(
+      BOOL glASetRast(
 
 /*  SYNOPSIS */
       GLAContext ctx,
@@ -32,12 +33,19 @@
 
     TAGS
 
-        GLA_Window - pointer to Window onto which scene is to be rendered. Must
-                     be provided.
+        GLA_Window - pointer to Window onto which scene is to be rendered.
+
+        GLA_Width, GLA_Height - without GLA_Window, GLA_Screen or
+                     GLA_RastPort: an offscreen target of that size, as
+                     glACreateContext makes one.
+
+        Without a target or a size the context keeps its target.
 
     RESULT
 
-        None
+        TRUE when the context draws to the new target. FALSE when the target
+        could not be prepared or its depth does not fit the context's visual;
+        the context then keeps its old target, untouched.
 
     BUGS
 
@@ -48,29 +56,29 @@
 *****************************************************************************/
 {
     struct mesa3dgl_context * _ctx = (struct mesa3dgl_context *)ctx;
+    struct mesa3dgl_drawable staged;
 
     D(bug("[MESA3DGL] %s()\n", __func__));
 
-    if (_ctx)
+    if (!_ctx)
+        return FALSE;
+    /* A window, rastport or screen, or an offscreen size; else nothing to do */
+    if (!GetTagData(GLA_Screen, 0, tagList) && !GetTagData(GLA_Window, 0, tagList) &&
+        !GetTagData(GLA_RastPort, 0, tagList) && !GetTagData(GLA_Width, 0, tagList) &&
+        !GetTagData(GLA_Height, 0, tagList))
+        return TRUE;
+
+    /* Prepared on the side; the old target goes only once the new one is
+     * complete and fits the visual. */
+    memset(&staged, 0, sizeof(staged));
+    if (!MESA3DGLPrepareTarget(&staged, tagList))
+        return FALSE;
+    if (!MESA3DGLVisualAccepts(&_ctx->stvis, staged.BitsPerPixel))
     {
-        /* Check if at least one of window, rastport or screen have been passed */
-        if ((GetTagData(GLA_Screen, 0, tagList) != 0) ||
-            (GetTagData(GLA_Window, 0, tagList) != 0) ||
-            (GetTagData(GLA_RastPort, 0, tagList) != 0))
-        {
-            /* If there already is visible_rp, free it */
-            if (_ctx->visible_rp)
-                FreeRastPort(_ctx->visible_rp);
-            /* Do standard rast port selection */
-            MESA3DGLSelectRastPort(_ctx, tagList);
-
-            /* Do standard initialization */
-            MESA3DGLStandardInit(_ctx, tagList);
-
-            /* TODO: what to do with visual and framebuffer, if BPP changes, we are in trouble */
-
-            /* After the new render target has been attached, invoke framebuffer recalculation */
-            MESA3DGLCheckAndUpdateBufferSize(_ctx);
-        }
+        MESA3DGLFreeTarget(&staged);
+        return FALSE;
     }
+    MESA3DGLCommitTarget(&_ctx->own, &staged);
+    MESA3DGLCheckAndUpdateBufferSize(&_ctx->own);
+    return TRUE;
 }

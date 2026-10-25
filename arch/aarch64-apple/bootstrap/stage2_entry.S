@@ -104,6 +104,12 @@ AROSAppleStage2Entry:
     tst     x8, #15
     b.ne    .Lstage2_fail
 
+#if defined(AROS_APPLE_STAGE2_FRAME_EYES)
+    mov     x0, x19
+    mov     x1, #1
+    mov     x2, #0
+    bl      AROSAppleStage2FrameEyesMark
+#endif
 
     /* The bundle allocation is zero-filled, but clear our NOLOAD state too. */
     adr     x9, __stage2_bss_start
@@ -124,6 +130,12 @@ AROSAppleStage2Entry:
     msr     VBAR_EL1, x8
     isb
 
+#if defined(AROS_APPLE_STAGE2_FRAME_EYES)
+    mov     x0, x19
+    mov     x1, #2
+    mov     x2, #0
+    bl      AROSAppleStage2FrameEyesMark
+#endif
 
     adr     x8, AROSAppleStage2Phase
     mov     x9, #STAGE2_PHASE_ENTRY
@@ -143,18 +155,46 @@ AROSAppleStage2Entry:
     cmp     x8, #0x300000
     b.ne    .Lstage2_fail
 
+#if defined(AROS_APPLE_STAGE2_FRAME_EYES)
+    mov     x0, x19
+    mov     x1, #3
+    mov     x2, #0
+    bl      AROSAppleStage2FrameEyesMark
+#endif
 
     mov     x0, x19
     adr     x1, __stage2_image_start
     adr     x2, __stage2_image_end
+#if defined(AROS_APPLE_STAGE2_A4_CACHE_QEMU_TEST)
+    bl      AROSAppleStage2A4CacheQEMUPrepare
+#elif defined(AROS_APPLE_STAGE2_A4_OBSERVER)
+    bl      AROSAppleStage2A4Main
+#else
     bl      AROSAppleStage2Main
+#endif
     mov     w20, w0
     cbnz    w20, .Lstage2_fail
 
 
+#if defined(AROS_APPLE_STAGE2_FRAME_EYES)
+    mov     x0, x19
+    mov     x1, #26
+    mov     x2, #3
+    bl      AROSAppleStage2FrameEyesMark
+#endif
 
+#if defined(AROS_APPLE_STAGE2_A4_CACHE_QEMU_TEST)
+    adr     x1, .Lstage2_a4_cache_begin_message
+    bl      .Lstage2_write0
+    bl      AROSAppleStage2A4RunCacheQEMU
+    cbz     w0, .Lstage2_fail
+#endif
 
 #if defined(AROS_APPLE_STAGE2_QEMU_TEST)
+#if defined(AROS_APPLE_STAGE2_A4_CACHE_QEMU_TEST)
+    adr     x1, .Lstage2_a4_cache_pass_message
+    bl      .Lstage2_write0
+#else
     adr     x1, .Lstage2_ownership_pass_message
     bl      .Lstage2_write0
     adr     x1, .Lstage2_memory_pass_message
@@ -241,6 +281,7 @@ AROSAppleStage2Entry:
     adr     x1, .Lstage2_pass_message
     bl      .Lstage2_write0
 #endif
+#endif
     b       .Lstage2_halt
 
 .Lstage2_fail:
@@ -248,8 +289,28 @@ AROSAppleStage2Entry:
      * diagnostics are emitted. This path terminates at the local park. */
     msr     daifset, #0xf
     isb
+#if defined(AROS_APPLE_STAGE2_FRAME_EYES)
+    mov     x0, x20
+    adrp    x8, AROSAppleStage2EyesCheckpoint
+    add     x8, x8, :lo12:AROSAppleStage2EyesCheckpoint
+    ldr     x1, [x8]
+    adr     x8, AROSAppleStage2Phase
+    ldr     x2, [x8]
+    bl      AROSAppleStage2FrameEyesTraceFailure
+
+    /* A red/orange display reports the actual stage-two status, not the
+     * checkpoint that preceded the failed operation. */
+    mov     x0, x19
+    uxtw    x1, w20
+    mov     x2, #1
+    bl      AROSAppleStage2FrameEyesMark
+#endif
 #if defined(AROS_APPLE_STAGE2_QEMU_TEST)
+#if defined(AROS_APPLE_STAGE2_A4_CACHE_QEMU_TEST)
+    adr     x1, .Lstage2_a4_cache_fail_message
+#else
     adr     x1, .Lstage2_fail_message
+#endif
     bl      .Lstage2_write0
     adr     x1, .Lstage2_failure_daif_label
     bl      .Lstage2_write0
@@ -521,7 +582,49 @@ AROSAppleStage2Entry:
     subs    x2, x2, #1
     b.ne    .Lstage2_exception_copy
 
+#if defined(AROS_APPLE_STAGE2_FRAME_EYES)
+    ldr     x0, [sp, #STAGE2_EXCEPTION_VECTOR]
+    ldr     x1, [sp, #STAGE2_EXCEPTION_ESR]
+    ldr     x2, [sp, #STAGE2_EXCEPTION_FAR]
+    ldr     x3, [sp, #STAGE2_EXCEPTION_ELR]
+    bl      AROSAppleStage2FrameEyesTraceException
 
+    /* A magenta display reports ESR_EL1.EC (bits 31:26). */
+    mov     x0, x19
+    ldr     x1, [sp, #STAGE2_EXCEPTION_ESR]
+    lsr     x1, x1, #26
+    and     x1, x1, #0x3f
+    mov     x2, #2
+    bl      AROSAppleStage2FrameEyesMark
+#endif
+
+#if defined(AROS_APPLE_STAGE2_A4_OBSERVER)
+    mov     x0, sp
+    bl      AROSAppleStage2A4HandleException
+    cbz     w0, .Lstage2_exception_halt
+    ldr     x16, [sp, #STAGE2_EXCEPTION_ELR]
+    msr     ELR_EL1, x16
+    ldr     x16, [sp, #STAGE2_EXCEPTION_SPSR]
+    msr     SPSR_EL1, x16
+    ldp     x0, x1, [sp, #0]
+    ldp     x2, x3, [sp, #16]
+    ldp     x4, x5, [sp, #32]
+    ldp     x6, x7, [sp, #48]
+    ldp     x8, x9, [sp, #64]
+    ldp     x10, x11, [sp, #80]
+    ldp     x12, x13, [sp, #96]
+    ldp     x14, x15, [sp, #112]
+    ldp     x16, x17, [sp, #128]
+    ldp     x18, x19, [sp, #144]
+    ldp     x20, x21, [sp, #160]
+    ldp     x22, x23, [sp, #176]
+    ldp     x24, x25, [sp, #192]
+    ldp     x26, x27, [sp, #208]
+    ldp     x28, x29, [sp, #224]
+    ldr     x30, [sp, #STAGE2_EXCEPTION_X30]
+    add     sp, sp, #STAGE2_EXCEPTION_FRAME_SIZE
+    eret
+#endif
 
 #if defined(AROS_APPLE_STAGE2_QEMU_TEST)
     adr     x1, .Lstage2_exception_message
@@ -587,6 +690,10 @@ AROSAppleStage2Entry:
     b       .Lstage2_exception_halt
 
 #if defined(AROS_APPLE_STAGE2_QEMU_TEST)
+#if defined(AROS_APPLE_STAGE2_PHYSICAL_CONSOLE)
+.Lstage2_write0:
+    b       AROSNativeStage2Write0
+#elif defined(AROS_VM_GUEST) && AROS_VM_GUEST
 .Lstage2_write0:
     stp     x29, x30, [sp, #-160]!
     mov     x29, sp
@@ -612,6 +719,13 @@ AROSAppleStage2Entry:
     ldr     x18, [sp, #144]
     ldp     x29, x30, [sp], #160
     ret
+#else
+/* Native QEMU qualification retains the semihost observation contract. */
+.Lstage2_write0:
+    mov     x0, #4
+    hlt     #0xf000
+    ret
+#endif
 
 /* Write x0 as a fixed-width hexadecimal line using the semihost console. */
 .Lstage2_write_hex:
@@ -632,6 +746,14 @@ AROSAppleStage2Entry:
 
 #if defined(AROS_APPLE_STAGE2_QEMU_TEST)
     .section .rodata,"a"
+#if defined(AROS_APPLE_STAGE2_A4_CACHE_QEMU_TEST)
+.Lstage2_a4_cache_begin_message:
+    .asciz  "[A4CQ] BEGIN after shared prepare\n"
+.Lstage2_a4_cache_pass_message:
+    .asciz  "[A4CQ] owned-page W^X + D/I cache + TLB PASS\n"
+.Lstage2_a4_cache_fail_message:
+    .asciz  "[A4CQ] FAIL: owned-page W^X/cache/TLB diagnostic\n"
+#endif
 .Lstage2_memory_pass_message:
     .asciz  "[B2M] conventional-memory probe PASS\n"
 .Lstage2_mmu_pass_message:

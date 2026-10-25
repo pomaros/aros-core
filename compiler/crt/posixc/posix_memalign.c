@@ -1,10 +1,11 @@
 /*
-    Copyright (C) 1995-2012, The AROS Development Team. All rights reserved.
+    Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
 
     POSIX.1-2008 function posix_memalign().
 */
 
 #include <errno.h>
+#include <stdint.h>
 
 /*****************************************************************************
 
@@ -38,7 +39,7 @@
         Memory allocated by posix_memalign() should be freed with free(). If
         not, it will be freed when the program terminates.
 
-        If an error occurs, errno will not be set.
+        errno is preserved. On failure, *memptr is unchanged.
 
     EXAMPLE
 
@@ -52,15 +53,22 @@
 
 ******************************************************************************/
 {
-    int ret = 0, old_errno;
+    int old_errno = errno;
+    void *allocation;
+    size_t rounded_size;
 
-    old_errno = errno;
+    if (alignment == 0 || (alignment & (alignment - 1)) != 0 ||
+        alignment % sizeof(void *) != 0)
+        return EINVAL;
 
-    *memptr = aligned_alloc(alignment, size);
-    if (!*memptr)
-        ret = errno;
-
+    /* Unlike C11 aligned_alloc(), POSIX permits any requested size. */
+    if (size > SIZE_MAX - (alignment - 1))
+        return ENOMEM;
+    rounded_size = (size + alignment - 1) & ~(alignment - 1);
+    allocation = aligned_alloc(alignment, rounded_size);
     errno = old_errno;
-
-    return ret;
+    if (allocation == NULL)
+        return ENOMEM;
+    *memptr = allocation;
+    return 0;
 }

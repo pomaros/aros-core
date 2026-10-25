@@ -1,0 +1,32 @@
+# Copyright (C) 2026 John KNIPPER <code@jkn.me>
+# Licensed under the AROS Public License (APL) Version 1.1
+#
+# The Rust half of rusttest.resource: a no_std staticlib that the module's
+# C shell (rusttest_resource.c) links and calls. Built by the mmakefile with
+# -Zbuild-std=core,alloc for ../../aarch64-unknown-aros.json.
+
+[package]
+name = "rusttest"
+version = "1.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["staticlib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = 2
+lto = true
+codegen-units = 1
+debug = false
+
+# One object per builtin, as the standard library's own build does: the
+# module link then pulls in only the builtins the Rust code references
+# (memcpy, memmove) instead of all of compiler_builtins.
+[profile.release.package.compiler_builtins]
+codegen-units = 10000

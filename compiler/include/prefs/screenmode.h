@@ -23,7 +23,8 @@
 
 struct ScreenModePrefs
 {
-    ULONG smp_Reserved[4];
+    ULONG smp_Scale;             /* percent, 100..400 in steps of 25 */
+    ULONG smp_Reserved[3];
     ULONG smp_DisplayID;
     UWORD smp_Width;
     UWORD smp_Height;

@@ -10,6 +10,7 @@
 #include <errno.h>
 
 #include "__upath.h"
+#include "__utimens.h"
 
 /*****************************************************************************
 
@@ -38,8 +39,9 @@
         variable errno is set.
 
     NOTES
-        The timeval structure has microsecond resolution, but in reality
-        this function has time resolution of 1 tick.
+        The timeval structure has microsecond resolution; the date is
+        stored with a resolution of 1 tick (1/50 s). A soft link is
+        followed. stat() reads the stored date back.
 
     EXAMPLE
 
@@ -48,12 +50,13 @@
         and only modification time of the file is set.
 
     SEE ALSO
-        utime()
+        utime(), utimensat()
 
     INTERNALS
 
 ******************************************************************************/
 {
+    struct timespec ts[2];
     struct DateStamp ds;
 
     if (!file) /*safety check */
@@ -62,25 +65,27 @@
         return -1;
     }
 
+    if (tvp != NULL)
+    {
+        int i;
+
+        for (i = 0; i < 2; i++)
+        {
+            if (tvp[i].tv_usec < 0 || tvp[i].tv_usec >= 1000000)
+            {
+                errno = EINVAL;
+                return -1;
+            }
+            ts[i].tv_sec  = tvp[i].tv_sec;
+            ts[i].tv_nsec = tvp[i].tv_usec * 1000L;
+        }
+    }
+    if (__utimens_date(tvp != NULL ? ts : NULL, &ds) < 0)
+        return -1;
+
     file = __path_u2a(file);
     if (!file)
         return -1;
 
-    if(tvp != NULL)
-    {
-        ULONG t = (ULONG)tvp[1].tv_sec - 2922 * 1440 * 60;
-
-        ds.ds_Days   = t / (60*60*24);
-        ds.ds_Minute = (t / 60) % (60*24);
-        ds.ds_Tick   = (t % 60) * TICKS_PER_SECOND;
-    }
-    else
-        DateStamp(&ds);
-
-    if (SetFileDate(file, &ds))
-        return 0;
-    else
-        errno = __stdc_ioerr2errno(IoErr());
-
-    return -1;
+    return __utimens_set(file, &ds, 1);
 }

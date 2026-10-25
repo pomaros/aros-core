@@ -67,9 +67,8 @@ static void publish_changes(struct SettingsBase *SettingsBase, struct SettingsWa
 
     if (fresh == NULL)
         return;
-    /* An absent file is the window of an atomic replace (delete, then
-     * rename on handlers that refuse a rename over an existing name); the
-     * next notification brings the new file. Publish nothing meanwhile. */
+    /* An unreadable file contributes no new values. A subsequent
+     * notification retries the complete file image. */
     if (!snapshot(SettingsBase, watch, fresh)) {
         FreeVec(fresh);
         return;

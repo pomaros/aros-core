@@ -56,6 +56,7 @@ VOID UpdateMemoryInformation(struct SysMonData * smdata)
 
 struct SysMonModule memorymodule =
 {
+    .Name = "memory",
     .Init = InitMemory,
     .DeInit = DeInitMemory,
 };

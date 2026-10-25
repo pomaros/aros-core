@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * Licensed under the AROS Public License (APL) Version 1.1. */
 /*
     Copyright (C) 2002-2015, The AROS Development Team. All rights reserved.
 */
@@ -591,7 +593,8 @@ const struct __MUIBuiltinClass _MUI_Menuitem_desc =
     MUIC_Menuitem,
     MUIC_Family,
     sizeof(struct MUI_MenuitemData),
-    (void *) Menuitem_Dispatcher
+    (void *) Menuitem_Dispatcher,
+    MUI_CLASS_SCALE_AWARE
 };
 
 /*
@@ -602,7 +605,8 @@ const struct __MUIBuiltinClass _MUI_Menu_desc =
     MUIC_Menu,
     MUIC_Family,
     sizeof(struct MUI_MenuitemData),
-    (void *) Menu_Dispatcher
+    (void *) Menu_Dispatcher,
+    MUI_CLASS_SCALE_AWARE
 };
 
 /*
@@ -613,5 +617,6 @@ const struct __MUIBuiltinClass _MUI_Menustrip_desc =
     MUIC_Menustrip,
     MUIC_Family,
     sizeof(struct MUI_MenuitemData),
-    (void *) Menustrip_Dispatcher
+    (void *) Menustrip_Dispatcher,
+    MUI_CLASS_SCALE_AWARE
 };

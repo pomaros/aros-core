@@ -67,7 +67,9 @@ typedef LONG PINT;
 
 #define MAX_NAME_SIZE (sizeof(((struct FileInfoBlock *)NULL)->fib_FileName))
 #define MIN_BLOCK_SIZE 64
-#define MAX_BLOCK_SIZE 0x8000
+/* A data block with its pool overhead fits a 1 MB puddle: a file of a few GB
+ * is a few thousand blocks, not a hundred thousand. */
+#define MAX_BLOCK_SIZE (0x100000 - 0x400)
 #define CLEAR_PUDDLE_SIZE (8 * 1024)
 #define CLEAR_PUDDLE_THRESH (4 * 1024)
 #define MUDDY_PUDDLE_SIZE (16 * 1024)
@@ -82,7 +84,7 @@ typedef LONG PINT;
 struct Block
 {
    struct MinNode node;
-   UWORD length;            /* number of data bytes */
+   UPINT length;            /* number of data bytes */
 };
 
 
@@ -98,7 +100,7 @@ struct Lock
 struct Object
 {
    struct Node node;
-   UWORD end_length;        /* number of valid bytes in last data block */
+   UPINT end_length;        /* number of valid bytes in last data block (a block holds up to MAX_BLOCK_SIZE) */
    struct MinList elements;
    UPINT length;            /* logical length in bytes for a file */
    UPINT block_count;       /* number of memory blocks */

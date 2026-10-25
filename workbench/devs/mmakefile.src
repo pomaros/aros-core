@@ -43,7 +43,7 @@ workbench-devs-mountlist : $(AROS_DEVS)/Mountlist workbench-devs-dosdrivers
 $(AROS_DEVS)/Mountlist : Mountlist
 	@$(CP) $< $@
 
-DOSDRIVERFILES := DEBUG PAR PIPE PRT SER SER0 SER1 SPEAK
+DOSDRIVERFILES := DEBUG PAR PIPE PRT RANDOM SER SER0 SER1 SPEAK ZERO
 
 %copy_files_q mmake=workbench-devs-dosdrivers files="$(DOSDRIVERFILES)" \
     src=DOSDrivers dst=$(AROS_DEVS)/DOSDrivers

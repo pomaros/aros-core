@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * Licensed under the AROS Public License (APL) Version 1.1. */
 /*
     Copyright  2002-2012, The AROS Development Team. All rights reserved.
 */
@@ -376,13 +378,13 @@ IPTR Prop__MUIM_AskMinMax(struct IClass *cl, Object *obj,
      */
     DoSuperMethodA(cl, obj, (Msg) msg);
 
-    msg->MinMaxInfo->MinWidth += data->minwidth;
-    msg->MinMaxInfo->DefWidth += data->defwidth;
-    msg->MinMaxInfo->MaxWidth = data->maxwidth;
+    msg->MinMaxInfo->MinWidth += zune_scale(obj, data->minwidth);
+    msg->MinMaxInfo->DefWidth += zune_scale(obj, data->defwidth);
+    msg->MinMaxInfo->MaxWidth = zune_scale(obj, data->maxwidth);
 
-    msg->MinMaxInfo->MinHeight += data->minheight;
-    msg->MinMaxInfo->DefHeight += data->defheight;
-    msg->MinMaxInfo->MaxHeight = data->maxheight;
+    msg->MinMaxInfo->MinHeight += zune_scale(obj, data->minheight);
+    msg->MinMaxInfo->DefHeight += zune_scale(obj, data->defheight);
+    msg->MinMaxInfo->MaxHeight = zune_scale(obj, data->maxheight);
 
     D(bug("Prop %p minheigh=%d\n", obj, msg->MinMaxInfo->MinHeight));
 
@@ -1182,6 +1184,9 @@ BOOPSI_DISPATCHER(IPTR, Prop_Dispatcher, cl, obj, msg)
 {
     switch (msg->MethodID)
     {
+    case MUIM_ScaleContextSupported:
+        return DoSuperMethodA(cl, obj, msg) &&
+            muiGlobalInfo(obj)->mgi_Prefs->scrollbar_type != SCROLLBAR_TYPE_CUSTOM;
     case OM_NEW:
         return Prop__OM_NEW(cl, obj, (struct opSet *)msg);
     case OM_DISPOSE:
@@ -1220,5 +1225,6 @@ const struct __MUIBuiltinClass _MUI_Prop_desc =
     MUIC_Prop,
     MUIC_Area,
     sizeof(struct Prop_DATA),
-    (void *) Prop_Dispatcher
+    (void *) Prop_Dispatcher,
+    MUI_CLASS_SCALE_AWARE
 };

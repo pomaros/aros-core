@@ -19,6 +19,9 @@
 #include <proto/utility.h>
 #include <proto/btclass.h>
 #include <proto/timer.h>
+#include <libraries/keyring.h>
+#define __KEYRING_NOLIBBASE__
+#include <proto/keyring.h>
 
 #include <string.h>
 #include <btcore/buffer.h>
@@ -30,6 +33,44 @@
 #define BtClsBase bc->bc_ClassBase
 #define DOSBase BluetoothBase->bt_DosBase
 #define TimerBase BluetoothBase->bt_TimerIOReq.tr_node.io_Device
+
+/* Bond bytes are private to the Bluetooth service, outside the IFF prefs. */
+static LONG bKeyringBond(LIBBASETYPEPTR BluetoothBase, struct BtDevice *bd,
+                        unsigned operation)
+{
+    struct Library *KeyringBase = OpenLibrary(KEYRINGNAME, 1);
+    APTR context;
+    LONG result = KR_ERR_CONTEXT;
+    ULONG size = sizeof(bd->bd_Keys);
+    if (!KeyringBase) return result;
+    context = KR_ServiceOpen(BluetoothBase, KR_SERVICE_BLUETOOTH);
+    if (context) {
+        if (operation == 0) {
+            result = KR_ServiceFetch(context, bd->bd_IDString, &bd->bd_Keys, &size);
+            if (result == KR_SUCCESS && (size != sizeof(bd->bd_Keys) || bd->bd_Keys.bkc_Version != 1)) result = KR_ERR_FORMAT;
+        } else if (operation == 1) {
+            bd->bd_Keys.bkc_Version=1;
+            result = KR_ServiceStore(context, bd->bd_IDString, &bd->bd_Keys, size);
+        }
+        else
+            result = KR_ServiceDelete(context, bd->bd_IDString);
+        KR_ServiceClose(context);
+    }
+    CloseLibrary(KeyringBase);
+    return result;
+}
+
+BOOL bLoadKeyringBond(LIBBASETYPEPTR BluetoothBase, struct BtDevice *bd)
+{
+    if(bKeyringBond(BluetoothBase, bd, 0) == KR_SUCCESS && bd->bd_Keys.bkc_Flags)
+        return TRUE;
+    {
+        volatile UBYTE *p = (volatile UBYTE *)&bd->bd_Keys;
+        ULONG size = sizeof(bd->bd_Keys);
+        while(size--) *p++ = 0;
+    }
+    return FALSE;
+}
 
 /* *** Hardware *** */
 
@@ -811,21 +852,14 @@ void bApplyDevConfig(LIBBASETYPEPTR BluetoothBase, struct BtDevice *bd)
                 CopyMem(((UBYTE *) bpc) + 8, ((UBYTE *) &bd->bd_PoPoCfg) + 8,
                         min(AROS_LONG2BE(bpc->bpc_Length), AROS_LONG2BE(bd->bd_PoPoCfg.bpc_Length)));
             }
-            if((chnk = bFindCfgChunk(BluetoothBase, pic, IFFCHNK_KEYS))) {
-                struct BtKeyCfg *bkc = (struct BtKeyCfg *) chnk;
-                bd->bd_Keys.bkc_ChunkID = AROS_LONG2BE(IFFCHNK_KEYS);
-                bd->bd_Keys.bkc_Length = AROS_LONG2BE(sizeof(struct BtKeyCfg) - 8);
-                CopyMem(((UBYTE *) bkc) + 8, ((UBYTE *) &bd->bd_Keys) + 8,
-                        min(AROS_LONG2BE(bkc->bkc_Length), sizeof(struct BtKeyCfg) - 8));
-                if(bd->bd_Keys.bkc_Flags) {
-                    bd->bd_Flags |= BDFF_BONDED;
-                }
-            }
+
             break;
         }
         pic = btNextCfgForm(pic);
     }
     bUnlockSem(BluetoothBase, &BluetoothBase->bt_ConfigLock);
+    if(bLoadKeyringBond(BluetoothBase, bd)) bd->bd_Flags |= BDFF_BONDED;
+
 }
 /* \\\ */
 
@@ -874,9 +908,7 @@ ULONG bRestoreDevices(LIBBASETYPEPTR BluetoothBase, struct BtHardware *bth)
                     if(brd->brd_Flags & BRDF_LE) {
                         bd->bd_Flags |= BDFF_LE;
                     }
-                    if(brd->brd_Flags & BRDF_BONDED) {
-                        bd->bd_Flags |= BDFF_BONDED;
-                    }
+                    if(brd->brd_Flags & BRDF_BONDED) bd->bd_Flags |= BDFF_BONDED;
                     bApplyDevConfig(BluetoothBase, bd);
                     if(!bd->bd_Name) {
                         bd->bd_Name = btCopyStr(bd->bd_AddrString);
@@ -917,49 +949,66 @@ ULONG bRestoreDevices(LIBBASETYPEPTR BluetoothBase, struct BtHardware *bth)
    from a resolvable private address): from now on the device is identified
    and stored under the identity, while the link that is up keeps using the
    private address (bd_CurAddr). Called with the device write locked. */
-void bRekeyDevice(LIBBASETYPEPTR BluetoothBase, struct BtDevice *bd, const UBYTE *addr, UBYTE addrtype)
+BOOL bRekeyDevice(LIBBASETYPEPTR BluetoothBase, struct BtDevice *bd, const UBYTE *addr, UBYTE addrtype)
 {
-    struct BtIFFContext *pic;
-    STRPTR oldid = bd->bd_IDString;
-    STRPTR newid;
+    struct BtIFFContext *pic=NULL;
+    struct Library *KeyringBase;
+    APTR context;
+    STRPTR oldid=bd->bd_IDString,newid,newname=NULL;
+    UBYTE address[BT_ADDRSTR_LEN];
+    ULONG restore[(8+BT_ADDRSTR_LEN+3+3)/4];
+    LONG result=KR_ERR_CONTEXT;
+    struct BtKeyCfg replacement=bd->bd_Keys;
     BOOL addrname;
-
-    if(!memcmp(bd->bd_Address.bd_Addr, addr, 6)) {
-        return;
+    if(!memcmp(bd->bd_Address.bd_Addr,addr,6)) {
+        volatile UBYTE *p=(volatile UBYTE *)&replacement; ULONG n=sizeof(replacement); while(n--) *p++=0; return TRUE;
     }
-    CopyMem(bd->bd_Address.bd_Addr, bd->bd_CurAddr, 6);
-    bd->bd_CurAddrType = bd->bd_AddrType;
-    bd->bd_CurAddrValid = TRUE;
-    addrname = bd->bd_Name && !strcmp(bd->bd_Name, (char *) bd->bd_AddrString);
-    CopyMem((APTR) addr, bd->bd_Address.bd_Addr, 6);
-    bd->bd_AddrType = addrtype;
-    bAddrToStr(bd->bd_Address.bd_Addr, (STRPTR) bd->bd_AddrString);
-    newid = btCopyStrFmt("BT:%s", bd->bd_AddrString);
-    if(!newid) {
-        return;
-    }
-    bd->bd_IDString = newid;
-    if(addrname) {
-        btFreeVec(bd->bd_Name);
-        bd->bd_Name = btCopyStr(bd->bd_AddrString);
-        bd->bd_Node.ln_Name = bd->bd_Name;
-    }
-    /* move the config form (custom name, popup settings) to the new id */
+    bAddrToStr((UBYTE *)addr,(STRPTR)address);
+    newid=btCopyStrFmt("BT:%s",address);
+    if(!newid) goto fail;
+    addrname=bd->bd_Name && !strcmp(bd->bd_Name,(char *)bd->bd_AddrString);
+    if(addrname && !(newname=btCopyStr((STRPTR)address))) goto fail;
+    if(oldid && strlen(oldid)!=strlen(newid)) goto fail;
+    KeyringBase=OpenLibrary(KEYRINGNAME,1);
+    if(!KeyringBase) goto fail;
+    context=KR_ServiceOpen(BluetoothBase,KR_SERVICE_BLUETOOTH);
+    if(!context) { CloseLibrary(KeyringBase);goto fail; }
+    bLockSemExcl(BluetoothBase,&BluetoothBase->bt_ConfigLock);
     if(oldid) {
-        bLockSemExcl(BluetoothBase, &BluetoothBase->bt_ConfigLock);
-        pic = btFindCfgForm(NULL, IFFFORM_BTDEVICECFG);
-        while(pic) {
-            if(bMatchStringChunk(BluetoothBase, pic, IFFCHNK_DEVID, oldid)) {
-                bAddStringChunk(BluetoothBase, pic, IFFCHNK_DEVID, newid);
-                break;
-            }
-            pic = btNextCfgForm(pic);
+        pic=btFindCfgForm(NULL,IFFFORM_BTDEVICECFG);
+        while(pic && !bMatchStringChunk(BluetoothBase,pic,IFFCHNK_DEVID,oldid)) pic=btNextCfgForm(pic);
+        if(pic) {
+            memset(restore,0,sizeof(restore));
+            restore[0]=AROS_LONG2BE(IFFCHNK_DEVID);
+            restore[1]=AROS_LONG2BE(strlen(oldid)+1);
+            CopyMem(oldid,(UBYTE *)restore+8,strlen(oldid)+1);
+            /* Reserve the replacement chunk before committing the vault.
+             * Both IDs have equal encoded lengths; rollback reuses capacity. */
+            if(!bAddStringChunk(BluetoothBase,pic,IFFCHNK_DEVID,newid)) goto unlock;
         }
-        bUnlockSem(BluetoothBase, &BluetoothBase->bt_ConfigLock);
-        btFreeVec(oldid);
     }
+    replacement.bkc_Version=1;
+    result=KR_ServiceRekey(context,oldid?oldid:newid,newid,&replacement,sizeof(replacement));
+    if(result!=KR_SUCCESS && pic) bAddCfgChunk(BluetoothBase,pic,restore);
+unlock:
+    bUnlockSem(BluetoothBase,&BluetoothBase->bt_ConfigLock);
+    KR_ServiceClose(context);CloseLibrary(KeyringBase);
+    if(result!=KR_SUCCESS) goto fail;
+    bd->bd_Keys.bkc_Version=1;
+    { volatile UBYTE *p=(volatile UBYTE *)&replacement; ULONG n=sizeof(replacement); while(n--) *p++=0; }
+    CopyMem(bd->bd_Address.bd_Addr,bd->bd_CurAddr,6);
+    bd->bd_CurAddrType=bd->bd_AddrType;bd->bd_CurAddrValid=TRUE;
+    CopyMem((APTR)addr,bd->bd_Address.bd_Addr,6);bd->bd_AddrType=addrtype;
+    CopyMem(address,bd->bd_AddrString,sizeof(address));bd->bd_IDString=newid;
+    if(addrname) { btFreeVec(bd->bd_Name);bd->bd_Name=newname;bd->bd_Node.ln_Name=newname; }
+    btFreeVec(oldid);return TRUE;
+fail:
+    { volatile UBYTE *p=(volatile UBYTE *)&replacement; ULONG n=sizeof(replacement); while(n--) *p++=0; }
+    btFreeVec(newid);btFreeVec(newname);
+    btAddErrorMsg0(RETURN_ERROR,(STRPTR)GM_UNIQUENAME(libname),
+                  "Keyring rekey failed: device identity and bond were preserved.");
+    return FALSE;
 }
-/* \\\ */
 
 /* /// "bStoreDevConfig()" */
 /* Writes custom name, popup config and (if registered) the registration
@@ -967,13 +1016,26 @@ void bRekeyDevice(LIBBASETYPEPTR BluetoothBase, struct BtDevice *bd, const UBYTE
    written to disk (ENVARC:/ENV:Sys/bluetooth.prefs) by the event handler
    process - that is how registrations and bond keys survive a reboot without
    the user having to press Save in the prefs. */
-void bStoreDevConfig(LIBBASETYPEPTR BluetoothBase, struct BtDevice *bd, BOOL persist)
+BOOL bStoreDevConfig(LIBBASETYPEPTR BluetoothBase, struct BtDevice *bd, BOOL persist)
 {
     struct BtIFFContext *pic;
     struct BtIFFContext *root;
 
     if(!bd->bd_IDString) {
-        return;
+        return FALSE;
+    }
+    /* A failed keyring commit must never publish saved/bonded metadata. */
+    {
+        LONG result;
+        if((bd->bd_Flags & (BDFF_REGISTERED|BDFF_BONDED)) ==
+               (BDFF_REGISTERED|BDFF_BONDED) && bd->bd_Keys.bkc_Flags)
+            result = bKeyringBond(BluetoothBase, bd, 1);
+        else result = bKeyringBond(BluetoothBase, bd, 2);
+        if(result != KR_SUCCESS && result != KR_ERR_NOTFOUND) {
+            btAddErrorMsg0(RETURN_ERROR, (STRPTR) GM_UNIQUENAME(libname),
+                "Keyring locked or unavailable: open Settings > System > Keyring. Configuration was not saved.");
+            return FALSE;
+        }
     }
     bLockSemExcl(BluetoothBase, &BluetoothBase->bt_ConfigLock);
     pic = btFindCfgForm(NULL, IFFFORM_BTDEVICECFG);
@@ -1022,16 +1084,9 @@ void bStoreDevConfig(LIBBASETYPEPTR BluetoothBase, struct BtDevice *bd, BOOL per
             brd.brd_ProductID = bd->bd_ProductID;
             brd.brd_ProductVersion = bd->bd_ProductVersion;
             bAddCfgChunk(BluetoothBase, pic, &brd);
-            if((bd->bd_Flags & BDFF_BONDED) && bd->bd_Keys.bkc_Flags) {
-                bd->bd_Keys.bkc_ChunkID = AROS_LONG2BE(IFFCHNK_KEYS);
-                bd->bd_Keys.bkc_Length = AROS_LONG2BE(sizeof(struct BtKeyCfg) - 8);
-                bAddCfgChunk(BluetoothBase, pic, &bd->bd_Keys);
-            } else {
-                bRemCfgChunk(BluetoothBase, pic, IFFCHNK_KEYS);
-            }
+
         } else {
             bRemCfgChunk(BluetoothBase, pic, IFFCHNK_REGDEVICE);
-            bRemCfgChunk(BluetoothBase, pic, IFFCHNK_KEYS);
         }
     }
     bUnlockSem(BluetoothBase, &BluetoothBase->bt_ConfigLock);
@@ -1045,6 +1100,7 @@ void bStoreDevConfig(LIBBASETYPEPTR BluetoothBase, struct BtDevice *bd, BOOL per
         }
         Permit();
     }
+    return pic != NULL;
 }
 /* \\\ */
 

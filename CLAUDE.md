@@ -8,4 +8,4 @@ This public repository provides the common OS sources for PomAROS Hosted, VM and
 - Preserve existing per-file licences. Original OS changes use APL 1.1 with Copyright (C) 2026 John KNIPPER.
 - Keep each product pinned to one reviewed commit. Source updates do not change the provenance of existing binaries.
 - Use isolated build directories and windowed app tests. Do not access or reboot native test hardware from this repository.
-- Consult README.md and docs/pomaros/ for architecture, build entry points and upstream maintenance.
+- Consult README.md for architecture, build entry points and upstream maintenance.

@@ -781,18 +781,13 @@ static void WalkCfgForm(struct BtActionData *data, const UBYTE *form, ULONG pare
             break;
         case IFFFORM_BTDEVICECFG: {
             const UBYTE *dreg = FindChunkData(form, IFFCHNK_REGDEVICE);
-            const UBYTE *keys = FindChunkData(form, IFFCHNK_KEYS);
             CONST_STRPTR name = (CONST_STRPTR)FindChunkData(form, IFFCHNK_NAME);
             s = FindChunkData(form, IFFCHNK_DEVID);
             strncpy(mydevid, s ? (const char *)s : "?", sizeof(mydevid)-1);
             mydevid[sizeof(mydevid)-1] = 0;
             devid = mydevid;
-            snprintf(desc, sizeof(desc), "%s (%s)%s%s%s%s%s", name ? name : mydevid, mydevid,
-                     dreg ? " - registered" : "",
-                     keys ? ", bonded:" : "",
-                     (keys && (keys[0] & BDKF_LINKKEY)) ? " link key" : "",
-                     (keys && (keys[0] & BDKF_LTK)) ? ((keys[0] & BDKF_SC) ? " LE key (SC)" : " LE key") : "",
-                     (keys && (keys[0] & BDKF_IRK)) ? " IRK" : "");
+            snprintf(desc, sizeof(desc), "%s (%s)%s; bond keys in keyring",
+                     name ? name : mydevid, mydevid, dreg ? " - registered" : "");
             AddCfgEntry(data, formid, parentid, size, "Device", desc, "Bluetooth", mydevid);
             break;
         }

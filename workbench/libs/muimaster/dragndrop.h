@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * Licensed under the AROS Public License (APL) Version 1.1. */
 /*
     Copyright (C) 2002-2011, The AROS Development Team.
     All rights reserved.
@@ -18,6 +20,7 @@
 #define GUI_TopOffset   (TAG_USER+4)    /* LONG */
 #define GUI_Width       (TAG_USER+5)    /* LONG */
 #define GUI_Height      (TAG_USER+6)    /* LONG */
+#define GUI_IntegerScale (TAG_USER+8) /* ULONG1..4; owns a scaled ARGB snapshot. Masks are refused. */
 #define GUI_SourceAlpha (TAG_USER+7)    /* BOOL */
 
 struct DragNDrop *CreateDragNDropA( struct TagItem *tlist );
@@ -26,11 +29,10 @@ VOID DeleteDragNDrop( struct DragNDrop *dnd );
 BOOL PrepareDragNDrop(struct DragNDrop *dnd,struct Screen *scr);
 VOID FinishDragNDrop(struct DragNDrop *dnd);
 
-VOID DrawDragNDrop(struct DragNDrop *dnd, LONG x, LONG y);
+BOOL DrawDragNDrop(struct DragNDrop *dnd, LONG x, LONG y);
 VOID UndrawDragNDrop(struct DragNDrop *dnd);
 
 struct BitMapNode *CreateBitMapNodeA( struct TagItem *tagList );
-struct BitMapNode *VARARGS68K CreateBitMapNode(void *dummy, ...) __stackparm;
 VOID DeleteBitMapNode(struct BitMapNode *bmn );
 
 VOID AttachBitMapNode( struct DragNDrop *dnd, struct BitMapNode *bmn );

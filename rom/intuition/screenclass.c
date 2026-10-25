@@ -1,4 +1,6 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
+    Licensed under the AROS Public License, version 1.1.
     Copyright (C) 2013-2025, The AROS Development Team. All rights reserved.
 */
 
@@ -13,6 +15,8 @@
 #include <intuition/classes.h>
 #include <intuition/classusr.h>
 #include <intuition/monitorclass.h>
+#include <intuition/gadgetclass.h>
+#include <intuition/imageclass.h>
 #include <proto/alib.h>
 #include <proto/exec.h>
 #include <proto/intuition.h>
@@ -20,7 +24,17 @@
 #include <proto/utility.h>
 
 #include "intuition_intern.h"
+#include "pointerscale.h"
+#include "windowcomposition.h"
+#include "windowfit.h"
+#include "windowscale.h"
+#include "scaleresult.h"
+#include "screenrendercontext.h"
 #include "intuition_customize.h"
+#include "inputhandler_actions.h"
+#include "inputhandler_support.h"
+#include <proto/graphics.h>
+#include <proto/layers.h>
 #include "monitorclass_private.h"
 
 /*i***************************************************************************
@@ -47,6 +61,16 @@ IPTR ScreenClass__OM_DISPOSE(Class *cl, Object *o, Msg msg)
 {
     struct IntuitionBase *IntuitionBase = (struct IntuitionBase *)cl->cl_UserData;
     struct IntScreen *screen = INST_DATA(cl, o);
+
+    struct GfxBase *GfxBase = GetPrivIBase(IntuitionBase)->GfxBase;
+
+    ForgetScreenPointerScale(&screen->Screen, IntuitionBase);
+    FreeScreenRenderContexts(screen, IntuitionBase);
+    FreeLogicalScreenInfo(screen, IntuitionBase);
+
+    /* Held independently of the rendered font, including failed opens. */
+    if (screen->ScaleBaseFont)
+        CloseFont(screen->ScaleBaseFont);
 
     /* Free decoration objects */
     DisposeObject(screen->WinDecorObj);
@@ -859,6 +883,18 @@ IPTR ScreenClass__OM_GET(Class *cl, Object *o, struct opGet *msg)
         *msg->opg_Storage = screen->Screen.BarVBorder + screen->Screen.BarLayer->rp->TxBaseline;
         break;
 
+    case SA_RenderContext:
+        *msg->opg_Storage = (IPTR)CurrentScreenRenderContext(&screen->Screen);
+        break;
+
+    case SA_Scale:
+        *msg->opg_Storage = screen->Scale ? screen->Scale : SA_SCALE_MIN;
+        break;
+
+    case SA_LegacyScaleFactor:
+        *msg->opg_Storage = ScreenLegacyScaleFactor(&screen->Screen);
+        break;
+
     case SA_ScreenbarTextPen:
         *msg->opg_Storage = screen->Pens[BARDETAILPEN];
         break;
@@ -901,6 +937,73 @@ IPTR ScreenClass__OM_GET(Class *cl, Object *o, struct opGet *msg)
     return TRUE;
 }
 
+/* The caller opens disk fonts before entering input.device. Every screen
+   mutation and notification is serialized with window open/close actions. */
+struct ScaleScreenAction
+{
+    struct IntuiActionMsg msg;
+    struct IntScreen *screen;
+    struct TextFont *font;
+    struct TextFont *basefont;
+    ULONG scale;
+    BOOL changed;
+    struct ScreenScaleResult *result;
+};
+
+static void ScaleScreen(struct ScaleScreenAction *msg, struct IntuitionBase *IntuitionBase)
+{
+    msg->changed = ApplyPreparedScreenScale(msg->screen, msg->font,
+        msg->basefont, msg->scale, NULL, msg->result, IntuitionBase);
+}
+
+static BOOL SetScreenScale(struct IntScreen *screen, ULONG scale,
+                           struct ScreenScaleResult *result, struct IntuitionBase *IntuitionBase)
+{
+    struct GfxBase *GfxBase = GetPrivIBase(IntuitionBase)->GfxBase;
+    struct ScaleScreenAction msg;
+    ULONG oldscale = screen->Scale;
+
+    scale = ClampScreenScale(scale);
+    ScaleResultReset(result, scale, oldscale);
+    ScaleResultSetStage(result, SSR_STAGE_FONT, NULL);
+    /* IPrefs may have selected the Workbench font while a startup Shell
+       prevented reopening its screen. Use that selected base on the next
+       scale change; a custom screen keeps its owner's explicit font. */
+    msg.basefont = SafeReopenFont(IntuitionBase,
+        (&screen->Screen == GetPrivIBase(IntuitionBase)->WorkBench)
+            ? &GetPrivIBase(IntuitionBase)->ScreenFont : &screen->ScaleBaseFont);
+    if (!msg.basefont)
+        return FALSE;
+    /* The same scale is a change only when the base font is another one:
+       IPrefs sets the current scale again to apply a new screen font to a
+       Workbench screen it could not close. */
+    if (scale == oldscale && msg.basefont == screen->ScaleBaseFont)
+    {
+        CloseFont(msg.basefont);
+        ScaleResultFinish(result, SSR_UNCHANGED, screen->Scale);
+        return FALSE;
+    }
+    msg.font = OpenScaledScreenFont(IntuitionBase, msg.basefont, scale);
+    if (!msg.font)
+        msg.font = SafeReopenFont(IntuitionBase, &msg.basefont);
+    if (!msg.font)
+    {
+        CloseFont(msg.basefont);
+        return FALSE;
+    }
+    msg.screen = screen;
+    msg.scale = scale;
+    msg.result = result;
+    msg.changed = FALSE;
+    DoSyncAction((APTR)ScaleScreen, &msg.msg, IntuitionBase);
+    if (!msg.changed)
+    {
+        CloseFont(msg.font);
+        CloseFont(msg.basefont);
+    }
+    return msg.changed;
+}
+
 IPTR ScreenClass__OM_SET(Class *cl, Object *o, struct opSet *msg)
 {
     struct IntuitionBase *IntuitionBase = (struct IntuitionBase *)cl->cl_UserData;
@@ -911,6 +1014,10 @@ IPTR ScreenClass__OM_SET(Class *cl, Object *o, struct opSet *msg)
     BOOL showpointer = screen->ShowPointer;
     BOOL movescreen = FALSE;
     BOOL gammaset = FALSE;
+    BOOL scaleset = FALSE;
+    struct ScreenScaleResult *scaleResult = (struct ScreenScaleResult *)
+        GetTagData(SA_ScaleResult, 0, msg->ops_AttrList);
+    if (scaleResult) *scaleResult = (struct ScreenScaleResult){0};
 
     while((tag = NextTagItem(&tstate)))
     {
@@ -934,6 +1041,10 @@ IPTR ScreenClass__OM_SET(Class *cl, Object *o, struct opSet *msg)
 
         case SA_ShowPointer:
             showpointer = tag->ti_Data;
+            break;
+
+        case SA_Scale:
+            scaleset |= SetScreenScale(screen, (ULONG)tag->ti_Data, scaleResult, IntuitionBase);
             break;
 
         case SA_GammaRed:
@@ -999,5 +1110,5 @@ IPTR ScreenClass__OM_SET(Class *cl, Object *o, struct opSet *msg)
         DoMethodA((Object *)screen->IMonitorNode, &sgmsg);
     }
 
-    return 0;
+    return scaleset;
 }

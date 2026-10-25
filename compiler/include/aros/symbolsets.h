@@ -156,7 +156,7 @@ const LONG __aros_libreq_##bname = ver;
    lld rejects them as duplicate symbols. */
 #ifndef AROS_LIBREQ
 #define AROS_LIBREQ(bname, ver) \
-    asm volatile ( \
+    __asm__ volatile ( \
                   ".weak __aros_libreq_" #bname "." #ver "\n" \
                   "__aros_libreq_" #bname "." #ver "=" #ver);
 #endif

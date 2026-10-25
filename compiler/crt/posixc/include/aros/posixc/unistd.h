@@ -44,7 +44,7 @@
 #define _POSIX_MEMLOCK_RANGE                -1
 #define _POSIX_MEMORY_PROTECTION            -1
 #define _POSIX_MESSAGE_PASSING              -1
-#define _POSIX_MONOTONIC_CLOCK              -1
+#define _POSIX_MONOTONIC_CLOCK              200809L
 #define _POSIX_NO_TRUNC                     1
 #define _POSIX_PRIORITIZED_IO               -1
 #define _POSIX_PRIORITY_SCHEDULING          -1
@@ -524,8 +524,10 @@ __off64_t lseek64(int filedes, __off64_t offset, int whence);
 # endif
 int pipe(int filedes[2]);
 ssize_t pread(int d, void *buf, size_t nbytes, off_t offset);
+ssize_t pwrite(int d, const void *buf, size_t nbytes, off_t offset);
 # if defined(__off64_t_defined)
 ssize_t pread64(int d, void *buf, size_t nbytes, __off64_t offset);
+ssize_t pwrite64(int d, const void *buf, size_t nbytes, __off64_t offset);
 # endif
 ssize_t read(int d, void *buf, size_t nbytes);
 int rmdir(const char *path);

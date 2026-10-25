@@ -17,7 +17,6 @@
 #include <string.h>
 
 #include "uhwcmd.h"
-#include "xhci_mmio.h"
 #include "xhciproto.h"
 #include "xhci_schedule.h"
 
@@ -97,7 +96,7 @@ void xhciUpdateFrameCounter(struct PCIController *hc)
      * Do not Disable/Enable here: enabling interrupts inside an ISR can
      * lead to reentrancy and corrupt shared driver state.
      */
-    framecnt = AROS_LE2LONG(rrs->mfindex) & 0x3FFF;
+    framecnt = XHCI_RD32(rrs->mfindex) & 0x3FFF;
     if(framecnt < (hc->hc_FrameCounter & 0x3FFF)) {
         hc->hc_FrameCounter |= 0x3FFF;
         hc->hc_FrameCounter++;
@@ -247,7 +246,7 @@ static void xhciPowerOnRootPorts(struct PCIController *hc, struct PCIUnit *hu,
     volatile struct xhci_pr *xhciports = (volatile struct xhci_pr *)((IPTR)xhcic->xhc_XHCIPorts);
 
     for(UWORD hciport = 0; hciport < hc->hc_NumPorts; hciport++) {
-        ULONG origportsc = xhciReadMMIO32(&xhciports[hciport].portsc);
+        ULONG origportsc = XHCI_RD32(xhciports[hciport].portsc);
         ULONG newportsc  = origportsc & ~(XHCIF_PR_PORTSC_OCC | XHCIF_PR_PORTSC_PRC |
                                           XHCIF_PR_PORTSC_WRC | XHCIF_PR_PORTSC_PEC |
                                           XHCIF_PR_PORTSC_CSC | XHCIF_PR_PORTSC_PLC |
@@ -258,11 +257,11 @@ static void xhciPowerOnRootPorts(struct PCIController *hc, struct PCIUnit *hu,
             continue;
 
         newportsc |= XHCIF_PR_PORTSC_PP;
-        xhciWriteMMIO32(&xhciports[hciport].portsc, newportsc);
+        XHCI_WR32(xhciports[hciport].portsc, newportsc);
 
         /* Wait for power to latch before continuing bring-up */
         for(ULONG waitms = 0; waitms < 20; waitms++) {
-            if(xhciReadMMIO32(&xhciports[hciport].portsc) & XHCIF_PR_PORTSC_PP)
+            if(XHCI_RD32(xhciports[hciport].portsc) & XHCIF_PR_PORTSC_PP)
                 break;
             uhwDelayMS(1, timerreq);
         }
@@ -271,7 +270,7 @@ static void xhciPowerOnRootPorts(struct PCIController *hc, struct PCIUnit *hu,
                         DEBUGCOLOR_SET "Port %u powered: %08lx -> %08lx" DEBUGCOLOR_RESET" \n",
                         hciport + 1,
                         origportsc,
-                        xhciReadMMIO32(&xhciports[hciport].portsc));
+                        XHCI_RD32(xhciports[hciport].portsc));
     }
 }
 
@@ -791,7 +790,7 @@ ULONG xhciPageSize(struct PCIController *hc)
 {
     struct XhciHCPrivate *xhcic = xhciGetHCPrivate(hc);
     volatile struct xhci_hcopr *hcopr = (volatile struct xhci_hcopr *)((IPTR)xhcic->xhc_XHCIOpR);
-    ULONG pagesize = AROS_LE2LONG(hcopr->pagesize);
+    ULONG pagesize = XHCI_RD32(hcopr->pagesize);
     int bit;
 
     for(bit = 0; bit < 16; bit++) {
@@ -1232,7 +1231,7 @@ static BOOL xhciDerivePortFlagsAndMps0(struct PCIController *hc,
 
         /* Prefer a connected+enabled port. */
         for(UWORD i = 0; i < hc->hc_NumPorts; i++) {
-            ULONG portsc = xhciReadMMIO32(&xhciports[i].portsc);
+            ULONG portsc = XHCI_RD32(xhciports[i].portsc);
             if(xhciHubPortConnected(portsc) && xhciHubPortEnabled(hc, i, portsc)) {
                 found = i;
                 break;
@@ -1242,7 +1241,7 @@ static BOOL xhciDerivePortFlagsAndMps0(struct PCIController *hc,
         /* Fallback: any connected port. */
         if(found == 0xFFFF) {
             for(UWORD i = 0; i < hc->hc_NumPorts; i++) {
-                ULONG portsc = xhciReadMMIO32(&xhciports[i].portsc);
+                ULONG portsc = XHCI_RD32(xhciports[i].portsc);
                 if(xhciHubPortConnected(portsc)) {
                     found = i;
                     break;
@@ -1257,7 +1256,7 @@ static BOOL xhciDerivePortFlagsAndMps0(struct PCIController *hc,
         *rootPortIndex = port;
     }
 
-    ULONG portsc = xhciReadMMIO32(&xhciports[port].portsc);
+    ULONG portsc = XHCI_RD32(xhciports[port].portsc);
     if(!xhciHubPortConnected(portsc))
         return FALSE;
 
@@ -2727,10 +2726,10 @@ static AROS_INTH1(xhciIntCode, struct PCIController *, hc)
 
     pciusbXHCIDebug("xHCI", DEBUGFUNCCOLOR_SET "%s()" DEBUGCOLOR_RESET" \n", __func__);
 
-    ULONG status = AROS_LE2LONG(hcopr->usbsts);
+    ULONG status = XHCI_RD32(hcopr->usbsts);
     volatile struct xhci_ir *xhciir =
         (volatile struct xhci_ir *)((IPTR)xhcic->xhc_XHCIIntR);
-    ULONG iman = AROS_LE2LONG(xhciir->iman), tmp;
+    ULONG iman = XHCI_RD32(xhciir->iman), tmp;
 
     xhciDumpIR(xhciir);
     xhciDumpStatus(status);
@@ -2772,10 +2771,10 @@ static AROS_INTH1(xhciIntCode, struct PCIController *, hc)
         ULONG maxwork = XHCI_EVENT_RING_TRBS;
 
         /* First acknowledge the interrupt ..*/
-        hcopr->usbsts = AROS_LONG2LE(status);
+        XHCI_WR32(hcopr->usbsts, status);
         /* Clear IP (W1C) while keeping IE set */
-        xhciir->iman = AROS_LONG2LE(XHCIF_IR_IMAN_IE | XHCIF_IR_IMAN_IP);
-        tmp = AROS_LE2LONG(xhciir->iman);
+        XHCI_WR32(xhciir->iman, XHCIF_IR_IMAN_IE | XHCIF_IR_IMAN_IP);
+        tmp = XHCI_RD32(xhciir->iman);
 
         pciusbXHCIDebugTRBV("xHCI",
                             DEBUGCOLOR_SET "Processing events..." DEBUGCOLOR_RESET" \n");
@@ -2825,7 +2824,7 @@ static AROS_INTH1(xhciIntCode, struct PCIController *, hc)
                 hciport = evt->port - 1;
 
                 xhciDumpPort(&xhciports[hciport]);
-                origportsc = xhciReadMMIO32(&xhciports[hciport].portsc);
+                origportsc = XHCI_RD32(xhciports[hciport].portsc);
                 newportsc = origportsc & (XHCIF_PR_PORTSC_PP);
 
                 if(origportsc & XHCIF_PR_PORTSC_OCC) {
@@ -2854,7 +2853,7 @@ static AROS_INTH1(xhciIntCode, struct PCIController *, hc)
                     newportsc |= XHCIF_PR_PORTSC_CEC;
 
                 /* Acknowledge the change bits we observed */
-                xhciWriteMMIO32(&xhciports[hciport].portsc, newportsc);
+                XHCI_WR32(xhciports[hciport].portsc, newportsc);
 
                 pciusbXHCIDebugTRBV("xHCI",
                                     DEBUGCOLOR_SET "RH Change $%08lx" DEBUGCOLOR_RESET" \n",
@@ -3119,12 +3118,12 @@ static AROS_INTH1(xhciIntCode, struct PCIController *, hc)
                 if(trbe_ccode != TRB_CC_SUCCESS) {
                     volatile struct xhci_ir *ir =
                         (volatile struct xhci_ir *)xhcic->xhc_XHCIIntR;
-                    ULONG crcr_lo = AROS_LE2LONG(hcopr->crcr.addr_lo);
-                    ULONG crcr_hi = AROS_LE2LONG(hcopr->crcr.addr_hi);
-                    ULONG erdp_lo = AROS_LE2LONG(ir->erdp.addr_lo);
-                    ULONG erdp_hi = AROS_LE2LONG(ir->erdp.addr_hi);
-                    ULONG erst_lo = AROS_LE2LONG(ir->erstba.addr_lo);
-                    ULONG erst_hi = AROS_LE2LONG(ir->erstba.addr_hi);
+                    ULONG crcr_lo = XHCI_RD32(hcopr->crcr.addr_lo);
+                    ULONG crcr_hi = XHCI_RD32(hcopr->crcr.addr_hi);
+                    ULONG erdp_lo = XHCI_RD32(ir->erdp.addr_lo);
+                    ULONG erdp_hi = XHCI_RD32(ir->erdp.addr_hi);
+                    ULONG erst_lo = XHCI_RD32(ir->erstba.addr_lo);
+                    ULONG erst_hi = XHCI_RD32(ir->erstba.addr_hi);
 
                     pciusbWarn("xHCI",
                                DEBUGWARNCOLOR_SET
@@ -3321,17 +3320,17 @@ void xhciReset(struct PCIController *hc, struct PCIUnit *hu,
     pciusbXHCIDebug("xHCI", DEBUGFUNCCOLOR_SET "%s(0x%p, 0x%p)" DEBUGCOLOR_RESET" \n", __func__, hc, hu);
 
     // Tell the controller to stop if its currently running ...
-    reg = AROS_LE2LONG(hcopr->usbcmd);
+    reg = XHCI_RD32(hcopr->usbcmd);
     if(reg & XHCIF_USBCMD_RS) {
         reg &= ~XHCIF_USBCMD_RS;
-        hcopr->usbcmd = AROS_LONG2LE(reg);
+        XHCI_WR32(hcopr->usbcmd, reg);
 
         // Wait for the controller to indicate it is finished ...
-        while(!(AROS_LE2LONG(hcopr->usbsts) & XHCIF_USBSTS_HCH) && (--cnt > 0))
+        while(!(XHCI_RD32(hcopr->usbsts) & XHCIF_USBSTS_HCH) && (--cnt > 0))
             uhwDelayMS(1, timerreq);
     }
 
-    status = AROS_LE2LONG(hcopr->usbsts);
+    status = XHCI_RD32(hcopr->usbsts);
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "Resetting Controller (pre-reset status $%08x)..." DEBUGCOLOR_RESET" \n",
                     status);
     xhciDumpStatus(status);
@@ -3347,16 +3346,16 @@ void xhciReset(struct PCIController *hc, struct PCIUnit *hu,
      * memory that has since been reclaimed.
      */
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "Halting Controller..." DEBUGCOLOR_RESET" \n");
-    hcopr->usbcmd = AROS_LONG2LE(0);
+    XHCI_WR32(hcopr->usbcmd, 0);
     cnt = 100;
-    while(!(AROS_LE2LONG(hcopr->usbsts) & XHCIF_USBSTS_HCH) && (--cnt > 0))
+    while(!(XHCI_RD32(hcopr->usbsts) & XHCIF_USBSTS_HCH) && (--cnt > 0))
         uhwDelayMS(1, timerreq);
-    if(!(AROS_LE2LONG(hcopr->usbsts) & XHCIF_USBSTS_HCH))
+    if(!(XHCI_RD32(hcopr->usbsts) & XHCIF_USBSTS_HCH))
         pciusbWarn("xHCI", DEBUGWARNCOLOR_SET "Controller will not halt (USBSTS $%08x)" DEBUGCOLOR_RESET" \n",
-                   AROS_LE2LONG(hcopr->usbsts));
+                   XHCI_RD32(hcopr->usbsts));
 
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "Resetting Controller..." DEBUGCOLOR_RESET" \n");
-    hcopr->usbcmd = AROS_LONG2LE(XHCIF_USBCMD_HCRST);
+    XHCI_WR32(hcopr->usbcmd, XHCIF_USBCMD_HCRST);
 
     /*
      * Wait before looking, not after. The reset bit does not read back
@@ -3368,12 +3367,12 @@ void xhciReset(struct PCIController *hc, struct PCIUnit *hu,
     cnt = 100;
     do {
         uhwDelayMS(2, timerreq);
-    } while((AROS_LE2LONG(hcopr->usbcmd) & XHCIF_USBCMD_HCRST) && (--cnt > 0));
+    } while((XHCI_RD32(hcopr->usbcmd) & XHCIF_USBCMD_HCRST) && (--cnt > 0));
 
-    pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "COMMAND = $%08x, after %ums" DEBUGCOLOR_RESET" \n", AROS_LE2LONG(hcopr->usbcmd),
+    pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "COMMAND = $%08x, after %ums" DEBUGCOLOR_RESET" \n", XHCI_RD32(hcopr->usbcmd),
                     (100 - cnt) << 1);
 
-    status = AROS_LE2LONG(hcopr->usbsts);
+    status = XHCI_RD32(hcopr->usbsts);
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "USBSTS after HCRST write = $%08x" DEBUGCOLOR_RESET" \n", status);
     xhciDumpStatus(status);
     if(status & (XHCIF_USBSTS_HCE | XHCIF_USBSTS_HSE))
@@ -3385,18 +3384,18 @@ void xhciReset(struct PCIController *hc, struct PCIUnit *hu,
     cnt = 100;
     do {
         uhwDelayMS(2, timerreq);
-    } while((AROS_LE2LONG(hcopr->usbsts) & XHCIF_USBSTS_CNR) && (--cnt > 0));
+    } while((XHCI_RD32(hcopr->usbsts) & XHCIF_USBSTS_CNR) && (--cnt > 0));
 
-    pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "USBSTS = $%08x, after %ums" DEBUGCOLOR_RESET" \n", AROS_LE2LONG(hcopr->usbsts),
+    pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "USBSTS = $%08x, after %ums" DEBUGCOLOR_RESET" \n", XHCI_RD32(hcopr->usbsts),
                     (100 - cnt) << 1);
-    xhciDumpStatus(AROS_LE2LONG(hcopr->usbsts));
+    xhciDumpStatus(XHCI_RD32(hcopr->usbsts));
 
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "Configuring DMA pointers..." DEBUGCOLOR_RESET" \n");
 
-    hcopr->config = AROS_LONG2LE(xhcic->xhc_NumSlots);
+    XHCI_WR32(hcopr->config, xhcic->xhc_NumSlots);
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  Setting DCBAA to 0x%p" DEBUGCOLOR_RESET" \n", xhcic->xhc_DMADCBAA);
     xhciSetPointerMMIO(hc, hcopr->dcbaap, xhcic->xhc_DMADCBAA);
-    xhciDumpStatus(AROS_LE2LONG(hcopr->usbsts));
+    xhciDumpStatus(XHCI_RD32(hcopr->usbsts));
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  Setting CRCR to 0x%p" DEBUGCOLOR_RESET" \n", xhcic->xhc_DMAOPR);
     xhciSetPointerMMIO(hc, hcopr->crcr, ((IPTR)xhcic->xhc_DMAOPR | 1));
 
@@ -3420,7 +3419,7 @@ void xhciReset(struct PCIController *hc, struct PCIUnit *hu,
     xhciInitRing(hc, (struct pcisusbXHCIRing *)xring);
 
     volatile struct xhci_ir *xhciir = (volatile struct xhci_ir *)((IPTR)xhcic->xhc_XHCIIntR);
-    xhciir->erstsz = AROS_LONG2LE(1);
+    XHCI_WR32(xhciir->erstsz, 1);
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  Setting ERDP to 0x%p" DEBUGCOLOR_RESET" \n", xhcic->xhc_DMAERS);
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  Setting ERSTBA to 0x%p" DEBUGCOLOR_RESET" \n", xhcic->xhc_DMAERST);
     xhciSetPointerMMIO(hc, xhciir->erdp, ((IPTR)xhcic->xhc_DMAERS | (IPTR)XHCIF_IR_ERDP_EHB));
@@ -3429,24 +3428,24 @@ void xhciReset(struct PCIController *hc, struct PCIUnit *hu,
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET
                "readback: erstsz %08lx erstba %08lx%08lx erdp %08lx%08lx dcbaap %08lx%08lx usbsts %08lx"
                DEBUGCOLOR_RESET" \n",
-               (unsigned long)AROS_LE2LONG(xhciir->erstsz),
-               (unsigned long)AROS_LE2LONG(xhciir->erstba.addr_hi),
-               (unsigned long)AROS_LE2LONG(xhciir->erstba.addr_lo),
-               (unsigned long)AROS_LE2LONG(xhciir->erdp.addr_hi),
-               (unsigned long)AROS_LE2LONG(xhciir->erdp.addr_lo),
-               (unsigned long)AROS_LE2LONG(hcopr->dcbaap.addr_hi),
-               (unsigned long)AROS_LE2LONG(hcopr->dcbaap.addr_lo),
-               (unsigned long)AROS_LE2LONG(hcopr->usbsts));
+               (unsigned long)XHCI_RD32(xhciir->erstsz),
+               (unsigned long)XHCI_RD32(xhciir->erstba.addr_hi),
+               (unsigned long)XHCI_RD32(xhciir->erstba.addr_lo),
+               (unsigned long)XHCI_RD32(xhciir->erdp.addr_hi),
+               (unsigned long)XHCI_RD32(xhciir->erdp.addr_lo),
+               (unsigned long)XHCI_RD32(hcopr->dcbaap.addr_hi),
+               (unsigned long)XHCI_RD32(hcopr->dcbaap.addr_lo),
+               (unsigned long)XHCI_RD32(hcopr->usbsts));
     /*
      * MSI/MSI-X is edge-triggered in practice: if IP/EINT are already set
      * when USBCMD.INTE becomes 1, some controllers will not emit a new MSI.
      * Clear pending latches here while enabling IE.
      */
-    xhciir->imod = AROS_LONG2LE(0); /* disable moderation for bring-up */
-    xhciir->iman = AROS_LONG2LE(XHCIF_IR_IMAN_IE | XHCIF_IR_IMAN_IP); /* W1C IP */
-    (void)AROS_LE2LONG(xhciir->iman);
-    ULONG st = AROS_LE2LONG(hcopr->usbsts);
-    hcopr->usbsts = AROS_LONG2LE(st); /* W1C any pending EINT/PCD/etc */
+    XHCI_WR32(xhciir->imod, 0); /* disable moderation for bring-up */
+    XHCI_WR32(xhciir->iman, XHCIF_IR_IMAN_IE | XHCIF_IR_IMAN_IP); /* W1C IP */
+    (void)XHCI_RD32(xhciir->iman);
+    ULONG st = XHCI_RD32(hcopr->usbsts);
+    XHCI_WR32(hcopr->usbsts, st); /* W1C any pending EINT/PCD/etc */
 
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "Reset complete..." DEBUGCOLOR_RESET" \n");
 
@@ -3469,7 +3468,7 @@ static void xhciLynxPointQuirk(struct PCIController *hc, struct timerequest *tim
         if(xhcic->xhc_PortProtocol[hciport] != XHCI_PORT_PROTOCOL_USB3)
             continue;
 
-        ULONG portsc = xhciReadMMIO32(&xhciports[hciport].portsc);
+        ULONG portsc = XHCI_RD32(xhciports[hciport].portsc);
         UWORD cnt;
 
         /* Port must be powered */
@@ -3484,14 +3483,14 @@ static void xhciLynxPointQuirk(struct PCIController *hc, struct timerequest *tim
             continue;
 
         /* Issue the warm reset */
-        xhciWriteMMIO32(&xhciports[hciport].portsc, portsc | XHCIF_PR_PORTSC_WPR);
-        (void)xhciReadMMIO32(&xhciports[hciport].portsc);
+        XHCI_WR32(xhciports[hciport].portsc, portsc | XHCIF_PR_PORTSC_WPR);
+        (void)XHCI_RD32(xhciports[hciport].portsc);
 
         /* Wait for the controller to report reset complete (WRC) */
         cnt = 200;
         while(--cnt > 0) {
             uhwDelayMS(5, timerreq);
-            portsc = xhciReadMMIO32(&xhciports[hciport].portsc);
+            portsc = XHCI_RD32(xhciports[hciport].portsc);
             if(portsc & XHCIF_PR_PORTSC_WRC)
                 break;
         }
@@ -3614,34 +3613,34 @@ BOOL xhciInit(struct PCIController *hc, struct PCIUnit *hu,
          * edge for MSI/MSI-X once interrupts are enabled.
          */
         volatile struct xhci_ir *xhciir = (volatile struct xhci_ir *)xhcic->xhc_XHCIIntR;
-        xhciir->iman = AROS_LONG2LE(XHCIF_IR_IMAN_IE | XHCIF_IR_IMAN_IP);
-        (void)AROS_LE2LONG(xhciir->iman);
+        XHCI_WR32(xhciir->iman, XHCIF_IR_IMAN_IE | XHCIF_IR_IMAN_IP);
+        (void)XHCI_RD32(xhciir->iman);
     }
-    val = AROS_LE2LONG(hcopr->usbcmd);
+    val = XHCI_RD32(hcopr->usbcmd);
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "Enabling xHCI interrupts..." DEBUGCOLOR_RESET" \n");
     val |= XHCIF_USBCMD_INTE;
-    hcopr->usbcmd = AROS_LONG2LE(val);
+    XHCI_WR32(hcopr->usbcmd, val);
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "USBCMD = $%08x..." DEBUGCOLOR_RESET" \n",
-                    AROS_LE2LONG(hcopr->usbcmd));
+                    XHCI_RD32(hcopr->usbcmd));
 
     /* Wait for the interrupt enable bit to be visible (defensive) */
     cnt = 100;
-    while(!(AROS_LE2LONG(hcopr->usbcmd) & XHCIF_USBCMD_INTE) && (--cnt > 0))
+    while(!(XHCI_RD32(hcopr->usbcmd) & XHCIF_USBCMD_INTE) && (--cnt > 0))
         uhwDelayMS(2, timerreq);
 
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "COMMAND = $%08x, after %ums" DEBUGCOLOR_RESET" \n",
-                    AROS_LE2LONG(hcopr->usbcmd), (100 - cnt) << 1);
+                    XHCI_RD32(hcopr->usbcmd), (100 - cnt) << 1);
 
     /* Wait for the controller to finish coming out of reset (CNR=0) */
     cnt = 100;
-    while((AROS_LE2LONG(hcopr->usbsts) & XHCIF_USBSTS_CNR) && (--cnt > 0))
+    while((XHCI_RD32(hcopr->usbsts) & XHCIF_USBSTS_CNR) && (--cnt > 0))
         uhwDelayMS(2, timerreq);
 
     /*
      * Check controller health before letting it run so that fatal errors
      * short-circuit initialisation rather than causing obscure failures later.
      */
-    val = AROS_LE2LONG(hcopr->usbsts);
+    val = XHCI_RD32(hcopr->usbsts);
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "USBSTS after interrupt enable = $%08x" DEBUGCOLOR_RESET" \n", val);
     xhciDumpStatus(val);
     if(val & (XHCIF_USBSTS_HCE | XHCIF_USBSTS_HSE)) {
@@ -3681,7 +3680,7 @@ BOOL xhciInit(struct PCIController *hc, struct PCIUnit *hu,
 
     /* Enable the interrupter to generate interrupts */
     volatile struct xhci_ir *xhciir = (volatile struct xhci_ir *)((IPTR)xhcic->xhc_XHCIIntR);
-    xhciir->iman = AROS_LONG2LE(XHCIF_IR_IMAN_IE);
+    XHCI_WR32(xhciir->iman, XHCIF_IR_IMAN_IE);
 
     /*
      * Start it, and be prepared to start it again.
@@ -3699,19 +3698,19 @@ BOOL xhciInit(struct PCIController *hc, struct PCIUnit *hu,
             pciusbWarn("xHCI", DEBUGWARNCOLOR_SET "Restarting after a failed start (attempt %u)" DEBUGCOLOR_RESET" \n",
                        attempt + 1);
             /* The error bits are write-one-to-clear */
-            hcopr->usbsts = AROS_LONG2LE(XHCIF_USBSTS_HSE | XHCIF_USBSTS_HCE);
+            XHCI_WR32(hcopr->usbsts, XHCIF_USBSTS_HSE | XHCIF_USBSTS_HCE);
             uhwDelayMS(20, timerreq);
 
             xhciReset(hc, hu, timerreq);
-            xhciir->iman = AROS_LONG2LE(XHCIF_IR_IMAN_IE);
+            XHCI_WR32(xhciir->iman, XHCIF_IR_IMAN_IE);
         }
 
         pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "Starting controller run state..." DEBUGCOLOR_RESET" \n");
-        val = AROS_LE2LONG(hcopr->usbcmd);
+        val = XHCI_RD32(hcopr->usbcmd);
         val |= XHCIF_USBCMD_RS | XHCIF_USBCMD_INTE;
-        hcopr->usbcmd = AROS_LONG2LE(val);
+        XHCI_WR32(hcopr->usbcmd, val);
         pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "USBCMD = $%08x..." DEBUGCOLOR_RESET" \n",
-                        AROS_LE2LONG(hcopr->usbcmd));
+                        XHCI_RD32(hcopr->usbcmd));
 
         /*
          * Running is what the controller says it is, not what was asked
@@ -3721,10 +3720,10 @@ BOOL xhciInit(struct PCIController *hc, struct PCIUnit *hu,
          * way from the cause.
          */
         cnt = 100;
-        while((AROS_LE2LONG(hcopr->usbsts) & XHCIF_USBSTS_HCH) && (--cnt > 0))
+        while((XHCI_RD32(hcopr->usbsts) & XHCIF_USBSTS_HCH) && (--cnt > 0))
             uhwDelayMS(2, timerreq);
 
-        val = AROS_LE2LONG(hcopr->usbsts);
+        val = XHCI_RD32(hcopr->usbsts);
         pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "USBSTS = $%08x, after %ums" DEBUGCOLOR_RESET" \n",
                         val, (100 - cnt) << 1);
         xhciDumpStatus(val);
@@ -3735,7 +3734,7 @@ BOOL xhciInit(struct PCIController *hc, struct PCIUnit *hu,
 
     if(val & XHCIF_USBSTS_HCH) {
         pciusbWarn("xHCI", DEBUGWARNCOLOR_SET "Controller will not leave the halted state (USBCMD $%08x, USBSTS $%08x)%s%s" DEBUGCOLOR_RESET" \n",
-                   AROS_LE2LONG(hcopr->usbcmd), val,
+                   XHCI_RD32(hcopr->usbcmd), val,
                    (val & XHCIF_USBSTS_HCE) ? " HCE" : "",
                    (val & XHCIF_USBSTS_HSE) ? " HSE" : "");
         /*

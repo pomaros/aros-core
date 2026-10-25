@@ -122,6 +122,38 @@ static int32_t signed_field(uint32_t raw, uint32_t size)
     return (int32_t)raw;
 }
 
+/* A record's value within its field: the masked bits shifted down, or the
+   whole field. A masked write keeps the other bits and refuses a value
+   wider than the mask. */
+static uint32_t record_read(const uint8_t *chunk, const struct settings_record *record)
+{
+    uint32_t raw = settings_field_read(chunk, record->offset, record->size), mask = record->mask;
+    if (mask == 0)
+        return raw;
+    raw &= mask;
+    while (!(mask & 1)) {
+        mask >>= 1;
+        raw >>= 1;
+    }
+    return raw;
+}
+
+static int record_write(uint8_t *chunk, const struct settings_record *record, uint32_t value)
+{
+    uint32_t mask = record->mask, shift = 0, raw;
+    if (mask == 0) {
+        settings_field_write(chunk, record->offset, record->size, value);
+        return SETTINGS_E_OK;
+    }
+    while (!((mask >> shift) & 1))
+        shift++;
+    if (value > (mask >> shift) || ((value << shift) & ~mask) != 0)
+        return SETTINGS_E_RANGE;
+    raw = settings_field_read(chunk, record->offset, record->size);
+    settings_field_write(chunk, record->offset, record->size, (raw & ~mask) | (value << shift));
+    return SETTINGS_E_OK;
+}
+
 int settings_value_get(const uint8_t *chunk, const struct settings_record *record,
     char *buffer, size_t buffer_size)
 {
@@ -144,24 +176,24 @@ int settings_value_get(const uint8_t *chunk, const struct settings_record *recor
         buffer[used] = '\0';
         return SETTINGS_E_OK;
     case SETTINGS_T_BOOL:
-        raw = settings_field_read(chunk, record->offset, record->size);
+        raw = record_read(chunk, record);
         return put_text(buffer, buffer_size, &used, raw != 0 ? "1" : "0");
     case SETTINGS_T_INT:
     case SETTINGS_T_PEN:
-        raw = settings_field_read(chunk, record->offset, record->size);
+        raw = record_read(chunk, record);
         return put_number(buffer, buffer_size, &used, signed_field(raw, record->size), 0);
     case SETTINGS_T_RGB:
     case SETTINGS_T_MODEID:
-        raw = settings_field_read(chunk, record->offset, record->size);
+        raw = record_read(chunk, record);
         return put_number(buffer, buffer_size, &used, (int32_t)raw, 1);
     case SETTINGS_T_ENUM:
-        raw = settings_field_read(chunk, record->offset, record->size);
+        raw = record_read(chunk, record);
         for (i = 0; i < record->choice_count; i++)
             if ((uint32_t)record->choices[i].value == raw)
                 return put_text(buffer, buffer_size, &used, record->choices[i].name);
         return put_number(buffer, buffer_size, &used, signed_field(raw, record->size), 0);
     case SETTINGS_T_FLAGS:
-        raw = settings_field_read(chunk, record->offset, record->size);
+        raw = record_read(chunk, record);
         for (i = 0; i < record->choice_count; i++) {
             uint32_t bit = (uint32_t)record->choices[i].value;
             if ((raw & bit) == bit && bit != 0) {
@@ -259,28 +291,23 @@ int settings_value_set(uint8_t *chunk, const struct settings_record *record,
             value = 0;
         else
             return SETTINGS_E_RANGE;
-        settings_field_write(chunk, record->offset, record->size, (uint32_t)value);
-        return SETTINGS_E_OK;
+        return record_write(chunk, record, (uint32_t)value);
     case SETTINGS_T_INT:
     case SETTINGS_T_PEN:
     case SETTINGS_T_RGB:
     case SETTINGS_T_MODEID:
         if (!parse_number(text, n, &value) || !fits(record, value))
             return SETTINGS_E_RANGE;
-        settings_field_write(chunk, record->offset, record->size, (uint32_t)value);
-        return SETTINGS_E_OK;
+        return record_write(chunk, record, (uint32_t)value);
     case SETTINGS_T_ENUM:
         for (i = 0; i < record->choice_count; i++)
             if (same(text, n, record->choices[i].name)) {
-                settings_field_write(chunk, record->offset, record->size,
-                    (uint32_t)record->choices[i].value);
-                return SETTINGS_E_OK;
+                return record_write(chunk, record, (uint32_t)record->choices[i].value);
             }
         if (parse_number(text, n, &value))
             for (i = 0; i < record->choice_count; i++)
                 if (record->choices[i].value == value) {
-                    settings_field_write(chunk, record->offset, record->size, (uint32_t)value);
-                    return SETTINGS_E_OK;
+                    return record_write(chunk, record, (uint32_t)value);
                 }
         return SETTINGS_E_RANGE;
     case SETTINGS_T_FLAGS:
@@ -309,8 +336,7 @@ int settings_value_set(uint8_t *chunk, const struct settings_record *record,
                 start = end + 1;
             }
         }
-        settings_field_write(chunk, record->offset, record->size, bits);
-        return SETTINGS_E_OK;
+        return record_write(chunk, record, bits);
     }
     return SETTINGS_E_UNKNOWN;
 }

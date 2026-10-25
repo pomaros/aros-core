@@ -3,6 +3,7 @@
 
 /*
     Copyright © 1995-2011, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright © 2001-2003, The MorphOS Development Team. All Rights Reserved.
     $Id$
 */
@@ -65,6 +66,11 @@ void PrepareGadgetInfo(struct GadgetInfo *gi, struct Screen *scr, struct Window 
 void SetGadgetInfoGadget(struct GadgetInfo *gi, struct Gadget *gad,
                          struct IntuitionBase *IntuitionBase);
 
+struct PropInputPosition;
+struct Gadget *DoGPInputAt(struct GadgetInfo *, struct Gadget *,
+    struct InputEvent *, STACKULONG, BOOL *, const struct PropInputPosition *,
+    struct IntuitionBase *);
+
 void SetGPIMouseCoords(struct gpInput *gpi, struct Gadget *gad);
 
 void HandleSysGadgetVerify(struct GadgetInfo *gi, struct Gadget *gadget,
@@ -102,6 +108,7 @@ void FixWindowCoords(struct Window *win, LONG *left, LONG *top, LONG *width, LON
 
 /*********************************************************************/
 
+void DrawWindowRefresh(struct Window *, struct IntuitionBase *);
 void WindowNeedsRefresh(struct Window * w, struct IntuitionBase * IntuitionBase );
 
 struct Screen *FindHighestScreen(struct IntuitionBase *IntuitionBase);
@@ -122,6 +129,9 @@ void FreeGeneratedInputEvents(struct IIHData *iihdata);
 
 BOOL FireMenuMessage(WORD code, struct Window *win,
                      struct InputEvent *ie, struct IntuitionBase *IntuitionBase);
+BOOL StartMenus(struct IIHData *iihdata, struct Window *win,
+                struct InputEvent *ie, struct IntuitionBase *IntuitionBase);
+void CloseOrphanMenuWindows(struct IIHData *iihdata, struct IntuitionBase *IntuitionBase);
 
 /*********************************************************************/
 

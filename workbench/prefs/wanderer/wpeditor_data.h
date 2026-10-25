@@ -42,7 +42,7 @@ struct WPEditor_DATA
                                                         *wped_FirstBGAdvancedObj;
 
     ULONG                                               wped_DimensionsSet;
-
+                                                        
     Object                                              *wped_ViewSettings_GroupObj,
                                                         *wped_ViewSettings_SpacerObj,
                                                         *wped_c_NavigationMethod,

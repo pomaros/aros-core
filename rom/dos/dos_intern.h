@@ -49,6 +49,14 @@ struct IntDosBase
     struct SignalSemaphore      segsem;
     struct List                 segdata;
     struct Library              *securityBase;  /* security.library, only when resident in ROM */
+    struct List                 handlerStarts;  /* devices whose handler is being started (getdeviceproc.c) */
+#ifdef __aarch64__
+    /* Segments with TLS sections, indexed by their slot (elf_tls.c) */
+    struct SignalSemaphore      tlsSem;
+    struct ELFTLSModule         **tlsModules;
+    ULONG                       tlsCapacity;
+    UQUAD                       tlsSerial;
+#endif
 #ifdef __arm__
     ULONG                       arm_Arch; /* ARM-specific info for ELF loader */
     BOOL                        arm_VFP;
@@ -144,6 +152,7 @@ BOOL internal_SetProgramName(struct CommandLineInterface *cli,
     CONST_STRPTR name, struct DosLibrary *DOSBase);
 /* Duplicate a cli_CommandDir BPTR list */
 BPTR internal_CopyPath(BPTR boldpath, struct DosLibrary * DOSBase);
+void internal_FreePath(BPTR path, struct DosLibrary *DOSBase);
 
 
 /* Pattern matching function used by MatchPattern() and MatchPatternNoCase() */

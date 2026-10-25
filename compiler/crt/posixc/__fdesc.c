@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
 
     File descriptor handling internals.
@@ -20,9 +21,11 @@
 
 #include <string.h>
 #include <fcntl.h>
+#include <sys/ioctl.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
+#include <limits.h>
 
 #include "__fdesc.h"
 #include "__dos64.h"
@@ -84,6 +87,13 @@ void __fdesc_unlock(void)
     FD_UNLOCK(base);
 }
 
+/* A number __getfdslot() handed out and __setfdesc() has not published yet
+   (open() is still talking to the file system). The slot holds this marker
+   so __getfirstfd() in another Task does not hand the same number out
+   again; lookups see an empty slot. fd.library reserves numbers system-wide
+   as well, but the local table must not depend on it being there. */
+static fdesc __fd_reserved;
+#define FD_RESERVED (&__fd_reserved)
 
 /* TODO: Add locking to make filedesc usage thread safe
    Using vfork()+exec*() filedescriptors may be shared between different
@@ -139,6 +149,8 @@ fdesc *__getfdesc(register int fd)
     local = ((FD_SLOTS(PosixCBase)>fd) && (fd>=0)) ?
                 FD_ARRAY(PosixCBase)[fd] : NULL;
     FD_UNLOCK(PosixCBase);
+    if (local == FD_RESERVED)
+        local = NULL;
 
     /* Standard streams (0..2) are always process-local. */
     if (fd >= 0 && fd <= STDERR_FILENO)
@@ -239,7 +251,7 @@ int __getfirstfd(register int startfd)
     }
 }
 
-int __getfdslot(int wanted_fd)
+static int __reservefdslot(int wanted_fd, int minimum)
 {
     struct PosixCIntBase *PosixCBase =
         (struct PosixCIntBase *)__aros_getbase_PosixCBase();
@@ -252,7 +264,7 @@ int __getfdslot(int wanted_fd)
     FD_LOCK(PosixCBase);
 
     if (wanted_fd == __FD_FIRSTFREE)
-        wanted_fd = __getfirstfd(0);
+        wanted_fd = __getfirstfd(minimum);
 
     if (wanted_fd>=FD_SLOTS(PosixCBase))
     {
@@ -283,7 +295,8 @@ int __getfdslot(int wanted_fd)
         __set_errno(PosixCBase, EINVAL);
         return -1;
     }
-    else if (FD_ARRAY(PosixCBase)[wanted_fd])
+    else if (FD_ARRAY(PosixCBase)[wanted_fd] &&
+             FD_ARRAY(PosixCBase)[wanted_fd] != FD_RESERVED)
     {
         /* The slot is grown above for an out-of-range wanted_fd (which is
            empty, so nothing is closed if that allocation fails); only an
@@ -318,8 +331,76 @@ int __getfdslot(int wanted_fd)
         }
     }
 
+    /* Busy from here until the caller publishes it or gives it back */
+    FD_ARRAY(PosixCBase)[wanted_fd] = FD_RESERVED;
+
     FD_UNLOCK(PosixCBase);
     return wanted_fd;
+}
+
+int __getfdslot(int wanted_fd)
+{
+    return __reservefdslot(wanted_fd, 0);
+}
+
+int __getfreefdslot(int minimum)
+{
+    return __reservefdslot(__FD_FIRSTFREE, minimum);
+}
+
+/* Duplicate and publish a local file descriptor with its initial flags in
+   one table transaction. FD_Alloc claims a fresh global number before the
+   local array is grown; no occupied descriptor is closed or replaced. */
+int __dupfd(int oldfd, int minimum, int flags)
+{
+    struct PosixCIntBase *PosixCBase =
+        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+    fdesc *old, *copy;
+    int slot, result = -1, reserved = 0;
+    LONG error = 0;
+    struct Library *FDBase = NULL;
+    if (minimum < 0 || minimum == INT_MAX || (flags & ~FD_CLOEXEC)) {
+        __set_errno(PosixCBase, EINVAL);
+        return -1;
+    }
+    FD_LOCK(PosixCBase);
+    old = __getfdesc(oldfd);
+    if (!old) { error = EBADF; goto done; }
+    copy = __alloc_fdesc();
+    if (!copy) { error = ENOMEM; goto done; }
+    __fcb_lock(old->fcb);
+    if (old->fcb->opencount == (unsigned int)-1) {
+        error = EOVERFLOW;
+        goto free_copy;
+    }
+    slot = __getfirstfd(minimum);
+    if (slot > STDERR_FILENO && __fdlib_available(PosixCBase)) {
+        LONG allocated;
+        FDBase = PosixCBase->PosixCFDBase;
+        error = FD_Alloc(slot, FD_OWNER_POSIXC, NULL, &allocated);
+        if (error) goto free_copy;
+        slot = allocated;
+        reserved = 1;
+    }
+    if (slot == INT_MAX || __getfdslot(slot) < 0) {
+        error = ENOMEM;
+        if (reserved) FD_Free(slot, FD_OWNER_POSIXC);
+        goto free_copy;
+    }
+    copy->fcb = old->fcb;
+    copy->fdflags = flags;
+    copy->fcb->opencount++;
+    __setfdesc(slot, copy);
+    result = slot;
+    __fcb_unlock(old->fcb);
+    goto done;
+free_copy:
+    __fcb_unlock(old->fcb);
+    __free_fdesc(copy);
+done:
+    FD_UNLOCK(PosixCBase);
+    if (error) __set_errno(PosixCBase, error);
+    return result;
 }
 
 LONG __oflags2amode(int flags)
@@ -718,7 +799,7 @@ static int __copy_fdarray(fdesc **__src_fd_array, int fd_slots)
     
     for(i = fd_slots - 1; i >= 0; i--)
     {
-        if(__src_fd_array[i])
+        if(__src_fd_array[i] && __src_fd_array[i] != FD_RESERVED)
         {
             if(__getfdslot(i) != i)
                 return 0;
@@ -812,7 +893,8 @@ void __exit_fd(struct PosixCIntBase *PosixCBase)
     i = FD_SLOTS(PosixCBase);
     while (i)
     {
-        if (FD_ARRAY(PosixCBase)[--i])
+        --i;
+        if (FD_ARRAY(PosixCBase)[i] && FD_ARRAY(PosixCBase)[i] != FD_RESERVED)
             close(i);
     }
 }
@@ -865,3 +947,81 @@ void __updatestdio(void)
 
 ADD2OPENLIB(__init_fd, 2);
 ADD2CLOSELIB(__exit_fd, 2);
+
+/* Dispatch never borrows an owner table or object across an unprotected gap.
+ * Existing owner2 still has to convert its provider teardown to retirement;
+ * native owned sockets honor that provider half of the lease contract. */
+SIPTR __fdhook(int fd, int operation, IPTR a, IPTR b, IPTR c, LONG *error)
+{
+    struct Library *FDBase = OpenLibrary("fd.library", 51);
+    struct fd_lease lease = {0};
+    const struct fd_hooks *hooks;
+    SIPTR result = -1;
+    LONG retired;
+    *error = FDBase ? FD_Acquire(fd, &lease) : EBADF;
+    if (*error) {
+        if (FDBase) CloseLibrary(FDBase);
+        return -1;
+    }
+    hooks = lease.hooks;
+    *error = EBADF;
+    if (!hooks || hooks->fdh_Version!=FD_HOOKS_VERSION) {
+        FD_Release(&lease);CloseLibrary(FDBase);return -1;
+    }
+    if (lease.owner != FD_OWNER_POSIXC) switch (operation) {
+    case __FDH_READ:
+        if (hooks->fdh_read) { *error=0; result=hooks->fdh_read(lease.data,fd,(APTR)a,b,error); }
+        break;
+    case __FDH_WRITE:
+        if (hooks->fdh_write) { *error=0; result=hooks->fdh_write(lease.data,fd,(CONST_APTR)a,b,error); }
+        break;
+    case __FDH_CLOSE:
+        if (hooks->fdh_close) { *error=0; result=hooks->fdh_close(lease.data,fd,error); }
+        break;
+    case __FDH_IOCTL:
+        if (hooks->fdh_ioctl) { *error=0; result=hooks->fdh_ioctl(lease.data,fd,a,(APTR)b,error); }
+        else *error=ENOTTY;
+        break;
+    case __FDH_DUP:
+        if (hooks->fdh_dup) {
+            if (__getfdesc(a)) {
+                /* Native replacement needs one registry transaction across
+                 * both owners; never destroy the target before it exists. */
+                if (lease.owner==FD_OWNER_NATIVE_SOCKET) {
+                    *error=EOPNOTSUPP;
+                    break;
+                }
+                close(a);
+            }
+            *error=0; result=hooks->fdh_dup(lease.data,fd,a,error);
+        }
+        break;
+    case __FDH_FCNTL:
+        if (hooks->fdh_fcntl) {
+            *error=0;result=hooks->fdh_fcntl(lease.data,fd,a,b,error);
+        } else if (a==F_GETFD || a==F_SETFD) {
+            /* Legacy descriptor owners expose no descriptor flag storage. */
+            *error=0; result=0;
+        } else if (a==F_GETFL && hooks->fdh_ioctl) {
+            LONG nonblock;
+            *error=0;
+            nonblock=hooks->fdh_ioctl(lease.data,fd,FIONBIO,NULL,error);
+            if (nonblock>=0) result=O_RDWR|(nonblock?O_NONBLOCK:0);
+        } else if (a==F_SETFL && hooks->fdh_ioctl) {
+            int nonblock=(b & O_NONBLOCK)!=0;
+            *error=0;result=hooks->fdh_ioctl(lease.data,fd,FIONBIO,&nonblock,error);
+        } else if (a==F_DUPFD && hooks->fdh_dup && (SIPTR)b>=0) {
+            LONG target=__getfirstfd(b);
+            *error=0; result=hooks->fdh_dup(lease.data,fd,target,error);
+            if (result>=0) result=target;
+        } else *error=EINVAL;
+        break;
+    }
+    retired=FD_Release(&lease);
+    /* Only close owns its teardown result. Other operations must preserve
+     * their own result when they happen to release a retired reservation. */
+    if (operation==__FDH_CLOSE && !*error && retired) { *error=retired;result=-1; }
+    CloseLibrary(FDBase);
+    (void)c;
+    return result;
+}

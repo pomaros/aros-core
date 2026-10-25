@@ -11,16 +11,27 @@
 #include <aros/libcall.h>
 #include <aros/apple/platformtimer.h>
 #include <aros/apple/startup.h>
-
+#include <aros/apple/jit.h>
+#include "jit_protect.h"
 
 #include <kernel_base.h>
 #include "kernel_intern.h"
 #include "page_allocator.h"
-
+#include "platform_irq.h"
+#include "platform_debug.h"
 #include "cpu_monitor.h"
 #include <proto/kernel.h>
 
 extern struct KrnPlatformTimer AROSApplePlatformTimer;
+
+#include <aros/apple/idle.h>
+#include <aros/apple/klog.h>
+#include <aros/apple/crashlog.h>
+extern intptr_t AROSAppleKernelLogRecord(void);
+extern intptr_t AROSAppleKernelCrashLogRecord(void);
+extern volatile uint32_t AROSAppleKernelIdleMode;
+extern volatile uint64_t AROSAppleKernelIdleEntries;
+extern volatile uint32_t AROSAppleKernelTicksHeld;
 
 AROS_LH1(intptr_t, KrnGetSystemAttr,
     AROS_LHA(uint32_t, id, D0),
@@ -32,10 +43,27 @@ AROS_LH1(intptr_t, KrnGetSystemAttr,
     {
     case KATTR_PageProtect:
         return (intptr_t)(KRN_PageProtect)AROSApplePageProtect;
+    case AROS_APPLE_KATTR_JIT_MODE:
+        return AROSAppleJitMode();
     case AROS_APPLE_KATTR_CPU_STATS:
     {
         const struct AROSAppleCPUStats *stats = AROSAppleCPUMonitorStats();
         return stats ? (intptr_t)stats : -1;
+    }
+    case AROS_APPLE_KATTR_KLOG:
+        return AROSAppleKernelLogRecord();
+    case AROS_APPLE_KATTR_CRASH_LOG:
+        return AROSAppleKernelCrashLogRecord();
+    case AROS_APPLE_KATTR_IDLE_CONTROL:
+    {
+        static struct AROSAppleIdleControl control;
+
+        control.version = AROS_APPLE_IDLE_CONTROL_VERSION;
+        control.size = sizeof(control);
+        control.mode = &AROSAppleKernelIdleMode;
+        control.entries = &AROSAppleKernelIdleEntries;
+        control.ticks_held = &AROSAppleKernelTicksHeld;
+        return (intptr_t)&control;
     }
 
     case KATTR_Architecture:
@@ -85,16 +113,11 @@ AROS_LH1(intptr_t, KrnGetSystemAttr,
     case AROS_APPLE_KATTR_CPU_MIDR:
     case AROS_APPLE_KATTR_CURRENT_EL:
     case AROS_APPLE_KATTR_COUNTER_FREQUENCY:
+    case KATTR_HWCap:
+    case KATTR_HWCap2:
     case AROS_APPLE_KATTR_BOARD_MODEL:
     case AROS_APPLE_KATTR_BOARD_COMPATIBLE:
-    case AROS_APPLE_KATTR_KEYBOARD_ISO:
-    case AROS_APPLE_KATTR_TRACKPAD_HID:
-    case AROS_APPLE_KATTR_TRACKPAD_STATE:
-    case AROS_APPLE_KATTR_SPI_STATS:
-    case AROS_APPLE_KATTR_DESKTOP_AIC:
-    case AROS_APPLE_KATTR_DESKTOP_NVME:
     case AROS_APPLE_KATTR_BOOT_SEED:
-    case AROS_APPLE_KATTR_BATTERY:
     case AROS_APPLE_KATTR_SYSTEM_TIME:
     {
         intptr_t value;
@@ -126,7 +149,13 @@ AROS_LH1(intptr_t, KrnGetSystemAttr,
     }
     }
 
-    return -1;
+    /* Product identities remain opaque to the common attribute dispatcher. */
+    {
+        intptr_t value;
+        if (AROSPlatformIdentity(id, &value))
+            return value;
+    }
+    return AROSPlatformIRQAttribute(id);
 
     AROS_LIBFUNC_EXIT
 }

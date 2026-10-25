@@ -409,6 +409,7 @@ static BOOL OTAG_GetGlyphMaps(struct GlyphEngine *ge,
                               struct DiskfontBase *DiskfontBase)
 {
     UWORD i;
+    WORD ascii_ascent = 0, ascii_descent = 0;
 
     *lochar   = -1;
     *hichar   = 0;
@@ -443,11 +444,33 @@ static BOOL OTAG_GetGlyphMaps(struct GlyphEngine *ge,
             {
                 *baseline = gm[i]->glm_Y0/* - (WORD)gm[i]->glm_BlackTop*/;
             }
+            /* A glyph's rows run from Baseline + 1 - Y0, so it reaches
+               BlackHeight - Y0 rows below the baseline variable. */
+            if (i >= 32 && i < 127)
+            {
+                WORD descent = (WORD)gm[i]->glm_BlackHeight - (WORD)gm[i]->glm_Y0;
+
+                if (gm[i]->glm_Y0 > ascii_ascent)
+                    ascii_ascent = gm[i]->glm_Y0;
+                if (descent > ascii_descent)
+                    ascii_descent = descent;
+            }
 
             *gfxwidth += gm[i]->glm_BlackWidth;
         }
     }
 
+    /* The font is exactly fontheight rows. The tallest of the 256 glyphs
+       (accented capitals, the box) set the baseline so low that every
+       descender of the text letters was cut off at the bottom. Place it
+       for the printable ASCII letters instead, keeping their descent;
+       only the top of the tallest accents may be clipped. */
+    if (ascii_ascent > 0)
+    {
+        *baseline = ascii_ascent;
+        if (*baseline + ascii_descent > fontheight && fontheight > ascii_descent)
+            *baseline = fontheight - ascii_descent;
+    }
     if (*baseline >= fontheight) *baseline = fontheight;
     if (*lochar > 32) *lochar = 32;
 

@@ -4,5 +4,5 @@
 #define SOFTWARE_UPDATE_EDITOR_H
 #include <libraries/mui.h>
 #define MUIM_SoftwareUpdateEditor_Refresh (TAG_USER | 0x105a0001)
-struct SoftwareUpdateEditor_DATA { Object *installed,*previous,*pending,*delivered; };
+struct SoftwareUpdateEditor_DATA { Object *installed,*previous,*last,*pending,*delivered; };
 #endif

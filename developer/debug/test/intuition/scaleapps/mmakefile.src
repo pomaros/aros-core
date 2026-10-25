@@ -1,0 +1,11 @@
+# Copyright (C) 2026 John Knipper.
+# Distributed under the AROS Public License, version 1.1.
+include $(SRCDIR)/config/aros.cfg
+
+#MM- test-intuition : test-intuition-scaleapps
+#MM test-intuition-scaleapps : includes linklibs
+
+%build_prog mmake=test-intuition-scaleapps progname=scaleapps \
+    files=scaleapps targetdir=$(AROS_TESTS)/intuition
+
+%common

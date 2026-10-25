@@ -36,7 +36,7 @@ FILES	  := bstr_helper errorlist \
 	     match_misc newcliproc rootnode fs_driver \
 	     patternmatching internalseek internalflush \
 	     packethelper namefrom internalloadseg_support \
-	     shell_helper emu68k_route
+	     shell_helper elf_tls emu68k_route
 
 LOADSEG_FILES := internalloadseg \
 		 $(foreach img, $(IMAGE_TYPES), internalloadseg_$(img))
@@ -61,7 +61,7 @@ FUNCTIONS := abortpkt addbuffers adddosentry addpart addsegment \
 	     matchpatternnocase maxcli namefromfh namefromlock newloadseg nextdosentry nil \
 	     open openfromlock output parentdir parentoffh parsepattern \
 	     parsepatternnocase pathpart printfault putstr read readargs \
-	     readitem relabel readlink remassignlist remdosentry remsegment rename \
+	     readitem relabel readlink remassignlist remdosentry remsegment rename replaceobject \
 	     replypkt runcommand samedevice samelock scanvars seek \
 	     selectinput selectoutput sendpkt setargstr setcomment setconsoletask \
 	     setcurrentdirname setfiledate setfilesize setfilesystask \
@@ -72,12 +72,13 @@ FUNCTIONS := abortpkt addbuffers adddosentry addpart addsegment \
 	     vprintf waitforchar waitpkt write writechars runhandler
 
 #MM kernel-dos-linklib : workbench-libs-dos-catalogs
-#MM kernel-dos-kobj : workbench-libs-dos-catalogs
-#MM kernel-dos : workbench-libs-dos-catalogs
+# dos.library calls security.library (setuid executables, per-user assigns):
+# its objects need security.library's current includes
+#MM kernel-dos-kobj : workbench-libs-dos-catalogs kernel-security-includes
+#MM kernel-dos : workbench-libs-dos-catalogs kernel-security-includes
 
 #MM kernel-dos-includes : \
 #MM     kernel-utility-includes \
-#MM     kernel-security-includes \
 #MM     kernel-exec-includes \
 #MM     kernel-timer-includes \
 #MM     kernel-intuition-includes \
@@ -98,6 +99,8 @@ $(GENDIR)/$(CURDIR)/dos/errorlist.d : $(GENDIR)/$(CURDIR)/dos/errorlist.h
 $(GENDIR)/$(CURDIR)/dos/errorlist.h : $(SRCDIR)/$(CURDIR)/catalogs/dos.cd $(SRCDIR)/$(CURDIR)/genstrings.py
 	@$(ECHO) Generating $@...
 	@$(PYTHON) $(SRCDIR)/$(CURDIR)/genstrings.py $< > $@
+
+#MM linklibs-loadseg : kernel-security-includes
 
 %build_linklib mmake=linklibs-loadseg libname=loadseg files="$(LOADSEG_FILES)" objdir=$(OBJDIR)/loadseg libdir=$(GENDIR)/lib
 

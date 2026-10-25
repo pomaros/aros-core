@@ -6,6 +6,7 @@
 */
 
 #include "intuition_intern.h"
+#include "windowfit.h"
 
 /*****************************************************************************
 
@@ -59,9 +60,11 @@
 
     DEBUG_WINDOWLIMITS(dprintf("WindowLimits(Window 0x%lx MinWidth %ld MinHeight %ld MaxWidth %ld MaxHeight %ld)\n",window,MinWidth,MinHeight,MaxWidth,MaxHeight));
 
-    IntuitionBase = IntuitionBase;  /* shut up the compiler */
-
     SANITY_CHECKR(window,FALSE)
+
+    ULONG lock = LockIBase(0);
+    BOOL unlimitedWidth = (WORD)MaxWidth == -1;
+    BOOL unlimitedHeight = (WORD)MaxHeight == -1;
 
     /* convert -1 to screen width/height */
     if ((WORD)MaxWidth == -1) MaxWidth = window->WScreen->Width;
@@ -74,7 +77,10 @@
     if (MinWidth)
     {
         if(window->Width >= MinWidth)
+        {
             window->MinWidth = MinWidth;
+            WindowFitRecordLimits(window, AG_MINWIDTH, FALSE);
+        }
         else
             retval = FALSE;
     }
@@ -82,7 +88,10 @@
     if (MinHeight)
     {
         if(window->Height >= MinHeight)
+        {
             window->MinHeight = MinHeight;
+            WindowFitRecordLimits(window, AG_MINHEIGHT, FALSE);
+        }
         else
             retval = FALSE;
     }
@@ -90,7 +99,10 @@
     if (MaxWidth)
     {
         if(window->Width <= MaxWidth)
+        {
             window->MaxWidth = MaxWidth;
+            WindowFitRecordLimits(window, AG_MAXWIDTH, unlimitedWidth);
+        }
         else
             retval = FALSE;
     }
@@ -98,11 +110,15 @@
     if (MaxHeight)
     {
         if(window->Height <= MaxHeight)
+        {
             window->MaxHeight = MaxHeight;
+            WindowFitRecordLimits(window, AG_MAXHEIGHT, unlimitedHeight);
+        }
         else
             retval = FALSE;
     }
     
+    UnlockIBase(lock);
     return retval;
     
     AROS_LIBFUNC_EXIT

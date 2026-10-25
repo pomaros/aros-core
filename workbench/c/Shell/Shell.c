@@ -275,10 +275,14 @@ LONG checkLine(ShellState *ss, Buffer *in, Buffer *out, BOOL echo)
          * executeLine() reports its own failures. Everything convertLine()
          * rejects, above all a redirection whose file would not open, used to
          * reach here and go no further than Result2, so the command simply did
-         * not run and said nothing about it.
+         * not run and said nothing about it. A refused line is a failed
+         * command, so a script stops at it like at any other failure.
          */
         if (convertFailed)
+        {
             PrintFault(result, NULL);
+            cli->cli_ReturnCode = RETURN_FAIL;
+        }
     }
 
 exit:

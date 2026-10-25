@@ -44,6 +44,7 @@
 struct Pool 
 {
     struct MinList PuddleList;
+    struct MinList LargeList;   /* one puddle per block larger than a puddle, never searched */
     ULONG Requirements;
     ULONG PuddleSize;
     ULONG PoolMagic;
@@ -81,6 +82,9 @@ void mhac_ClearSysCtx(struct MemHeader * mh, struct ExecBase * SysBase);
 struct MemHeader *FindMem(APTR address, struct ExecBase *SysBase);
 APTR stdAlloc(struct MemHeader *mh, struct MemHeaderAllocatorCtx *mhac, IPTR byteSize, ULONG requirements, struct TraceLocation *loc, struct ExecBase *SysBase);
 void stdDealloc(struct MemHeader *freeList, struct MemHeaderAllocatorCtx *mhac, APTR memoryBlock, IPTR byteSize, struct TraceLocation *loc, struct ExecBase *SysBase);
+/* Post a memory alert that stdAlloc()/stdDealloc() deferred: call it once
+ * every allocator lock the caller took is released (see memory.c). */
+void mmPostPendingAlert(struct ExecBase *SysBase);
 
 APTR InternalAllocAbs(APTR location, IPTR byteSize, struct ExecBase *SysBase);
 void InternalFreeMem(APTR location, IPTR byteSize, struct TraceLocation *loc, struct ExecBase *SysBase);

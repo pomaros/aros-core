@@ -3,19 +3,8 @@
  *
  * Licensed under the AROS Public License (APL) Version 1.1
  *
- * Desc: Reader and writer for ENV:Sys/Wireless.prefs, the wpa_supplicant-style
- *       file the network preferences write:
- *
- *           network={
- *               ssid="name"
- *               psk="passphrase"
- *               key_mgmt=WPA-PSK
- *           }
- *
- *       Header-only and free of OS calls so bwfm.device, the Wi-Fi
- *       preferences and a host test share one implementation. Only the
- *       first network block is used; a quoted psk is a passphrase, a bare
- *       64-digit psk is a raw PSK the firmware supplicant does not take.
+ * Desc: Metadata-only Wireless.prefs. Credentials live in keyring.library.
+ *       Shared parser/formatter for the driver, editors and host tests.
  */
 
 #ifndef WIRELESS_PREFS_H
@@ -29,13 +18,11 @@
 
 struct wireless_prefs {
     char ssid[WIRELESS_SSID_MAX + 1];
-    char psk[WIRELESS_PSK_MAX + 1];
     unsigned ssid_len;
-    unsigned psk_len;
-    unsigned psk_is_hex;   /* bare 64 hex digits: a raw PSK, unsupported */
+    unsigned protected_network;
 };
 
-static size_t wireless_prefs_skip_space(const char *text, size_t at,
+static inline size_t wireless_prefs_skip_space(const char *text, size_t at,
     size_t end)
 {
     while (at < end && (text[at] == ' ' || text[at] == '\t'))
@@ -44,7 +31,7 @@ static size_t wireless_prefs_skip_space(const char *text, size_t at,
 }
 
 /* Copy a quoted or bare value at `at` into out; returns the length. */
-static unsigned wireless_prefs_value(const char *text, size_t at,
+static inline unsigned wireless_prefs_value(const char *text, size_t at,
     size_t end, char *out, unsigned max, unsigned *quoted)
 {
     unsigned length = 0;
@@ -71,7 +58,7 @@ static unsigned wireless_prefs_value(const char *text, size_t at,
     return length;
 }
 
-static int wireless_prefs_line_is(const char *text, size_t at, size_t end,
+static inline int wireless_prefs_line_is(const char *text, size_t at, size_t end,
     const char *key)
 {
     size_t index = 0;
@@ -84,24 +71,55 @@ static int wireless_prefs_line_is(const char *text, size_t at, size_t end,
     return 1;
 }
 
+static inline int wireless_prefs_key_is(const char *text,size_t at,size_t end,const char *key)
+{
+    if(!wireless_prefs_line_is(text,at,end,key)) return 0;
+    while(*key) { at++;key++; }
+    at=wireless_prefs_skip_space(text,at,end);
+    return at<end && text[at]=='=';
+}
+static inline int wireless_prefs_unsupported_secret(const char *text,size_t at,size_t end)
+{
+    static const char *names[]={"password","private_key_passwd","private_key2_passwd","pin","pin2","new_password"};
+    size_t i;
+    if(wireless_prefs_line_is(text,at,end,"blob-base64-")) return 1;
+    for(i=0;i<sizeof(names)/sizeof(names[0]);i++)
+        if(wireless_prefs_key_is(text,at,end,names[i])) return 1;
+    return 0;
+}
+
+/* Runtime consumers require the explicit one-shot importer for old files. */
+static inline int wireless_prefs_has_plaintext(const char *text, size_t length)
+{
+    size_t at=0;
+    if(!text) return 0;
+    while(at<length) {
+        size_t line=wireless_prefs_skip_space(text,at,length);
+        if(line<length && text[line]=='#') line=wireless_prefs_skip_space(text,line+1,length);
+        if(wireless_prefs_key_is(text,line,length,"psk") ||
+           wireless_prefs_line_is(text,line,length,"wep_key") ||
+           wireless_prefs_unsupported_secret(text,line,length)) return 1;
+        while(at<length && text[at]!='\n') at++;
+        at++;
+    }
+    return 0;
+}
+
 /*
  * Parse the first network block. Returns 1 when an SSID was found. A
- * block without psk is an open network (psk_len 0).
+ * key_mgmt=WPA-PSK identifies a protected network.
  */
-static int wireless_prefs_parse(const char *text, size_t length,
+static inline int wireless_prefs_parse(const char *text, size_t length,
     struct wireless_prefs *prefs)
 {
     size_t at = 0;
     int in_block = 0;
     unsigned quoted;
-    unsigned index;
 
     prefs->ssid[0] = '\0';
-    prefs->psk[0] = '\0';
     prefs->ssid_len = 0;
-    prefs->psk_len = 0;
-    prefs->psk_is_hex = 0;
-    if (text == NULL)
+    prefs->protected_network = 0;
+    if (text == NULL || wireless_prefs_has_plaintext(text,length))
         return 0;
     while (at < length) {
         size_t line = wireless_prefs_skip_space(text, at, length);
@@ -111,25 +129,16 @@ static int wireless_prefs_parse(const char *text, size_t length,
                 in_block = 1;
         } else if (line < length && text[line] == '}') {
             break;
+        } else if (wireless_prefs_line_is(text, line, length, "psk=") ||
+                   wireless_prefs_line_is(text, line, length, "wep_key")) {
+            return 0; /* Explicit migration imports obsolete cleartext files. */
         } else if (wireless_prefs_line_is(text, line, length, "ssid=")) {
             prefs->ssid_len = wireless_prefs_value(text, line + 5, length,
                 prefs->ssid, WIRELESS_SSID_MAX, &quoted);
-        } else if (wireless_prefs_line_is(text, line, length, "psk=")) {
-            prefs->psk_len = wireless_prefs_value(text, line + 4, length,
-                prefs->psk, WIRELESS_PSK_MAX, &quoted);
-            if (!quoted && prefs->psk_len == 63) {
-                /* 64 hex digits were cut to 63: a raw PSK. */
-                prefs->psk_is_hex = 1;
-            } else if (!quoted) {
-                prefs->psk_is_hex = 1;
-                for (index = 0; index < prefs->psk_len; ++index) {
-                    char c = prefs->psk[index];
-
-                    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
-                            (c >= 'A' && c <= 'F')))
-                        prefs->psk_is_hex = 0;
-                }
-            }
+        } else if (wireless_prefs_line_is(text, line, length, "key_mgmt=WPA-PSK")) {
+            prefs->protected_network = 1;
+        } else if (wireless_prefs_line_is(text, line, length, "keyring_security=WEP")) {
+            prefs->protected_network = 2;
         }
         while (at < length && text[at] != '\n')
             ++at;
@@ -139,11 +148,10 @@ static int wireless_prefs_parse(const char *text, size_t length,
 }
 
 /* Write one network block; returns the length, or 0 when out is too small. */
-static size_t wireless_prefs_format(const char *ssid, const char *psk,
+static inline size_t wireless_prefs_format(const char *ssid, unsigned protected_network,
     char *out, size_t size)
 {
     static const char head[] = "network={\n\tssid=\"";
-    static const char psk_head[] = "\"\n\tpsk=\"";
     static const char psk_tail[] = "\"\n\tkey_mgmt=WPA-PSK\n}\n";
     static const char open_tail[] = "\"\n\tkey_mgmt=NONE\n}\n";
     const char *parts[5];
@@ -151,11 +159,13 @@ static size_t wireless_prefs_format(const char *ssid, const char *psk,
     size_t total = 0;
     size_t index;
 
+    if (ssid == NULL || ssid[0] == 0) return 0;
+    for (index = 0; ssid[index]; ++index)
+        if (index >= WIRELESS_SSID_MAX || (unsigned char)ssid[index] < 32 ||
+            ssid[index] == '"' || ssid[index] == '\\') return 0;
     parts[count++] = head;
     parts[count++] = ssid;
-    if (psk != NULL && psk[0] != '\0') {
-        parts[count++] = psk_head;
-        parts[count++] = psk;
+    if (protected_network) {
         parts[count++] = psk_tail;
     } else {
         parts[count++] = open_tail;

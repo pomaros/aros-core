@@ -1,0 +1,11 @@
+# Copyright (C) 2026 John KNIPPER <code@jkn.me>
+# Licensed under the AROS Public License (APL) Version 1.1
+#
+# -Zbuild-std and -Zjson-target-spec are nightly-only; rust-src is what
+# -Zbuild-std compiles core and alloc from. Moving the pin means rebuilding
+# the module and repeating its relocation audit and load test.
+
+[toolchain]
+channel = "nightly-2026-06-27"
+components = ["rust-src"]
+profile = "minimal"

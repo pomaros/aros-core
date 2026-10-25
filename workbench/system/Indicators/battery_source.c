@@ -1,18 +1,17 @@
 /* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
  * SPDX-License-Identifier: APL-1.1
- * Apple cached battery adapter. No SMC request executes in this process.
+ * Battery subscription service; snapshots come from the selected provider.
  */
 #include "battery.h"
+#include "battery_source.h"
 #include "consumers.h"
 #include "subscriptions.h"
 #include <resources/task.h>
 #include <proto/task.h>
 #include "source.h"
-#include <aros/apple/startup.h>
 #include <devices/timer.h>
 #include <dos/dos.h>
 #include <proto/exec.h>
-#include <proto/kernel.h>
 #include <proto/rexxsyslib.h>
 #include <proto/timer.h>
 #include <stdio.h>
@@ -38,20 +37,9 @@ static void result(APTR owner, BOOL setting, BOOL success, CONST_STRPTR text, AP
 }
 static BOOL snapshot(char *event, size_t size)
 {
-    const volatile struct AROSAppleBatteryInfo *published=(APTR)KrnGetSystemAttr(AROS_APPLE_KATTR_BATTERY);
-    struct AROSAppleBatteryInfo sample;
-    uint64_t counter;
-    if (!published || published==(APTR)-1 || !AROSAppleBatteryRead(published,&sample)) return FALSE;
-    __asm__ volatile("mrs %0, cntvct_el0":"=r"(counter));
-    if (!(sample.flags&AROS_APPLE_BATTERY_PRESENT) || !sample.counter_frequency ||
-        counter<sample.sample_counter || (counter-sample.sample_counter)/sample.counter_frequency>=10) return FALSE;
-    {
-        struct IndicatorBattery b={sample.charge_percent,
-            !!(sample.flags&AROS_APPLE_BATTERY_ADAPTER),!!(sample.flags&AROS_APPLE_BATTERY_CHARGING),
-            !!(sample.flags&AROS_APPLE_BATTERY_CAPACITY),!!(sample.flags&AROS_APPLE_BATTERY_CURRENT),
-            sample.remaining_mah,sample.current_ma};
-        return IndicatorBatteryEvent(&b,event,size);
-    }
+    struct IndicatorBattery sample;
+    return IndicatorBatterySnapshot(&sample, KernelBase) &&
+        IndicatorBatteryEvent(&sample, event, size);
 }
 static void answer(struct RexxMsg *m, LONG error, const char *text)
 {

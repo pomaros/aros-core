@@ -1,0 +1,56 @@
+{
+  "source_commit": "bf102a00c4502ebce50637212b823c974196547b",
+  "runtime_commit": "91b911d19f",
+  "shared_tile_build": {
+    "/Users/jknipper/Source/aros-personal/aros-core-tiles-indicator-api/workbench/libs/workbench/tile.h": {
+      "mtime_ns": 1792100865857171321,
+      "sha256": "c2f83491c1c70e45dea851b98e5943c4a4b670fe24ccf1968b299f94f987e31d"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-tiles-indicator-api/bin/apple-aarch64/gen/workbench/system/Wanderer/appobjects.o": {
+      "mtime_ns": 1792102108826956649,
+      "sha256": "19d3f4396a39cb82007d8d1c1f01ca2dd9983aec0332d89c9f9023b492d9d0d6"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-tiles-indicator-api/bin/apple-aarch64/AROS/System/Wanderer/Wanderer": {
+      "mtime_ns": 1792102109195415358,
+      "sha256": "fac834df25a49f275f5ab1139a03dae34843dd72fa69c64a29c2ccd507152188"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-tiles-indicator-api/bin/apple-aarch64/gen/workbench/libs/workbench/workbench/tile.o": {
+      "mtime_ns": 1792101942934835843,
+      "sha256": "a4b42aa00031ec2b36faa26702837965f8c6b04233301ce2319f2835ef76e7f3"
+    },
+    "/Users/jknipper/Source/aros-personal/aros-build-tiles-indicator-api/bin/apple-aarch64/AROS/Libs/workbench.library": {
+      "mtime_ns": 1792101943160126459,
+      "sha256": "01c4618dc9e928f1325b908bbf0d3eac66ac35ecda0157e55b7d9218bb6249f7"
+    }
+  },
+  "logs": {
+    "control-workbench-02.log": {
+      "sha256": "9099e796fb3ab6cef03df9c5665680ab4eca09be011b112139adb34b6c96fa7d",
+      "warning_count": 0
+    },
+    "control-wanderer-02.log": {
+      "sha256": "c98f1ea268efd198760b051ecdbebe7933f3d8461aca79a4ac60239e6176ce0f",
+      "warning_count": 2
+    },
+    "control-service-06.log": {
+      "sha256": "4024deaabb927fd555bc48efde87c419fc6a5a795d29fbf964c0cf29c0bcb0cb",
+      "warning_count": 0
+    },
+    "control-install-02.log": {
+      "sha256": "618711bc68aae282a474f6551dc0e81d2326779112c94a2e80a0dcc20403fa7c",
+      "warning_count": 0
+    },
+    "control-probe-02.log": {
+      "sha256": "223d73b90b8ef29794e90deadacfe7cc972cdada433cbd855934cf4c2426ddec",
+      "warning_count": 0
+    }
+  },
+  "binaries": {
+    "System/Tiles": "dca6e2885a67ce5db2c65979c5eb4af1d3fad24536711c7970a9f417515a1c61",
+    "System/TilesControl": "00fdf9fde269a2b8964622467fadc65916bfbfcdbdfd0fb00b085d022c954a47",
+    "System/Wanderer/Wanderer": "fac834df25a49f275f5ab1139a03dae34843dd72fa69c64a29c2ccd507152188",
+    "Libs/workbench.library": "01c4618dc9e928f1325b908bbf0d3eac66ac35ecda0157e55b7d9218bb6249f7",
+    "Classes/Zune/IconList.mui": "3c1c47d592b69bee4fd8a1c8eeb91cbd200e17f3193383fdb2fcfb68320a812f",
+    "Developer/Debug/Tests/workbench/appicon_control_probe": "8ffd622c36899345bbf1804215d2163cfaaafa20473e49445d93ad89ec107273"
+  }
+}

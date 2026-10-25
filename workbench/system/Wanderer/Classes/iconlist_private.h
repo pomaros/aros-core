@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2013, The AROS Development Team. All rights reserved.
 */
 
@@ -6,6 +7,8 @@
 #define _ICONLIST_PRIVATE_H_
 
 #include "iconlist.h"
+
+extern struct MUI_CustomClass *IconListScaleClass;
 
 /*** Instance data **********************************************************/
 
@@ -49,12 +52,27 @@ struct IconList_DATA
 {
     BOOL                          icld_TileMotion; /* keep IDCMP_MOUSEMOVE for shown tiles */
     BOOL                          icld_TilesShown; /* successful Show until Hide/Cleanup */
+    IPTR                          icld_ContextRecalc;
+    ULONG                         icld_RenderScale;
+    ULONG                         icld_BaseIconHorizontalSpacing;
+    ULONG                         icld_BaseIconVerticalSpacing;
+    ULONG                         icld_BaseIconImageSpacing;
+    ULONG                         icld_BaseLabelTextHorizontalPadding;
+    ULONG                         icld_BaseLabelTextVerticalPadding;
+    ULONG                         icld_BaseLabelTextBorderWidth;
+    ULONG                         icld_BaseLabelTextBorderHeight;
     APTR                          icld_Pool;                          /* Pool to allocate data from */
 
     struct RastPort               *icld_DisplayRastPort;
     struct RastPort               *icld_BufferRastPort;
     struct TextFont               *icld_IconLabelFont;
     struct TextFont               *icld_IconInfoFont;
+    IPTR                          icld_IconLabelFontRequest;
+    struct TextFont               *icld_IconInfoFontRequest;
+    struct TextFont               *icld_LabelBaseFont;
+    struct TextFont               *icld_InfoBaseFont;
+    struct TextFont               *icld_ScaledLabelFont;
+    struct TextFont               *icld_ScaledInfoFont;
 
     struct List                   icld_IconList;                      /* IconEntry(s)     */
     struct List                   icld_SelectionList;                 /* Selected Icon(s) */
@@ -143,14 +161,14 @@ struct IconList_DATA
     BOOL                          icld__Option_TrimVolumeNames;
 
     BOOL                          icld__Option_LabelTextMultiLineOnFocus;        /* Only show "multiline" label for focused icon */
-    UBYTE                         icld__Option_IconBorderOverlap;
-    UBYTE                         icld__Option_IconHorizontalSpacing;            /* Horizontal/Vert Space between Icon "Areas" */
-    UBYTE                         icld__Option_IconVerticalSpacing;
-    UBYTE                         icld__Option_IconImageSpacing;                 /* Space between Icon Image and Label Frame */
-    UBYTE                         icld__Option_LabelTextHorizontalPadding;       /* Outer padding between label text and frame */
-    UBYTE                         icld__Option_LabelTextVerticalPadding;
-    UBYTE                         icld__Option_LabelTextBorderWidth;             /* Label frame dimensions */
-    UBYTE                         icld__Option_LabelTextBorderHeight;
+    ULONG                         icld__Option_IconBorderOverlap;
+    ULONG                         icld__Option_IconHorizontalSpacing;            /* Horizontal/Vert Space between Icon "Areas" */
+    ULONG                         icld__Option_IconVerticalSpacing;
+    ULONG                         icld__Option_IconImageSpacing;                 /* Space between Icon Image and Label Frame */
+    ULONG                         icld__Option_LabelTextHorizontalPadding;       /* Outer padding between label text and frame */
+    ULONG                         icld__Option_LabelTextVerticalPadding;
+    ULONG                         icld__Option_LabelTextBorderWidth;             /* Label frame dimensions */
+    ULONG                         icld__Option_LabelTextBorderHeight;
 
     UBYTE                         mouse_pressed;
 };

@@ -58,4 +58,27 @@ USER_INCLUDES += \
 #MM- workbench-hidds: hidd-vulkan-vulkanprobe
 #MM- hidd-vulkan-vulkanprobe : hidd-vulkan-loader
 
+# LIBS:dl/libvulkan.so: the same loader as a dlopen() module, the file that
+# wgpu, ash and libloading open as "libvulkan.so.1" (tools/dlmodule). The
+# module opens oop.library through its own base, hence -loop.
+VULKAN_DLDIR    := $(GENDIR)/$(CURDIR)/dlmodule
+VULKAN_DLOBJ    := $(VULKAN_DLDIR)/vulkan_loader.o
+VULKAN_DLMODULE := $(AROS_LIBRARIES)/dl/libvulkan.so
+
+#MM- workbench-hidds: hidd-vulkan-dlmodule
+#MM hidd-vulkan-dlmodule : includes linklibs-startup
+hidd-vulkan-dlmodule : $(VULKAN_DLMODULE)
+
+$(VULKAN_DLOBJ) : $(SRCDIR)/$(CURDIR)/vulkan_loader.c | $(VULKAN_DLDIR)
+	%compile_q
+
+$(VULKAN_DLMODULE) : $(VULKAN_DLOBJ) | $(AROS_LIBRARIES)/dl
+	@$(ECHO) "Linking dlopen module $(subst $(TARGETDIR)/,,$@)"
+	$(Q)$(PYTHON) $(SRCDIR)/tools/dlmodule/dlmodule-link --cc $(TARGET_CC) \
+	    $(foreach a,$(TARGET_SYSROOT) $(CFLAGS),--cc-arg=$(a)) \
+	    --startup $(AROS_LIB)/dlmodule-startup.o --nm $(firstword $(NM)) \
+	    --export-prefix vk -o $@ -- $< -loop
+
+%rule_makedirs dirs="$(VULKAN_DLDIR) $(AROS_LIBRARIES)/dl"
+
 %common

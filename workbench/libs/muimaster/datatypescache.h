@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright  2002, The AROS Development Team. 
     All rights reserved.
     
@@ -116,5 +117,8 @@ void dispose_custom_frame(struct dt_frame_image *fi);
 #define GET_B(rgb) ((rgb >> 24) & 0xff)
 #define SET_ARGB(a, r, g, b) b << 24 | g << 16 | r << 8 | a
 #endif
+
+void dt_put_scaled_on_rastport(struct dt_node *node, struct RastPort *rp,
+    int x, int y, ULONG scale, ULONG density, BOOL mim, LONG state);
 
 #endif

@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2011, The AROS Development Team. All rights reserved.
 */
 
@@ -59,8 +60,10 @@ IPTR AslFontStyle__OM_NEW(Class * cl, Object * o, struct opSet * msg)
     if (o)
     {
         data = INST_DATA(cl, o);
+        data->ld = (struct LayoutData *)GetTagData(GA_UserData, 0, msg->ops_AttrList);
 
-        data->frame = NewObjectA(NULL, FRAMEICLASS, fitags);
+        data->frame = AslFrame((struct LayoutData *)GetTagData(GA_UserData, 0, msg->ops_AttrList), fitags, AslBase);
+        if (!data->frame) { CoerceMethod(cl, o, OM_DISPOSE); return 0; }
 
         data->style = GetTagData(ASLFS_Style, FS_NORMAL, msg->ops_AttrList);
 
@@ -180,6 +183,7 @@ IPTR AslFontStyle__GM_RENDER(Class *cl, struct Gadget *g, struct gpRender *msg)
 
     data = INST_DATA(cl, g);
     rp = msg->gpr_RPort;
+    SetFont(rp, data->ld->ld_Font);
 
     sw = w / 3;
 
@@ -205,11 +209,11 @@ IPTR AslFontStyle__GM_RENDER(Class *cl, struct Gadget *g, struct gpRender *msg)
                            x,
                            y,
                            set ? IDS_SELECTED : IDS_NORMAL,
-                           msg->gpr_GInfo->gi_DrInfo);
+                           ((struct LayoutData *)g->UserData)->ld_Dri);
         }
 
         SetSoftStyle(rp, gadindextostylemap[i], AskSoftStyle(rp));
-        SetAPen(rp, msg->gpr_GInfo->gi_DrInfo->dri_Pens[set ? HIGHLIGHTTEXTPEN : TEXTPEN]);
+        SetAPen(rp, ((struct LayoutData *)g->UserData)->ld_Dri->dri_Pens[set ? HIGHLIGHTTEXTPEN : TEXTPEN]);
         SetDrMd(rp, JAM1);
 
         TextExtent(rp, data->text[i], strlen(data->text[i]), &te);

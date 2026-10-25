@@ -22,6 +22,32 @@ AROS_TARGET_ARCH        ?= @aros_target_arch@
 AROS_TARGET_VARIANT     ?= @aros_target_variant@
 COLLECT-AROS32_TGT      ?= @aros_collect32_target@
 
+.DEFAULT_GOAL := default
+.PHONY: default all apple-full-build apple-full-build-guard \
+	apple-kernel-rebuild apple-pmgr-rebuild apple-core-products-refresh \
+	apple-rtkit-rebuild \
+	apple-dart-rebuild apple-usb-rebuild \
+	apple-spmi-rebuild apple-smc-rebuild
+
+ifeq ($(AROS_TARGET_ARCH),apple)
+default:
+	@echo "Refusing an implicit full Apple build. Use an explicit focused target" >&2
+	@echo "such as 'make apple-boot-payloads'. For the exceptional full graph:" >&2
+	@echo "ALLOW_APPLE_FULL_BUILD=1 make all" >&2
+	@false
+
+apple-full-build-guard:
+	@if test "$(ALLOW_APPLE_FULL_BUILD)" != 1; then \
+		echo "Refusing the Apple full build without ALLOW_APPLE_FULL_BUILD=1" >&2; \
+		exit 1; \
+	fi
+else
+default: all
+
+apple-full-build-guard:
+	@true
+endif
+
 AMIGAOSNDKDIR           ?= $(SRCDIR)/local/NDK_3.1
 
 # normally, these variable's should go in mmake.config/globalvarfile
@@ -129,8 +155,148 @@ CONFIGUREFILES += $(HOSTGENDIR)/config/host.cfg
 # Standard Rules ...
 #
 
-all: $(CONFIGUREFILES) crosstools-toolchain features
+apple-full-build: $(CONFIGUREFILES) crosstools-toolchain features
 	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.AROS
+
+# MetaMake's module clean removes kernel.resource's generated headers but
+# leaves their completion stamp behind.  A direct clean/build pair can then
+# try to copy files that the stale stamp prevented genmodule from recreating.
+# Keep the exact recovery sequence behind one explicit Apple-only target.
+ifeq ($(AROS_TARGET_ARCH),apple)
+apple-kernel-rebuild: $(CONFIGUREFILES) crosstools-toolchain features
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.kernel-kernel-clean
+	@$(RM) $(GENDIR)/rom/kernel/kernel/include/.kernel.resource-includes
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.kernel-kernel-includes
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.kernel-kernel
+else
+apple-kernel-rebuild:
+	@echo "apple-kernel-rebuild is available only for the Apple target" >&2
+	@false
+endif
+
+# The generated PMGR module has the same genmodule stamp defect as
+# kernel.resource. This target is also required after changing its compile
+# flags, because ordinary MetaMake dependencies do not track them.
+ifeq ($(AROS_TARGET_ARCH),apple)
+apple-pmgr-rebuild: $(CONFIGUREFILES) crosstools-toolchain features
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.kernel-pmgr-clean
+	@$(RM) $(GENDIR)/arch/aarch64-apple/pmgr/pmgr/include/.pmgr.resource-includes
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.kernel-pmgr-includes
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.kernel-pmgr
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.apple-pmgr-diag
+else
+apple-pmgr-rebuild:
+	@echo "apple-pmgr-rebuild is available only for the Apple target" >&2
+	@false
+endif
+
+# Refresh the complete A4-A7 canonical product input set with one final
+# MetaMake graph scan. PMGR's generated-header stamp must still be repaired
+# first, but every product and diagnostic then shares the same dependency walk.
+ifeq ($(AROS_TARGET_ARCH),apple)
+apple-core-products-refresh: $(CONFIGUREFILES) crosstools-toolchain features
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.kernel-pmgr-clean
+	@$(RM) $(GENDIR)/arch/aarch64-apple/pmgr/pmgr/include/.pmgr.resource-includes
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.kernel-pmgr-includes
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) \
+		AROS.kernel-pmgr \
+		AROS.apple-pmgr-diag \
+		AROS.apple-a7-payloads \
+		AROS.apple-a6-payloads \
+		AROS.apple-stage2-a4-observer \
+		AROS.apple-stage2-a4-cache-observer \
+		AROS.apple-stage2-a5-observer
+else
+apple-core-products-refresh:
+	@echo "apple-core-products-refresh is available only for the Apple target" >&2
+	@false
+endif
+
+# Keep RTKit header regeneration and its four-object rebuild behind one named
+# target. Ordinary MetaMake dependencies do not repair stale genmodule stamps.
+ifeq ($(AROS_TARGET_ARCH),apple)
+apple-rtkit-rebuild: $(CONFIGUREFILES) crosstools-toolchain features
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.kernel-rtkit-clean
+	@$(RM) $(GENDIR)/arch/aarch64-apple/rtkit/rtkit/include/.rtkit.resource-includes
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.kernel-rtkit-includes
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.kernel-rtkit
+else
+apple-rtkit-rebuild:
+	@echo "apple-rtkit-rebuild is available only for the Apple target" >&2
+	@false
+endif
+
+# Keep the common DART/SART resource vectors and all three implementation
+# objects synchronized after contract changes.
+ifeq ($(AROS_TARGET_ARCH),apple)
+apple-dart-rebuild: $(CONFIGUREFILES) crosstools-toolchain features
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.kernel-dart-clean
+	@$(RM) $(GENDIR)/arch/aarch64-apple/dma/dart/include/.dart.resource-includes
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.kernel-dart-includes
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.kernel-dart
+else
+apple-dart-rebuild:
+	@echo "apple-dart-rebuild is available only for the Apple target" >&2
+	@false
+endif
+
+# Keep the U0 public vectors, FDT/transaction/resource objects and target
+# observer in one explicit rebuild. appleusb.resource depends on the already
+# built PMGR and DART resources but never invokes the unrestricted Apple build
+# graph.
+ifeq ($(AROS_TARGET_ARCH),apple)
+apple-usb-rebuild: $(CONFIGUREFILES) crosstools-toolchain features
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.kernel-appleusb-clean
+	@$(RM) $(GENDIR)/arch/aarch64-apple/usb/appleusb/include/.appleusb.resource-includes
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.kernel-appleusb-includes
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.kernel-appleusb
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.apple-usb-diag
+else
+apple-usb-rebuild:
+	@echo "apple-usb-rebuild is available only for the Apple target" >&2
+	@false
+endif
+
+# Keep SPMI's generated public vectors and resource body synchronized after
+# contract or compiler-flag changes; MetaMake can otherwise retain its stamp.
+ifeq ($(AROS_TARGET_ARCH),apple)
+apple-spmi-rebuild: $(CONFIGUREFILES) crosstools-toolchain features
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.kernel-spmi-clean
+	@$(RM) $(GENDIR)/arch/aarch64-apple/spmi/spmi/include/.spmi.resource-includes
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.kernel-spmi-includes
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.kernel-spmi
+else
+apple-spmi-rebuild:
+	@echo "apple-spmi-rebuild is available only for the Apple target" >&2
+	@false
+endif
+
+# Keep SMC's generated public vectors and resource body synchronized after
+# contract or compiler-flag changes; MetaMake can otherwise retain its stamp.
+ifeq ($(AROS_TARGET_ARCH),apple)
+apple-smc-rebuild: $(CONFIGUREFILES) crosstools-toolchain features \
+	apple-spmi-rebuild
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.kernel-smc-clean
+	@$(RM) $(GENDIR)/arch/aarch64-apple/smc/smc/include/.smc.resource-includes
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.kernel-smc-includes
+	@+$(CALL) $(MMAKE) $(MMAKE_OPTIONS) AROS.kernel-smc
+else
+apple-smc-rebuild:
+	@echo "apple-smc-rebuild is available only for the Apple target" >&2
+	@false
+endif
+
+ifeq ($(AROS_TARGET_ARCH),apple)
+ifeq ($(ALLOW_APPLE_FULL_BUILD),1)
+all: apple-full-build
+else
+all:
+	@echo "Refusing the Apple full build without ALLOW_APPLE_FULL_BUILD=1" >&2
+	@false
+endif
+else
+all: apple-full-build
+endif
 
 AROSGDBFILES=
 

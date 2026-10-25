@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2010, The AROS Development Team. All rights reserved.
 
     File requester specific code.
@@ -330,9 +331,9 @@ STATIC BOOL SMGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
     WORD                labelwidth = 0, maxcyclewidth = 0;
 
 
-    NEWLIST(&udata->ListviewList);
+    if (!ld->ld_Rebuilding) NEWLIST(&udata->ListviewList);
 
-    error = SMGetModes(ld, AslBase);
+    error = ld->ld_Rebuilding ? 0 : SMGetModes(ld, AslBase);
     if (error) goto failure;
 
     error = ERROR_NO_FREE_STORE;
@@ -357,17 +358,19 @@ STATIC BOOL SMGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
 #endif
         if (ld->ld_TrueColor)
         {
-            x += IMAGEBUTTONEXTRAWIDTH + bi[i].coolimage->width;
+            x += AslScaleValue(ld, IMAGEBUTTONEXTRAWIDTH) + AslScaleValue(ld, bi[i].coolimage->width);
         }
 #endif
 
         if (x > w) w = x;
     }
 
-    udata->ButWidth = w + BUTTONEXTRAWIDTH;
+    udata->ButWidth = w + AslScaleValue(ld, BUTTONEXTRAWIDTH);
 
     ld->ld_ButWidth = udata->ButWidth;
     ld->ld_NumButtons = 4;
+
+    udata->ButHeight = AslScaleValue(ld, BUTTONEXTRAHEIGHT) + ld->ld_Font->tf_YSize;
 
 #if SREQ_COOL_BUTTONS
 
@@ -375,10 +378,10 @@ STATIC BOOL SMGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
     if (CoolImagesBase)
     {
 #endif
-        y  = BUTTONEXTRAHEIGHT + ld->ld_Font->tf_YSize;
+        y  = AslScaleValue(ld, BUTTONEXTRAHEIGHT) + ld->ld_Font->tf_YSize;
         if (ld->ld_TrueColor)
         {
-            y2 = IMAGEBUTTONEXTRAHEIGHT + DEF_COOLIMAGEHEIGHT;
+            y2 = AslScaleValue(ld, IMAGEBUTTONEXTRAHEIGHT) + AslScaleValue(ld, DEF_COOLIMAGEHEIGHT);
         } else {
             y2 = 0;
         }
@@ -387,12 +390,12 @@ STATIC BOOL SMGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
     }
     else
     {
-        udata->ButHeight = BUTTONEXTRAHEIGHT + ld->ld_Font->tf_YSize;
+        udata->ButHeight = AslScaleValue(ld, BUTTONEXTRAHEIGHT) + ld->ld_Font->tf_YSize;
     }
 #endif
 
 #else
-        udata->ButHeight = BUTTONEXTRAHEIGHT + ld->ld_Font->tf_YSize;
+        udata->ButHeight = AslScaleValue(ld, BUTTONEXTRAHEIGHT) + ld->ld_Font->tf_YSize;
 #endif
 
     gadrows = 1; /* button row  */
@@ -402,23 +405,23 @@ STATIC BOOL SMGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
     if (ismreq->ism_Flags & ISMF_DODEPTH) gadrows++;
     if (ismreq->ism_Flags & ISMF_DOAUTOSCROLL) gadrows++;
 
-    ld->ld_MinWidth =  OUTERSPACINGX * 2 +
-                       GADGETSPACINGX * 1 +
+    ld->ld_MinWidth =  AslScaleValue(ld, OUTERSPACINGX) * 2 +
+                       AslScaleValue(ld, GADGETSPACINGX) * 1 +
                        udata->ButWidth * NUMBUTS;
 
-    ld->ld_MinHeight = OUTERSPACINGY * 2 +
-                       (GADGETSPACINGY + udata->ButHeight) * gadrows +
-                       BORDERLVSPACINGY * 2 +
-                       (ld->ld_Font->tf_YSize + BORDERLVITEMSPACINGY * 2) * SREQ_MIN_VISIBLELINES;
+    ld->ld_MinHeight = AslScaleValue(ld, OUTERSPACINGY) * 2 +
+                       (AslScaleValue(ld, GADGETSPACINGY) + udata->ButHeight) * gadrows +
+                       AslScaleValue(ld, BORDERLVSPACINGY) * 2 +
+                       (ld->ld_Font->tf_YSize + AslScaleValue(ld, BORDERLVITEMSPACINGY) * 2) * SREQ_MIN_VISIBLELINES;
 
     /* make listview gadget */
 
-    x = ld->ld_WBorLeft + OUTERSPACINGX;
-    y = ld->ld_WBorTop + OUTERSPACINGY;
-    w = -ld->ld_WBorRight - ld->ld_WBorLeft - OUTERSPACINGX * 2 - PROPSIZE;
-    h = -ld->ld_WBorBottom - ld->ld_WBorTop - OUTERSPACINGY * 2 -
+    x = ld->ld_WBorLeft + AslScaleValue(ld, OUTERSPACINGX);
+    y = ld->ld_WBorTop + AslScaleValue(ld, OUTERSPACINGY);
+    w = -ld->ld_WBorRight - ld->ld_WBorLeft - AslScaleValue(ld, OUTERSPACINGX) * 2 - AslScaleValue(ld, PROPSIZE);
+    h = -ld->ld_WBorBottom - ld->ld_WBorTop - AslScaleValue(ld, OUTERSPACINGY) * 2 -
         udata->ButHeight * gadrows -
-        GADGETSPACINGY * gadrows;
+        AslScaleValue(ld, GADGETSPACINGY) * gadrows;
 
     {
         struct TagItem lv_tags[] =
@@ -435,19 +438,19 @@ STATIC BOOL SMGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
             {TAG_DONE                                           }
         };
 
-        udata->Listview = gad = NewObjectA(AslBase->asllistviewclass, NULL, lv_tags);
+        udata->Listview = gad = AslLayoutObject(ld, AslBase->asllistviewclass, NULL, lv_tags, udata->Listview, AslBase);
         if (!udata->Listview) goto failure;
 
     }
 
     /* make scroller gadget for listview */
 
-    x = -ld->ld_WBorRight - OUTERSPACINGX - PROPSIZE + 1;
-    y = ld->ld_WBorTop + OUTERSPACINGY;
-    w = PROPSIZE;
-    h = -ld->ld_WBorBottom - ld->ld_WBorTop - OUTERSPACINGY * 2 -
+    x = -ld->ld_WBorRight - AslScaleValue(ld, OUTERSPACINGX) - AslScaleValue(ld, PROPSIZE) + 1;
+    y = ld->ld_WBorTop + AslScaleValue(ld, OUTERSPACINGY);
+    w = AslScaleValue(ld, PROPSIZE);
+    h = -ld->ld_WBorBottom - ld->ld_WBorTop - AslScaleValue(ld, OUTERSPACINGY) * 2 -
         udata->ButHeight * gadrows -
-        GADGETSPACINGY * gadrows;
+        AslScaleValue(ld, GADGETSPACINGY) * gadrows;
     {
         struct TagItem scroller_tags[] =
         {
@@ -474,7 +477,7 @@ STATIC BOOL SMGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
 
     /* make button row */
 
-    y = -ld->ld_WBorBottom - OUTERSPACINGY - udata->ButHeight + 1;
+    y = -ld->ld_WBorBottom - AslScaleValue(ld, OUTERSPACINGY) - udata->ButHeight + 1;
 
     {
         struct TagItem button_tags[] =
@@ -508,7 +511,7 @@ STATIC BOOL SMGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
         #endif
             button_tags[3].ti_Data = (IPTR)bi[i].coolimage;
 
-            *(bi[i].objvar) = gad = NewObjectA(AslBase->aslbuttonclass, NULL, button_tags);
+            *(bi[i].objvar) = gad = AslLayoutObject(ld, AslBase->aslbuttonclass, NULL, button_tags, *(bi[i].objvar), AslBase);
             if (!gad) goto failure;
         }
 
@@ -559,9 +562,9 @@ STATIC BOOL SMGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
             }
         }
 
-        x = ld->ld_WBorLeft + OUTERSPACINGX;
-        y = -ld->ld_WBorBottom - OUTERSPACINGY - udata->ButHeight -
-            (udata->ButHeight + GADGETSPACINGY) * (gadrows - 1) + 1;
+        x = ld->ld_WBorLeft + AslScaleValue(ld, OUTERSPACINGX);
+        y = -ld->ld_WBorBottom - AslScaleValue(ld, OUTERSPACINGY) - udata->ButHeight -
+            (udata->ButHeight + AslScaleValue(ld, GADGETSPACINGY)) * (gadrows - 1) + 1;
 
 
         w = labelwidth = BiggestTextLength(str, i2, &(ld->ld_DummyRP), AslBase);
@@ -577,19 +580,19 @@ STATIC BOOL SMGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
             label_tags[4].ti_Data = (IPTR)li[i].text;
             label_tags[5].ti_Data = (IPTR)gad;
 
-            *(li[i].objvar) = gad = NewObjectA(AslBase->aslbuttonclass, NULL, label_tags);
+            *(li[i].objvar) = gad = AslLayoutObject(ld, AslBase->aslbuttonclass, NULL, label_tags, *(li[i].objvar), AslBase);
             if (!gad) goto failure;
 
-            y += udata->ButHeight + GADGETSPACINGY;
+            y += udata->ButHeight + AslScaleValue(ld, GADGETSPACINGY);
             label_tags[1].ti_Data = y;
         }
 
-        y = -ld->ld_WBorBottom - OUTERSPACINGY - udata->ButHeight -
-            (udata->ButHeight + GADGETSPACINGY) * (gadrows - 1) + 1;
-        x = ld->ld_WBorLeft + OUTERSPACINGX + w + LABELSPACINGX;
+        y = -ld->ld_WBorBottom - AslScaleValue(ld, OUTERSPACINGY) - udata->ButHeight -
+            (udata->ButHeight + AslScaleValue(ld, GADGETSPACINGY)) * (gadrows - 1) + 1;
+        x = ld->ld_WBorLeft + AslScaleValue(ld, OUTERSPACINGX) + w + AslScaleValue(ld, LABELSPACINGX);
 
-        w = -ld->ld_WBorLeft - ld->ld_WBorRight - OUTERSPACINGX * 2 -
-            w - LABELSPACINGX;
+        w = -ld->ld_WBorLeft - ld->ld_WBorRight - AslScaleValue(ld, OUTERSPACINGX) * 2 -
+            w - AslScaleValue(ld, LABELSPACINGX);
 
         /* Make Overscan gadget */
 
@@ -626,16 +629,16 @@ STATIC BOOL SMGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
                 labels[i] = GetString(labelids[i], GetIR(ismreq)->ir_Catalog, AslBase);
             }
 
-            i = CYCLEEXTRAWIDTH +  BiggestTextLength(&ismreq->ism_Overscan1Text,
+            i = AslScaleValue(ld, CYCLEEXTRAWIDTH) +  BiggestTextLength(&ismreq->ism_Overscan1Text,
                                                      4,
                                                      &(ld->ld_DummyRP),
                                                      AslBase);
             if (i > maxcyclewidth) maxcyclewidth = i;
 
-            udata->OverscanGadget = gad = NewObjectA(AslBase->aslcycleclass, NULL, cycle_tags);
+            udata->OverscanGadget = gad = AslLayoutObject(ld, AslBase->aslcycleclass, NULL, cycle_tags, udata->OverscanGadget, AslBase);
             if (!gad) goto failure;
 
-            y += udata->ButHeight + GADGETSPACINGY;
+            y += udata->ButHeight + AslScaleValue(ld, GADGETSPACINGY);
 
         } /* if (ismreq->ism_Flags & ISMF_DOOVERSCAN) */
 
@@ -661,10 +664,10 @@ STATIC BOOL SMGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
 
             if (ismreq->ism_Flags & ISMF_DOWIDTH)
             {
-                udata->WidthGadget = gad = NewObjectA(AslBase->aslstringclass, NULL, string_tags);
+                udata->WidthGadget = gad = AslLayoutObject(ld, AslBase->aslstringclass, NULL, string_tags, udata->WidthGadget, AslBase);
                 if (!gad) goto failure;
 
-                y += udata->ButHeight + GADGETSPACINGY;
+                y += udata->ButHeight + AslScaleValue(ld, GADGETSPACINGY);
             }
 
             /* Make height gadget */
@@ -676,10 +679,10 @@ STATIC BOOL SMGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
                 string_tags[2].ti_Data = ismreq->ism_DisplayHeight;
                 string_tags[3].ti_Data = y;
 
-                udata->HeightGadget = gad = NewObjectA(AslBase->aslstringclass, NULL, string_tags);
+                udata->HeightGadget = gad = AslLayoutObject(ld, AslBase->aslstringclass, NULL, string_tags, udata->HeightGadget, AslBase);
                 if (!gad) goto failure;
 
-                y += udata->ButHeight + GADGETSPACINGY;
+                y += udata->ButHeight + AslScaleValue(ld, GADGETSPACINGY);
             }
         }
 
@@ -705,13 +708,13 @@ STATIC BOOL SMGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
 
             if (ismreq->ism_Flags & ISMF_DODEPTH)
             {
-                i = CYCLEEXTRAWIDTH + TextLength(&ld->ld_DummyRP, "16777216", 8);
+                i = AslScaleValue(ld, CYCLEEXTRAWIDTH) + TextLength(&ld->ld_DummyRP, "16777216", 8);
                 if (i > maxcyclewidth) maxcyclewidth = i;
 
-                udata->DepthGadget = gad = NewObjectA(AslBase->aslcycleclass, NULL, cycle_tags);
+                udata->DepthGadget = gad = AslLayoutObject(ld, AslBase->aslcycleclass, NULL, cycle_tags, udata->DepthGadget, AslBase);
                 if (!gad) goto failure;
 
-                y += udata->ButHeight + GADGETSPACINGY;
+                y += udata->ButHeight + AslScaleValue(ld, GADGETSPACINGY);
             }
 
             /* Make AutoScroll gadget */
@@ -727,16 +730,16 @@ STATIC BOOL SMGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
                 ismreq->ism_AutoScrollOFFText = GetString(MSG_MODEREQ_AUTOSCROLL_OFF, GetIR(ismreq)->ir_Catalog, AslBase);
                 ismreq->ism_AutoScrollONText  = GetString(MSG_MODEREQ_AUTOSCROLL_ON , GetIR(ismreq)->ir_Catalog, AslBase);
 
-                i = CYCLEEXTRAWIDTH + BiggestTextLength(&ismreq->ism_AutoScrollOFFText,
+                i = AslScaleValue(ld, CYCLEEXTRAWIDTH) + BiggestTextLength(&ismreq->ism_AutoScrollOFFText,
                                                         2,
                                                         &(ld->ld_DummyRP),
                                                         AslBase);
                 if (i > maxcyclewidth) maxcyclewidth = i;
 
-                udata->AutoScrollGadget = gad = NewObjectA(AslBase->aslcycleclass, NULL, cycle_tags);
+                udata->AutoScrollGadget = gad = AslLayoutObject(ld, AslBase->aslcycleclass, NULL, cycle_tags, udata->AutoScrollGadget, AslBase);
                 if (!gad) goto failure;
 
-                y += udata->ButHeight + GADGETSPACINGY;
+                y += udata->ButHeight + AslScaleValue(ld, GADGETSPACINGY);
             }
 
         }
@@ -751,17 +754,22 @@ STATIC BOOL SMGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
             {TAG_DONE}
         };
 
-        udata->EraserGadget = gad = NewObjectA(AslBase->asleraserclass, NULL, eraser_tags);
+        udata->EraserGadget = gad = AslLayoutObject(ld, AslBase->asleraserclass, NULL, eraser_tags, udata->EraserGadget, AslBase);
         /* Doesn't matter if this failed */
     }
 #endif
 
-    w = OUTERSPACINGX + labelwidth + LABELSPACINGX + maxcyclewidth + OUTERSPACINGX;
+    w = AslScaleValue(ld, OUTERSPACINGX) + labelwidth + AslScaleValue(ld, LABELSPACINGX) + maxcyclewidth + AslScaleValue(ld, OUTERSPACINGX);
     if (w > ld->ld_MinWidth) ld->ld_MinWidth = w;
+
+    /* Public native limits are outer extents. The content minimum above
+     * excludes frame metrics, while every relative gadget subtracts them. */
+    ld->ld_MinWidth += ld->ld_WBorLeft + ld->ld_WBorRight;
+    ld->ld_MinHeight += ld->ld_WBorTop + ld->ld_WBorBottom;
 
     ld->ld_GList = (struct Gadget *)udata->Listview;
 
-    /* Menus */
+    /* Menus are detached and owned by this generation. */
     {
         struct NewMenu nm[] =
         {
@@ -800,7 +808,7 @@ STATIC BOOL SMGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
         }
     }
 
-    SMRestore(ld, AslBase);
+    if (!ld->ld_Rebuilding) SMRestore(ld, AslBase);
 
     SetIoErr(0);
     ReturnBool ("SMGadInit", TRUE);
@@ -810,7 +818,7 @@ failure:
 
 D(bug("failure\n"));
 
-    SMGadCleanup(ld, ASLB(AslBase));
+    if (!ld->ld_Rebuilding) SMGadCleanup(ld, ASLB(AslBase));
 
     ReturnBool ("SMGadInit", FALSE);
 
@@ -925,7 +933,7 @@ STATIC ULONG SMHandleEvents(struct LayoutData *ld, struct AslBase_intern *AslBas
 
                         GetAttr(ASLLV_Active, udata->Listview, &active);
 
-                        if ((dispmode = (struct DisplayMode *)FindListNode(&udata->ListviewList, (WORD)active)))
+                        if ((dispmode = (struct DisplayMode *)FindListNode(&udata->ListviewList, (LONG)active)))
                         {
                             SMActivateMode(ld, active, 0, AslBase);
 
@@ -1053,18 +1061,18 @@ STATIC VOID SMGadCleanup(struct LayoutData *ld, struct AslBase_intern *AslBase)
         RemoveGList(ld->ld_Window, ld->ld_GList, -1);
     }
 
-    killscrollergadget(&udata->ScrollGad, AslBase);
+    killscrollergadget(&udata->ScrollGad, ld, AslBase);
 
-    FreeObjects(&SREQ_FIRST_OBJECT(udata), &SREQ_LAST_OBJECT(udata), AslBase);
+    FreeObjects(&SREQ_FIRST_OBJECT(udata), &SREQ_LAST_OBJECT(udata), ld, AslBase);
 
     req->sm_InfoOpened = ismreq->ism_InfoOpened = ld->ld_Window2 ? TRUE : FALSE;
 
     if (ld->ld_Window)
     {
-        req->sm_LeftEdge = intreq->ir_LeftEdge = ld->ld_Window->LeftEdge;
-        req->sm_TopEdge  = intreq->ir_TopEdge  = ld->ld_Window->TopEdge;
-        req->sm_Width    = intreq->ir_Width    = ld->ld_Window->Width;
-        req->sm_Height   = intreq->ir_Height   = ld->ld_Window->Height;
+        req->sm_LeftEdge = intreq->ir_LeftEdge = AslUnscaleValue(ld, ld->ld_Window->LeftEdge);
+        req->sm_TopEdge  = intreq->ir_TopEdge  = AslUnscaleValue(ld, ld->ld_Window->TopEdge);
+        req->sm_Width    = intreq->ir_Width    = AslUnscaleValue(ld, ld->ld_Window->Width);
+        req->sm_Height   = intreq->ir_Height   = AslUnscaleValue(ld, ld->ld_Window->Height);
 
         req->sm_InfoLeftEdge = ismreq->ism_InfoLeftEdge;
         req->sm_InfoTopEdge  = ismreq->ism_InfoTopEdge;

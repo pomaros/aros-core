@@ -1,0 +1,10 @@
+# Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+# Distributed under the AROS Public License, version 1.1.
+
+include $(SRCDIR)/config/aros.cfg
+
+%set_archincludes mainmmake=kernel-dos maindir=rom/dos \
+  modname=dos pri=10 arch=apple-aarch64 \
+  includes="-I$(SRCDIR)/$(CURDIR)"
+
+%common

@@ -1,6 +1,8 @@
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
 
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
+
     Desc: Copy content of a rastport to another rastport
 */
 
@@ -99,7 +101,7 @@
 {
     AROS_LIBFUNC_INIT
 
-    BOOL li_locked = FALSE;
+    struct Layer_Info *locked_li = NULL, *locked_li_second = NULL;
 
 
     FIX_GFXCOORD(xSrc);
@@ -109,15 +111,26 @@
 
     /* overlapping and non-overlapping blits are handled differently. */
 
-    if(LayersBase && srcRP->Layer &&
-            destRP->Layer &&
-            (srcRP->Layer != destRP->Layer) &&
-            (srcRP->Layer->LayerInfo == destRP->Layer->LayerInfo)) {
-        /* If two layers which belong to the same LayerInfo (~screen)
-           have to be locked, lock first LayerInfo, otherwise there
-           is a potential deadlock problem */
-        LockLayerInfo(srcRP->Layer->LayerInfo);
-        li_locked = TRUE;
+    if(LayersBase && srcRP->Layer && destRP->Layer &&
+            srcRP->Layer != destRP->Layer) {
+        struct Layer_Info *source = GetLayerInfoCompositionRoot(srcRP->Layer->LayerInfo);
+        struct Layer_Info *destination = GetLayerInfoCompositionRoot(destRP->Layer->LayerInfo);
+        /* Distinct physical roots must also precede both client layers.
+         * An opaque move owns the destination screen's physical layers before
+         * moving its private logical canvas. Taking a private source first
+         * could otherwise form a cross-screen copy/move cycle. Order the roots
+         * by address so opposed cross-screen copies cannot invert them. */
+        if ((IPTR)source > (IPTR)destination) {
+            struct Layer_Info *swap = source;
+            source = destination;
+            destination = swap;
+        }
+        LockLayerInfo(source);
+        locked_li = source;
+        if (destination != source) {
+            LockLayerInfo(destination);
+            locked_li_second = destination;
+        }
     }
 
     if(srcRP->Layer) LockLayerRom(srcRP->Layer);
@@ -125,7 +138,8 @@
 
     /* Once the layers are locked there's no more need to hold the layerinfo lock */
 
-    if(li_locked) UnlockLayerInfo(srcRP->Layer->LayerInfo);
+    if(locked_li_second) UnlockLayerInfo(locked_li_second);
+    if(locked_li) UnlockLayerInfo(locked_li);
 
     /* check for overlapping blits */
     if(srcRP == destRP) {

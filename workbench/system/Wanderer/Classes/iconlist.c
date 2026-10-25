@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 2001-2025, The AROS Development Team. All rights reserved.
 */
 
@@ -22,6 +23,7 @@
 #include "../tile_transaction.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -47,6 +49,9 @@
 
 #include <proto/exec.h>
 #include <proto/graphics.h>
+#include <proto/diskfont.h>
+#include <diskfont/diskfont.h>
+#include <proto/intuition.h>
 #include <proto/utility.h>
 #include <proto/dos.h>
 #include <proto/icon.h>
@@ -71,6 +76,7 @@
 #include "iconlist.h"
 #include "iconlist_private.h"
 #include "iconlistview.h"
+#include "../wandererscale.h"
 
 #define _between(a,x,b) ((x)>=(a) && (x)<=(b))
 #define _isinobject(x,y) (_between(_mleft(obj),(x),_mright (obj)) \
@@ -172,6 +178,141 @@ for                                                        \
     ((struct Node *)(node))->ln_Pred;                      \
     node = (void *)(((struct Node *)(node))->ln_Pred)      \
 )
+
+/* The metadata DiskObject stays in points and is never rescaled. Each
+ * destination owns its render generation, so another screen is unaffected.
+ * Optional name@2x.info supplies a denser source above 100%; bitmap-only icons
+ * use icon.library's explicit nearest-neighbour scaler at the requested size.
+ */
+static void iconlist_cancel_context_recalc(Object *obj, struct IconList_DATA *data)
+{
+    if (data->icld_ContextRecalc)
+        DoMethod(_app(obj), MUIM_Application_UnpushMethod, _win(obj),
+            data->icld_ContextRecalc, MUIM_Window_RecalcDisplay);
+    data->icld_ContextRecalc = 0;
+}
+static void iconlist_requalify_context(Object *obj, struct IconList_DATA *data)
+{
+    if (!muiRenderInfo(obj)) return;
+    iconlist_cancel_context_recalc(obj, data);
+    /* AppIcon updates can hold the app-object lock. Rebuild only after that
+     * update returns; client Tile/render hooks must see a coherent context. */
+    data->icld_ContextRecalc = DoMethod(_app(obj), MUIM_Application_PushMethod,
+        _win(obj), 2, MUIM_Window_RecalcDisplay, obj);
+}
+
+static LONG iconlist_render_position(const struct IconList_DATA *data, LONG point)
+{
+    return point == NO_ICON_POSITION ? point : WandererScalePoint(point, data->icld_RenderScale);
+}
+static LONG iconlist_point_position(const struct IconList_DATA *data, LONG pixel)
+{
+    return pixel == NO_ICON_POSITION ? pixel : WandererUnscalePoint(pixel, data->icld_RenderScale);
+}
+
+static void iconlist_release_render_icon(struct IconEntry *entry)
+{
+    if (entry->ie_RenderDiskObj) FreeDiskObject(entry->ie_RenderDiskObj);
+    entry->ie_RenderDiskObj = NULL;
+    entry->ie_RenderScale = 0;
+}
+
+static struct DiskObject *iconlist_render_icon(Object *obj,
+    struct IconList_DATA *data, struct IconEntry *entry)
+{
+    struct Rectangle base;
+    struct DiskObject *render = NULL;
+    LONG width, height;
+    ULONG scale = data->icld_RenderScale;
+    if (!entry->ie_DiskObj) return NULL;
+    if (scale == 100) return entry->ie_DiskObj;
+    if (entry->ie_RenderDiskObj && entry->ie_RenderScale == scale)
+        return entry->ie_RenderDiskObj;
+    GetIconRectangleA(NULL, entry->ie_DiskObj, NULL, &base, __iconList_DrawIconStateTags);
+    width = WandererScalePoint(base.MaxX - base.MinX + 1, scale);
+    height = WandererScalePoint(base.MaxY - base.MinY + 1, scale);
+    if (width <= 0 || height <= 0 || width > 32767 || height > 32767)
+        return NULL;
+    if (entry->ie_IconNode.ln_Name && entry->ie_IconListEntry.type != ILE_TYPE_APPICON)
+    {
+        IPTR length = strlen(entry->ie_IconNode.ln_Name);
+        if (length <= (IPTR)-1 - 4)
+        {
+            char *name = AllocVec(length + 4, MEMF_ANY);
+            if (name)
+            {
+                memcpy(name, entry->ie_IconNode.ln_Name, length);
+                memcpy(name + length, "@2x", 4);
+                render = GetIconTags(name, ICONGETA_RemapIcon, FALSE,
+                    ICONGETA_FailIfUnavailable, TRUE, TAG_DONE);
+                FreeVec(name);
+            }
+        }
+    }
+    if (!render) render = DupDiskObject(entry->ie_DiskObj,
+        ICONDUPA_DuplicateImageData, TRUE, TAG_DONE);
+    if (!render) return NULL;
+    if (!IconControl(render, ICONCTRLA_SetScaleBox,
+            PACK_ICON_SCALEBOX(width, height), TAG_DONE) ||
+        !LayoutIcon(render, _screen(obj), TAG_DONE))
+    {
+        FreeDiskObject(render);
+        return NULL;
+    }
+    iconlist_release_render_icon(entry);
+    entry->ie_RenderDiskObj = render;
+    entry->ie_RenderScale = scale;
+    return render;
+}
+
+static void iconlist_release_buffer(struct IconList_DATA *data)
+{
+    struct RastPort *buffer = data->icld_BufferRastPort;
+    if (buffer && buffer != data->icld_DisplayRastPort)
+    {
+        if (buffer->Layer)
+        {
+            struct Layer_Info *li = buffer->Layer->LayerInfo;
+            DeleteLayer(0, buffer->Layer);
+            buffer->Layer = NULL;
+            DisposeLayerInfo(li);
+        }
+        FreeBitMap(buffer->BitMap);
+        FreeRastPort(buffer);
+    }
+    data->icld_BufferRastPort = data->icld_DisplayRastPort;
+}
+
+static BOOL iconlist_create_buffer(Object *obj, struct IconList_DATA *data)
+{
+    struct RastPort *buffer = NULL;
+    struct BitMap *bitmap = NULL;
+    struct Layer_Info *li = NULL;
+    ULONG depth;
+    if (!data->icld_DisplayRastPort || !data->icld_ViewWidth || !data->icld_ViewHeight)
+        return FALSE;
+    depth = GetBitMapAttr(data->icld_DisplayRastPort->BitMap, BMA_DEPTH);
+    bitmap = AllocBitMap(data->icld_ViewWidth, data->icld_ViewHeight,
+        depth, BMF_CLEAR, data->icld_DisplayRastPort->BitMap);
+    if (!bitmap) goto fail;
+    buffer = CreateRastPort();
+    if (!buffer) goto fail;
+    buffer->BitMap = bitmap;
+    li = NewLayerInfo();
+    if (!li) goto fail;
+    buffer->Layer = CreateUpfrontLayer(li, bitmap, 0, 0,
+        data->icld_ViewWidth - 1, data->icld_ViewHeight - 1, 0, NULL);
+    if (!buffer->Layer) goto fail;
+    if (data->icld_IconLabelFont) SetFont(buffer, data->icld_IconLabelFont);
+    SET(obj, MUIA_IconList_BufferRastport, buffer);
+    data->icld_DrawOffsetX = data->icld_DrawOffsetY = 0;
+    return TRUE;
+fail:
+    if (li) DisposeLayerInfo(li);
+    if (buffer) FreeRastPort(buffer);
+    if (bitmap) FreeBitMap(bitmap);
+    return FALSE;
+}
 
 static void RastPortSetOpaque(struct RastPort *arport, ULONG ax, ULONG ay, ULONG width, ULONG height, ULONG transpcolval)
 {
@@ -519,7 +660,15 @@ static void IconList_GetIconImageRectangle(Object *obj, struct IconList_DATA *da
 
     BOOL tile = FALSE;
     /* Get basic width/height */
-    GetIconRectangleA(NULL, entry->ie_DiskObj, NULL, rect, __iconList_DrawIconStateTags);
+    struct DiskObject *render = iconlist_render_icon(obj, data, entry);
+    if (!render)
+    {
+        rect->MinX = rect->MinY = 0;
+        rect->MaxX = rect->MaxY = -1;
+        entry->ie_IconWidth = entry->ie_IconHeight = 0;
+        return;
+    }
+    GetIconRectangleA(NULL, render, NULL, rect, __iconList_DrawIconStateTags);
 #if defined(DEBUG_ILC_ICONPOSITIONING)
     D(bug("[IconList] %s: MinX %d, MinY %d      MaxX %d, MaxY %d\n", __func__, rect->MinX, rect->MinY, rect->MaxX, rect->MaxY));
 #endif
@@ -626,7 +775,6 @@ static void IconList_TileMotion(Object *obj, struct IconList_DATA *data, BOOL en
     DoMethod(_win(obj), MUIM_Window_RemEventHandler, (IPTR)&data->ehn);
     if (enable) data->ehn.ehn_Events |= IDCMP_MOUSEMOVE;
     else data->ehn.ehn_Events &= ~IDCMP_MOUSEMOVE;
-    DoMethod(_win(obj), MUIM_Window_AddEventHandler, (IPTR)&data->ehn);
 }
 
 static void IconList_PublishTileVisibility(Object *obj, struct IconEntry *entry, BOOL visible)
@@ -765,14 +913,14 @@ static void IconList_GetIconLabelRectangle(Object *obj, struct IconList_DATA *da
     switch ( data->icld__Option_LabelTextMode )
     {
         case ICON_TEXTMODE_DROPSHADOW:
-            outline_offset = 1;
+            outline_offset = WandererScalePoint(1, data->icld_RenderScale);
             break;
 
         case ICON_TEXTMODE_PLAIN:
             break;
 
         default:
-            outline_offset = 2;
+            outline_offset = 2 * WandererScalePoint(1, data->icld_RenderScale);
             break;
     }
     
@@ -842,7 +990,7 @@ static void IconList_GetIconLabelRectangle(Object *obj, struct IconList_DATA *da
 ///IconList_GetIconAreaRectangle()
 static void IconList_GetIconAreaRectangle(Object *obj, struct IconList_DATA *data, struct IconEntry *entry, struct Rectangle *rect)
 {
-    struct Rectangle    labelrect;
+    struct Rectangle    labelrect = {0, 0, -1, -1};
     ULONG               iconlabel_Width;
     ULONG               iconlabel_Height;
 
@@ -1115,13 +1263,13 @@ static void RenderEntryField(Object *obj, struct IconList_DATA *data,
             0x0A246A);
     }
 
-    rect->MinX += ENTRY_SPACING_LEFT;
-    rect->MaxX -= ENTRY_SPACING_RIGHT;
-    rect->MinY += LINE_SPACING_TOP;
-    rect->MaxY -= LINE_SPACING_BOTTOM;
+    rect->MinX += WandererScalePoint(ENTRY_SPACING_LEFT, data->icld_RenderScale);
+    rect->MaxX -= WandererScalePoint(ENTRY_SPACING_RIGHT, data->icld_RenderScale);
+    rect->MinY += WandererScalePoint(LINE_SPACING_TOP, data->icld_RenderScale);
+    rect->MaxY -= WandererScalePoint(LINE_SPACING_BOTTOM, data->icld_RenderScale);
 
-    if (firstvis) rect->MinX += LINE_SPACING_LEFT;
-    if (lastvis)  rect->MaxX -= LINE_SPACING_RIGHT;
+    if (firstvis) rect->MinX += WandererScalePoint(LINE_SPACING_LEFT, data->icld_RenderScale);
+    if (lastvis)  rect->MaxX -= WandererScalePoint(LINE_SPACING_RIGHT, data->icld_RenderScale);
 
     if (!entry) return;
 
@@ -1304,7 +1452,7 @@ IPTR IconList__MUIM_IconList_DrawEntry(struct IClass *CLASS, Object *obj, struct
 
         SetFont(data->icld_BufferRastPort, data->icld_IconLabelFont);
 
-        x = linerect.MinX + LINE_SPACING_LEFT;
+        x = linerect.MinX + WandererScalePoint(LINE_SPACING_LEFT, data->icld_RenderScale);
 
         firstvis = FirstVisibleColumnNumber(data);
         lastvis = LastVisibleColumnNumber(data);
@@ -1318,7 +1466,7 @@ IPTR IconList__MUIM_IconList_DrawEntry(struct IClass *CLASS, Object *obj, struct
 
             field_rect.MinX = (i == firstvis) ? linerect.MinX : x;
             field_rect.MinY = linerect.MinY;
-            field_rect.MaxX = x + data->icld_LVMAttribs->lmva_ColumnWidth[index] - 1 + ((i == lastvis) ? LINE_SPACING_RIGHT : 0);
+            field_rect.MaxX = x + data->icld_LVMAttribs->lmva_ColumnWidth[index] - 1 + ((i == lastvis) ? WandererScalePoint(LINE_SPACING_RIGHT, data->icld_RenderScale) : 0);
             field_rect.MaxY = linerect.MaxY;
             
 /*            if (MustRenderRect(data, &field_rect))
@@ -1334,7 +1482,7 @@ IPTR IconList__MUIM_IconList_DrawEntry(struct IClass *CLASS, Object *obj, struct
 
         if ((data->icld_LVMAttribs->lvma_Flags & LVMAF_ROWDRAWTOEND) == LVMAF_ROWDRAWTOEND)
         {
-            x += LINE_SPACING_RIGHT;
+            x += WandererScalePoint(LINE_SPACING_RIGHT, data->icld_RenderScale);
 
             if (x < linerect.MaxX)
             {
@@ -1417,9 +1565,11 @@ IPTR IconList__MUIM_IconList_DrawEntry(struct IClass *CLASS, Object *obj, struct
         }
 
         BOOL renderSelected = ((message->entry->ie_Flags & (ICONENTRY_FLAG_SELECTED | ICONENTRY_FLAG_LASSO)) != 0);
+        struct DiskObject *render = iconlist_render_icon(obj, data, message->entry);
+        if (!render) return FALSE;
         DrawIconStateA
           (
-            data->icld_BufferRastPort, message->entry->ie_DiskObj, NULL,
+            data->icld_BufferRastPort, render, NULL,
             iconX,
             iconY,
             (renderSelected) ? IDS_SELECTED : IDS_NORMAL,
@@ -1710,6 +1860,7 @@ IPTR IconList__MUIM_IconList_DrawEntryLabel(struct IClass *CLASS, Object *obj, s
 
     ULONG                       txtbox_width = 0;
     LONG                        tx,ty,offsetx,offsety;
+    const LONG                  stroke = WandererScalePoint(1, data->icld_RenderScale);
     LONG                        txwidth; // txheight;
 
     ULONG                       objX, objY, objW, objH;
@@ -1931,9 +2082,9 @@ IPTR IconList__MUIM_IconList_DrawEntryLabel(struct IClass *CLASS, Object *obj, s
             {
                 case ICON_TEXTMODE_DROPSHADOW:
                     SetAPen(data->icld_BufferRastPort, data->icld_LabelShadowPen);
-                    Move(data->icld_BufferRastPort, tx + 1, ty + 1);
+                    Move(data->icld_BufferRastPort, tx + stroke, ty + stroke);
                     Text(data->icld_BufferRastPort, curlabel_StrPtr, ie_LabelLength);
-                    offset_y = 1;
+                    offset_y = stroke;
                 case ICON_TEXTMODE_PLAIN:
                     SetAPen(data->icld_BufferRastPort, data->icld_LabelPen);
                     Move(data->icld_BufferRastPort, tx, ty);
@@ -1945,13 +2096,13 @@ IPTR IconList__MUIM_IconList_DrawEntryLabel(struct IClass *CLASS, Object *obj, s
                     SetSoftStyle(data->icld_BufferRastPort, FSF_BOLD, AskSoftStyle(data->icld_BufferRastPort));
 
                     SetAPen(data->icld_BufferRastPort, data->icld_LabelShadowPen);
-                    Move(data->icld_BufferRastPort, tx + 1, ty );
+                    Move(data->icld_BufferRastPort, tx + stroke, ty );
                     Text(data->icld_BufferRastPort, curlabel_StrPtr, ie_LabelLength);
-                    Move(data->icld_BufferRastPort, tx - 1, ty );
+                    Move(data->icld_BufferRastPort, tx - stroke, ty );
                     Text(data->icld_BufferRastPort, curlabel_StrPtr, ie_LabelLength);
-                    Move(data->icld_BufferRastPort, tx, ty + 1);
+                    Move(data->icld_BufferRastPort, tx, ty + stroke);
                     Text(data->icld_BufferRastPort, curlabel_StrPtr, ie_LabelLength);
-                    Move(data->icld_BufferRastPort, tx, ty - 1);
+                    Move(data->icld_BufferRastPort, tx, ty - stroke);
                     Text(data->icld_BufferRastPort, curlabel_StrPtr, ie_LabelLength);
 
                     SetAPen(data->icld_BufferRastPort, data->icld_LabelPen);
@@ -1959,7 +2110,7 @@ IPTR IconList__MUIM_IconList_DrawEntryLabel(struct IClass *CLASS, Object *obj, s
                     Text(data->icld_BufferRastPort, curlabel_StrPtr, ie_LabelLength);
 
                     SetSoftStyle(data->icld_BufferRastPort, FS_NORMAL, AskSoftStyle(data->icld_BufferRastPort));
-                    offset_y = 2;
+                    offset_y = 2 * stroke;
                     break;
             }
             if ((curlabel_CurrentLine >= (curlabel_TotalLines -1)) && (curlabel_TotalLines < message->entry->ie_SplitParts))
@@ -2009,7 +2160,7 @@ IPTR IconList__MUIM_IconList_DrawEntryLabel(struct IClass *CLASS, Object *obj, s
                 {
                     case ICON_TEXTMODE_DROPSHADOW:
                         SetAPen(data->icld_BufferRastPort, data->icld_InfoShadowPen);
-                        Move(data->icld_BufferRastPort, tx + 1, ty + 1); Text(data->icld_BufferRastPort, buf, ie_LabelLength);
+                        Move(data->icld_BufferRastPort, tx + stroke, ty + stroke); Text(data->icld_BufferRastPort, buf, ie_LabelLength);
                     case ICON_TEXTMODE_PLAIN:
                         SetAPen(data->icld_BufferRastPort, data->icld_InfoPen);
                         Move(data->icld_BufferRastPort, tx, ty); Text(data->icld_BufferRastPort, buf, ie_LabelLength);
@@ -2020,13 +2171,13 @@ IPTR IconList__MUIM_IconList_DrawEntryLabel(struct IClass *CLASS, Object *obj, s
                         SetSoftStyle(data->icld_BufferRastPort, FSF_BOLD, AskSoftStyle(data->icld_BufferRastPort));
                         SetAPen(data->icld_BufferRastPort, data->icld_InfoShadowPen);
 
-                        Move(data->icld_BufferRastPort, tx + 1, ty );
+                        Move(data->icld_BufferRastPort, tx + stroke, ty );
                         Text(data->icld_BufferRastPort, buf, ie_LabelLength);
-                        Move(data->icld_BufferRastPort, tx - 1, ty );
+                        Move(data->icld_BufferRastPort, tx - stroke, ty );
                         Text(data->icld_BufferRastPort, buf, ie_LabelLength);
-                        Move(data->icld_BufferRastPort, tx, ty - 1 );
+                        Move(data->icld_BufferRastPort, tx, ty - stroke );
                         Text(data->icld_BufferRastPort, buf, ie_LabelLength);
-                        Move(data->icld_BufferRastPort, tx, ty + 1 );
+                        Move(data->icld_BufferRastPort, tx, ty + stroke );
                         Text(data->icld_BufferRastPort, buf, ie_LabelLength);
 
                         SetAPen(data->icld_BufferRastPort, data->icld_InfoPen);
@@ -2216,8 +2367,8 @@ static BOOL IconList_Layout_TileGrid(struct IClass *CLASS, Object *obj, BOOL pre
     for (index=0; index<count; ++index) {
         entry=slots[index].entry;
         if (slots[index].pinned) {
-            slots[index].x=IconGridSnap(entry->ie_ProvidedIconX,left,pitchX);
-            slots[index].y=IconGridSnap(entry->ie_ProvidedIconY,top,pitchY);
+            slots[index].x=IconGridSnap(iconlist_render_position(data, entry->ie_ProvidedIconX),left,pitchX);
+            slots[index].y=IconGridSnap(iconlist_render_position(data, entry->ie_ProvidedIconY),top,pitchY);
         }
     }
     if (!IconGridPlace(slots,count,limit,vertical)) { FreeVec(slots); return FALSE; }
@@ -2236,12 +2387,12 @@ static BOOL IconList_Layout_TileGrid(struct IClass *CLASS, Object *obj, BOOL pre
         if (group) {
             entry->ie_GridWidth=entry->ie_AreaWidth=slot->width*64;
             entry->ie_GridHeight=entry->ie_AreaHeight=slot->height*64;
-            if (entry->ie_ProvidedIconX!=NO_ICON_POSITION)entry->ie_IconX=entry->ie_ProvidedIconX;
-            if (entry->ie_ProvidedIconY!=NO_ICON_POSITION)entry->ie_IconY=entry->ie_ProvidedIconY;
+            if (entry->ie_ProvidedIconX!=NO_ICON_POSITION)entry->ie_IconX=iconlist_render_position(data, entry->ie_ProvidedIconX);
+            if (entry->ie_ProvidedIconY!=NO_ICON_POSITION)entry->ie_IconY=iconlist_render_position(data, entry->ie_ProvidedIconY);
         }
         if (slot->pinned) {
-            entry->ie_ProvidedIconX=entry->ie_IconX;
-            entry->ie_ProvidedIconY=entry->ie_IconY;
+            entry->ie_ProvidedIconX=iconlist_point_position(data, entry->ie_IconX);
+            entry->ie_ProvidedIconY=iconlist_point_position(data, entry->ie_IconY);
         }
     }
     FreeVec(slots);
@@ -2400,10 +2551,10 @@ static VOID IconList_Layout_PartialAutoLayout(struct IClass *CLASS, Object *obj)
                 && (entry->ie_Flags & ICONENTRY_FLAG_VISIBLE))
         {
             struct Rectangle iconrect = {
-                    entry->ie_ProvidedIconX,
-                    entry->ie_ProvidedIconY,
-                    entry->ie_ProvidedIconX + entry->ie_AreaWidth - 1,
-                    entry->ie_ProvidedIconY + entry->ie_AreaHeight - 1
+                    iconlist_render_position(data, entry->ie_ProvidedIconX),
+                    iconlist_render_position(data, entry->ie_ProvidedIconY),
+                    iconlist_render_position(data, entry->ie_ProvidedIconX) + entry->ie_AreaWidth - 1,
+                    iconlist_render_position(data, entry->ie_ProvidedIconY) + entry->ie_AreaHeight - 1
             };
 
             if (data->icld_DisplayFlags & ICONLIST_DISP_VERTICAL)
@@ -2427,8 +2578,8 @@ static VOID IconList_Layout_PartialAutoLayout(struct IClass *CLASS, Object *obj)
         {
             if ((entry->ie_ProvidedIconX != NO_ICON_POSITION) && (entry->ie_ProvidedIconY != NO_ICON_POSITION))
             {
-                entry->ie_IconX = entry->ie_ProvidedIconX;
-                entry->ie_IconY = entry->ie_ProvidedIconY;
+                entry->ie_IconX = iconlist_render_position(data, entry->ie_ProvidedIconX);
+                entry->ie_IconY = iconlist_render_position(data, entry->ie_ProvidedIconY);
             }
             else
             {
@@ -2570,17 +2721,193 @@ IPTR IconList__MUIM_IconList_PositionIcons(struct IClass *CLASS, Object *obj, st
 
 #define ICONENTRY_SIZE 16
 
-static inline void CalcHeight(struct ListViewModeAttribs *LVMAttribs, struct TextFont *LabelFont)
+/* Row resources survive visibility changes. Group Show ignores child FALSE,
+ * so prepare both images before Setup succeeds or either live pointer changes. */
+static void iconlist_release_rows(struct IconList_DATA *data)
+{
+    if (!data->icld_LVMAttribs) return;
+    if (data->icld_LVMAttribs->lvma_IconDrawer)
+        FreeDiskObject(data->icld_LVMAttribs->lvma_IconDrawer);
+    if (data->icld_LVMAttribs->lvma_IconFile)
+        FreeDiskObject(data->icld_LVMAttribs->lvma_IconFile);
+    data->icld_LVMAttribs->lvma_IconDrawer = NULL;
+    data->icld_LVMAttribs->lvma_IconFile = NULL;
+}
+
+static BOOL iconlist_prepare_rows(Object *obj, struct IconList_DATA *data)
+{
+    struct DiskObject *prepared[2] = { NULL, NULL };
+    const char *names[2] = { "WANDERER:Icons/drawer", "WANDERER:Icons/file" };
+    ULONG i;
+    LONG size = WandererScalePoint(ICONENTRY_SIZE, data->icld_RenderScale);
+    if (!data->icld_LVMAttribs) return TRUE;
+    for (i = 0; i < 2; ++i)
+    {
+        prepared[i] = GetIconTags(names[i],
+            ICONGETA_Screen, (IPTR)_screen(obj), ICONGETA_RemapIcon, TRUE,
+            ICONGETA_FailIfUnavailable, FALSE, ICONGETA_GenerateImageMasks, TRUE,
+            TAG_DONE);
+        /* Standard builtin fallback keeps missing theme assets usable.
+         * GetIconTags does not reliably distinguish read OOM from absence. */
+        if (!prepared[i]) goto failure;
+        if (data->icld_RenderScale != 100 &&
+            (!IconControl(prepared[i], ICONCTRLA_SetScaleBox,
+                PACK_ICON_SCALEBOX(size, size), TAG_DONE) ||
+             !LayoutIcon(prepared[i], _screen(obj), TAG_DONE))) goto failure;
+    }
+    iconlist_release_rows(data);
+    data->icld_LVMAttribs->lvma_IconDrawer = prepared[0];
+    data->icld_LVMAttribs->lvma_IconFile = prepared[1];
+    return TRUE;
+failure:
+    for (i = 0; i < 2; ++i) if (prepared[i]) FreeDiskObject(prepared[i]);
+    return FALSE;
+}
+
+
+
+static inline void CalcHeight(struct ListViewModeAttribs *LVMAttribs, struct TextFont *LabelFont, ULONG scale)
 {
     ULONG YSize = LabelFont ? LabelFont->tf_YSize : 0;
+    ULONG icon_size = WandererScalePoint(ICONENTRY_SIZE, scale);
 
-    LVMAttribs->lmva_HeaderHeight = HEADERLINE_EXTRAHEIGHT + YSize;
-    LVMAttribs->lmva_RowHeight = LINE_EXTRAHEIGHT + ((ICONENTRY_SIZE > YSize) ? ICONENTRY_SIZE : YSize);
+    LVMAttribs->lmva_HeaderHeight = WandererScalePoint(HEADERLINE_EXTRAHEIGHT, scale) + YSize;
+    LVMAttribs->lmva_RowHeight = WandererScalePoint(LINE_EXTRAHEIGHT, scale) +
+        (icon_size > YSize ? icon_size : YSize);
 }
 
 /**************************************************************************
 OM_NEW
 **************************************************************************/
+/* Presets are resolved and owned by Area's per-window font cache. A caller
+ * supplying a TextFont retains ownership of that external font. */
+static BOOL iconlist_area_font(IPTR request)
+{
+    return (SIPTR)request <= (SIPTR)MUIV_Font_Inherit &&
+        (SIPTR)request >= (SIPTR)MUIV_Font_NegCount;
+}
+
+static void iconlist_font_attr(struct TextFont *font, struct TTextAttr *attr)
+{
+    attr->tta_Name = font->tf_Message.mn_Node.ln_Name;
+    attr->tta_YSize = font->tf_YSize;
+    attr->tta_Style = font->tf_Style & ~FSF_TAGGED;
+    attr->tta_Flags = font->tf_Flags;
+    attr->tta_Tags = NULL;
+    if ((font->tf_Style & FSF_TAGGED) && font->tf_Extension)
+    {
+        attr->tta_Tags = ((struct TextFontExtension *)font->tf_Extension)->tfe_Tags;
+        if (attr->tta_Tags) attr->tta_Style |= FSF_TAGGED;
+    }
+}
+
+static struct TextFont *iconlist_own_font(struct TextFont *font)
+{
+    struct TTextAttr ta;
+    if (!font) return NULL;
+    iconlist_font_attr(font, &ta);
+    return OpenFont((struct TextAttr *)&ta);
+}
+
+static struct TextFont *iconlist_scale_font(struct TextFont *base, ULONG scale)
+{
+    struct TTextAttr ta;
+    struct TextFont *font;
+    struct Library *DiskfontBase;
+    if (!base || scale == 100) return NULL;
+    iconlist_font_attr(base, &ta);
+    ta.tta_YSize = WandererScalePoint(base->tf_YSize, scale);
+    if (!ta.tta_YSize) ta.tta_YSize = 1;
+    DiskfontBase = OpenLibrary("diskfont.library", 0);
+    if (!DiskfontBase) return NULL;
+    font = OpenDiskFont((struct TextAttr *)&ta);
+    if (font && font->tf_YSize != ta.tta_YSize)
+    {
+        CloseFont(font);
+        font = NULL;
+    }
+    if (!font)
+    {
+        struct DiskFontHeader *scaled = NewScaledDiskFont(base, (struct TextAttr *)&ta);
+        if (scaled) font = &scaled->dfh_TF;
+    }
+    CloseLibrary(DiskfontBase);
+    return font;
+}
+
+static void iconlist_scale_options(struct IconList_DATA *data)
+{
+    data->icld__Option_IconBorderOverlap = WandererScalePoint(10, data->icld_RenderScale);
+    data->icld__Option_IconHorizontalSpacing = WandererScalePoint(data->icld_BaseIconHorizontalSpacing, data->icld_RenderScale);
+    data->icld__Option_IconVerticalSpacing = WandererScalePoint(data->icld_BaseIconVerticalSpacing, data->icld_RenderScale);
+    data->icld__Option_IconImageSpacing = WandererScalePoint(data->icld_BaseIconImageSpacing, data->icld_RenderScale);
+    data->icld__Option_LabelTextHorizontalPadding = WandererScalePoint(data->icld_BaseLabelTextHorizontalPadding, data->icld_RenderScale);
+    data->icld__Option_LabelTextVerticalPadding = WandererScalePoint(data->icld_BaseLabelTextVerticalPadding, data->icld_RenderScale);
+    data->icld__Option_LabelTextBorderWidth = WandererScalePoint(data->icld_BaseLabelTextBorderWidth, data->icld_RenderScale);
+    data->icld__Option_LabelTextBorderHeight = WandererScalePoint(data->icld_BaseLabelTextBorderHeight, data->icld_RenderScale);
+}
+
+static BOOL iconlist_resolve_fonts(Object *obj, struct IconList_DATA *data)
+{
+    struct TextFont *oldlabel = data->icld_ScaledLabelFont;
+    struct TextFont *oldinfo = data->icld_ScaledInfoFont;
+    struct TextFont *label, *info;
+    IPTR scale = 100;
+    GetAttr(MUIA_RenderScale, _win(obj), &scale);
+    label = iconlist_scale_font(data->icld_LabelBaseFont, scale);
+    info = iconlist_scale_font(data->icld_InfoBaseFont, scale);
+    if (scale != 100 && ((data->icld_LabelBaseFont && !label) ||
+        (data->icld_InfoBaseFont && !info)))
+    {
+        if (label) CloseFont(label);
+        if (info) CloseFont(info);
+        return FALSE;
+    }
+    data->icld_RenderScale = scale;
+    iconlist_scale_options(data);
+    data->icld_ScaledLabelFont = label;
+    data->icld_ScaledInfoFont = info;
+    data->icld_IconLabelFont = data->icld_LabelBaseFont ?
+        (data->icld_ScaledLabelFont ? data->icld_ScaledLabelFont : data->icld_LabelBaseFont) : _font(obj);
+    data->icld_IconInfoFont = data->icld_InfoBaseFont ?
+        (data->icld_ScaledInfoFont ? data->icld_ScaledInfoFont : data->icld_InfoBaseFont) : data->icld_IconLabelFont;
+    if (data->icld_DisplayRastPort) SetFont(data->icld_DisplayRastPort, data->icld_IconLabelFont);
+    if (data->icld_BufferRastPort) SetFont(data->icld_BufferRastPort, data->icld_IconLabelFont);
+    if (oldlabel) CloseFont(oldlabel);
+    if (oldinfo) CloseFont(oldinfo);
+    return TRUE;
+}
+
+static void iconlist_update_font_metrics(Object *obj, struct IconList_DATA *data)
+{
+    struct IconEntry *entry;
+    struct Rectangle bounds;
+    if (data->icld_LVMAttribs) CalcHeight(data->icld_LVMAttribs, data->icld_IconLabelFont, data->icld_RenderScale);
+    if (!data->icld_BufferRastPort) return;
+    /* Recompute from this generation, never a previous scale's maximum.
+     * Measure images first so every grid cell sees the same final height. */
+    data->icld_IconAreaLargestWidth = 0;
+    data->icld_IconAreaLargestHeight = 0;
+    data->icld_IconLargestHeight = 0;
+    data->icld_LabelLargestHeight = 0;
+    ForeachNode(&data->icld_IconList, entry) {
+        IconList__LabelFunc_CreateLabel(obj, data, entry);
+        IconList_GetIconImageRectangle(obj, data, entry, &bounds);
+    }
+    ForeachNode(&data->icld_IconList, entry) {
+        IconList_GetIconAreaRectangle(obj, data, entry, &bounds);
+    }
+    DoMethod(obj, MUIM_IconList_Sort);
+}
+
+static void iconlist_area_request(struct IClass *CLASS, Object *obj, IPTR request)
+{
+    struct TagItem tags[] = {{MUIA_Font, iconlist_area_font(request) ? request : MUIV_Font_Tiny}, {TAG_DONE, 0}};
+    struct opSet setmsg = {OM_SET, tags, NULL};
+    /* Area never borrows the caller's external font; IconList owns that base. */
+    DoSuperMethodA(CLASS, obj, (Msg)&setmsg);
+}
+
 IPTR IconList__OM_NEW(struct IClass *CLASS, Object *obj, struct opSet *message)
 {
     struct IconList_DATA        *data = NULL;
@@ -2592,7 +2919,7 @@ IPTR IconList__OM_NEW(struct IClass *CLASS, Object *obj, struct opSet *message)
     D(bug("[IconList]: %s()\n", __func__));
 #endif
 
-    icl_WindowFont = (struct TextFont *) GetTagData(MUIA_Font, (IPTR) NULL, message->ops_AttrList);
+    icl_WindowFont = (struct TextFont *) GetTagData(MUIA_Font, MUIV_Font_Tiny, message->ops_AttrList);
 
     obj = (Object *)DoSuperNewTags(CLASS, obj, NULL,
         MUIA_FillArea, FALSE,
@@ -2619,7 +2946,20 @@ IPTR IconList__OM_NEW(struct IClass *CLASS, Object *obj, struct opSet *message)
     NewList((struct List*)&data->icld_IconList);
     NewList((struct List*)&data->icld_SelectionList);
 
-    data->icld_IconLabelFont = icl_WindowFont;
+    data->icld_IconLabelFontRequest = (IPTR)icl_WindowFont;
+    if (!iconlist_area_font((IPTR)icl_WindowFont)) {
+        data->icld_LabelBaseFont = iconlist_own_font(icl_WindowFont);
+        if (!data->icld_LabelBaseFont) { CoerceMethod(CLASS, obj, OM_DISPOSE); return 0; }
+    }
+    data->icld_IconInfoFontRequest = (struct TextFont *)GetTagData(
+        MUIA_IconList_LabelInfoText_Font, 0, message->ops_AttrList);
+    if (data->icld_IconInfoFontRequest) {
+        data->icld_InfoBaseFont = iconlist_own_font(data->icld_IconInfoFontRequest);
+        if (!data->icld_InfoBaseFont) { CoerceMethod(CLASS, obj, OM_DISPOSE); return 0; }
+    }
+    data->icld_IconLabelFont = data->icld_LabelBaseFont;
+    data->icld_IconInfoFont = data->icld_InfoBaseFont;
+    iconlist_area_request(CLASS, obj, data->icld_IconLabelFontRequest);
 
 /* Setup List View-Mode options */
     if ((data->icld_LVMAttribs = AllocMem(sizeof(struct ListViewModeAttribs), MEMF_CLEAR)) != NULL)
@@ -2677,16 +3017,28 @@ IPTR IconList__OM_NEW(struct IClass *CLASS, Object *obj, struct opSet *message)
  * font failed to open). In this case we fail back to the font specified in MUI's AreaData, but
  * it becomes known only in MUIM_Setup
  *
-         CalcHeight(data->icld_LVMAttribs, data->icld_IconLabelFont); */
+         CalcHeight(data->icld_LVMAttribs, data->icld_IconLabelFont, data->icld_RenderScale); */
     }
 
     /* Get/Set initial values */
     /* TODO: TrimVolumeNames should be prefs settable */
     data->icld__Option_TrimVolumeNames = TRUE;
+    data->icld_RenderScale = 100;
+    data->icld_BaseIconHorizontalSpacing = (UBYTE)GetTagData(MUIA_IconList_Icon_HorizontalSpacing, ILC_ICON_HORIZONTALMARGIN_DEFAULT, message->ops_AttrList);
+    data->icld_BaseIconVerticalSpacing = (UBYTE)GetTagData(MUIA_IconList_Icon_VerticalSpacing, ILC_ICON_VERTICALMARGIN_DEFAULT, message->ops_AttrList);
+    data->icld_BaseIconImageSpacing = (UBYTE)GetTagData(MUIA_IconList_Icon_ImageSpacing, ILC_ICONLABEL_IMAGEMARGIN_DEFAULT, message->ops_AttrList);
+    data->icld_BaseLabelTextHorizontalPadding = (UBYTE)GetTagData(MUIA_IconList_LabelText_HorizontalPadding, ILC_ICONLABEL_HORIZONTALTEXTMARGIN_DEFAULT, message->ops_AttrList);
+    data->icld_BaseLabelTextVerticalPadding = (UBYTE)GetTagData(MUIA_IconList_LabelText_VerticalPadding, ILC_ICONLABEL_VERTICALTEXTMARGIN_DEFAULT, message->ops_AttrList);
+    data->icld_BaseLabelTextBorderWidth = (UBYTE)GetTagData(MUIA_IconList_LabelText_BorderWidth, ILC_ICONLABEL_BORDERWIDTH_DEFAULT, message->ops_AttrList);
+    data->icld_BaseLabelTextBorderHeight = (UBYTE)GetTagData(MUIA_IconList_LabelText_BorderHeight, ILC_ICONLABEL_BORDERHEIGHT_DEFAULT, message->ops_AttrList);
+    iconlist_scale_options(data);
     /* TODO: Adjust overlap by window border width */
-    data->icld__Option_IconBorderOverlap = 10;
+
 
     data->icld__Option_IconListMode   = (UBYTE)GetTagData(MUIA_IconList_IconListMode, 0, message->ops_AttrList);
+    data->icld__Option_LabelTextMultiLine = GetTagData(MUIA_IconList_LabelText_MultiLine, 1, message->ops_AttrList);
+    if (!data->icld__Option_LabelTextMultiLine) data->icld__Option_LabelTextMultiLine = 1;
+    data->icld__Option_LabelTextMultiLineOnFocus = GetTagData(MUIA_IconList_LabelText_MultiLineOnFocus, FALSE, message->ops_AttrList);
     data->icld__Option_LabelTextMode   = (UBYTE)GetTagData(MUIA_IconList_LabelText_Mode, 0, message->ops_AttrList);
     data->icld__Option_LabelTextMaxLen = (ULONG)GetTagData(MUIA_IconList_LabelText_MaxLineLen, ILC_ICONLABEL_MAXLINELEN_DEFAULT, message->ops_AttrList);
     data->icld__Option_DragImageTransparent = (BOOL)GetTagData(MUIA_IconList_DragImageTransparent, FALSE, message->ops_AttrList);
@@ -2744,12 +3096,22 @@ IPTR IconList__OM_DISPOSE(struct IClass *CLASS, Object *obj, Msg message)
     D(bug("[IconList]: %s()\n", __func__));
 #endif
 
+    iconlist_cancel_context_recalc(obj, data);
+    if (data->icld_DisplayRastPort || data->icld_BufferRastPort) DoMethod(obj, MUIM_Hide);
+    iconlist_release_rows(data);
     IconList_HideTiles(obj, data);
     ForeachNode(&data->icld_IconList, node)
     {
+        iconlist_release_render_icon(node);
         if (node->ie_DiskObj)
             FreeDiskObject(node->ie_DiskObj);
+        node->ie_DiskObj = NULL;
     }
+
+    if (data->icld_ScaledLabelFont) CloseFont(data->icld_ScaledLabelFont);
+    if (data->icld_ScaledInfoFont) CloseFont(data->icld_ScaledInfoFont);
+    if (data->icld_LabelBaseFont) CloseFont(data->icld_LabelBaseFont);
+    if (data->icld_InfoBaseFont) CloseFont(data->icld_InfoBaseFont);
 
     if (data->icld_Pool) DeletePool(data->icld_Pool);
 
@@ -2823,15 +3185,47 @@ IPTR IconList__OM_SET(struct IClass *CLASS, Object *obj, struct opSet *message)
 #if defined(DEBUG_ILC_ATTRIBS)
                 D(bug("[IconList] %s: MUIA_Font 0x%p\n", __func__, tag->ti_Data));
 #endif
-                data->icld_IconLabelFont = (struct TextFont*)tag->ti_Data;
-                /* FIXME: Should we call CalcHeight() here because our font changed? */
+                {
+                    struct TextFont *base = iconlist_area_font(tag->ti_Data) ? NULL :
+                        iconlist_own_font((struct TextFont *)tag->ti_Data);
+                    struct TextFont *old = data->icld_LabelBaseFont;
+                    IPTR oldrequest = data->icld_IconLabelFontRequest;
+                    if (!iconlist_area_font(tag->ti_Data) && !base) return FALSE;
+                    data->icld_IconLabelFontRequest = tag->ti_Data;
+                    data->icld_LabelBaseFont = base;
+                    if (muiRenderInfo(obj) && !iconlist_resolve_fonts(obj, data))
+                    {
+                        data->icld_LabelBaseFont = old;
+                        data->icld_IconLabelFontRequest = oldrequest;
+                        if (base) CloseFont(base);
+                        return FALSE;
+                    }
+                    if (!muiRenderInfo(obj)) data->icld_IconLabelFont = base;
+                    if (old) CloseFont(old);
+                }
                 break;
 
             case MUIA_IconList_LabelInfoText_Font:
 #if defined(DEBUG_ILC_ATTRIBS)
                 D(bug("[IconList] %s: MUIA_IconList_LabelInfoText_Font 0x%p\n", __func__, tag->ti_Data));
 #endif
-                data->icld_IconInfoFont = (struct TextFont*)tag->ti_Data;
+                {
+                    struct TextFont *base = tag->ti_Data ? iconlist_own_font((struct TextFont *)tag->ti_Data) : NULL;
+                    struct TextFont *old = data->icld_InfoBaseFont;
+                    struct TextFont *oldrequest = data->icld_IconInfoFontRequest;
+                    if (tag->ti_Data && !base) return FALSE;
+                    data->icld_IconInfoFontRequest = (struct TextFont *)tag->ti_Data;
+                    data->icld_InfoBaseFont = base;
+                    if (muiRenderInfo(obj) && !iconlist_resolve_fonts(obj, data))
+                    {
+                        data->icld_InfoBaseFont = old;
+                        data->icld_IconInfoFontRequest = oldrequest;
+                        if (base) CloseFont(base);
+                        return FALSE;
+                    }
+                    if (!muiRenderInfo(obj)) data->icld_IconInfoFont = base;
+                    if (old) CloseFont(old);
+                }
                 break;
 
             case MUIA_IconList_DisplayFlags:
@@ -2856,59 +3250,15 @@ IPTR IconList__OM_SET(struct IClass *CLASS, Object *obj, struct opSet *message)
                             if ((GetBitMapAttr(data->icld_BufferRastPort->BitMap, BMA_WIDTH) != data->icld_ViewWidth)
                                 || (GetBitMapAttr(data->icld_BufferRastPort->BitMap, BMA_HEIGHT) != data->icld_ViewHeight))
                             {
-                                struct Layer *oldLayer = data->icld_BufferRastPort->Layer;
-#if defined(DEBUG_ILC_ATTRIBS) || defined(DEBUG_ILC_ICONRENDERING)
-                                D(bug("[IconList] %s: Destroying old BackLayer\n", __func__));
-#endif
-                                data->icld_BufferRastPort = data->icld_DisplayRastPort;
-                                DeleteLayer(0, oldLayer);
+                                iconlist_release_buffer(data);
                             }
                         }
 
                         if ((data->icld_BufferRastPort == NULL) || (data->icld_BufferRastPort == data->icld_DisplayRastPort))
                         {
-                            struct BitMap *bitmap_New = NULL;
-                            ULONG tmp_RastDepth;
-                            struct Layer_Info *li = NULL;
-
-                            tmp_RastDepth = GetCyberMapAttr(data->icld_DisplayRastPort->BitMap, CYBRMATTR_DEPTH);
-                            if ((bitmap_New = AllocBitMap(data->icld_ViewWidth,
-                                                data->icld_ViewHeight,
-                                                tmp_RastDepth,
-                                                BMF_CLEAR,
-                                                data->icld_DisplayRastPort->BitMap))!=NULL)
+                            if (!iconlist_create_buffer(obj, data))
                             {
-                                if ((data->icld_BufferRastPort = CreateRastPort())!=NULL)
-                                {
-                                    data->icld_BufferRastPort->BitMap = bitmap_New;
-                                    if ((li = NewLayerInfo()))
-                                    {
-                                        if ((data->icld_BufferRastPort->Layer = CreateUpfrontLayer(li, data->icld_BufferRastPort->BitMap, 0, 0, data->icld_ViewWidth - 1, data->icld_ViewHeight - 1, 0, NULL)))
-                                        {
-                                           /*
-                                            * Mark it as a buffered rastport.
-                                            */
-
-#if defined(DEBUG_ILC_ATTRIBS) || defined(DEBUG_ILC_ICONRENDERING)
-                                            D(bug("[IconList] %s: FrontRastPort @ %p, New BackLayer @ %p, BackRastport @ %p\n", __func__, data->icld_DisplayRastPort, data->icld_BufferRastPort->Layer, data->icld_BufferRastPort));
-#endif
-                                            SET(obj, MUIA_IconList_BufferRastport, data->icld_BufferRastPort);
-                                            data->icld_DrawOffsetX = 0;
-                                            data->icld_DrawOffsetY = 0;
-                                        }
-                                        else
-                                            data->icld_BufferRastPort = data->icld_DisplayRastPort;
-                                    }
-                                    else
-                                        data->icld_BufferRastPort = data->icld_DisplayRastPort;
-                                }
-                                else
-                                    data->icld_BufferRastPort = data->icld_DisplayRastPort;
-                            }
-                            if (data->icld_BufferRastPort == data->icld_DisplayRastPort)
-                            {
-                                if (bitmap_New) FreeBitMap(bitmap_New);
-                                if (li) DisposeLayerInfo(li);
+                                data->icld_BufferRastPort = data->icld_DisplayRastPort;
                                 data->icld_DrawOffsetX = _mleft(obj);
                                 data->icld_DrawOffsetY = _mtop(obj);
                             }
@@ -2919,11 +3269,7 @@ IPTR IconList__OM_SET(struct IClass *CLASS, Object *obj, struct opSet *message)
                         if ((data->icld_BufferRastPort) && (data->icld_BufferRastPort != data->icld_DisplayRastPort))
                         {
                             //Free up the buffers layer, rastport and bitmap since they are no longer needed ..
-                            struct Layer *oldLayer = data->icld_BufferRastPort->Layer;
-                            data->icld_BufferRastPort = data->icld_DisplayRastPort;
-                            InstallClipRegion(oldLayer, NULL);
-                            DeleteLayer(0, oldLayer);
-                            FreeBitMap(data->icld_BufferRastPort->BitMap);
+                            iconlist_release_buffer(data);
                             data->icld_DrawOffsetX = _mleft(obj);
                             data->icld_DrawOffsetY = _mtop(obj);
                         }
@@ -2990,49 +3336,56 @@ IPTR IconList__OM_SET(struct IClass *CLASS, Object *obj, struct opSet *message)
 #if defined(DEBUG_ILC_ATTRIBS)
                 D(bug("[IconList] %s: MUIA_IconList_Icon_HorizontalSpacing %d\n", __func__, tag->ti_Data));
 #endif
-                data->icld__Option_IconHorizontalSpacing = (UBYTE)tag->ti_Data;
+                data->icld_BaseIconHorizontalSpacing = (UBYTE)tag->ti_Data;
+                data->icld__Option_IconHorizontalSpacing = WandererScalePoint(data->icld_BaseIconHorizontalSpacing, data->icld_RenderScale);
                 break;
 
             case MUIA_IconList_Icon_VerticalSpacing:
 #if defined(DEBUG_ILC_ATTRIBS)
                 D(bug("[IconList] %s: MUIA_IconList_Icon_VerticalSpacing %d\n", __func__, tag->ti_Data));
 #endif
-                data->icld__Option_IconVerticalSpacing = (UBYTE)tag->ti_Data;
+                data->icld_BaseIconVerticalSpacing = (UBYTE)tag->ti_Data;
+                data->icld__Option_IconVerticalSpacing = WandererScalePoint(data->icld_BaseIconVerticalSpacing, data->icld_RenderScale);
                 break;
 
             case MUIA_IconList_Icon_ImageSpacing:
 #if defined(DEBUG_ILC_ATTRIBS)
                 D(bug("[IconList] %s: MUIA_IconList_Icon_ImageSpacing %d\n", __func__, tag->ti_Data));
 #endif
-                data->icld__Option_IconImageSpacing = (UBYTE)tag->ti_Data;
+                data->icld_BaseIconImageSpacing = (UBYTE)tag->ti_Data;
+                data->icld__Option_IconImageSpacing = WandererScalePoint(data->icld_BaseIconImageSpacing, data->icld_RenderScale);
                 break;
 
             case MUIA_IconList_LabelText_HorizontalPadding:
 #if defined(DEBUG_ILC_ATTRIBS)
                 D(bug("[IconList] %s: MUIA_IconList_LabelText_HorizontalPadding %d\n", __func__, tag->ti_Data));
 #endif
-                data->icld__Option_LabelTextHorizontalPadding = (UBYTE)tag->ti_Data;
+                data->icld_BaseLabelTextHorizontalPadding = (UBYTE)tag->ti_Data;
+                data->icld__Option_LabelTextHorizontalPadding = WandererScalePoint(data->icld_BaseLabelTextHorizontalPadding, data->icld_RenderScale);
                 break;
 
             case MUIA_IconList_LabelText_VerticalPadding:
 #if defined(DEBUG_ILC_ATTRIBS)
                 D(bug("[IconList] %s: MUIA_IconList_LabelText_VerticalPadding %d\n", __func__, tag->ti_Data));
 #endif
-                data->icld__Option_LabelTextVerticalPadding = (UBYTE)tag->ti_Data;
+                data->icld_BaseLabelTextVerticalPadding = (UBYTE)tag->ti_Data;
+                data->icld__Option_LabelTextVerticalPadding = WandererScalePoint(data->icld_BaseLabelTextVerticalPadding, data->icld_RenderScale);
                 break;
 
             case MUIA_IconList_LabelText_BorderWidth:
 #if defined(DEBUG_ILC_ATTRIBS)
                 D(bug("[IconList] %s: MUIA_IconList_LabelText_BorderWidth %d\n", __func__, tag->ti_Data));
 #endif
-                data->icld__Option_LabelTextBorderWidth = (UBYTE)tag->ti_Data;
+                data->icld_BaseLabelTextBorderWidth = (UBYTE)tag->ti_Data;
+                data->icld__Option_LabelTextBorderWidth = WandererScalePoint(data->icld_BaseLabelTextBorderWidth, data->icld_RenderScale);
                 break;
 
             case MUIA_IconList_LabelText_BorderHeight:
 #if defined(DEBUG_ILC_ATTRIBS)
                 D(bug("[IconList] %s: MUIA_IconList_LabelText_BorderHeight %d\n", __func__, tag->ti_Data));
 #endif
-                data->icld__Option_LabelTextBorderHeight = (UBYTE)tag->ti_Data;
+                data->icld_BaseLabelTextBorderHeight = (UBYTE)tag->ti_Data;
+                data->icld__Option_LabelTextBorderHeight = WandererScalePoint(data->icld_BaseLabelTextBorderHeight, data->icld_RenderScale);
                 break;
 
             case MUIA_IconList_LabelText_Pen:
@@ -3126,7 +3479,16 @@ IPTR IconList__OM_SET(struct IClass *CLASS, Object *obj, struct opSet *message)
 #if defined(DEBUG_ILC_ATTRIBS)
     D(bug("[IconList] %s(), call DoSuperMethodA()\n", __func__));
 #endif
-    return DoSuperMethodA(CLASS, obj, (Msg)message);
+    {
+        IPTR result = DoSuperMethodA(CLASS, obj, (Msg)message);
+        iconlist_area_request(CLASS, obj, data->icld_IconLabelFontRequest);
+        if (muiRenderInfo(obj) && (FindTagItem(MUIA_Font, message->ops_AttrList) ||
+            FindTagItem(MUIA_IconList_LabelInfoText_Font, message->ops_AttrList))) {
+            iconlist_update_font_metrics(obj, data);
+            MUI_Redraw(obj, MADF_DRAWOBJECT);
+        }
+        return result;
+    }
 }
 ///
 
@@ -3146,6 +3508,7 @@ IPTR IconList__OM_GET(struct IClass *CLASS, Object *obj, struct opGet *message)
 
     switch (message->opg_AttrID)
     {
+        case MUIA_RenderScale: STORE = data->icld_RenderScale; return TRUE;
         case MUIA_IconList_Rastport:                    STORE = (IPTR)data->icld_DisplayRastPort; return 1;
         case MUIA_IconList_BufferRastport:              STORE = (IPTR)data->icld_BufferRastPort; return 1;
         case MUIA_IconList_BufferLeft:                  STORE = (IPTR)data->icld_DrawOffsetX; return 1;
@@ -3174,13 +3537,13 @@ IPTR IconList__OM_GET(struct IClass *CLASS, Object *obj, struct opGet *message)
         case MUIA_IconList_LabelInfoText_ShadowPen:     STORE = (IPTR)data->icld_InfoShadowPen; return 1;
         case MUIA_IconList_DragImageTransparent:        STORE = (IPTR)data->icld__Option_DragImageTransparent; return 1;
 
-        case MUIA_IconList_Icon_HorizontalSpacing:      STORE = (IPTR)data->icld__Option_IconHorizontalSpacing; return 1;
-        case MUIA_IconList_Icon_VerticalSpacing:        STORE = (IPTR)data->icld__Option_IconVerticalSpacing; return 1;
-        case MUIA_IconList_Icon_ImageSpacing:           STORE = (IPTR)data->icld__Option_IconImageSpacing; return 1;
-        case MUIA_IconList_LabelText_HorizontalPadding: STORE = (IPTR)data->icld__Option_LabelTextHorizontalPadding; return 1;
-        case MUIA_IconList_LabelText_VerticalPadding:   STORE = (IPTR)data->icld__Option_LabelTextVerticalPadding; return 1;
-        case MUIA_IconList_LabelText_BorderWidth:       STORE = (IPTR)data->icld__Option_LabelTextBorderWidth; return 1;
-        case MUIA_IconList_LabelText_BorderHeight:      STORE = (IPTR)data->icld__Option_LabelTextBorderHeight; return 1;
+        case MUIA_IconList_Icon_HorizontalSpacing:      STORE = (IPTR)data->icld_BaseIconHorizontalSpacing; return 1;
+        case MUIA_IconList_Icon_VerticalSpacing:        STORE = (IPTR)data->icld_BaseIconVerticalSpacing; return 1;
+        case MUIA_IconList_Icon_ImageSpacing:           STORE = (IPTR)data->icld_BaseIconImageSpacing; return 1;
+        case MUIA_IconList_LabelText_HorizontalPadding: STORE = (IPTR)data->icld_BaseLabelTextHorizontalPadding; return 1;
+        case MUIA_IconList_LabelText_VerticalPadding:   STORE = (IPTR)data->icld_BaseLabelTextVerticalPadding; return 1;
+        case MUIA_IconList_LabelText_BorderWidth:       STORE = (IPTR)data->icld_BaseLabelTextBorderWidth; return 1;
+        case MUIA_IconList_LabelText_BorderHeight:      STORE = (IPTR)data->icld_BaseLabelTextBorderHeight; return 1;
 
         /* Settings defined by the view class */
         case MUIA_IconListview_FixedBackground:         STORE = (IPTR)data->icld__Option_IconListFixedBackground; return 1;
@@ -3213,6 +3576,8 @@ IPTR IconList__MUIM_Family_AddHead(struct IClass *CLASS, Object *obj, struct MUI
         /* TODO: Use the correct _OBJECT() code when we switch to icon.mui */
 //        AddHead(&(data->icld_IconList), (struct Node *)_OBJECT(message->obj));
         AddHead(&(data->icld_IconList), (struct Node *)message->obj);
+        if (((struct IconEntry *)message->obj)->ie_IconListEntry.type == ILE_TYPE_APPICON)
+            iconlist_requalify_context(obj, data);
         return TRUE;
     }
     else
@@ -3233,6 +3598,8 @@ IPTR IconList__MUIM_Family_AddTail(struct IClass *CLASS, Object *obj, struct MUI
         /* TODO: Use the correct _OBJECT() code when we switch to icon.mui */
 //        AddTail(&(data->icld_IconList), (struct Node *)_OBJECT(message->obj));
         AddTail(&(data->icld_IconList), (struct Node *)message->obj);
+        if (((struct IconEntry *)message->obj)->ie_IconListEntry.type == ILE_TYPE_APPICON)
+            iconlist_requalify_context(obj, data);
         return TRUE;
     }
     else
@@ -3249,7 +3616,7 @@ IPTR IconList__OM_ADDMEMBER(struct IClass *CLASS, Object *obj, struct MUIP_Famil
 
 IPTR IconList__MUIM_Family_Remove(struct IClass *CLASS, Object *obj, struct MUIP_Family_Remove *message)
 {
-    // struct IconList_DATA        *data = INST_DATA(CLASS, obj);
+    struct IconList_DATA *data = INST_DATA(CLASS, obj);
 #if defined(DEBUG_ILC_FUNCS)
     D(bug("[IconList]: %s()\n", __func__));
 #endif
@@ -3261,6 +3628,8 @@ IPTR IconList__MUIM_Family_Remove(struct IClass *CLASS, Object *obj, struct MUIP
         /* TODO: Use the correct _OBJECT() code when we switch to icon.mui */
 //        Remove((struct Node *)_OBJECT(message->obj));
         Remove((struct Node *)message->obj);
+        if (((struct IconEntry *)message->obj)->ie_IconListEntry.type == ILE_TYPE_APPICON)
+            iconlist_requalify_context(obj, data);
         return TRUE;
     }
     else
@@ -3289,21 +3658,39 @@ IPTR IconList__MUIM_Setup(struct IClass *CLASS, Object *obj, struct MUIP_Setup *
 
     if (!DoSuperMethodA(CLASS, obj, (Msg) message)) return (IPTR)NULL;
 
-    DoMethod(_win(obj), MUIM_Window_AddEventHandler, (IPTR)&data->ehn);
-
     /* Get Internal Objects to use if not set .. */
     data->icld_DisplayRastPort = NULL;
     data->icld_BufferRastPort = NULL;
 
-    if (data->icld_IconLabelFont == NULL)   data->icld_IconLabelFont = _font(obj);
-    if (data->icld_IconInfoFont == NULL)    data->icld_IconInfoFont = data->icld_IconLabelFont;
+    if (!iconlist_resolve_fonts(obj, data))
+    {
+        DoSuperMethod(CLASS, obj, MUIM_Cleanup);
+        return FALSE;
+    }
+    if (!iconlist_prepare_rows(obj, data))
+    {
+        if (data->icld_ScaledLabelFont) CloseFont(data->icld_ScaledLabelFont);
+        if (data->icld_ScaledInfoFont) CloseFont(data->icld_ScaledInfoFont);
+        data->icld_ScaledLabelFont = data->icld_ScaledInfoFont = NULL;
+        data->icld_IconLabelFont = data->icld_IconInfoFont = NULL;
+        DoSuperMethod(CLASS, obj, MUIM_Cleanup);
+        return FALSE;
+    }
+    DoMethod(_win(obj), MUIM_Window_AddEventHandler, (IPTR)&data->ehn);
 
     /*
      * Here we have our font, either from user preferences or from MUI's AreaData.
      * It's right time to set up some sizes.
      */
     if (data->icld_LVMAttribs)
-        CalcHeight(data->icld_LVMAttribs, data->icld_IconLabelFont);
+    {
+        ULONG column;
+        CalcHeight(data->icld_LVMAttribs, data->icld_IconLabelFont, data->icld_RenderScale);
+        for (column = 0; column < NUM_COLUMNS; ++column)
+            data->icld_LVMAttribs->lmva_ColumnWidth[column] =
+                WandererScalePoint(column == INDEX_TYPE ? ICONENTRY_SIZE + 2 : 100,
+                    data->icld_RenderScale);
+    }
 #if defined(DEBUG_ILC_ICONRENDERING)
     D(bug("[IconList] %s: Use Font @ 0x%p, RastPort @ 0x%p\n", __func__, data->icld_IconLabelFont, data->icld_BufferRastPort ));
 #endif
@@ -3314,18 +3701,11 @@ IPTR IconList__MUIM_Setup(struct IClass *CLASS, Object *obj, struct MUIP_Setup *
     data->icld_InfoPen                            = _pens(obj)[MPEN_SHINE];
     data->icld_InfoShadowPen                      = _pens(obj)[MPEN_SHADOW];
 
-    data->icld__Option_LabelTextMultiLine         = 1;
+
     data->icld__Option_LastLabelTextMultiLine = data->icld__Option_LabelTextMultiLine;
 
-    data->icld__Option_LabelTextMultiLineOnFocus  = FALSE;
+
     
-    data->icld__Option_IconHorizontalSpacing      = ILC_ICON_HORIZONTALMARGIN_DEFAULT;
-    data->icld__Option_IconVerticalSpacing        = ILC_ICON_VERTICALMARGIN_DEFAULT;
-    data->icld__Option_IconImageSpacing           = ILC_ICONLABEL_IMAGEMARGIN_DEFAULT;
-    data->icld__Option_LabelTextHorizontalPadding = ILC_ICONLABEL_HORIZONTALTEXTMARGIN_DEFAULT;
-    data->icld__Option_LabelTextVerticalPadding   = ILC_ICONLABEL_VERTICALTEXTMARGIN_DEFAULT;
-    data->icld__Option_LabelTextBorderWidth       = ILC_ICONLABEL_BORDERWIDTH_DEFAULT;
-    data->icld__Option_LabelTextBorderHeight      = ILC_ICONLABEL_BORDERHEIGHT_DEFAULT;
 
     return 1;
 }
@@ -3392,49 +3772,13 @@ D(bug("[IconList]: %s()\n", __func__));
 #endif
         }
 
+        if (!data->icld_DisplayRastPort) return FALSE;
+
         if (data->icld_DisplayFlags & ICONLIST_DISP_BUFFERED)
         {
-            struct BitMap *bitmap_New = NULL;
-            struct Layer_Info *li = NULL;
-
-            ULONG tmp_RastDepth = GetCyberMapAttr(data->icld_DisplayRastPort->BitMap, CYBRMATTR_DEPTH);
-            if ((bitmap_New = AllocBitMap(data->icld_ViewWidth,
-                                data->icld_ViewHeight,
-                                tmp_RastDepth,
-                                BMF_CLEAR,
-                                data->icld_DisplayRastPort->BitMap))!=NULL)
+            if (!iconlist_create_buffer(obj, data))
             {
-                if ((data->icld_BufferRastPort = CreateRastPort())!=NULL)
-                {
-                    data->icld_BufferRastPort->BitMap = bitmap_New;
-                    if ((li = NewLayerInfo()))
-                    {
-                        if ((data->icld_BufferRastPort->Layer = CreateUpfrontLayer(li, data->icld_BufferRastPort->BitMap, 0, 0, data->icld_ViewWidth - 1, data->icld_ViewHeight - 1, 0, NULL)))
-                        {
-                           /*
-                            * Mark it as a buffered rastport.
-                            */
-
-#if defined(DEBUG_ILC_ATTRIBS) || defined(DEBUG_ILC_ICONRENDERING)
-                            D(bug("[IconList] %s: FrontRastPort @ %p, New BackLayer @ %p, BackRastport @ %p\n", __func__, data->icld_DisplayRastPort, data->icld_BufferRastPort->Layer, data->icld_BufferRastPort));
-#endif
-                            SET(obj, MUIA_IconList_BufferRastport, data->icld_BufferRastPort);
-                            data->icld_DrawOffsetX = 0;
-                            data->icld_DrawOffsetY = 0;
-                        }
-                        else
-                            data->icld_BufferRastPort = data->icld_DisplayRastPort;
-                    }
-                    else
-                        data->icld_BufferRastPort = data->icld_DisplayRastPort;
-                }
-                else
-                    data->icld_BufferRastPort = data->icld_DisplayRastPort;
-            }
-            if (data->icld_BufferRastPort == data->icld_DisplayRastPort)
-            {
-                if (bitmap_New) FreeBitMap(bitmap_New);
-                if (li) DisposeLayerInfo(li);
+                data->icld_BufferRastPort = data->icld_DisplayRastPort;
                 data->icld_DrawOffsetX = _mleft(obj);
                 data->icld_DrawOffsetY = _mtop(obj);
             }
@@ -3454,44 +3798,6 @@ D(bug("[IconList]: %s()\n", __func__));
 
         if ((data->icld_BufferRastPort) && (data->icld_IconLabelFont))
             SetFont(data->icld_BufferRastPort, data->icld_IconLabelFont);
-
-        if (data->icld_LVMAttribs)
-        {
-            data->icld_LVMAttribs->lvma_IconDrawer = GetIconTags
-            (
-                "WANDERER:Icons/drawer",
-                (iconlistScreen) ? ICONGETA_Screen : TAG_IGNORE, iconlistScreen,
-                (iconlistScreen) ? ICONGETA_RemapIcon : TAG_IGNORE, TRUE,
-                ICONGETA_FailIfUnavailable,        TRUE,
-                ICONGETA_GenerateImageMasks,       TRUE,
-                ICONA_ErrorCode,                   &geticon_error,
-                TAG_DONE
-            );
-
-#if defined(DEBUG_ILC_ICONRENDERING)
-            if (data->icld_LVMAttribs->lvma_IconDrawer == NULL)
-            {
-                D(bug("[IconList] %s: Couldnt get drawer DiskObject! (error code = 0x%p)\n", __func__, geticon_error));
-            }
-#endif
-            data->icld_LVMAttribs->lvma_IconFile = GetIconTags
-            (
-                "WANDERER:Icons/file",
-                (iconlistScreen) ? ICONGETA_Screen : TAG_IGNORE, iconlistScreen,
-                (iconlistScreen) ? ICONGETA_RemapIcon : TAG_IGNORE, TRUE,
-                ICONGETA_FailIfUnavailable,        TRUE,
-                ICONGETA_GenerateImageMasks,       TRUE,
-                ICONA_ErrorCode,                   &geticon_error,
-                TAG_DONE
-            );
-
-#if defined(DEBUG_ILC_ICONRENDERING)
-            if (data->icld_LVMAttribs->lvma_IconFile == NULL)
-            {
-                D(bug("[IconList] %s: Couldnt get file DiskObject! (error code = 0x%p)\n", __func__, geticon_error));
-            }
-#endif
-        }
 
         ForeachNode(&data->icld_IconList, node)
         {
@@ -3514,6 +3820,7 @@ D(bug("[IconList]: %s()\n", __func__));
         }
     }
     data->icld_TilesShown = rc != 0;
+    if (rc) iconlist_update_font_metrics(obj, data);
     if (rc) IconList_SampleTiles(CLASS, obj, FALSE, 0, 0);
     return rc;
 }
@@ -3541,24 +3848,12 @@ D(bug("[IconList]: %s()\n", __func__));
 
         ForeachNode(&data->icld_IconList, node)
         {
+            iconlist_release_render_icon(node);
             if (node->ie_DiskObj)
                 FreeDiskObject(node->ie_DiskObj);
             node->ie_DiskObj = NULL;
         }
-        if (data->icld_LVMAttribs)
-        {
-            if (data->icld_LVMAttribs->lvma_IconDrawer)
-                FreeDiskObject(data->icld_LVMAttribs->lvma_IconDrawer);
-            data->icld_LVMAttribs->lvma_IconDrawer = NULL;
-            if (data->icld_LVMAttribs->lvma_IconFile)
-                FreeDiskObject(data->icld_LVMAttribs->lvma_IconFile);
-            data->icld_LVMAttribs->lvma_IconFile = NULL;
-        }
-        if ((data->icld_BufferRastPort) && (data->icld_BufferRastPort != data->icld_DisplayRastPort))
-        {
-            DeleteLayer(0, data->icld_BufferRastPort->Layer);
-        }
-
+        iconlist_release_buffer(data);
         data->icld_BufferRastPort = NULL;
 
         if (data->icld_DisplayRastPort)
@@ -3583,10 +3878,12 @@ IPTR IconList__MUIM_Cleanup(struct IClass *CLASS, Object *obj, struct MUIP_Clean
     D(bug("[IconList]: %s()\n", __func__));
 #endif
 
+    iconlist_cancel_context_recalc(obj, data);
     data->icld_TilesShown = FALSE;
     IconList_HideTiles(obj, data);
     ForeachNode(&data->icld_IconList, node)
     {
+        iconlist_release_render_icon(node);
         if (node->ie_DiskObj)
         {
             FreeDiskObject(node->ie_DiskObj);
@@ -3595,6 +3892,16 @@ IPTR IconList__MUIM_Cleanup(struct IClass *CLASS, Object *obj, struct MUIP_Clean
     }
 
     DoMethod(_win(obj), MUIM_Window_RemEventHandler, (IPTR)&data->ehn);
+
+    /* Window cleanup releases Area's cached fonts after this method returns.
+     * Keep only caller-owned requests across the following Setup. */
+    if (data->icld_DisplayRastPort || data->icld_BufferRastPort)
+        DoMethod(obj, MUIM_Hide);
+    iconlist_release_rows(data);
+    if (data->icld_ScaledLabelFont) CloseFont(data->icld_ScaledLabelFont);
+    if (data->icld_ScaledInfoFont) CloseFont(data->icld_ScaledInfoFont);
+    data->icld_ScaledLabelFont = data->icld_ScaledInfoFont = NULL;
+    data->icld_IconLabelFont = data->icld_IconInfoFont = NULL;
 
     return DoSuperMethodA(CLASS, obj, (Msg)message);
 }
@@ -3606,17 +3913,18 @@ MUIM_AskMinMax
 **************************************************************************/
 IPTR IconList__MUIM_AskMinMax(struct IClass *CLASS, Object *obj, struct MUIP_AskMinMax *message)
 {
+    struct IconList_DATA *data = INST_DATA(CLASS, obj);
     ULONG       rc = DoSuperMethodA(CLASS, obj, (Msg) message);
 
 #if defined(DEBUG_ILC_FUNCS)
     D(bug("[IconList]: %s()\n", __func__));
 #endif
 
-    message->MinMaxInfo->MinWidth  += 96;
-    message->MinMaxInfo->MinHeight += 64;
+    message->MinMaxInfo->MinWidth  += WandererScalePoint(96, data->icld_RenderScale);
+    message->MinMaxInfo->MinHeight += WandererScalePoint(64, data->icld_RenderScale);
 
-    message->MinMaxInfo->DefWidth  += 200;
-    message->MinMaxInfo->DefHeight += 180;
+    message->MinMaxInfo->DefWidth  += WandererScalePoint(200, data->icld_RenderScale);
+    message->MinMaxInfo->DefHeight += WandererScalePoint(180, data->icld_RenderScale);
 
     message->MinMaxInfo->MaxWidth = MUI_MAXMAX;
     message->MinMaxInfo->MaxHeight = MUI_MAXMAX;
@@ -3742,10 +4050,10 @@ D(bug("[IconList]: %s(obj @ 0x%p)\n", __func__, obj));
             }
         }
 
-        rendRect.MinX += HEADERENTRY_SPACING_LEFT;
-        rendRect.MinY += HEADERLINE_SPACING_TOP;
-        rendRect.MaxX -= HEADERENTRY_SPACING_RIGHT;
-        rendRect.MaxY -= HEADERLINE_SPACING_BOTTOM;
+        rendRect.MinX += WandererScalePoint(HEADERENTRY_SPACING_LEFT, data->icld_RenderScale);
+        rendRect.MinY += WandererScalePoint(HEADERLINE_SPACING_TOP, data->icld_RenderScale);
+        rendRect.MaxX -= WandererScalePoint(HEADERENTRY_SPACING_RIGHT, data->icld_RenderScale);
+        rendRect.MaxY -= WandererScalePoint(HEADERLINE_SPACING_BOTTOM, data->icld_RenderScale);
 
         if (text && text[0])
         {
@@ -3782,7 +4090,7 @@ D(bug("[IconList]: %s(obj @ 0x%p)\n", __func__, obj));
 
         SetFont(data->icld_BufferRastPort, data->icld_IconLabelFont);
 
-        x = linerect.MinX + HEADERLINE_SPACING_LEFT;
+        x = linerect.MinX + WandererScalePoint(HEADERLINE_SPACING_LEFT, data->icld_RenderScale);
 
         firstvis = FirstVisibleColumnNumber(data);
         lastvis = LastVisibleColumnNumber(data);
@@ -3797,7 +4105,7 @@ D(bug("[IconList]: %s(obj @ 0x%p)\n", __func__, obj));
 
             field_rect.MinX = (i == firstvis) ? linerect.MinX : x;
             field_rect.MinY = linerect.MinY;
-            field_rect.MaxX = x + data->icld_LVMAttribs->lmva_ColumnWidth[index] - 1 + ((i == lastvis) ? HEADERLINE_SPACING_RIGHT : 0);
+            field_rect.MaxX = x + data->icld_LVMAttribs->lmva_ColumnWidth[index] - 1 + ((i == lastvis) ? WandererScalePoint(HEADERLINE_SPACING_RIGHT, data->icld_RenderScale) : 0);
             field_rect.MaxY = linerect.MaxY;
 
             /* data->update_rect1 and data->update_rect2 may
@@ -3819,7 +4127,7 @@ D(bug("[IconList]: %s(obj @ 0x%p)\n", __func__, obj));
 
         if ((data->icld_LVMAttribs->lvma_Flags & LVMAF_HEADERDRAWTOEND) == LVMAF_HEADERDRAWTOEND)
         {
-            x += HEADERLINE_SPACING_RIGHT;
+            x += WandererScalePoint(HEADERLINE_SPACING_RIGHT, data->icld_RenderScale);
 
             if (x < linerect.MaxX)
             {
@@ -3919,13 +4227,13 @@ IPTR IconList__MUIM_Draw(struct IClass *CLASS, Object *obj, struct MUIP_Draw *me
 
                 field_rect.MaxX = field_rect.MinX + data->icld_LVMAttribs->lmva_ColumnWidth[index] - 1;
                 if (index == lastvis)
-                    field_rect.MaxX += HEADERLINE_SPACING_RIGHT;
+                    field_rect.MaxX += WandererScalePoint(HEADERLINE_SPACING_RIGHT, data->icld_RenderScale);
 
                 if ((IPTR)data->update_entry != index)
                 {
                     field_rect.MinX += data->icld_LVMAttribs->lmva_ColumnWidth[index];
                     if (index == firstvis)
-                        field_rect.MinX += HEADERLINE_SPACING_LEFT;
+                        field_rect.MinX += WandererScalePoint(HEADERLINE_SPACING_LEFT, data->icld_RenderScale);
                 }
                 else
                     break;
@@ -4639,6 +4947,9 @@ IPTR IconList__MUIM_IconList_Clear(struct IClass *CLASS, Object *obj, struct MUI
 ///IconList__MUIM_IconList_DestroyEntry()
 IPTR IconList__MUIM_IconList_DestroyEntry(struct IClass *CLASS, Object *obj, struct MUIP_IconList_DestroyEntry *message)
 {
+    if (message->entry && message->entry->ie_IconListEntry.type == ILE_TYPE_APPICON)
+        iconlist_requalify_context(obj, INST_DATA(CLASS, obj));
+
     struct IconList_DATA        *data = INST_DATA(CLASS, obj);
 
 #if defined(DEBUG_ILC_FUNCS)
@@ -4683,6 +4994,7 @@ IPTR IconList__MUIM_IconList_DestroyEntry(struct IClass *CLASS, Object *obj, str
         if (message->entry->ie_TxtBuf_DATE)
             FreePooled(data->icld_Pool, message->entry->ie_TxtBuf_DATE, LEN_DATSTRING);
 
+        iconlist_release_render_icon(message->entry);
         if (message->entry->ie_DiskObj)
             FreeDiskObject(message->entry->ie_DiskObj);
 
@@ -4705,8 +5017,9 @@ IPTR IconList__MUIM_IconList_DestroyEntry(struct IClass *CLASS, Object *obj, str
 IPTR IconList__MUIM_IconList_PropagateEntryPos(struct IClass *CLASS, Object *obj,
         struct MUIP_IconList_PropagateEntryPos *message)
 {
-    message->entry->ie_ProvidedIconX = message->entry->ie_IconX;
-    message->entry->ie_ProvidedIconY = message->entry->ie_IconY;
+    struct IconList_DATA *data = INST_DATA(CLASS, obj);
+    message->entry->ie_ProvidedIconX = iconlist_point_position(data, message->entry->ie_IconX);
+    message->entry->ie_ProvidedIconY = iconlist_point_position(data, message->entry->ie_IconY);
 
     return (IPTR)TRUE;
 }
@@ -4896,8 +5209,8 @@ IPTR IconList__MUIM_IconList_CreateEntry(struct IClass *CLASS, Object *obj, stru
 
     entry->ie_IconListEntry.udata = message->udata;
 
-    entry->ie_IconX = dob->do_CurrentX;
-    entry->ie_IconY = dob->do_CurrentY;
+    entry->ie_IconX = iconlist_render_position(data, dob->do_CurrentX);
+    entry->ie_IconY = iconlist_render_position(data, dob->do_CurrentY);
 
     DoMethod(obj, MUIM_IconList_PropagateEntryPos, entry);
 
@@ -4956,6 +5269,7 @@ IPTR IconList__MUIM_IconList_UpdateEntry(struct IClass *CLASS, Object *obj, stru
                     TAG_DONE
                 );
             }
+            iconlist_release_render_icon(message->entry);
             if (message->entry->ie_DiskObj)
                 FreeDiskObject(message->entry->ie_DiskObj);
             message->entry->ie_DiskObj = dob;
@@ -6420,7 +6734,7 @@ IPTR IconList__MUIM_HandleEvent(struct IClass *CLASS, Object *obj, struct MUIP_H
 
                             LONG clickColumn = -1;
     
-                            LONG x = _mleft(obj) - data->icld_ViewX + LINE_SPACING_LEFT;
+                            LONG x = _mleft(obj) - data->icld_ViewX + WandererScalePoint(LINE_SPACING_LEFT, data->icld_RenderScale);
                             LONG index, w, i;
 
                             /* Find column in which click happened */
@@ -6921,6 +7235,7 @@ static void DrawIconOnDragImage(struct RastPort *rp, struct DiskObject *icon, LO
     };
 
 
+    if (!icon) return;
     IconControlA(icon, tags);
 
     /* Most icons will have valid ICONCRTLA_GetHeight/GetWidth. Those that not (OS 1.3, 2.0?) should have valid
@@ -6978,7 +7293,7 @@ IPTR IconList__MUIM_CreateDragImage(struct IClass *CLASS, Object *obj, struct MU
 
         ForeachNode(&data->icld_SelectionList, node)
         {
-            entry = (struct IconEntry *)((IPTR)node - ((IPTR)&entry->ie_SelectionNode - (IPTR)entry));
+            entry = (struct IconEntry *)((IPTR)node - offsetof(struct IconEntry, ie_SelectionNode));
             if ((entry->ie_Flags & ICONENTRY_FLAG_VISIBLE) && (entry->ie_Flags & ICONENTRY_FLAG_SELECTED))
             {
                 if ((data->icld_DisplayFlags & ICONLIST_DISP_MODELIST) != ICONLIST_DISP_MODELIST)
@@ -7062,7 +7377,7 @@ IPTR IconList__MUIM_CreateDragImage(struct IClass *CLASS, Object *obj, struct MU
 #if defined(CREATE_FULL_DRAGIMAGE)
             ForeachNode(&data->icld_SelectionList, node)
             {
-                entry = (struct IconEntry *)((IPTR)node - ((IPTR)&entry->ie_SelectionNode - (IPTR)entry));
+                entry = (struct IconEntry *)((IPTR)node - offsetof(struct IconEntry, ie_SelectionNode));
                 if ((entry->ie_Flags & ICONENTRY_FLAG_VISIBLE) && (entry->ie_Flags & ICONENTRY_FLAG_SELECTED))
                 {
                     if ((data->icld_DisplayFlags & ICONLIST_DISP_MODELIST) == ICONLIST_DISP_MODELIST)
@@ -7090,7 +7405,7 @@ IPTR IconList__MUIM_CreateDragImage(struct IClass *CLASS, Object *obj, struct MU
 
                         IconList_GetIconImageOffsets(data, entry, &offsetx, &offsety);
 
-                        DrawIconOnDragImage(&temprp, entry->ie_DiskObj, (entry->ie_IconX + 1) - first_x + offsetx,
+                        DrawIconOnDragImage(&temprp, iconlist_render_icon(obj, data, entry), (entry->ie_IconX + 1) - first_x + offsetx,
                             (entry->ie_IconY + 1) - first_y + offsety, transp);
                     }
                 }
@@ -7103,7 +7418,7 @@ IPTR IconList__MUIM_CreateDragImage(struct IClass *CLASS, Object *obj, struct MU
             }
             else
             {
-                DrawIconOnDragImage(&temprp, entry->ie_DiskObj, 0, 0, transp);
+                DrawIconOnDragImage(&temprp, iconlist_render_icon(obj, data, entry), 0, 0, transp);
             }
 #endif
 
@@ -7630,7 +7945,7 @@ IPTR IconList__MUIM_IconList_UnselectAll(struct IClass *CLASS, Object *obj, Msg 
 
     ForeachNodeSafe(&data->icld_SelectionList, node, next_node)
     {
-        struct IconEntry    *entry = (struct IconEntry *)((IPTR)node - ((IPTR)&entry->ie_SelectionNode - (IPTR)entry));
+        struct IconEntry    *entry = (struct IconEntry *)((IPTR)node - offsetof(struct IconEntry, ie_SelectionNode));
         BOOL                update_entry = FALSE;
 
         if (entry->ie_Flags & ICONENTRY_FLAG_VISIBLE)
@@ -8142,6 +8457,19 @@ D(bug("[IconList]: %s()\n", __func__));
     return 1;
 }
 
+/* AppIcon clients can draw through arbitrary render hooks or Tile RPC.
+ * Their pixel contracts remain 100%; let the window compositor enlarge the
+ * complete context until those clients declare a scaling capability. */
+IPTR IconList__MUIM_ScaleContextSupported(struct IClass *CLASS, Object *obj, Msg message)
+{
+    struct IconList_DATA *data = INST_DATA(CLASS, obj);
+    struct IconEntry *entry;
+    if (!DoSuperMethodA(CLASS, obj, message)) return FALSE;
+    ForeachNode(&data->icld_IconList, entry)
+        if (entry->ie_IconListEntry.type == ILE_TYPE_APPICON) return FALSE;
+    return TRUE;
+}
+
 #if defined(WANDERER_BUILTIN_ICONLIST)
 BOOPSI_DISPATCHER(IPTR,IconList_Dispatcher, CLASS, obj, message)
 {
@@ -8157,6 +8485,7 @@ BOOPSI_DISPATCHER(IPTR,IconList_Dispatcher, CLASS, obj, message)
         case OM_REMMEMBER:
         case MUIM_Family_Remove:                return IconList__MUIM_Family_Remove(CLASS, obj, (APTR)message);
 
+        case MUIM_ScaleContextSupported:        return IconList__MUIM_ScaleContextSupported(CLASS, obj, message);
         case MUIM_Setup:                        return IconList__MUIM_Setup(CLASS, obj, (struct MUIP_Setup *)message);
 
         case MUIM_IconList_UpdateTileVisibility: return IconList__MUIM_IconList_UpdateTileVisibility(CLASS, obj, message);
@@ -8203,3 +8532,16 @@ const struct __MUIBuiltinClass _MUI_IconList_desc = {
     (void*)IconList_Dispatcher
 };
 #endif /* WANDERER_BUILTIN_ICONLIST */
+
+#if !defined(WANDERER_BUILTIN_ICONLIST)
+#include <aros/symbolsets.h>
+struct MUI_CustomClass *IconListScaleClass;
+static int IconListScaleStartup(struct Library *base)
+{
+    (void)base;
+    return IconListScaleClass && MUI_SetClassCapabilities(
+        IconListScaleClass->mcc_Class, MUI_CLASS_SCALE_AWARE);
+}
+/* The generated .mui class initializer runs at priority -1. */
+ADD2SET(IconListScaleStartup, CLASSESINIT, 0);
+#endif

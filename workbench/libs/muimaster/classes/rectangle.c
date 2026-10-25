@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * Licensed under the AROS Public License (APL) Version 1.1. */
 /*
     Copyright (C) 2002-2020, The AROS Development Team.
     Copyright (C) 1999, David Le Corfec.
@@ -41,12 +43,16 @@ struct Rectangle_DATA
 #define RECTANGLE_TYPE_HBAR 1
 #define RECTANGLE_TYPE_VBAR 2
 
-static void draw_line(struct RastPort *rp, int xa, int ya, int xb, int yb)
+static void draw_line(Object *obj, int xa, int ya, int xb, int yb)
 {
-    Move(rp, xa, ya);
-    Draw(rp, xb, yb);
+    LONG offset, unit = zune_scale(obj, 1);
+    for (offset = 0; offset < unit; ++offset)
+    {
+        LONG dx = xa == xb ? offset : 0, dy = ya == yb ? offset : 0;
+        Move(_rp(obj), xa + dx, ya + dy);
+        Draw(_rp(obj), xb + dx, yb + dy);
+    }
 }
-
 
 IPTR Rectangle__OM_NEW(struct IClass *cl, Object *obj, struct opSet *msg)
 {
@@ -191,15 +197,15 @@ IPTR Rectangle__MUIM_AskMinMax(struct IClass *cl, Object *obj,
 
     if (!data->BarTitle)
     {
-/*          msg->MinMaxInfo->MinWidth += 1; */
-/*          msg->MinMaxInfo->MinHeight += 1;             */
+/*          msg->MinMaxInfo->MinWidth += zune_scale(obj, 1); */
+/*          msg->MinMaxInfo->MinHeight += zune_scale(obj, 1);             */
         if (data->Type == RECTANGLE_TYPE_HBAR)
         {
-            msg->MinMaxInfo->MinHeight += 2;
+            msg->MinMaxInfo->MinHeight += zune_scale(obj, 2);
         }
         else if (data->Type == RECTANGLE_TYPE_VBAR)
         {
-            msg->MinMaxInfo->MinWidth += 2;
+            msg->MinMaxInfo->MinWidth += zune_scale(obj, 2);
         }
     }
     else
@@ -211,8 +217,8 @@ IPTR Rectangle__MUIM_AskMinMax(struct IClass *cl, Object *obj,
         if (muiGlobalInfo(obj)->mgi_Prefs->group_title_color ==
             GROUP_TITLE_COLOR_3D)
         {
-            msg->MinMaxInfo->MinWidth += 1;
-            msg->MinMaxInfo->MinHeight += 1;
+            msg->MinMaxInfo->MinWidth += zune_scale(obj, 1);
+            msg->MinMaxInfo->MinHeight += zune_scale(obj, 1);
         }
     }
 
@@ -239,6 +245,7 @@ IPTR Rectangle__MUIM_Draw(struct IClass *cl, Object *obj,
     struct MUIP_Draw *msg)
 {
     struct Rectangle_DATA *data = INST_DATA(cl, obj);
+    LONG unit = zune_scale(obj, 1);
 
     /*
      ** let our superclass draw itself first, area class would
@@ -287,13 +294,13 @@ IPTR Rectangle__MUIM_Draw(struct IClass *cl, Object *obj,
         if (muiGlobalInfo(obj)->mgi_Prefs->group_title_color ==
             GROUP_TITLE_COLOR_3D)
         {
-            tw = data->ztext->width + 1;
-            th = data->ztext->height + 1;
+            tw = data->ztext->width + unit;
+            th = data->ztext->height + unit;
             x1 = _mleft(obj) + (_mwidth(obj) - tw) / 2;
-            x1 -= 1;
+            x1 -= unit;
             x2 = x1 + tw;
             yt = _mtop(obj) + (_mheight(obj) - th) / 2;
-            zune_text_draw(data->ztext, obj, x1 + 1, x2, yt + 1);
+            zune_text_draw(data->ztext, obj, x1 + unit, x2, yt + unit);
             SetAPen(_rp(obj), _pens(obj)[MPEN_SHINE]);
             zune_text_draw(data->ztext, obj, x1, x2 - 1, yt);
 
@@ -301,15 +308,15 @@ IPTR Rectangle__MUIM_Draw(struct IClass *cl, Object *obj,
             {
                 int y = yt + data->ztext->height / 2;
 
-                if ((x1 - 2) > _mleft(obj) && (x2 + 2) < _mright(obj))
+                if ((x1 - 2 * unit) > _mleft(obj) && (x2 + 2 * unit) < _mright(obj))
                 {
                     SetAPen(_rp(obj), _pens(obj)[MPEN_SHADOW]);
-                    draw_line(_rp(obj), _mleft(obj), y, x1 - 2, y);
-                    draw_line(_rp(obj), x2 + 3, y, _mright(obj), y);
+                    draw_line(obj, _mleft(obj), y, x1 - 2 * unit, y);
+                    draw_line(obj, x2 + 3 * unit, y, _mright(obj), y);
 
                     SetAPen(_rp(obj), _pens(obj)[MPEN_SHINE]);
-                    draw_line(_rp(obj), _mleft(obj), y + 1, x1 - 2, y + 1);
-                    draw_line(_rp(obj), x2 + 3, y + 1, _mright(obj), y + 1);
+                    draw_line(obj, _mleft(obj), y + unit, x1 - 2 * unit, y + unit);
+                    draw_line(obj, x2 + 3 * unit, y + unit, _mright(obj), y + unit);
                 }
             }
         }
@@ -331,15 +338,15 @@ IPTR Rectangle__MUIM_Draw(struct IClass *cl, Object *obj,
             {
                 int y = yt + data->ztext->height / 2;
 
-                if ((x1 - 2) > _mleft(obj) && (x2 + 2) < _mright(obj))
+                if ((x1 - 2 * unit) > _mleft(obj) && (x2 + 2 * unit) < _mright(obj))
                 {
                     SetAPen(_rp(obj), _pens(obj)[MPEN_SHADOW]);
-                    draw_line(_rp(obj), _mleft(obj), y, x1 - 3, y);
-                    draw_line(_rp(obj), x2 + 2, y, _mright(obj), y);
+                    draw_line(obj, _mleft(obj), y, x1 - 3 * unit, y);
+                    draw_line(obj, x2 + 2 * unit, y, _mright(obj), y);
 
                     SetAPen(_rp(obj), _pens(obj)[MPEN_SHINE]);
-                    draw_line(_rp(obj), _mleft(obj), y + 1, x1 - 3, y + 1);
-                    draw_line(_rp(obj), x2 + 2, y + 1, _mright(obj), y + 1);
+                    draw_line(obj, _mleft(obj), y + unit, x1 - 3 * unit, y + unit);
+                    draw_line(obj, x2 + 2 * unit, y + unit, _mright(obj), y + unit);
                 }
             }
         }
@@ -348,23 +355,23 @@ IPTR Rectangle__MUIM_Draw(struct IClass *cl, Object *obj,
     {
         if (data->Type == RECTANGLE_TYPE_HBAR)
         {
-            int y = _mtop(obj) + _mheight(obj) / 2 - 1;
+            int y = _mtop(obj) + _mheight(obj) / 2 - unit;
 
             SetAPen(_rp(obj), _pens(obj)[MPEN_SHADOW]);
-            draw_line(_rp(obj), _mleft(obj), y, _mright(obj), y);
+            draw_line(obj, _mleft(obj), y, _mright(obj), y);
 
             SetAPen(_rp(obj), _pens(obj)[MPEN_SHINE]);
-            draw_line(_rp(obj), _mleft(obj), y + 1, _mright(obj), y + 1);
+            draw_line(obj, _mleft(obj), y + unit, _mright(obj), y + unit);
         }
         else if (data->Type == RECTANGLE_TYPE_VBAR)
         {
-            int x = _mleft(obj) + _mwidth(obj) / 2 - 1;
+            int x = _mleft(obj) + _mwidth(obj) / 2 - unit;
 
             SetAPen(_rp(obj), _pens(obj)[MPEN_SHADOW]);
-            draw_line(_rp(obj), x, _mtop(obj), x, _mbottom(obj));
+            draw_line(obj, x, _mtop(obj), x, _mbottom(obj));
 
             SetAPen(_rp(obj), _pens(obj)[MPEN_SHINE]);
-            draw_line(_rp(obj), x + 1, _mtop(obj), x + 1, _mbottom(obj));
+            draw_line(obj, x + unit, _mtop(obj), x + unit, _mbottom(obj));
         }
         else
         {
@@ -387,6 +394,10 @@ BOOPSI_DISPATCHER(IPTR, Rectangle_Dispatcher, cl, obj, msg)
 {
     switch (msg->MethodID)
     {
+    case MUIM_ScaleContextSupported:
+        return DoSuperMethodA(cl, obj, msg) &&
+            (muiAreaData(obj)->mad_ScaleAwareHooks ||
+             zune_text_scale_supported(((struct Rectangle_DATA *)INST_DATA(cl, obj))->BarTitle));
     case OM_NEW:
         return Rectangle__OM_NEW(cl, obj, (struct opSet *)msg);
     case OM_DISPOSE:
@@ -412,5 +423,6 @@ const struct __MUIBuiltinClass _MUI_Rectangle_desc =
     MUIC_Rectangle,
     MUIC_Area,
     sizeof(struct Rectangle_DATA),
-    (void *) Rectangle_Dispatcher
+    (void *) Rectangle_Dispatcher,
+    MUI_CLASS_SCALE_AWARE
 };

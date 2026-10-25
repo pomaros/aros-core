@@ -11,8 +11,14 @@
 
 #include "dos_intern.h"
 
+#include <string.h>
+
+/* room for a per-user assign's target once its tokens are expanded */
+#define USERPATH_MAX    512
+
 extern struct Process *r(struct DeviceNode *dn, struct DosLibrary *DOSBase);
 static struct DevProc *deviceproc_internal(struct DosLibrary *DOSBase, CONST_STRPTR name, struct DevProc *dp);
+static struct MsgPort *start_handler(struct DeviceNode *device, CONST_STRPTR path, struct DosLibrary *DOSBase);
 
 /*****************************************************************************
 
@@ -267,6 +273,59 @@ static struct DevProc *deviceproc_internal(struct DosLibrary *DOSBase, CONST_STR
 
     /* nonbinding assign. like a late assign, but with no doslist promotion */
     if (dl->dol_Type == DLT_NONBINDING) {
+        CONST_STRPTR target = dl->dol_misc.dol_assign.dol_AssignName;
+
+        /*
+         * Multi-user: a per-user assign ("Assign T: RAM:T/%u USER") holds
+         * user tokens, which security.library expands for the owner of
+         * this task - each time, so every user gets his own directory. Its
+         * last directory is created on first use, here in the user's
+         * task, so it is his. Without security.library (or on a system
+         * that is not multi-user) the target is used as it is written.
+         */
+        if (SECURITY_ACTIVE && strchr((const char *)target, '%')) {
+            ULONG tlen = strlen((const char *)target) + 1;
+            STRPTR copy = AllocVec(tlen + USERPATH_MAX, MEMF_ANY);
+            STRPTR path = copy ? copy + tlen : NULL;
+            struct TagItem tags[] = { { secT_BufferSize, USERPATH_MAX }, { TAG_DONE, 0 } };
+
+            if (copy == NULL) {
+                UnLockDosList(LDF_ALL | LDF_READ);
+                FreeMem(dp, sizeof(struct DevProc));
+                SetIoErr(ERROR_NO_FREE_STORE);
+                return NULL;
+            }
+            /* the expansion asks the security server: not with the list held */
+            CopyMem((APTR)target, copy, tlen);
+            UnLockDosList(LDF_ALL | LDF_READ);
+
+            if (secExpandPathA(copy, path, tags)) {
+                lock = Lock(path, SHARED_LOCK);
+                if (lock == BNULL && IoErr() == ERROR_OBJECT_NOT_FOUND) {
+                    BPTR dir = CreateDir(path);
+
+                    if (dir != BNULL) {
+                        UnLock(dir);
+                        lock = Lock(path, SHARED_LOCK);
+                    }
+                }
+            } else if (IoErr() == ERROR_NOT_IMPLEMENTED)
+                lock = Lock(copy, SHARED_LOCK);
+            else
+                lock = BNULL;
+            FreeVec(copy);
+
+            if (lock == BNULL) {
+                FreeMem(dp, sizeof(struct DevProc));
+                return NULL;
+            }
+            dp->dvp_Port = ((struct FileLock *) BADDR(lock))->fl_Task;
+            dp->dvp_Lock = lock;
+            dp->dvp_Flags = DVPF_UNLOCK;
+            dp->dvp_DevNode = dl;
+            return dp;
+        }
+
         lock = Lock(dl->dol_misc.dol_assign.dol_AssignName, SHARED_LOCK);
 
         /* didn't find the target; Lock() has set IoErr() */
@@ -306,7 +365,7 @@ static struct DevProc *deviceproc_internal(struct DosLibrary *DOSBase, CONST_STR
                  */
                 UnLockDosList(LDF_ALL | LDF_READ);
 
-                newhandler = RunHandler((struct DeviceNode *)dl, origname, DOSBase);
+                newhandler = start_handler((struct DeviceNode *)dl, origname, DOSBase);
                 if (!newhandler)
                 {
                     FreeMem(dp, sizeof(struct DevProc));
@@ -424,4 +483,88 @@ static struct DevProc *deviceproc_internal(struct DosLibrary *DOSBase, CONST_STR
     /* phew */
     SetIoErr(0);
     return dp;
+}
+
+/*
+ * One start per device. Tasks that ask for a device whose handler is not
+ * running all found dn_Task empty, and each ran a handler process for the
+ * same DeviceNode; the loser's failed startup cleared dn_Task and its caller
+ * saw the device as not mounted (the first pipe() of two threads at once).
+ * The first task starts the handler; the others wait for that start and use
+ * the port it published. Nested starts (a handler that needs another device
+ * while starting) concern other devices, so they do not wait on this one.
+ */
+struct HandlerStart
+{
+    struct MinNode          node;
+    struct DeviceNode      *device;
+    struct SignalSemaphore  done;   /* held by the starting task */
+    ULONG                   users;  /* the starter and its waiters; the last one frees */
+};
+
+static struct MsgPort *start_handler(struct DeviceNode *device, CONST_STRPTR path, struct DosLibrary *DOSBase)
+{
+    struct List *starts = &IDosBase(DOSBase)->handlerStarts;
+    struct HandlerStart *mine, *running = NULL;
+    struct Node *node;
+    struct MsgPort *port;
+    BOOL last;
+
+    mine = AllocMem(sizeof(*mine), MEMF_PUBLIC | MEMF_CLEAR);
+    if (mine == NULL)
+        return RunHandler(device, path, DOSBase);
+    mine->device = device;
+    mine->users = 1;
+    InitSemaphore(&mine->done);
+    ObtainSemaphore(&mine->done);
+
+    Forbid();
+    port = device->dn_Task;
+    if (port == NULL)
+    {
+        for (node = starts->lh_Head; node->ln_Succ != NULL; node = node->ln_Succ)
+        {
+            if (((struct HandlerStart *)node)->device == device)
+            {
+                running = (struct HandlerStart *)node;
+                running->users++;
+                break;
+            }
+        }
+        if (running == NULL)
+            AddTail(starts, (struct Node *)mine);
+    }
+    Permit();
+
+    if (port != NULL || running != NULL)
+    {
+        ReleaseSemaphore(&mine->done);
+        FreeMem(mine, sizeof(*mine));
+        if (port != NULL)
+            return port;
+
+        /* Another task is starting this handler: wait for the end of its start */
+        ObtainSemaphore(&running->done);
+        ReleaseSemaphore(&running->done);
+        Forbid();
+        port = device->dn_Task;
+        last = --running->users == 0;
+        Permit();
+        if (last)
+            FreeMem(running, sizeof(*running));
+        if (port == NULL)
+            SetIoErr(ERROR_DEVICE_NOT_MOUNTED);
+        return port;
+    }
+
+    port = RunHandler(device, path, DOSBase);
+
+    Forbid();
+    Remove((struct Node *)mine);
+    last = --mine->users == 0;
+    Permit();
+    ReleaseSemaphore(&mine->done);
+    if (last)
+        FreeMem(mine, sizeof(*mine));
+    return port;
 }

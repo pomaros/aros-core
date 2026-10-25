@@ -44,6 +44,9 @@
 #define DEBUG 1
 #include <aros/debug.h>
 
+/* The debug log and the console: a native run is judged from the console */
+#define REPORT(...) do { bug(__VA_ARGS__); printf(__VA_ARGS__); fflush(stdout); } while (0)
+
 APTR KernelBase;
 struct Library *SocketBase;     /* unused: every task opens its own base */
 static int g_NumCPUs = 1;
@@ -73,12 +76,12 @@ static void check(BOOL ok, const char *what)
 {
     if (ok)
     {
-        bug("[smpnet] %s OK\n", what);
+        REPORT("[smpnet] %s OK\n", what);
         pass++;
     }
     else
     {
-        bug("[smpnet] *** FAIL *** %s\n", what);
+        REPORT("[smpnet] *** FAIL *** %s\n", what);
         fail++;
     }
 }
@@ -191,7 +194,7 @@ static void test_pthread_start(void)
             if (!slot[i].ts_Started)
             {
                 /* It will never finish: joining it would hang the test */
-                bug("[smpnet] round %d: thread %d never started (lost wakeup?)\n", r, i);
+                REPORT("[smpnet] round %d: thread %d never started (lost wakeup?)\n", r, i);
                 ok = FALSE;
                 break;
             }
@@ -203,7 +206,7 @@ static void test_pthread_start(void)
             pthread_join(thr[i], NULL);
         if (n < THR_COUNT)
         {
-            bug("[smpnet] round %d: pthread_create failed after %d threads\n", r, n);
+            REPORT("[smpnet] round %d: pthread_create failed after %d threads\n", r, n);
             ok = FALSE;
         }
     }
@@ -211,11 +214,11 @@ static void test_pthread_start(void)
     g_Stop = 1;
     wait_count(&g_Hammers, hammers, DONE_TICKS);
 
-    bug("[smpnet] pthread: %lu threads, cpu mask 0x%lx, %d hammers\n",
+    REPORT("[smpnet] pthread: %lu threads, cpu mask 0x%lx, %d hammers\n",
         (unsigned long)created, (unsigned long)cpus, hammers);
     if (ok && (cpus & ~1UL) == 0)
     {
-        bug("[smpnet] INVALID pthread start: no thread ran off cpu 0\n");
+        REPORT("[smpnet] INVALID pthread start: no thread ran off cpu 0\n");
         invalid++;
     }
     else
@@ -280,7 +283,7 @@ static void test_bases(void)
         after = master_opencnt();
     }
 
-    bug("[smpnet] bases: %d workers x %d opens, null=%lu badsocket=%lu, opencnt %u -> %u\n",
+    REPORT("[smpnet] bases: %d workers x %d opens, null=%lu badsocket=%lu, opencnt %u -> %u\n",
         started, BASE_ROUNDS, (unsigned long)g_NullOpens, (unsigned long)g_BadSockets,
         before, after);
     check(g_NullOpens == 0, "every OpenLibrary returned a base");
@@ -419,7 +422,7 @@ static void EchoClient(void)
             recv_all(SocketBase, fd, in, MSGLEN))
             ok = memcmp(in, out, MSGLEN) == 0;
         if (!ok)
-            bug("[smpnet] client %lu round %d failed (errno %ld)\n",
+            REPORT("[smpnet] client %lu round %d failed (errno %ld)\n",
                 (unsigned long)id, r, (long)Errno());
         if (fd >= 0)
             CloseSocket(fd);
@@ -447,7 +450,7 @@ static void test_tcp(void)
     if (!spawn(EchoServer, "smpnet.server", 0, NULL) ||
         !wait_count(&g_ServerUp, 1, START_TICKS) || g_Port == 0)
     {
-        bug("[smpnet] INVALID tcp: echo server did not start\n");
+        REPORT("[smpnet] INVALID tcp: echo server did not start\n");
         invalid++;
         g_Stop = 1;
         wait_count(&g_ServerDone, 1, DONE_TICKS);
@@ -465,7 +468,7 @@ static void test_tcp(void)
     g_Stop = 1;
     wait_count(&g_ServerDone, 1, DONE_TICKS);
 
-    bug("[smpnet] tcp: %d clients x %d rounds, ok=%lu fail=%lu served=%lu\n",
+    REPORT("[smpnet] tcp: %d clients x %d rounds, ok=%lu fail=%lu served=%lu\n",
         clients, TCP_ROUNDS, (unsigned long)g_TcpOK, (unsigned long)g_TcpFail,
         (unsigned long)g_Served);
     check(done, "all tcp clients finished");
@@ -534,7 +537,7 @@ static void Taker(void)
                         : ObtainSocket(g_Ids[slot], AF_INET, SOCK_STREAM, 0);
         if (fd < 0)
         {
-            bug("[smpnet] ObtainSocket(%ld) failed (errno %ld)\n", (long)g_Ids[slot], (long)Errno());
+            REPORT("[smpnet] ObtainSocket(%ld) failed (errno %ld)\n", (long)g_Ids[slot], (long)Errno());
             __atomic_add_fetch(&g_HandFail, 1, __ATOMIC_RELAXED);
         }
         else
@@ -583,7 +586,7 @@ static void test_handoff(void)
     CloseSocket(after);
     CloseLibrary(SocketBase);
 
-    bug("[smpnet] handoff: %d tasks, %lu sockets, fail=%lu dup ids=%d, fd %ld -> %ld\n",
+    REPORT("[smpnet] handoff: %d tasks, %lu sockets, fail=%lu dup ids=%d, fd %ld -> %ld\n",
         tasks, (unsigned long)g_HandTotal, (unsigned long)g_HandFail, dups,
         (long)before, (long)after);
     check(done, "all hand-off tasks finished");
@@ -734,7 +737,7 @@ static void test_posix_threads(void)
     Delay(10);
     cnt1 = master_opencnt();
 
-    bug("[smpnet] posix: %lu writers, read %lu bytes, bad=%lu, close=%ld, fd %ld -> %ld, opencnt %u -> %u, owner after exit %p\n",
+    REPORT("[smpnet] posix: %lu writers, read %lu bytes, bad=%lu, close=%ld, fd %ld -> %ld, opencnt %u -> %u, owner after exit %p\n",
         (unsigned long)g_PxWriters, (unsigned long)g_PxRead, (unsigned long)g_PxBad,
         (long)g_PxCloseRet, (long)before, (long)after, cnt0, cnt1, got);
     check(done && g_PxRead == g_PxWriters * PX_ROUNDS * PX_CHUNK, "posixc threads moved all the data");
@@ -754,11 +757,11 @@ int main(void)
     if (g_NumCPUs > MAXCPUS)
         g_NumCPUs = MAXCPUS;
 
-    bug("[smpnet] start: cpus=%d\n", g_NumCPUs);
+    REPORT("[smpnet] start: cpus=%d\n", g_NumCPUs);
 
     if (!KernelBase || g_NumCPUs < 2)
     {
-        bug("[smpnet] INVALID (needs at least 2 CPUs)\n");
+        REPORT("[smpnet] INVALID (needs at least 2 CPUs)\n");
         return RETURN_WARN;
     }
 
@@ -775,12 +778,12 @@ int main(void)
     }
     else
     {
-        bug("[smpnet] INVALID bsdsocket: bsdsocket.library not available (stack not running?)\n");
+        REPORT("[smpnet] INVALID bsdsocket: bsdsocket.library not available (stack not running?)\n");
         invalid++;
     }
 
-    bug("[smpnet] DONE: %d PASS, %d FAIL, %d INVALID\n", pass, fail, invalid);
-    return fail ? RETURN_FAIL : RETURN_OK;
+    REPORT("[smpnet] DONE: %d PASS, %d FAIL, %d INVALID\n", pass, fail, invalid);
+    return fail ? RETURN_FAIL : invalid ? RETURN_WARN : RETURN_OK;
 }
 #else
 int main(void)

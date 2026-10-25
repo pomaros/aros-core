@@ -1,0 +1,35 @@
+# Copyright (C) 2026 John KNIPPER <code@jkn.me>
+# Licensed under the AROS PUBLIC LICENSE (APL) Version 1.1.
+include $(SRCDIR)/config/aros.cfg
+
+TARGETDIR := $(AROS_TESTS)/Settings
+
+#MM test-settings : test-settings-aslprobe
+
+%build_prog mmake=test-settings-aslprobe progname=AslProbe files=aslprobe \
+    targetdir=$(TARGETDIR)
+
+#MM test-settings : test-settings-timeprobe
+
+%build_prog mmake=test-settings-timeprobe progname=TimeProbe files=timeprobe \
+    targetdir=$(TARGETDIR)
+
+#MM test-settings : test-settings-zuneprobe
+
+%build_prog mmake=test-settings-zuneprobe progname=ZuneProbe files=zuneprobe \
+    targetdir=$(TARGETDIR)
+
+#MM test-settings : test-settings-specialkeysprobe
+
+%build_prog mmake=test-settings-specialkeysprobe progname=SpecialKeysProbe files=specialkeysprobe \
+    targetdir=$(TARGETDIR)
+
+#MM test-settings : test-settings-trackpadprobe
+
+%build_prog mmake=test-settings-trackpadprobe progname=TrackpadProbe files=trackpadprobe \
+    targetdir=$(TARGETDIR)
+
+#MM test-settings : test-settings-pagesprobe
+
+%build_prog mmake=test-settings-pagesprobe progname=PagesProbe files=pagesprobe \
+    targetdir=$(TARGETDIR)

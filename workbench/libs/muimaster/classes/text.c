@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * Licensed under the AROS Public License (APL) Version 1.1. */
 /*
     Copyright  2002-2020, The AROS Development Team.
     Copyright  1999, David Le Corfec.
@@ -509,6 +511,13 @@ BOOPSI_DISPATCHER(IPTR, Text_Dispatcher, cl, obj, msg)
 {
     switch (msg->MethodID)
     {
+    case MUIM_ScaleContextSupported:
+    {
+        struct MUI_TextData *data = INST_DATA(cl, obj);
+        return DoSuperMethodA(cl, obj, msg) &&
+            (muiAreaData(obj)->mad_ScaleAwareHooks ||
+             (zune_text_scale_supported(data->contents) && zune_text_scale_supported(data->preparse)));
+    }
     case OM_NEW:
         return Text__OM_NEW(cl, obj, (struct opSet *)msg);
     case OM_DISPOSE:
@@ -548,5 +557,6 @@ const struct __MUIBuiltinClass _MUI_Text_desc =
     MUIC_Text,
     MUIC_Area,
     sizeof(struct MUI_TextData),
-    (void *) Text_Dispatcher
+    (void *) Text_Dispatcher,
+    MUI_CLASS_SCALE_AWARE
 };

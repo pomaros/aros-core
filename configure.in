@@ -2508,16 +2508,6 @@ if test "$aros_vm_guest" = yes; then
     fi
 fi
 
-# The public Apple target supplies virtual guests only. Native hardware drivers
-# are maintained separately and are not part of this source distribution.
-if test "$aros_target_arch" = apple && test "$aros_vm_guest" != yes; then
-    AC_MSG_ERROR([PomAROS public core requires --enable-vm-guest for --target=apple-aarch64])
-fi
-
-if test "$aros_target_arch" = apple && test "$aros_target_variant" = smp; then
-    AC_MSG_ERROR([PomAROS public VM target currently supports the single-CPU build only])
-fi
-
 crosstools_guess="yes"
 aros_target_toolchain="no"
 aros_kernel_sysroot=""
@@ -2921,7 +2911,10 @@ fi
 AC_MSG_RESULT($aros_enable_rust)
 
 default_rust_version="1.98.1"
-AC_ARG_WITH(rust-version,AS_HELP_STRING([--with-rust-version=VERSION],[Compile rust-VERSION for AROS (default=$default_rust_version)]),use_rust_version="$withval",use_rust_version="")
+if test "$aros_target_cpu:$aros_toolchain" = "aarch64:llvm"; then
+    default_rust_version="nightly-2026-08-04"
+fi
+AC_ARG_WITH(rust-version,AS_HELP_STRING([--with-rust-version=VERSION],[Rust version (AArch64 LLVM: nightly-2026-08-04; other targets: 1.98.1)]),use_rust_version="$withval",use_rust_version="")
 if test "$use_rust_version" = ""; then
     target_rust_version="$default_rust_version"
 else

@@ -28,6 +28,7 @@
 #include "internalloadseg.h"
 #include "dos_intern.h"
 #include "include/loadseg.h"
+#include "elf_tls.h"
 
 #define DATTR(x)
 
@@ -72,6 +73,27 @@ static BOOL protect_elf_code_hunk(BPTR hunks, APTR section, IPTR size,
 #endif
 
 #define LOADSEG_SMALL_READ  4096 /* Size adjusted by profiling in Callgrind */
+
+/*
+ * A segment with TLS sections (AArch64). Those sections lose SHF_ALLOC:
+ * they become the image each task's block is initialised from, held with
+ * the segment's TLS descriptors in one record hunk (elf_tls.h).
+ */
+struct elf_tls
+{
+    struct sheader            rec;        /* the record hunk, as a section */
+    struct ELFTLSModule      *mod;
+    struct ELFTLSDescriptor  *first;
+    struct ELFTLSDescriptor  *next;       /* next free descriptor */
+    struct ELFTLSDescriptor  *end;
+    struct ELFTLSDescriptor **by_sym;     /* per symbol index, or NULL */
+    IPTR                     *offset;     /* per section: offset in the block */
+    ULONG                     nsyms;
+    ULONG                     ndesc;
+    ULONG                     align;
+    IPTR                      block_size;
+    IPTR                      image_size;
+};
 
 /* [S]mall [R]eads [Buffer]
  *
@@ -463,6 +485,7 @@ static int relocate
     ULONG              shnum,
     struct sheader    *symtab_shndx,
     BOOL              *reloc_out_of_range,
+    struct elf_tls    *tls,
     struct DosLibrary *DOSBase
 )
 {
@@ -489,9 +512,10 @@ static int relocate
 
     /*
      * Ignore relocs if the target section has no allocation. that can happen
-     * eg. with a .debug PROGBITS and a .rel.debug section
+     * eg. with a .debug PROGBITS and a .rel.debug section. A TLS section is
+     * relocated in place in the segment's TLS image.
      */
-    if (!(toreloc->flags & SHF_ALLOC))
+    if (!(toreloc->flags & (SHF_ALLOC | SHF_TLS)))
         return 1;
 
     ULONG numrel = shrel->size / shrel->entsize;
@@ -516,6 +540,9 @@ static int relocate
         ULONG *p;
         IPTR s;
         ULONG shindex;
+#if defined(__aarch64__)
+        BOOL is_tls = FALSE;
+#endif
 
 #ifdef __arm__
         /*
@@ -607,7 +634,61 @@ static int relocate
                     shindex = ((ULONG *)symtab_shndx->addr)[ELF_R_SYM(rel->info)];
                 }
                 s = (IPTR)sh[shindex].addr + sym->value;
+#if defined(__aarch64__)
+                /* A TLS symbol's value is an offset in the segment's block */
+                if (tls && (sh[shindex].flags & SHF_TLS))
+                {
+                    s = tls->offset[shindex] + sym->value;
+                    is_tls = TRUE;
+                }
+#endif
         }
+
+#if defined(__aarch64__)
+        /*
+         * Code may reach a TLS variable only through a descriptor: there is
+         * no static TLS block, since any task may run the segment's code.
+         * The adrp/ldr/add of the sequence then address the descriptor.
+         */
+        {
+            ULONG type = ELF_R_TYPE(rel->info);
+            BOOL  desc = (type == R_AARCH64_TLSDESC_ADR_PAGE21 ||
+                          type == R_AARCH64_TLSDESC_LD64_LO12 ||
+                          type == R_AARCH64_TLSDESC_ADD_LO12 ||
+                          type == R_AARCH64_TLSDESC_CALL);
+
+            if (is_tls != desc)
+            {
+                bug("[ELF Loader] Relocation type %d against %sTLS symbol '%s': only TLS descriptors are supported\n",
+                    type, is_tls ? "" : "non-",
+                    (STRPTR)sh[shsymtab->link].addr + sym->name);
+                SetIoErr(ERROR_BAD_HUNK);
+                return 0;
+            }
+            if (desc && type != R_AARCH64_TLSDESC_CALL)
+            {
+                struct ELFTLSDescriptor *d = tls->by_sym[ELF_R_SYM(rel->info)];
+
+                s += rel->addend;
+                if (!d || d->td_Offset != s)
+                {
+                    if (tls->next == tls->end)
+                    {
+                        bug("[ELF Loader] More TLS descriptors than TLS symbols\n");
+                        SetIoErr(ERROR_BAD_HUNK);
+                        return 0;
+                    }
+                    d = tls->next++;
+                    d->td_Resolver = (APTR)elftls_resolve;
+                    d->td_Offset = s;
+                    d->td_Module = tls->mod;
+                    if (!tls->by_sym[ELF_R_SYM(rel->info)])
+                        tls->by_sym[ELF_R_SYM(rel->info)] = d;
+                }
+                s = (IPTR)d;
+            }
+        }
+#endif
 
         switch (ELF_R_TYPE(rel->info))
         {
@@ -1062,6 +1143,18 @@ static int relocate
                 SIPTR temp = (SIPTR)(s + rel->addend - (IPTR)p);
                 SIPTR imm26;
 
+                /*
+                 * A direct branch to an undefined weak symbol: the symbol
+                 * is 0, which no branch can reach. Linkers turn such a
+                 * call into a NOP; the code guards the call with a test
+                 * of the symbol's address, which also reads 0.
+                 */
+                if (sym->shindex == SHN_UNDEF && ELF_ST_BIND(sym->info) == STB_WEAK)
+                {
+                    *p = 0xd503201fu; /* NOP */
+                    break;
+                }
+
                 if (temp & 3) {
                     D(bug("[ELF Loader] CALL26/JUMP26 target misaligned\n"));
                     SetIoErr(ERROR_BAD_HUNK);
@@ -1143,6 +1236,29 @@ static int relocate
                 D(bug("[ELF Loader] GOT relocation in module - built as PIC/small code model?\n"));
                 SetIoErr(ERROR_BAD_HUNK);
                 return 0;
+
+            /* s is the descriptor; its offset already holds the addend */
+            case R_AARCH64_TLSDESC_ADR_PAGE21:
+            {
+                SIPTR x = (SIPTR)((s & ~(IPTR)0xfff) - ((IPTR)p & ~(IPTR)0xfff)) >> 12;
+
+                if (x < -((SIPTR)1 << 20) || x > (((SIPTR)1 << 20) - 1)) {
+                    D(bug("[ELF Loader] TLS descriptor out of ADRP range\n"));
+                    SetIoErr(ERROR_BAD_HUNK);
+                    return 0;
+                }
+
+                *p = (*p & 0x9f00001fu) | (((ULONG)x & 0x3) << 29) | ((((ULONG)(x >> 2)) & 0x7ffff) << 5);
+                break;
+            }
+            case R_AARCH64_TLSDESC_LD64_LO12:
+                *p = (*p & 0xffc003ffu) | (((s & 0xfff) >> 3) << 10);
+                break;
+            case R_AARCH64_TLSDESC_ADD_LO12:
+                *p = (*p & 0xffc003ffu) | ((s & 0xfff) << 10);
+                break;
+            case R_AARCH64_TLSDESC_CALL:
+                break;
 
             case R_AARCH64_NONE:
                 break;
@@ -1628,6 +1744,153 @@ static BOOL ARM_ParseAttrs(UBYTE *data, ULONG len, struct DosLibrary *DOSBase)
 
 #endif
 
+#if defined(__aarch64__)
+
+/*
+ * Lay out the segment's TLS sections in one block and take them out of the
+ * hunks. Returns FALSE on error; tls->offset stays NULL without TLS.
+ */
+static BOOL tls_prepare(struct elf_tls *tls, struct sheader *sh, ULONG shnum,
+                        struct sheader *symtab_shndx, struct DosLibrary *DOSBase)
+{
+    struct sheader *symtab = NULL;
+    ULONG i;
+
+    memset(tls, 0, sizeof(*tls));
+    for (i = 0; i < shnum; i++)
+        if ((sh[i].flags & SHF_TLS) && (sh[i].flags & SHF_ALLOC))
+            break;
+    if (i == shnum)
+        return TRUE;
+
+    /* The registry and the runtime belong to dos.library */
+    if (!DOSBase)
+    {
+        SetIoErr(ERROR_NOT_IMPLEMENTED);
+        return FALSE;
+    }
+
+    for (i = 0; i < shnum; i++)
+    {
+        if (sh[i].type != SHT_SYMTAB)
+            continue;
+        if (symtab)
+        {
+            bug("[ELF Loader] TLS needs a single symbol table\n");
+            SetIoErr(ERROR_BAD_HUNK);
+            return FALSE;
+        }
+        symtab = &sh[i];
+    }
+    if (!symtab)
+    {
+        SetIoErr(ERROR_BAD_HUNK);
+        return FALSE;
+    }
+    tls->nsyms = symtab->size / sizeof(struct symbol);
+
+    tls->offset = AllocVec(shnum * sizeof(IPTR), MEMF_ANY | MEMF_CLEAR);
+    tls->by_sym = AllocVec(tls->nsyms * sizeof(APTR), MEMF_ANY | MEMF_CLEAR);
+    if (!tls->offset || !tls->by_sym)
+    {
+        SetIoErr(ERROR_NO_FREE_STORE);
+        return FALSE;
+    }
+
+    tls->align = 16;
+    for (i = 0; i < shnum; i++)
+    {
+        ULONG align;
+
+        if (!(sh[i].flags & SHF_TLS) || !(sh[i].flags & SHF_ALLOC))
+            continue;
+        align = sh[i].addralign ? sh[i].addralign : 1;
+        if (align > tls->align)
+            tls->align = align;
+        tls->block_size = AROS_ROUNDUP2(tls->block_size, align);
+        tls->offset[i] = tls->block_size;
+        tls->block_size += sh[i].size;
+        if (sh[i].type != SHT_NOBITS)
+            tls->image_size = tls->block_size;
+        sh[i].flags &= ~SHF_ALLOC;
+    }
+
+    /* One descriptor per TLS symbol (or section symbol of a TLS section) */
+    for (i = 0; i < tls->nsyms; i++)
+    {
+        struct symbol *sym = &((struct symbol *)symtab->addr)[i];
+        ULONG shindex = sym->shindex;
+
+        if (shindex == SHN_XINDEX && symtab_shndx)
+            shindex = ((ULONG *)symtab_shndx->addr)[i];
+        else if (shindex >= SHN_LORESERVE)
+            continue;
+        if (shindex < shnum && (sh[shindex].flags & SHF_TLS))
+            tls->ndesc++;
+    }
+
+    tls->rec.type = SHT_NOBITS;
+    tls->rec.flags = SHF_ALLOC | SHF_WRITE;
+    tls->rec.addralign = 16;
+    tls->rec.size = AROS_ROUNDUP2(sizeof(struct ELFTLSModule), 16)
+                  + tls->ndesc * sizeof(struct ELFTLSDescriptor)
+                  + tls->image_size;
+    return TRUE;
+}
+
+/* Allocate the record hunk after the section hunks, read the image */
+static BOOL tls_load(struct elf_tls *tls, BPTR file, struct sheader *sh, ULONG shnum,
+                     BPTR **next_hunk_ptr, SIPTR *funcarray, BOOL do_align,
+                     UBYTE **arena_cur, ULONG extra_memflags, struct SRBuffer *srb,
+                     struct DosLibrary *DOSBase)
+{
+    UBYTE *image;
+    ULONG  i;
+
+    if (!load_hunk(file, next_hunk_ptr, &tls->rec, NULL, funcarray, do_align,
+                   arena_cur, extra_memflags, srb, DOSBase))
+        return FALSE;
+
+    tls->mod = (struct ELFTLSModule *)tls->rec.addr;
+    tls->mod->tm_Hunk = MKBADDR(*next_hunk_ptr);
+    tls->mod->tm_Align = tls->align;
+    tls->mod->tm_BlockSize = tls->block_size;
+    tls->mod->tm_ImageSize = tls->image_size;
+    tls->first = (struct ELFTLSDescriptor *)((UBYTE *)tls->mod +
+                 AROS_ROUNDUP2(sizeof(struct ELFTLSModule), 16));
+    tls->next = tls->first;
+    tls->end = tls->first + tls->ndesc;
+    image = (UBYTE *)tls->end;
+    tls->mod->tm_Image = image;
+
+    for (i = 0; i < shnum; i++)
+    {
+        if (!(sh[i].flags & SHF_TLS) || sh[i].type == SHT_NOBITS || !sh[i].size)
+            continue;
+        sh[i].addr = image + tls->offset[i];
+        if (elf_read_block(file, sh[i].offset, sh[i].addr, sh[i].size, funcarray, srb, DOSBase))
+            return FALSE;
+    }
+    return TRUE;
+}
+
+/* After relocation: give the segment its slot and key */
+static BOOL tls_publish(struct elf_tls *tls, struct DosLibrary *DOSBase)
+{
+    struct ELFTLSDescriptor *d;
+
+    if (!elftls_register(tls->mod, DOSBase))
+    {
+        SetIoErr(ERROR_NO_FREE_STORE);
+        return FALSE;
+    }
+    for (d = tls->first; d < tls->next; d++)
+        d->td_Key = tls->mod->tm_Key;
+    return TRUE;
+}
+
+#endif
+
 static BPTR load_seg_elf_int
 (
     BPTR               file,
@@ -1658,6 +1921,10 @@ static BPTR load_seg_elf_int
     UBYTE *arena_cursor = NULL;
     IPTR   arena_size = 0;
     ULONG  arena_flags = 0;
+#if defined(__aarch64__)
+    struct elf_tls  tls_state = { 0 };
+    struct elf_tls *tls = NULL;
+#endif
 
     /* load and validate ELF header */
     if (!load_header(file, &eh, funcarray, &srb, DOSBase))
@@ -1732,6 +1999,13 @@ static BPTR load_seg_elf_int
         }
    }
 
+#if defined(__aarch64__)
+    if (!tls_prepare(&tls_state, sh, int_shnum, symtab_shndx, DOSBase))
+        goto error;
+    if (tls_state.offset)
+        tls = &tls_state;
+#endif
+
     /* Now that we have the string and symbol tables loaded,
      * load the rest of the hunks.
      */
@@ -1769,6 +2043,11 @@ static BPTR load_seg_elf_int
             arena_size += AROS_ROUNDUP2(elf_hunk_size(&sh[i], do_align), AROS_WORSTALIGN) + AROS_WORSTALIGN;
         }
     }
+#if defined(__aarch64__)
+    /* The TLS record is carved from the arena too, within ADRP reach */
+    if (tls)
+        arena_size += AROS_ROUNDUP2(elf_hunk_size(&tls->rec, exec_hunk_seen), AROS_WORSTALIGN) + AROS_WORSTALIGN;
+#endif
     exec_hunk_seen = FALSE;
 
     if (arena_size)
@@ -1826,6 +2105,17 @@ static BPTR load_seg_elf_int
         }
     }
 
+#if defined(__aarch64__)
+    if (tls && !tls_load(tls, file, sh, int_shnum, &next_hunk_ptr, funcarray, exec_hunk_seen,
+#if defined(ELF_MODULE_ARENA)
+                         arena ? &arena_cursor : NULL,
+#else
+                         NULL,
+#endif
+                         force31 ? MEMF_31BIT : 0, &srb, DOSBase))
+        goto error;
+#endif
+
 #if defined(ELF_MODULE_ARENA)
     if (arena && hunks)
     {
@@ -1868,13 +2158,24 @@ static BPTR load_seg_elf_int
             if (!sh[sh[i].info].addr)
                 continue;
             sh[i].addr = load_block(file, sh[i].offset, sh[i].size, funcarray, &srb, DOSBase);
-            if (!sh[i].addr || !relocate(&eh, sh, i, int_shnum, symtab_shndx, reloc_out_of_range, DOSBase))
+            if (!sh[i].addr || !relocate(&eh, sh, i, int_shnum, symtab_shndx, reloc_out_of_range,
+#if defined(__aarch64__)
+                                         tls,
+#else
+                                         NULL,
+#endif
+                                         DOSBase))
                 goto error;
 
             ilsFreeMem(sh[i].addr, sh[i].size);
             sh[i].addr = NULL;
         }
     }
+
+#if defined(__aarch64__)
+    if (tls && !tls_publish(tls, DOSBase))
+        goto error;
+#endif
 
 #if defined(__AROSPLATFORM_WXSEG__)
     /*
@@ -1967,6 +2268,11 @@ end:
         if (((sh[i].type == SHT_SYMTAB) || (sh[i].type == SHT_STRTAB)) && (sh[i].addr != NULL))
             ilsFreeMem(sh[i].addr, sh[i].size);
     }
+
+#if defined(__aarch64__)
+    FreeVec(tls_state.by_sym);
+    FreeVec(tls_state.offset);
+#endif
 
     /* Free the section headers */
     ilsFreeMem(sh, int_shnum * eh.shentsize);

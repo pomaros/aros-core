@@ -100,6 +100,7 @@ VOID UpdateVideoInformation(struct SysMonData * smdata)
 
 struct SysMonModule videomodule =
 {
+    .Name = "video",
     .Init = InitVideo,
     .DeInit = DeInitVideo,
 };

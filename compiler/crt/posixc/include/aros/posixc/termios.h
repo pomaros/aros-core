@@ -68,7 +68,7 @@ struct termios {
 #define CR1     0000400
 #define CR2     0001000
 #define CR3     0001400
-#define TBLDLY  0006000
+#define TABDLY  0006000
 #define TAB0    0000000
 #define TAB1    0002000
 #define TAB2    0004000
@@ -76,7 +76,7 @@ struct termios {
 #define BSDLY   0010000
 #define BS0     0000000
 #define BS1     0010000
-#define VRDLY   0020000
+#define VTDLY   0020000
 #define VT0     0000000
 #define VT1     0020000
 #define FFDLY   0040000
@@ -149,12 +149,18 @@ speed_t cfgetispeed(const struct termios *);
 speed_t cfgetospeed(const struct termios *);
 int cfsetispeed(struct termios *, speed_t);
 int cfsetospeed(struct termios *, speed_t);
-/* NOTIMPL int tcdrain(int); */
-/* NOTIMPL int tcflow(int, int); */
-/* NOTIMPL int tcflush(int, int); */
+#if defined(_BSD_SOURCE) || defined(_GNU_SOURCE) || defined(_DEFAULT_SOURCE)
+void cfmakeraw(struct termios *);
+int cfsetspeed(struct termios *, speed_t);
+#endif
+int tcdrain(int);
+/* tcflow(), tcflush(), tcgetsid() and tcsendbreak() fail with ENOSYS until
+   AROS has a terminal-control layer; that work keeps these entry points. */
+int tcflow(int, int);
+int tcflush(int, int);
 int tcgetattr(int __fd, struct termios *__termios_p);
-/* NOTIMPL pid_t tcgetsid(int); */
-/* NOTIMPL int tcsendbreak(int, int); */
+pid_t tcgetsid(int);
+int tcsendbreak(int, int);
 int tcsetattr(int __fd, int __optional_actions,
               const struct termios *__termios_p);
 

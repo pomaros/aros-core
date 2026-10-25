@@ -430,27 +430,7 @@ struct BtHardware
 
 #define BT_ADVDATA_MAX      62            /* adv + scan response */
 
-/* Bond keys of a device (private; persisted as the KEYS chunk of its DEVC
-   form, never handed out through btGetAttrs) */
-struct BtKeyCfg
-{
-    ULONG bkc_ChunkID;                    /* IFFCHNK_KEYS */
-    ULONG bkc_Length;                     /* sizeof(struct BtKeyCfg)-8 */
-    UBYTE bkc_Flags;                      /* BKCF_xxx */
-    UBYTE bkc_LinkKeyType;                /* BR/EDR link key type */
-    UBYTE bkc_LinkKey[16];                /* BR/EDR link key */
-    UBYTE bkc_LTK[16];                    /* LE long term key */
-    UBYTE bkc_EDIV[2];
-    UBYTE bkc_Rand[8];
-    UBYTE bkc_IRK[16];
-    UBYTE bkc_CSRK[16];
-    UBYTE bkc_Reserved[4];
-    /* Key our peripheral role distributed to a remote central.  It cannot
-       share bkc_LTK, which is the peer key used when we are central. */
-    UBYTE bkc_LocalLTK[16];
-    UBYTE bkc_LocalEDIV[2];
-    UBYTE bkc_LocalRand[8];
-};
+#include <libraries/bluetooth_secret.h>
 
 #define BKCF_LINKKEY 0x01
 #define BKCF_LTK     0x02

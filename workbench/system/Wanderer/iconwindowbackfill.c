@@ -830,6 +830,14 @@ D(bug("[IconWindow.ImageBackFill] MUIM_IconWindow_BackFill_Cleanup()\n"));
 ///
 
 ///ImageBackFill__MUIM_IconWindow_BackFill_DrawBackground()
+/* Borrow only the Window Setup generation; no live Screen metadata lookup. */
+static struct DrawInfo *ImageBackFill_BackgroundDrawInfo(Object *window)
+{
+  const struct ScreenRenderContext *context = NULL;
+  GetAttr(MUIA_RenderContext, window, (IPTR *)&context);
+  return context ? context->src_LogicalDrawInfo : NULL;
+}
+
 IPTR ImageBackFill__MUIM_IconWindow_BackFill_DrawBackground
 (
   Class *CLASS, Object *self, struct MUIP_IconWindow_BackFill_DrawBackground *message
@@ -880,7 +888,7 @@ D(bug("[IconWindow.ImageBackFill] MUIM_IconWindow_BackFill_DrawBackground: BackF
      */
     if ((this_BFI->bfi_ImageFailed) && (this_BFI->bfi_RastPort) && (this_BFI->bfi_Screen))
     {
-      struct DrawInfo *dri = GetScreenDrawInfo(this_BFI->bfi_Screen);
+      struct DrawInfo *dri = ImageBackFill_BackgroundDrawInfo(self);
 
       if (dri)
       {
@@ -891,7 +899,6 @@ D(bug("[IconWindow.ImageBackFill] MUIM_IconWindow_BackFill_DrawBackground: BackF
                  message->draw_BFM->DrawBounds.MinX, message->draw_BFM->DrawBounds.MinY,
                  message->draw_BFM->DrawBounds.MaxX, message->draw_BFM->DrawBounds.MaxY);
 
-        FreeScreenDrawInfo(this_BFI->bfi_Screen, dri);
         return (IPTR)TRUE;
       }
     }

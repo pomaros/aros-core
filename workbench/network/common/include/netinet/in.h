@@ -335,6 +335,7 @@ struct ip_opts {
 #define	IP_DROP_MEMBERSHIP	13	/* drop an IP group membership */
 #define	IP_ADD_SOURCE_MEMBERSHIP 25	/* add source-specific multicast */
 #define	IP_DROP_SOURCE_MEMBERSHIP 26	/* drop source-specific multicast */
+#define	IP_RECVTOS	68	/* bool; receive IP TOS w/datagram */
 
 /*
  * Argument structure for IP_ADD_MEMBERSHIP and IP_DROP_MEMBERSHIP.
@@ -351,6 +352,16 @@ struct ip_mreq_source {
 	struct in_addr	imr_multiaddr;	/* IP multicast address of group */
 	struct in_addr	imr_sourceaddr;	/* IP address of source */
 	struct in_addr	imr_interface;	/* local IP address of interface */
+};
+
+/*
+ * Argument structure for IP_ADD_MEMBERSHIP and IP_DROP_MEMBERSHIP that
+ * names the interface by index (FreeBSD and Linux).
+ */
+struct ip_mreqn {
+	struct in_addr	imr_multiaddr;	/* IP multicast address of group */
+	struct in_addr	imr_address;	/* local IP address of interface */
+	int		imr_ifindex;	/* interface index */
 };
 
 /*
@@ -514,6 +525,7 @@ struct sockaddr_in6 {
 #define IPV6_RECVHOPLIMIT	37	/* bool; recv hop limit */
 #define IPV6_CHECKSUM		26	/* int; checksum offset for raw socket */
 #define IPV6_TCLASS		36	/* int; traffic class */
+#define IPV6_RECVTCLASS		57	/* bool; recv traffic class values */
 
 /* IPv6 multicast request */
 struct ipv6_mreq {

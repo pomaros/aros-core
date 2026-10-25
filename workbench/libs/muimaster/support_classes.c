@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * Licensed under the AROS Public License (APL) Version 1.1. */
 /*
     Copyright (C) 2002-2020, The AROS Development Team. All rights reserved.
 */
@@ -208,6 +210,12 @@ static Class *ZUNE_MakeBuiltinClass(ClassID classid,
 #endif
                 /* Use this as a reference counter */
                 cl->cl_Dispatcher.h_Data = 0;
+                if (builtins[i]->capabilities &&
+                    !zune_set_class_capabilities(cl, builtins[i]->capabilities, MUIMasterBase))
+                {
+                    FreeClass(cl);
+                    cl = NULL;
+                }
             }
 
             break;
@@ -237,9 +245,9 @@ Class *ZUNE_GetBuiltinClass(ClassID classid, struct Library * mb)
             ZUNE_AddBuiltinClass(cl, mb);
 
             /* Increase the reference counter */
-            char *count = cl->cl_Dispatcher.h_Data;
+            IPTR count = (IPTR)cl->cl_Dispatcher.h_Data;
             count++;
-            cl->cl_Dispatcher.h_Data = count;
+            cl->cl_Dispatcher.h_Data = (APTR)count;
         }
     }
 

@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
 
     Desc: Basic helpfuncs for Asl.
@@ -333,7 +334,8 @@ VOID FreeCommon(struct LayoutData *ld, struct AslBase_intern *AslBase)
 {
     if (ld)
     {
-
+        /* Pending messages borrow the native window's IDCMP pool. */
+        AslDiscardEvents(ld, NULL, AslBase);
         if (ld->ld_IntReq->ir_Catalog) CloseCatalog(ld->ld_IntReq->ir_Catalog);
 
         if (ld->ld_Menu)
@@ -367,10 +369,13 @@ VOID FreeCommon(struct LayoutData *ld, struct AslBase_intern *AslBase)
             }
         }
 
+        if (ld->ld_Events) FreeVec(ld->ld_Events);
+
         D(bug("Window freed\n"));
 
         if (ld->ld_VisualInfo) FreeVisualInfo(ld->ld_VisualInfo);
-        if (ld->ld_Dri) FreeScreenDrawInfo(ld->ld_Screen, ld->ld_Dri);
+        /* DrawInfo and the default font belong to the pinned immutable context. */
+        AslDisposeObjects(ld, AslBase);
 
         if (ld->ld_ScreenLocked)
             UnlockPubScreen(NULL, ld->ld_Screen);
@@ -378,11 +383,11 @@ VOID FreeCommon(struct LayoutData *ld, struct AslBase_intern *AslBase)
         if (ld->ld_UserData)
             FreeVec(ld->ld_UserData);
 
-        if (ld->ld_Font)
+        if (ld->ld_Font && ld->ld_FontOwned)
             CloseFont(ld->ld_Font);
 
-        if (ld->ld_TextAttr.ta_Name)
-            FreeVec(ld->ld_TextAttr.ta_Name);
+        if (ld->ld_FontOwned && ld->ld_TextAttr.tta_Name)
+            FreeVec(ld->ld_TextAttr.tta_Name);
 
         FreeMem(ld, sizeof (struct LayoutData));
     }
@@ -443,44 +448,21 @@ struct LayoutData *AllocCommon
 
     ld->ld_Screen = screen;
 
-    if (!(ld->ld_Dri = GetScreenDrawInfo(screen))) goto failure;
-
-    if (!(ld->ld_VisualInfo = GetVisualInfoA(screen, NULL))) goto failure;
-
-    ld->ld_WBorLeft  = screen->WBorLeft;
-    ld->ld_WBorTop   = screen->WBorTop + screen->Font->ta_YSize + 1;
-    ld->ld_WBorRight = screen->WBorRight;
-    ld->ld_WBorBottom = 16;
-
+    ld->ld_ScaleAware = AslScaleEligible(intreq);
+    ld->ld_UserDataSize = udatasize;
+    if (ld->ld_ScaleAware)
     {
-        struct TagItem sysi_tags[] =
-        {
-            {SYSIA_DrawInfo     , (IPTR)ld->ld_Dri      },
-            {SYSIA_Which        , SIZEIMAGE             },
-            {TAG_DONE                                   }
-        };
-
-        Object *im;
-
-        if ((im = NewObjectA(NULL, SYSICLASS, sysi_tags)))
-        {
-            IPTR height;
-
-            if (GetAttr(IA_Height, im, &height))
-            {
-                ld->ld_WBorBottom = height;
-            }
-            DisposeObject(im);
-        }
-
+        ld->ld_Events = AllocVec(sizeof(*ld->ld_Events), MEMF_ANY);
+        if (!ld->ld_Events) goto failure;
+        NEWLIST(ld->ld_Events);
     }
-
+    if (!AslPrepareContext(ld, AslBase)) goto failure;
     if(GetBitMapAttr(screen->RastPort.BitMap, BMA_DEPTH) > 8) ld->ld_TrueColor = TRUE;
 
     if (!(ld->ld_UserData = AllocVec(udatasize, MEMF_ANY|MEMF_CLEAR)))
         goto failure;
 
-    if (!GetRequesterFont(ld, ASLB(AslBase)))
+    if (intreq->ir_TextAttr && !GetRequesterFont(ld, ASLB(AslBase)))
         goto failure;
 
     SetFont( &(ld->ld_DummyRP), ld->ld_Font );
@@ -632,7 +614,8 @@ BOOL GetRequesterFont(struct LayoutData *ld, struct AslBase_intern *AslBase)
 {
     struct TextFont     *font = NULL;
 
-    struct TextAttr     *usedattr, askattr;
+    struct TextAttr     *usedattr;
+    struct TTextAttr    askattr = {0};
 
     BOOL                success = FALSE;
 
@@ -695,10 +678,13 @@ BOOL GetRequesterFont(struct LayoutData *ld, struct AslBase_intern *AslBase)
 
     if (!font)
     {
-        usedattr = &askattr;
+        usedattr = (struct TextAttr *)&askattr;
 
         SetFont(&(ld->ld_DummyRP), GfxBase->DefaultFont);
         AskFont(&(ld->ld_DummyRP), usedattr);
+        if ((askattr.tta_Style & FSF_TAGGED) && GfxBase->DefaultFont->tf_Extension)
+            askattr.tta_Tags = ((struct TextFontExtension *)GfxBase->DefaultFont->tf_Extension)->tfe_Tags;
+        else askattr.tta_Style &= ~FSF_TAGGED;
 
         font = OpenDiskFont(usedattr);
     }
@@ -727,15 +713,18 @@ BOOL GetRequesterFont(struct LayoutData *ld, struct AslBase_intern *AslBase)
         {
             strcpy (fontname, usedattr->ta_Name);
 
-            ld->ld_TextAttr.ta_Name  = fontname;
-            ld->ld_TextAttr.ta_YSize = usedattr->ta_YSize;
-            ld->ld_TextAttr.ta_Style = usedattr->ta_Style;
-            ld->ld_TextAttr.ta_Flags = usedattr->ta_Flags;
+            ld->ld_TextAttr.tta_Name  = fontname;
+            ld->ld_TextAttr.tta_YSize = usedattr->ta_YSize;
+            ld->ld_TextAttr.tta_Style = usedattr->ta_Style;
+            ld->ld_TextAttr.tta_Flags = usedattr->ta_Flags;
 
+            ld->ld_TextAttr.tta_Tags = (usedattr->ta_Style & FSF_TAGGED) ? ((struct TTextAttr *)usedattr)->tta_Tags : NULL;
             ld->ld_Font = font;
+            ld->ld_FontOwned = TRUE;
 
             success = TRUE;
         }
+        else CloseFont(font);
     }
     return (success);
 }
@@ -755,23 +744,28 @@ BOOL HandleEvents(struct LayoutData *ld, struct AslReqInfo *reqinfo, struct AslB
     
     EnterFunc(bug("HandleEvents(ld=%p, reqinfo=%p)\n", ld, reqinfo));
 
-    winport = ld->ld_Window->UserPort;
-    if (!winport)
-        winport = ld->ld_Window->WindowPort;
-    winmask = 1L << winport->mp_SigBit;
-    
-
     while (!terminated)
     {
-        ULONG sigmask;
-        if (ld->ld_AppMsgPort)
-            sigmask = Wait(winmask | (1L << ld->ld_AppMsgPort->mp_SigBit));
-        else
-            sigmask = Wait(winmask);
+        ULONG sigmask, waitmask;
+        if (ld->ld_RetryScale)
+        {
+            /* This is the requester's Process, never InputTask. A bounded
+             * delay allows memory recovery while Cancel and Abort stay live. */
+            Delay(1);
+            if (AslRelayout(ld, reqinfo, AslBase)) ld->ld_RetryScale = FALSE;
+            if (ld->ld_PendingAbort) { success = FALSE; break; }
+        }
+        winport = ld->ld_Window->UserPort;
+        if (!winport) winport = ld->ld_Window->WindowPort;
+        winmask = 1UL << winport->mp_SigBit;
+        waitmask = winmask;
+        if (ld->ld_AppMsgPort) waitmask |= 1UL << ld->ld_AppMsgPort->mp_SigBit;
+        sigmask = ld->ld_Events && !IsListEmpty(ld->ld_Events) ? winmask :
+            ld->ld_RetryScale ? SetSignal(0, waitmask) & waitmask : Wait(waitmask);
 
         if (sigmask & winmask)
         {
-        while ((imsg = (struct IntuiMessage *)GetMsg(winport)))
+        while ((imsg = AslNextEvent(ld, winport, AslBase)))
         {
             if ((imsg->IDCMPWindow == ld->ld_Window) ||
                 (imsg->IDCMPWindow == ld->ld_Window2))
@@ -781,9 +775,23 @@ BOOL HandleEvents(struct LayoutData *ld, struct AslReqInfo *reqinfo, struct AslB
                     case IDCMP_MOUSEMOVE:
                         break;
 
+                    case IDCMP_CHANGESCALE:
+                    case IDCMP_CHANGEWINDOW:
                     case IDCMP_NEWSIZE:
-                        ld->ld_Command = LDCMD_LAYOUT;
-                        CallHookPkt(&(reqinfo->GadgetryHook), ld, ASLB(AslBase));
+                        /* Reply before Process-side resource preparation.
+                         * The native Window and all queued event identities
+                         * stay live throughout this asynchronous relayout. */
+                        ReplyMsg((struct Message *)imsg);
+                        imsg = NULL;
+                        if (!AslRelayout(ld, reqinfo, AslBase))
+                            ld->ld_RetryScale = !ld->ld_PendingAbort;
+                        if (ld->ld_PendingAbort)
+                        { success = FALSE; terminated = TRUE; }
+                        else
+                        {
+                            ld->ld_Command = LDCMD_LAYOUT;
+                            CallHookPkt(&(reqinfo->GadgetryHook), ld, ASLB(AslBase));
+                        }
                         break;
 
                     case IDCMP_REFRESHWINDOW:
@@ -821,9 +829,10 @@ BOOL HandleEvents(struct LayoutData *ld, struct AslReqInfo *reqinfo, struct AslB
             {
                 DoASLHookFunc(ifreq, FRF_INTUIFUNC, imsg, req);
             }
-            ReplyMsg((struct Message *)imsg);
+            if (imsg) ReplyMsg((struct Message *)imsg);
+            if (terminated) break;
 
-        } /* while ((imsg = (struct IntuiMessage *)GetMsg(winport))) */
+        } /* while ((imsg = AslNextEvent(ld, winport, AslBase))) */
         }
 
         while ((ld->ld_AppMsgPort) && (ld->ld_AppMsg = (struct AppMessage *) GetMsg(ld->ld_AppMsgPort)))
@@ -870,7 +879,7 @@ UWORD BiggestTextLength(STRPTR          *strarray,
 
     UWORD i, w = 0, new_w;
 
-    for (i = 0; strarray[i] && i < numstrings; i ++)
+    for (i = 0; i < numstrings && strarray[i]; i ++)
     {
         new_w = TextLength(rp, strarray[i], strlen(strarray[i]));
         if (new_w > w)
@@ -956,14 +965,18 @@ VOID StripRequester(APTR req, UWORD reqtype, struct AslBase_intern *AslBase)
 
 /*****************************************************************************************/
 
-WORD CountNodes(struct List *list, WORD flag)
+LONG CountNodes(struct List *list, WORD flag)
 {
     struct Node *node;
-    WORD        result = 0;
+    LONG        result = 0;
 
     ForeachNode(list, node)
     {
-        if ((node->ln_Pri & flag) == flag) result++;
+        if ((node->ln_Pri & flag) == flag)
+        {
+            if (result == 2147483647) return -1;
+            result++;
+        }
     }
 
     return result;
@@ -971,7 +984,7 @@ WORD CountNodes(struct List *list, WORD flag)
 
 /*****************************************************************************************/
 
-struct Node *FindListNode(struct List *list, WORD which)
+struct Node *FindListNode(struct List *list, LONG which)
 {
     struct Node *node = NULL;
 

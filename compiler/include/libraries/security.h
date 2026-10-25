@@ -37,6 +37,18 @@
 #   include <utility/tagitem.h>
 #endif
 
+/* Authority-service ABI 45.17: the registered library has permanent lifetime
+ * (security.conf: options noexpunge). Compatible 45.x revisions preserve this
+ * lifetime, GetTaskOwner vector 7's unsigned owner result, ROOT=65535 and
+ * nobody=0. A different lifetime/identity requires a new major ABI.
+ *
+ * Filesystem handlers must never load this library through their own volume.
+ * After validating a loaded 45.17+ base under Exec's library-list exclusion,
+ * they may release that exclusion before normal Open/Close and owner queries.
+ * Do not manipulate lib_OpenCnt as a temporary pin: generated Open/Close do
+ * not share the library-list lock on SMP. Hooks and queries may wait on a
+ * semaphore and must run without the list spinlock held.
+ */
 #define SECURITYNAME                    "security.library"
 #define SECURITYVERSION                 (45)
 
@@ -172,10 +184,84 @@ struct secGroupInfo
 #define secT_PasswordHash       (TAG_USER+18)   /* (STRPTR) pre-hashed token instead of secT_Password             */
 #define secT_HashType           (TAG_USER+19)   /* (ULONG) secHASH_#? form of secT_PasswordHash                   */
 #define secT_UserInfo           (TAG_USER+20)   /* (struct secUserInfo *) filled on success (secAllocUserInfo())  */
-#define secT_Ticket             (TAG_USER+21)   /* secVerifyUserA(): (ULONG *) receives a login ticket;           */
-                                                /* secLoginA(): (ULONG) the ticket to log in with                 */
+#define secT_Ticket             (TAG_USER+21)   /* secVerifyUserA(): (struct secLoginTicket *) receives a ticket; */
+                                                /* secLoginA(): (struct secLoginTicket *) the ticket to log in   */
 #define secT_HasPassword        (TAG_USER+22)   /* secQueryUserA(): (BOOL *) the user has a password              */
 #define secT_MayChangePassword  (TAG_USER+23)   /* secQueryUserA(): (BOOL *) the user may change it               */
+#define secT_DiscardTicket      (TAG_USER+24)   /* secVerifyUserA(): (struct secLoginTicket *) give an unused     */
+                                                /* ticket back; nothing else is done                              */
+/* secAuthControlA() (root only) */
+#define secT_AuthList           (TAG_USER+25)   /* (struct secAuthRecord *) array to fill                          */
+#define secT_AuthListSize       (TAG_USER+26)   /* (ULONG) entries in that array                                   */
+#define secT_AuthCount          (TAG_USER+27)   /* (ULONG *) receives the number of records (may exceed the size)  */
+#define secT_AuthClear          (TAG_USER+28)   /* (BOOL) clear the records of secT_UserID / secT_RemoteHost, or   */
+                                                /* all of them when neither is given                               */
+#define secT_LockAccount        (TAG_USER+29)   /* secAuthControlA(): (STRPTR) lock this user's account            */
+#define secT_UnlockAccount      (TAG_USER+30)   /* secAuthControlA(): (STRPTR) unlock it                           */
+#define secT_AccountLocked      (TAG_USER+31)   /* secQueryUserA(): (BOOL *) the account is locked                 */
+/* secUserAdminA() (root only); also secT_UserID, secT_Password */
+#define secT_UAOperation        (TAG_USER+32)   /* (ULONG) secUA_#?                                                */
+#define secT_NewUserID          (TAG_USER+33)   /* (STRPTR) MODIFY: new user ID                                    */
+#define secT_UID                (TAG_USER+34)   /* (ULONG) user number 1..65535                                    */
+#define secT_GID                (TAG_USER+35)   /* (ULONG) primary group number, must exist                        */
+#define secT_UserName           (TAG_USER+36)   /* (STRPTR) the full name                                          */
+#define secT_HomeDir            (TAG_USER+37)   /* (STRPTR) home directory                                         */
+#define secT_Shell              (TAG_USER+38)   /* (STRPTR) shell (may be empty)                                   */
+/* secUserAdminA() groups (root only) */
+#define secT_GroupID            (TAG_USER+39)   /* (STRPTR) the group (GROUPADD: the new one)                      */
+#define secT_NewGroupID         (TAG_USER+40)   /* (STRPTR) GROUPMODIFY: new group ID                              */
+#define secT_GroupName          (TAG_USER+41)   /* (STRPTR) the group's description                                */
+#define secT_GroupMgr           (TAG_USER+42)   /* (ULONG) uid of the group's manager (default root)               */
+#define secT_GroupMembers       (TAG_USER+43)   /* (STRPTR *) NULL-terminated user IDs: the group's members        */
+                                                /* (besides those whose primary group it is); replaces the list     */
+/* secExpandPathA() */
+#define secT_BufferSize         (TAG_USER+44)   /* (ULONG) size of the buffer that receives the path               */
+
+/* secUserAdminA() operations */
+#define secUA_ADD               (1)             /* new user: secT_UserID, secT_UID, secT_GID [, others]            */
+#define secUA_MODIFY            (2)             /* change the given fields of secT_UserID                          */
+#define secUA_DELETE            (3)             /* remove secT_UserID                                              */
+#define secUA_PASSWORD          (4)             /* set secT_UserID's password to secT_Password ("" = none)         */
+#define secUA_GROUPADD          (5)             /* new group: secT_GroupID, secT_GID [, others]                    */
+#define secUA_GROUPMODIFY       (6)             /* change the given fields of secT_GroupID                         */
+#define secUA_GROUPDELETE       (7)             /* remove secT_GroupID (not while it is a user's primary group)    */
+
+/* secUserAdminA() results */
+#define secUAERR_OK             (0)
+#define secUAERR_NOTROOT        (1)             /* only root may change accounts                                   */
+#define secUAERR_NOTFOUND       (2)             /* no such user (or group, or member)                              */
+#define secUAERR_EXISTS         (3)             /* the user/group ID or the uid/gid is taken                       */
+#define secUAERR_BADARGS        (4)             /* a field is missing, too long or holds '|', ':' or a control char */
+#define secUAERR_NOGROUP        (5)             /* no group with that gid                                          */
+#define secUAERR_PROTECTED      (6)             /* root (and root's group) cannot be deleted, renamed or renumbered */
+#define secUAERR_WRITE          (7)             /* the password or group file could not be written; nothing changed */
+#define secUAERR_UNAVAILABLE    (8)             /* unconfigured system or no server                                */
+#define secUAERR_INUSE          (9)             /* the group is a user's primary group                             */
+
+/* What secAuthControlA() reports */
+#define secAUTHREC_DELAY        (0)             /* failures for a user name: requests are held back                */
+#define secAUTHREC_LOCKOUT      (1)             /* failures for a user from a remote host                          */
+
+struct secAuthRecord
+{
+    UBYTE   Kind;                               /* secAUTHREC_#?                                                   */
+    UBYTE   Pad[3];
+    ULONG   Failures;
+    ULONG   Seconds;                            /* left of the hold-back / lock-out, 0 = none now                  */
+    char    UserID[secUSERIDSIZE];              /* DELAY: the last name that failed in this slot                   */
+    char    Source[64];                         /* LOCKOUT: the remote host (cut)                                  */
+};
+
+/*
+ * A login ticket (secT_Ticket): an opaque, unguessable value that only the
+ * task it was issued to can use, once, within a few seconds.
+ */
+#define secTICKETSIZE           (16)
+
+struct secLoginTicket
+{
+    UBYTE   Id[secTICKETSIZE];
+};
 
 /* secT_HashType */
 #define secHASH_NONE            (0)             /* clear text (secT_Password)                                       */
@@ -402,6 +488,11 @@ struct secPointers
  */
 #define secConfig_DirName       "SYS:Security"
 #define secConfig_AssignName    "SECURITY"
+
+/* The current S:Security-Startup that AMUInit installs; security.library
+ * logs a hint at start-up when the installed one is older */
+#define secSTARTUP_VERSION      (45)
+#define secSTARTUP_REVISION     (11)
 
 /*==========================================================================*/
 /*                      FileSystem Authors' API                             */

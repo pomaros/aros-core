@@ -29,6 +29,7 @@
 #include "kernel_intr.h"
 
 #include "tls.h"
+#include "task_tls.h"
 
 #define D(x)
 #define DSCHED(x)
@@ -73,6 +74,7 @@ asm(
 "               msr     elr_el2, x4            \n"
 "               eret                            \n"
 "mpcore_el1_entry:                              \n"
+"               msr     tpidr_el0, xzr         \n"
 "               /* Enable FP/NEON */            \n"
 "               mov     x4, #(3 << 20)         \n"
 "               msr     cpacr_el1, x4          \n"
@@ -408,6 +410,8 @@ void cpu_Dispatch(regs_t *regs)
 
     while (!(task = core_Dispatch()))
     {
+        /* No selected task owns this CPU while it waits for work. */
+        AROSAArch64WriteTaskPointer(0);
         DSCHED(bug("[Kernel:%02d] cpu_Dispatch: Nothing to run - idling\n", cpunum));
         /* WFI wakes on masked interrupts, but the pending IPI must be
          * HANDLED to make a task ready - open a brief window for it. */
@@ -419,6 +423,8 @@ void cpu_Dispatch(regs_t *regs)
 
     /* Restore the task's state */
     RESTORE_TASKSTATE(task, regs)
+    /* RESTORE_TASKSTATE installs TP with the incoming frame. Native TLS is
+     * nevertheless unsupported in scheduler tc_Switch/tc_Launch hooks. */
 
     DREGS(cpu_DumpRegs(regs));
 

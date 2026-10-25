@@ -55,6 +55,7 @@ void ProcessPackets(struct Globals *glob)
             case ACTION_FORMAT:
             case ACTION_DELETE_OBJECT:
             case ACTION_RENAME_OBJECT:
+            case ACTION_REPLACE_OBJECT:
             case ACTION_CREATE_DIR:
             case ACTION_SET_PROTECT:
             case ACTION_SET_DATE:
@@ -133,6 +134,67 @@ void ProcessPackets(struct Globals *glob)
                 if ((err = OpCopyLock(fl, &lock, glob)) == 0)
                     res = (IPTR) MKBADDR(lock);
 
+                break;
+            }
+
+        case ACTION_CHANGE_MODE:
+            {
+                /* dp_Arg1: CHANGE_LOCK or CHANGE_FH; dp_Arg2: the lock, or
+                 * the file handle holding it; dp_Arg3: the new access. A
+                 * lock becomes exclusive only while it is the file's only
+                 * lock. Run shares an exclusive output this way to give the
+                 * background process its own handle. */
+                struct ExtFileLock *fl = NULL;
+                LONG access = pkt->dp_Arg3;
+
+                if (pkt->dp_Arg1 == CHANGE_FH)
+                {
+                    struct FileHandle *fh = BADDR(pkt->dp_Arg2);
+
+                    if (fh != NULL)
+                        fl = BADDR(fh->fh_Arg1);
+                }
+                else if (pkt->dp_Arg1 == CHANGE_LOCK)
+                    fl = BADDR(pkt->dp_Arg2);
+                else
+                {
+                    err = ERROR_BAD_NUMBER;
+                    break;
+                }
+
+                if (access != SHARED_LOCK && access != EXCLUSIVE_LOCK)
+                {
+                    err = ERROR_BAD_NUMBER;
+                    break;
+                }
+                if (fl == NULL)
+                {
+                    err = ERROR_REQUIRED_ARG_MISSING;
+                    break;
+                }
+                if ((err = TestLock(fl, glob)))
+                    break;
+
+                if (fl->gl == &glob->sb->info->root_lock)
+                {
+                    if (access == EXCLUSIVE_LOCK)
+                        err = ERROR_OBJECT_IN_USE;
+                    else
+                        res = DOSTRUE;
+                    break;
+                }
+
+                if (access == EXCLUSIVE_LOCK &&
+                    (fl->gl->locks.mlh_Head != &fl->node ||
+                     fl->node.mln_Succ->mln_Succ != NULL))
+                {
+                    err = ERROR_OBJECT_IN_USE;
+                    break;
+                }
+
+                fl->fl_Access = access;
+                fl->gl->access = access;
+                res = DOSTRUE;
                 break;
             }
 
@@ -377,15 +439,18 @@ void ProcessPackets(struct Globals *glob)
                 res = fl->pos;
                 err = 0;
 
-                if (whence == OFFSET_BEGINNING
-                    && offset >= 0 && offset <= fl->gl->size)
+                /* A position beyond the end is kept: reads there find the
+                 * end, and a write there fills the gap with zeros first
+                 * (POSIX lseek semantics, which posixc relies on). */
+                if (whence == OFFSET_BEGINNING && offset >= 0)
                     fl->pos = offset;
                 else if (whence == OFFSET_CURRENT
-                    && offset + fl->pos >= 0
-                    && offset + fl->pos <= fl->gl->size)
+                    && (QUAD)fl->pos + offset >= 0
+                    && (QUAD)fl->pos + offset <= (QUAD)0xffffffffUL)
                     fl->pos += offset;
                 else if (whence == OFFSET_END
-                    && offset <= 0 && fl->gl->size + offset >= 0)
+                    && (QUAD)fl->gl->size + offset >= 0
+                    && (QUAD)fl->gl->size + offset <= (QUAD)0xffffffffUL)
                     fl->pos = fl->gl->size + offset;
                 else
                 {
@@ -830,6 +895,25 @@ void ProcessPackets(struct Globals *glob)
                     break;
 
                 err = OpRenameFile(sfl, AROS_BSTR_ADDR(pkt->dp_Arg2),
+                    AROS_BSTR_strlen(pkt->dp_Arg2), dfl,
+                    AROS_BSTR_ADDR(pkt->dp_Arg4),
+                    AROS_BSTR_strlen(pkt->dp_Arg4), glob);
+                if (err == 0)
+                    res = DOSTRUE;
+
+                break;
+            }
+
+        case ACTION_REPLACE_OBJECT:
+            {
+                struct ExtFileLock *sfl = BADDR(pkt->dp_Arg1), *dfl =
+                    BADDR(pkt->dp_Arg3);
+
+                if ((err = TestLock(sfl, glob)) != 0
+                    || (err = TestLock(dfl, glob)) != 0)
+                    break;
+
+                err = OpReplaceFile(sfl, AROS_BSTR_ADDR(pkt->dp_Arg2),
                     AROS_BSTR_strlen(pkt->dp_Arg2), dfl,
                     AROS_BSTR_ADDR(pkt->dp_Arg4),
                     AROS_BSTR_strlen(pkt->dp_Arg4), glob);

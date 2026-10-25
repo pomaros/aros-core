@@ -3,6 +3,7 @@
 
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     $Id$
 
     Desc: Definitions for the Gfx Hidd system.
@@ -334,6 +335,8 @@ typedef ULONG (*HIDDT_RGBConversionFunction)(APTR srcPixels, ULONG srcMod, HIDDT
                                              APTR dstPixels, ULONG dstMod, HIDDT_StdPixFmt dstPixFmt,
                                              UWORD width, UWORD height);
 
+#include <hidd/preparedpixels.h>
+#include <hidd/preparedcursor.h>
 #include <interface/Hidd_BitMap.h>
 
 #define CLID_Hidd_BitMap IID_Hidd_BitMap
@@ -642,8 +645,13 @@ struct HiddBitMapPlaneData
     STACKED LONG HBMPD_RealDepth;
     STACKED ULONG HBMPD_Flags;
     STACKED HIDDT_ModeID HBMPD_HiddMode;
+    STACKED struct Hook *HBMPD_UpdateHook;
 };
 
+/* Plane-data starts after the public eight planes. Size its allocation
+ * from the actual structure, including pointer alignment on each target. */
+#define HIDD_BM_PLANEDATA_SIZE sizeof(struct HiddBitMapPlaneData)
+#define HIDD_BM_UPDATEHOOK(bitmap) (((struct HiddBitMapPlaneData *)&(bitmap)->Planes[HIDD_BM_EXTRAPLANES])->HBMPD_UpdateHook)
 #define HIDD_BM_OBJ(bitmap)       (((struct HiddBitMapPlaneData *)&(bitmap)->Planes[HIDD_BM_EXTRAPLANES])->HBMPD_Object)
 #define HIDD_BM_DRVDATA(bitmap)   (((struct HiddBitMapPlaneData *)&(bitmap)->Planes[HIDD_BM_EXTRAPLANES])->HBMPD_DriverData)
 #define HIDD_BM_COLMAP(bitmap)	  (((struct HiddBitMapPlaneData *)&(bitmap)->Planes[HIDD_BM_EXTRAPLANES])->HBMPD_ColMap)

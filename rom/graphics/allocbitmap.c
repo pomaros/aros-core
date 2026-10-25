@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
 
     Desc: Create a new BitMap
 */
@@ -192,6 +193,7 @@ static HIDDT_StdPixFmt const cyber2hidd_pixfmt[] = {
     struct gfxdisplay_data *drv = NULL;
     ULONG clear = flags & BMF_CLEAR;
     BOOL alloc = TRUE;
+    struct Hook *updatehook = NULL;
 
     if(BITMAPFLAGS_ARE_EXTENDED(flags)) {
         struct TagItem *tag, *tstate = (struct TagItem *)friend_bitmap;
@@ -200,6 +202,10 @@ static HIDDT_StdPixFmt const cyber2hidd_pixfmt[] = {
 
         while((tag = NextTagItem(&tstate))) {
             switch(tag->ti_Tag) {
+            case BMATags_UpdateHook:
+                updatehook = (struct Hook *)tag->ti_Data;
+                break;
+
             case BMATags_Friend:
                 friend_bitmap = (struct BitMap *)tag->ti_Data;
                 break;
@@ -239,7 +245,7 @@ static HIDDT_StdPixFmt const cyber2hidd_pixfmt[] = {
         there is a friend_bitmap bitmap and that's not a normal bitmap, then
         call the RTG driver.
     */
-    if((depth > 8) || (hiddmode != vHidd_ModeID_Invalid) ||
+    if(updatehook || (depth > 8) || (hiddmode != vHidd_ModeID_Invalid) ||
             (friend_bitmap && (friend_bitmap->Flags & BMF_SPECIALFMT)) ||
             (friend_bitmap && (friend_bitmap->pad == HIDD_BM_PAD_MAGIC)) ||
             (flags & BMF_SPECIALFMT) ||
@@ -330,7 +336,7 @@ static HIDDT_StdPixFmt const cyber2hidd_pixfmt[] = {
         SET_TAG(bm_tags, 8, TAG_DONE, 0);
 
         /* Allocate an extra planes for HIDD bitmap info */
-        nbm = AllocVec(sizeof(struct BitMap) + sizeof(PLANEPTR) * HIDD_BM_EXTRAPLANES, MEMF_ANY | MEMF_CLEAR);
+        nbm = AllocVec(sizeof(struct BitMap) + HIDD_BM_PLANEDATA_SIZE, MEMF_ANY | MEMF_CLEAR);
         D(bug("[AllocBitMap] Allocated bitmap structure: 0x%p\n", nbm));
 
         if(nbm) {
@@ -455,6 +461,9 @@ static HIDDT_StdPixFmt const cyber2hidd_pixfmt[] = {
                 if(ok) {
                     struct BitMap *pbm = NULL;
 
+                    /* Clear through the initialized HIDD object. The update
+                     * hook is installed only after constructor drawing ends. */
+                    nbm->pad = HIDD_BM_PAD_MAGIC;
                     if(clear)
                         BltBitMap(nbm, 0, 0, nbm, 0, 0, sizex, sizey, 0x00, 0xFF, NULL);
 
@@ -471,8 +480,7 @@ static HIDDT_StdPixFmt const cyber2hidd_pixfmt[] = {
                             | (pbm->Flags & BMF_INTERLEAVED);
                     }
 
-                    /* Mark this is a HIDD bitmap via the pad field */
-                    nbm->pad = HIDD_BM_PAD_MAGIC;
+                    HIDD_BM_UPDATEHOOK(nbm) = updatehook;
 
                     ReturnPtr("AllocBitMap", struct BitMap *, nbm);
                 }

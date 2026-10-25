@@ -81,6 +81,10 @@ int gettimeofday(struct timeval * __restrict, struct timezone * __restrict);
 /* NOTIMPL int setitimer(int which, const struct itimerval * restrict, struct itimerval * restrict); */
 /* select() is defined by inclusion of <sys/select.h> */
 int utimes(const char *, const struct timeval tvp[2]);
+#if defined(_BSD_SOURCE) || defined(_GNU_SOURCE) || defined(_DEFAULT_SOURCE)
+int lutimes(const char *, const struct timeval tvp[2]);
+int futimes(int, const struct timeval tvp[2]);
+#endif
 
 __END_DECLS
 

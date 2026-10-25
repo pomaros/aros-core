@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 2002-2011, The AROS Development Team.
     All rights reserved.
     
@@ -16,6 +17,7 @@
 #include <proto/layers.h>
 
 #include "muimaster_intern.h"
+#include "support.h"
 
 extern struct Library *MUIMasterBase;
 
@@ -28,7 +30,7 @@ extern struct Library *MUIMasterBase;
 #define max(a,b) (((a) > (b)) ? (a) : (b))
 
 void GetMenuBox(struct Window *win, struct MenuItem *item,
-    WORD *xmin, WORD *ymin, WORD *xmax, WORD *ymax)
+    WORD *xmin, WORD *ymin, WORD *xmax, WORD *ymax, ULONG scale)
 {
 
     WORD left, right, top, bottom;
@@ -47,17 +49,17 @@ void GetMenuBox(struct Window *win, struct MenuItem *item,
     }
 
     if (xmin)
-        *xmin = left - win->WScreen->MenuHBorder;
+        *xmin = left - zune_scale_value(win->WScreen->MenuHBorder, scale);
     if (ymin)
-        *ymin = top - win->WScreen->MenuVBorder;
+        *ymin = top - zune_scale_value(win->WScreen->MenuVBorder, scale);
     if (xmax)
-        *xmax = right + win->WScreen->MenuHBorder;
+        *xmax = right + zune_scale_value(win->WScreen->MenuHBorder, scale);
     if (ymax)
-        *ymax = bottom + win->WScreen->MenuVBorder;
+        *ymax = bottom + zune_scale_value(win->WScreen->MenuVBorder, scale);
 
 }
 
-void CalculateDims(struct Window *win, struct Menu *menu)
+void CalculateDims(struct Window *win, struct Menu *menu, ULONG scale)
 {
     struct MenuItem *item;
 
@@ -66,7 +68,7 @@ void CalculateDims(struct Window *win, struct Menu *menu)
         item = menu->FirstItem;
 
         GetMenuBox(win, item, &menu->JazzX, &menu->JazzY, &menu->BeatX,
-            &menu->BeatY);
+            &menu->BeatY, scale);
 
         menu = menu->NextMenu;
     }
@@ -109,6 +111,8 @@ void Characterize(struct Menu *menu)
 struct MenuHandlerData
 {
     struct Window *win;
+    BOOL scaleAware;
+    ULONG factor, renderScale;
     struct Screen *scr;
     struct DrawInfo *dri;
     struct Window *menubarwin;
@@ -119,8 +123,6 @@ struct MenuHandlerData
     struct MenuItem *activeitem;
     struct MenuItem *activesubitem;
     struct Rectangle submenubox;
-    struct Image *checkmark;
-    struct Image *amigakey;
     WORD menubarwidth;
     WORD menubarheight;
     WORD menubaritemwidth;
@@ -137,6 +139,16 @@ struct MenuHandlerData
     UWORD lastmenupick;
     BOOL active;
 };
+
+static WORD MenuMetric(struct MenuHandlerData *mhd, LONG points) { return zune_scale_value(points, mhd->renderScale); }
+static WORD MenuMouseX(struct MenuHandlerData *mhd) { return mhd->scrmousex / mhd->factor; }
+static WORD MenuMouseY(struct MenuHandlerData *mhd) { return mhd->scrmousey / mhd->factor; }
+static WORD MenuWidth(struct MenuHandlerData *mhd) { return mhd->scr->Width / mhd->factor; }
+static WORD MenuBarHeight(struct MenuHandlerData *mhd)
+{
+    return mhd->scaleAware ? mhd->scr->BarHeight :
+        mhd->dri->dri_Font->tf_YSize + mhd->scr->WBorTop - 2 + MenuMetric(mhd, mhd->scr->BarVBorder) * 2;
+}
 
 /* this #defines are taken from workbench/libs/gadtools/menus.c!! */
 
@@ -448,22 +460,22 @@ static void HighlightMenuTitle(struct Menu *menu,
 
 #if MENUS_UNDERMOUSE
         struct Menu *m = mhd->menu;
-        WORD x1 = mhd->scr->MenuHBorder;
+        WORD x1 = MenuMetric(mhd, mhd->scr->MenuHBorder);
         WORD x2 = x1 + mhd->menubaritemwidth - 1;
         WORD y1, y2, i;
 
         for (i = 0; m != menu; m = m->NextMenu)
             i++;
 
-        y1 = mhd->scr->MenuVBorder + i * mhd->menubaritemheight;
+        y1 = MenuMetric(mhd, mhd->scr->MenuVBorder) + i * mhd->menubaritemheight;
         y2 = y1 + mhd->menubaritemheight - 1;
 
 #else
         WORD x1 =
-            menu->LeftEdge + mhd->scr->BarHBorder - mhd->scr->MenuHBorder;
+            menu->LeftEdge + MenuMetric(mhd, mhd->scr->BarHBorder) - MenuMetric(mhd, mhd->scr->MenuHBorder);
         WORD y1 = 0;
         WORD x2 = x1 + menu->Width - 1;
-        WORD y2 = mhd->scr->BarHeight - 1;
+        WORD y2 = MenuBarHeight(mhd) - 1;
 #endif
 
 #if MENUS_AMIGALOOK
@@ -507,14 +519,14 @@ static struct Menu *FindMenu(WORD *var, struct MenuHandlerData *mhd)
     struct Menu *menu;
     WORD mouse_x, mouse_y, i;
 
-    mouse_x = mhd->scrmousex - mhd->menubarwin->LeftEdge;
-    mouse_y = mhd->scrmousey - mhd->menubarwin->TopEdge;
+    mouse_x = MenuMouseX(mhd) - mhd->menubarwin->LeftEdge;
+    mouse_y = MenuMouseY(mhd) - mhd->menubarwin->TopEdge;
 
 #if MENUS_UNDERMOUSE
     menu = NULL;
 
-    mouse_x -= mhd->scr->MenuHBorder;
-    mouse_y -= mhd->scr->MenuVBorder;
+    mouse_x -= MenuMetric(mhd, mhd->scr->MenuHBorder);
+    mouse_y -= MenuMetric(mhd, mhd->scr->MenuVBorder);
 
     if ((mouse_x >= 0) && (mouse_x < mhd->menubaritemwidth)
         && (mouse_y >= 0))
@@ -543,7 +555,7 @@ static struct Menu *FindMenu(WORD *var, struct MenuHandlerData *mhd)
     {
         if ((mouse_x >= menu->LeftEdge) &&
             (mouse_x < menu->LeftEdge + menu->Width) &&
-            (mouse_y >= 0) && (mouse_y <= mhd->scr->BarHeight))
+            (mouse_y >= 0) && (mouse_y <= MenuBarHeight(mhd)))
         {
             *var = i;
             break;
@@ -563,10 +575,10 @@ static struct MenuItem *FindItem(WORD *var, struct MenuHandlerData *mhd)
     if (mhd->menuwin)
     {
         mouse_x =
-            mhd->scrmousex - mhd->menuwin->LeftEdge +
+            MenuMouseX(mhd) - mhd->menuwin->LeftEdge +
             mhd->activemenu->JazzX;
         mouse_y =
-            mhd->scrmousey - mhd->menuwin->TopEdge + mhd->activemenu->JazzY;
+            MenuMouseY(mhd) - mhd->menuwin->TopEdge + mhd->activemenu->JazzY;
 
         for (item = mhd->activemenu->FirstItem, i = 0; item;
             item = item->NextItem, i++)
@@ -597,10 +609,10 @@ static struct MenuItem *FindSubItem(WORD *var, struct MenuHandlerData *mhd)
     if (mhd->submenuwin)
     {
         mouse_x =
-            mhd->scrmousex - mhd->submenuwin->LeftEdge +
+            MenuMouseX(mhd) - mhd->submenuwin->LeftEdge +
             mhd->submenubox.MinX;
         mouse_y =
-            mhd->scrmousey - mhd->submenuwin->TopEdge +
+            MenuMouseY(mhd) - mhd->submenuwin->TopEdge +
             mhd->submenubox.MinY;
 
         *var = -1;
@@ -626,7 +638,7 @@ static struct MenuItem *FindSubItem(WORD *var, struct MenuHandlerData *mhd)
 
 static void MakeMenuBarWin(struct MenuHandlerData *mhd)
 {
-    struct TagItem win_tags[9];
+    struct TagItem win_tags[10];
     struct Menu *menu;
 
 #if MENUS_UNDERMOUSE
@@ -638,9 +650,9 @@ static void MakeMenuBarWin(struct MenuHandlerData *mhd)
     win_tags[1].ti_Tag = WA_Top;
     win_tags[1].ti_Data = 0;
     win_tags[2].ti_Tag = WA_Width;
-    win_tags[2].ti_Data = mhd->scr->Width;
+    win_tags[2].ti_Data = MenuWidth(mhd);
     win_tags[3].ti_Tag = WA_Height;
-    win_tags[3].ti_Data = mhd->scr->BarHeight + 1;
+    win_tags[3].ti_Data = MenuBarHeight(mhd) + 1;
     win_tags[4].ti_Tag = WA_AutoAdjust;
     win_tags[4].ti_Data = TRUE;
     win_tags[5].ti_Tag = WA_Borderless;
@@ -648,15 +660,18 @@ static void MakeMenuBarWin(struct MenuHandlerData *mhd)
     win_tags[6].ti_Tag = WA_CustomScreen;
     win_tags[6].ti_Data = (IPTR) mhd->scr;
     win_tags[7].ti_Tag = WA_BackFill;
-    win_tags[7].ti_Tag = (IPTR) LAYERS_NOBACKFILL;
-    win_tags[8].ti_Tag = TAG_DONE;
+    win_tags[7].ti_Data = (IPTR) LAYERS_NOBACKFILL;
+    win_tags[8].ti_Tag = WA_ScaleAware;
+    win_tags[8].ti_Data = mhd->scaleAware;
+    win_tags[9].ti_Tag = TAG_DONE;
 
 #if MENUS_UNDERMOUSE
 
+    struct RastPort measure;InitRastPort(&measure);SetFont(&measure, mhd->dri->dri_Font);
     mhd->nummenubaritems = 0;
     for (menu = mhd->menu; menu; menu = menu->NextMenu)
     {
-        w = TextLength(&mhd->scr->RastPort, menu->MenuName,
+        w = TextLength(&measure, menu->MenuName,
             strlen(menu->MenuName));
         if (w > maxw)
             maxw = w;
@@ -664,18 +679,18 @@ static void MakeMenuBarWin(struct MenuHandlerData *mhd)
     }
 
     mhd->menubaritemwidth =
-        maxw + TextLength(&mhd->scr->RastPort, subitemindicator,
-        1) + TEXT_AMIGAKEY_SPACING + ITEXT_EXTRA_LEFT + ITEXT_EXTRA_RIGHT;
+        maxw + TextLength(&measure, subitemindicator,
+        1) + MenuMetric(mhd, TEXT_AMIGAKEY_SPACING) + MenuMetric(mhd, ITEXT_EXTRA_LEFT) + MenuMetric(mhd, ITEXT_EXTRA_RIGHT);
 
     mhd->menubaritemheight =
-        mhd->scr->RastPort.TxHeight + ITEXT_EXTRA_TOP + ITEXT_EXTRA_BOTTOM;
+        mhd->dri->dri_Font->tf_YSize + MenuMetric(mhd, ITEXT_EXTRA_TOP) + MenuMetric(mhd, ITEXT_EXTRA_BOTTOM);
 
-    win_tags[2].ti_Data = mhd->menubaritemwidth + mhd->scr->MenuHBorder * 2;
+    win_tags[2].ti_Data = mhd->menubaritemwidth + MenuMetric(mhd, mhd->scr->MenuHBorder) * 2;
     win_tags[3].ti_Data =
         mhd->menubaritemheight * mhd->nummenubaritems +
-        mhd->scr->MenuVBorder * 2;
-    win_tags[0].ti_Data = mhd->scr->MouseX - win_tags[2].ti_Data / 2;
-    win_tags[1].ti_Data = mhd->scr->MouseY;
+        MenuMetric(mhd, mhd->scr->MenuVBorder) * 2;
+    win_tags[0].ti_Data = MenuMouseX(mhd) - win_tags[2].ti_Data / 2;
+    win_tags[1].ti_Data = MenuMouseY(mhd);
 
 #endif
 
@@ -761,12 +776,12 @@ static void RenderMenuTitle(struct Menu *menu, struct MenuHandlerData *mhd)
         yoff++;
     }
 
-    x = mhd->scr->MenuHBorder + ITEXT_EXTRA_LEFT;
-    y = mhd->scr->MenuVBorder + ITEXT_EXTRA_TOP +
+    x = MenuMetric(mhd, mhd->scr->MenuHBorder) + MenuMetric(mhd, ITEXT_EXTRA_LEFT);
+    y = MenuMetric(mhd, mhd->scr->MenuVBorder) + MenuMetric(mhd, ITEXT_EXTRA_TOP) +
         yoff * mhd->menubaritemheight;
 #else
-    WORD x = mhd->scr->BarHBorder + menu->LeftEdge;
-    WORD y = mhd->scr->BarVBorder;
+    WORD x = MenuMetric(mhd, mhd->scr->BarHBorder) + menu->LeftEdge;
+    WORD y = MenuMetric(mhd, mhd->scr->BarVBorder);
 #endif
 
 #if MENUS_AMIGALOOK
@@ -785,8 +800,8 @@ static void RenderMenuTitle(struct Menu *menu, struct MenuHandlerData *mhd)
     {
         WORD silen = TextLength(rp, subitemindicator, 1);
         WORD x2 =
-            mhd->scr->MenuHBorder + mhd->menubaritemwidth -
-            ITEXT_EXTRA_RIGHT - silen;
+            MenuMetric(mhd, mhd->scr->MenuHBorder) + mhd->menubaritemwidth -
+            MenuMetric(mhd, ITEXT_EXTRA_RIGHT) - silen;
 
         Move(rp, x2, y + rp->TxBaseline);
         Text(rp, subitemindicator, 1);
@@ -796,7 +811,7 @@ static void RenderMenuTitle(struct Menu *menu, struct MenuHandlerData *mhd)
     if (!(menu->Flags & MENUENABLED))
     {
 #if MENUS_UNDERMOUSE
-        WORD x2 = mhd->scr->MenuHBorder + mhd->menubaritemwidth - 1;
+        WORD x2 = MenuMetric(mhd, mhd->scr->MenuHBorder) + mhd->menubaritemwidth - 1;
 #else
         WORD x2 = x + TextLength(rp, menu->MenuName, len) - 1;
 #endif
@@ -818,18 +833,18 @@ static void MakeMenuWin(struct MenuHandlerData *mhd)
     WORD ypos = mhd->menubarwin->TopEdge;
 #else
     WORD xpos =
-        mhd->activemenu->LeftEdge + mhd->scr->BarHBorder +
+        mhd->activemenu->LeftEdge + MenuMetric(mhd, mhd->scr->BarHBorder) +
         mhd->activemenu->JazzX;
 
 #if MENUS_AMIGALOOK
-    WORD ypos = mhd->scr->BarHeight + 1 + mhd->activemenu->JazzY;
+    WORD ypos = MenuBarHeight(mhd) + 1 + mhd->activemenu->JazzY;
 #else
-    WORD ypos = mhd->scr->BarHeight + 1;
+    WORD ypos = MenuBarHeight(mhd) + 1;
 #endif
 
 #endif
 
-    struct TagItem win_tags[9];
+    struct TagItem win_tags[10];
 
     win_tags[0].ti_Tag = WA_Left;
     win_tags[0].ti_Data = xpos;
@@ -846,15 +861,17 @@ static void MakeMenuWin(struct MenuHandlerData *mhd)
     win_tags[6].ti_Tag = WA_CustomScreen;
     win_tags[6].ti_Data = (IPTR) mhd->scr;
     win_tags[7].ti_Tag = WA_BackFill;
-    win_tags[7].ti_Tag = (IPTR) LAYERS_NOBACKFILL;
-    win_tags[8].ti_Tag = TAG_DONE;
+    win_tags[7].ti_Data = (IPTR) LAYERS_NOBACKFILL;
+    win_tags[8].ti_Tag = WA_ScaleAware;
+    win_tags[8].ti_Data = mhd->scaleAware;
+    win_tags[9].ti_Tag = TAG_DONE;
 
 
 #if MENUS_UNDERMOUSE
     win_tags[1].ti_Data +=
         (mhd->menubaritemheight * mhd->activemenunum +
-        mhd->scr->MenuVBorder) - height / 2;
-    if (xpos + width > mhd->scr->Width)
+        MenuMetric(mhd, mhd->scr->MenuVBorder)) - height / 2;
+    if (xpos + width > MenuWidth(mhd))
     {
         win_tags[0].ti_Data = mhd->menubarwin->LeftEdge - width + 16;
     }
@@ -923,7 +940,7 @@ static void RenderMenu(struct MenuHandlerData *mhd)
 static void MakeSubMenuWin(struct MenuHandlerData *mhd)
 {
     struct MenuItem *item = mhd->activeitem->SubItem;
-    struct TagItem win_tags[9];
+    struct TagItem win_tags[10];
 
     win_tags[0].ti_Tag = WA_Left;
     win_tags[0].ti_Data = 0;
@@ -940,12 +957,14 @@ static void MakeSubMenuWin(struct MenuHandlerData *mhd)
     win_tags[6].ti_Tag = WA_CustomScreen;
     win_tags[6].ti_Data = (IPTR) mhd->scr;
     win_tags[7].ti_Tag = WA_BackFill;
-    win_tags[7].ti_Tag = (IPTR) LAYERS_NOBACKFILL;
-    win_tags[8].ti_Tag = TAG_DONE;
+    win_tags[7].ti_Data = (IPTR) LAYERS_NOBACKFILL;
+    win_tags[8].ti_Tag = WA_ScaleAware;
+    win_tags[8].ti_Data = mhd->scaleAware;
+    win_tags[9].ti_Tag = TAG_DONE;
 
     GetMenuBox(mhd->menubarwin, item, &mhd->submenubox.MinX,
         &mhd->submenubox.MinY,
-        &mhd->submenubox.MaxX, &mhd->submenubox.MaxY);
+        &mhd->submenubox.MaxX, &mhd->submenubox.MaxY, mhd->renderScale);
 
     win_tags[0].ti_Data = mhd->menuwin->LeftEdge +
         mhd->activeitem->LeftEdge - mhd->activemenu->JazzX +
@@ -1083,8 +1102,8 @@ static void RenderMenuBG(struct Window *win, struct MenuHandlerData *mhd)
     struct RastPort *rp = win->RPort;
 
 #if MENUS_AMIGALOOK
-    WORD borderx = mhd->scr->MenuHBorder / 2;
-    WORD bordery = mhd->scr->MenuVBorder / 2;
+    WORD borderx = MenuMetric(mhd, mhd->scr->MenuHBorder) / 2;
+    WORD bordery = MenuMetric(mhd, mhd->scr->MenuVBorder) / 2;
 #else
     WORD borderx = 1;
     WORD bordery = 1;
@@ -1138,15 +1157,15 @@ static void RenderCheckMark(struct MenuItem *item, WORD itemtype,
 
         x1 = item->LeftEdge + offx;
         y1 = item->TopEdge + offy + (item->Height -
-            mhd->checkmark->Height) / 2;
-        x2 = x1 + mhd->checkmark->Width - 1;
-        y2 = y1 + mhd->checkmark->Height - 1;
+            mhd->dri->dri_CheckMark->Height) / 2;
+        x2 = x1 + mhd->dri->dri_CheckMark->Width - 1;
+        y2 = y1 + mhd->dri->dri_CheckMark->Height - 1;
 
         SetDrMd(rp, JAM1);
 
         if (item->Flags & CHECKED)
         {
-            DrawImageState(rp, mhd->checkmark, x1, y1, state, mhd->dri);
+            DrawImageState(rp, mhd->dri->dri_CheckMark, x1, y1, state, mhd->dri);
         }
         else
         {
@@ -1204,16 +1223,16 @@ static void RenderAmigaKey(struct MenuItem *item, WORD itemtype,
             }
         }
 
-        x1 = item->LeftEdge + offx + item->Width - AMIGAKEY_BORDER_SPACING -
-            mhd->amigakey->Width - AMIGAKEY_KEY_SPACING - commkeywidth;
-        y1 = item->TopEdge + offy + (item->Height - mhd->amigakey->Height +
+        x1 = item->LeftEdge + offx + item->Width - MenuMetric(mhd, AMIGAKEY_BORDER_SPACING) -
+            mhd->dri->dri_AmigaKey->Width - MenuMetric(mhd, AMIGAKEY_KEY_SPACING) - commkeywidth;
+        y1 = item->TopEdge + offy + (item->Height - mhd->dri->dri_AmigaKey->Height +
             1) / 2;
 
         SetDrMd(rp, JAM1);
 
-        DrawImageState(rp, mhd->amigakey, x1, y1, state, mhd->dri);
+        DrawImageState(rp, mhd->dri->dri_AmigaKey, x1, y1, state, mhd->dri);
 
-        x1 += mhd->amigakey->Width + AMIGAKEY_KEY_SPACING;
+        x1 += mhd->dri->dri_AmigaKey->Width + MenuMetric(mhd, AMIGAKEY_KEY_SPACING);
 
 #if MENUS_AMIGALOOK
         SetAPen(rp, mhd->dri->dri_Pens[BARDETAILPEN]);
@@ -1363,8 +1382,8 @@ static void HighlightItem(struct MenuItem *item, WORD itemtype,
 
         case HIGHBOX:
             SetDrMd(rp, COMPLEMENT);
-            offx = mhd->scr->MenuHBorder;
-            offy = mhd->scr->MenuVBorder;
+            offx = MenuMetric(mhd, mhd->scr->MenuHBorder);
+            offy = MenuMetric(mhd, mhd->scr->MenuVBorder);
 
             x1 -= offx;
             x2 += offx;
@@ -1507,8 +1526,9 @@ struct ZMenu
     struct MenuHandlerData mhd;
 };
 
-struct ZMenu *zune_open_menu(struct Window *wnd, struct NewMenu *newmenu)
+struct ZMenu *zune_open_menu(struct MUI_RenderInfo *mri, struct NewMenu *newmenu)
 {
+    struct Window *wnd = mri->mri_Window;
     struct TagItem tags[] = {
         {GTMN_NewLookMenus, TRUE},
         {TAG_DONE}
@@ -1521,7 +1541,7 @@ struct ZMenu *zune_open_menu(struct Window *wnd, struct NewMenu *newmenu)
     if (!zmenu)
         return NULL;
 
-    visinfo = GetVisualInfoA(wnd->WScreen, NULL);
+    visinfo = zune_visualinfo(mri);
     if (!visinfo)
     {
         FreeVec(zmenu);
@@ -1530,25 +1550,40 @@ struct ZMenu *zune_open_menu(struct Window *wnd, struct NewMenu *newmenu)
 
     if (!(menu = CreateMenusA(newmenu, NULL)))
     {
+        FreeVisualInfo(visinfo);
         FreeVec(zmenu);
         return NULL;
     }
 
-    LayoutMenusA(menu, visinfo, tags);
+    if (!LayoutMenusA(menu, visinfo, tags))
+    {
+        FreeVisualInfo(visinfo);
+        FreeMenus(menu);
+        FreeVec(zmenu);
+        return NULL;
+    }
     FreeVisualInfo(visinfo);
 
     Characterize(menu);
-    CalculateDims(wnd, menu);
+    CalculateDims(wnd, menu, zune_render_scale(mri));
 
     zmenu->mhd.win = wnd;
     zmenu->mhd.scr = zmenu->mhd.win->WScreen;
-    zmenu->mhd.dri = GetScreenDrawInfo(zmenu->mhd.scr);
+    zmenu->mhd.scaleAware = mri->mri_ScaleAware;
+    zmenu->mhd.renderScale = zune_render_scale(mri);
+    zmenu->mhd.factor = mri->mri_ScaleAware ? 1 : zune_legacy_factor(mri->mri_Screen);
+    if (!zmenu->mhd.factor) zmenu->mhd.factor = 1;
+    zmenu->mhd.dri = mri->mri_DrawInfo;
+    if (!zmenu->mhd.dri)
+    {
+        FreeMenus(menu);
+        FreeVec(zmenu);
+        return NULL;
+    }
     zmenu->mhd.menu = menu;
     zmenu->mhd.activemenunum = -1;
     zmenu->mhd.activeitemnum = -1;
     zmenu->mhd.activesubitemnum = -1;
-    zmenu->mhd.checkmark = zmenu->mhd.dri->dri_CheckMark;
-    zmenu->mhd.amigakey = zmenu->mhd.dri->dri_AmigaKey;
     zmenu->mhd.scrmousex = zmenu->mhd.scr->MouseX;
     zmenu->mhd.scrmousey = zmenu->mhd.scr->MouseY;
     zmenu->mhd.firstmenupick = MENUNULL;
@@ -1591,7 +1626,6 @@ void zune_close_menu(struct ZMenu *zmenu)
 
     if (zmenu->mhd.dri)
     {
-        FreeScreenDrawInfo(zmenu->mhd.scr, zmenu->mhd.dri);
         zmenu->mhd.dri = 0;
     }
 

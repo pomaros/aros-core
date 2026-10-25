@@ -46,6 +46,7 @@
     /* PIPE:cpipe-%08x-%d, where %x is the getpid(), %d is the nth pipe */
     char pipe_name[5 + 6 + 8 + 1 + 16 + 1];
     static int pipeno = 0;
+    int number;
 
     if (!pipedes)
     {
@@ -71,13 +72,12 @@
         return -1;
     }
 
-    /* Get the next pipe number */
-    Forbid();
-    pipeno++;
-    Permit();
+    /* Take the number in the same step as the increment: read again
+       afterwards, two threads can name the same pipe. */
+    number = __atomic_add_fetch(&pipeno, 1, __ATOMIC_RELAXED);
 
     snprintf(pipe_name, sizeof(pipe_name), "PIPE:cpipe-%08lx-%d",
-               (unsigned long)getpid(), pipeno);
+               (unsigned long)getpid(), number);
     pipe_name[sizeof(pipe_name)-1] = 0;
 
     writer = Open(pipe_name, MODE_NEWFILE);
@@ -103,7 +103,23 @@
     InitSemaphore(&rfcb->io_lock);
     InitSemaphore(&wfcb->io_lock);
 
-    pipedes[0] = __getfdslot(__getfirstfd(0));
+    /* Each number is picked and reserved in one step: a number picked first
+       and claimed later can meanwhile be taken by another thread, and
+       claiming an occupied slot closes it. */
+    pipedes[0] = __getfreefdslot(0);
+    pipedes[1] = pipedes[0] < 0 ? -1 : __getfreefdslot(0);
+    if (pipedes[1] < 0)
+    {
+        if (pipedes[0] >= 0)
+            __setfdesc(pipedes[0], NULL);
+        Close(reader);
+        Close(writer);
+        FreeVec(rfcb);
+        FreeVec(wfcb);
+        __free_fdesc(rdesc);
+        __free_fdesc(wdesc);
+        return -1;
+    }
     rdesc->fdflags = 0;
     rdesc->fcb = rfcb;
     rdesc->fcb->handle    = reader;
@@ -111,7 +127,6 @@
     rdesc->fcb->opencount = 1;
     __setfdesc(pipedes[0], rdesc);
 
-    pipedes[1] = __getfdslot(__getfirstfd(pipedes[0]));
     wdesc->fdflags = 0;
     wdesc->fcb = wfcb;
     wdesc->fcb->handle    = writer;

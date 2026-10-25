@@ -1,5 +1,6 @@
 /*
     Copyright (C) 2002-2011, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
 */
 
 #define MUIMASTER_YES_INLINE_STDARG
@@ -19,6 +20,8 @@
 #include "locale.h"
 #include "wanderer.h"
 #include "tile_transaction.h"
+#include "iconwindow.h"
+#include "iconwindow_iconlist.h"
 
 /* global variables */
 Object         *_WandererIntern_AppObj = NULL;
@@ -31,6 +34,13 @@ int                  __forceerrorrequester = 1;
 int main(void)
 {
     LONG             retval = RETURN_ERROR;
+
+    /* Qualify only our audited exact classes, after generated class startup
+     * and before any application/window/object tree exists. */
+    if (!MUI_SetClassCapabilities(IconWindow_CLASS->mcc_Class, MUI_CLASS_SCALE_AWARE) ||
+        !MUI_SetClassCapabilities(IconWindowDrawerList_CLASS->mcc_Class, MUI_CLASS_SCALE_AWARE) ||
+        !MUI_SetClassCapabilities(IconWindowVolumeList_CLASS->mcc_Class, MUI_CLASS_SCALE_AWARE))
+        return RETURN_FAIL;
 
     /* WB programs have NULL pr_ConsoleTask */
     SetConsoleTask(NULL);

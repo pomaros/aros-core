@@ -45,7 +45,10 @@ OOP_Object *METHOD(HiddVulkan, Root, New)
         return NULL;
     }
 
-    return (OOP_Object *)OOP_DoSuperMethod(cl, o, (OOP_Msg)msg);
+    o = (OOP_Object *)OOP_DoSuperMethod(cl, o, (OOP_Msg)msg);
+    if (o)
+        VulkanDiscoverDrivers(SD(cl));
+    return o;
 }
 
 VOID METHOD(HiddVulkan, Root, Get)
@@ -77,12 +80,9 @@ VOID METHOD(HiddVulkan, Root, Get)
 APTR METHOD(HiddVulkan, Hidd_Vulkan, CreateInstance)
 {
     struct VulkanGPUEntry *gpu = GET_GPU(SD(cl));
-    D(bug("[Vulkan] %s(app='%s')\n", __func__,
-          msg->applicationName ? msg->applicationName : "(null)"));
+    D(bug("[Vulkan] %s(createInfo=%p)\n", __func__, msg->createInfo));
     if (gpu && gpu->callbacks.CreateInstance)
-        return gpu->callbacks.CreateInstance(msg->applicationName,
-                                             msg->applicationVersion,
-                                             gpu->driver_data);
+        return gpu->callbacks.CreateInstance(msg->createInfo, gpu->driver_data);
     return NULL;
 }
 
@@ -956,8 +956,7 @@ IPTR METHOD(HiddVulkan, Hidd_Vulkan, EnumerateInstanceVersion)
     if (gpu && gpu->callbacks.EnumerateInstanceVersion)
         return (IPTR)gpu->callbacks.EnumerateInstanceVersion(
             msg->pApiVersion, gpu->driver_data);
-    /* No driver — report Vulkan 1.0 */
-    if (msg->pApiVersion) *msg->pApiVersion = (1 << 22); /* VK_API_VERSION_1_0 */
+    if (msg->pApiVersion) *msg->pApiVersion = VULKAN_LOADER_API_VERSION;
     return 0;
 }
 

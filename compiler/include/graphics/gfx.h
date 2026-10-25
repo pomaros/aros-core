@@ -3,6 +3,7 @@
 
 /*
     Copyright © 1995-2010, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     $Id$
 
     Desc: Graphic structures
@@ -117,6 +118,15 @@ struct Rect32
 #define BMATags_Private5            (TAG_USER + 19)
 #define BMATags_Private6            (TAG_USER + 20)
 #define BMATags_Private7            (TAG_USER + 21)
+/* Private AROS composition support. The hook is borrowed until FreeBitMap.
+ * It runs synchronously after an update and must only queue damage; it must
+ * not acquire screen/layer locks, wait for presentation, or free the bitmap.
+ * Object is the bitmap; message is a BitMapUpdateMessage. */
+#define BMATags_UpdateHook          (TAG_USER + 22)
+struct BitMapUpdateMessage
+{
+    UWORD x, y, width, height;
+};
 #define BMATags_BitmapColors        (TAG_USER + 0x29)
 #define BMATags_DisplayID           (TAG_USER + 0x32)
 #define BMATags_BitmapInvisible     (TAG_USER + 0x37)

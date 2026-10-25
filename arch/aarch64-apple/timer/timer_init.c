@@ -12,6 +12,9 @@
 #include <exec/execbase.h>
 #include <exec/errors.h>
 #include <exec/io.h>
+#include <exec/interrupts.h>
+#include <hardware/intbits.h>
+#include <aros/asmcall.h>
 
 #include <proto/exec.h>
 #include <proto/kernel.h>
@@ -98,6 +101,9 @@ static UQUAD next_deadline(
         if (selected == 0 || candidate < selected)
             selected = candidate;
     }
+    if (TimerBase->tb_Platform.tb_VBlankTicks != 0 &&
+        (selected == 0 || TimerBase->tb_Platform.tb_NextVBlank < selected))
+        selected = TimerBase->tb_Platform.tb_NextVBlank;
     return selected;
 }
 
@@ -121,6 +127,9 @@ BOOL AROSAppleTimerProgram(struct TimerBase *TimerBase)
     if (!TimerBase || !TimerBase->tb_Platform.tb_DeadlineOwned)
         return FALSE;
     Disable();
+#if defined(__AROSEXEC_SMP__)
+    result = timer_control(TimerBase, AROS_APPLE_TIMER_OP_NOTIFY, 0);
+#else
     AROSAppleTimerLock(TimerBase);
     UQUAD now = KrnPlatformTimerRead();
     AROSAppleEClockUpdateAt(TimerBase, now);
@@ -128,6 +137,7 @@ BOOL AROSAppleTimerProgram(struct TimerBase *TimerBase)
     result = timer_control(TimerBase, deadline ? AROS_APPLE_TIMER_OP_ARM :
         AROS_APPLE_TIMER_OP_DISARM, deadline);
     AROSAppleTimerUnlock(TimerBase);
+#endif
     Enable();
     return result == AROS_APPLE_TIMER_OK;
 }
@@ -163,6 +173,7 @@ static UQUAD timer_deadline_callback(void *context, UQUAD now)
     struct MinList completed;
     struct timerequest *request;
     UQUAD deadline;
+    BOOL vblank = FALSE;
     if (!TimerBase)
         return 0;
     NEWLIST(&completed);
@@ -181,9 +192,21 @@ static UQUAD timer_deadline_callback(void *context, UQUAD now)
             ADDTAIL(&completed, request);
         }
     }
+    if (TimerBase->tb_Platform.tb_VBlankTicks != 0 &&
+        now >= TimerBase->tb_Platform.tb_NextVBlank) {
+        UQUAD ticks = TimerBase->tb_Platform.tb_VBlankTicks;
+
+        vblank = TRUE;
+        TimerBase->tb_Platform.tb_NextVBlank += ticks;
+        /* Missed ones are not made up: the next comes one period on. */
+        if (TimerBase->tb_Platform.tb_NextVBlank <= now)
+            TimerBase->tb_Platform.tb_NextVBlank = now + ticks;
+    }
     deadline = TimerBase->tb_Platform.tb_DeadlineFault ? 0 : next_deadline(TimerBase, now);
     AROSAppleTimerUnlock(TimerBase);
     reply_completed(&completed, SysBase);
+    if (vblank)
+        vblank_Cause(SysBase);
     return deadline;
 }
 
@@ -203,8 +226,12 @@ static int counter_Init(struct TimerBase *LIBBASE)
     LIBBASE->tb_Platform.tb_LastTime = KrnPlatformTimerRead();
     LIBBASE->tb_eclock_rate = timer->kpt_Frequency;
     SysBase->ex_EClockFrequency = timer->kpt_Frequency;
+    /* Nominal software VBlank heartbeat; this is not a scanout timestamp. */
     if (SysBase->VBlankFrequency == 0)
-        SysBase->VBlankFrequency = 50;
+        SysBase->VBlankFrequency = 60;
+    LIBBASE->tb_Platform.tb_VBlankTicks = timer->kpt_Frequency / SysBase->VBlankFrequency;
+    LIBBASE->tb_Platform.tb_NextVBlank = LIBBASE->tb_Platform.tb_LastTime +
+        LIBBASE->tb_Platform.tb_VBlankTicks;
     if ((timer->kpt_Flags & KPTF_DEADLINE_READY) != 0) {
         struct AROSAppleTimerControl control;
 
@@ -218,6 +245,7 @@ static int counter_Init(struct TimerBase *LIBBASE)
             (control.flags & AROS_APPLE_TIMER_CONTROL_CLAIMED) == 0)
             return FALSE;
         LIBBASE->tb_Platform.tb_DeadlineOwned = 1;
+        AROSAppleTimerProgram(LIBBASE);
     }
     return TRUE;
 }

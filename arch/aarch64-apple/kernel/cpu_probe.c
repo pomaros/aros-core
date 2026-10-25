@@ -6,10 +6,12 @@
 #include "cpu_monitor.h"
 #include "kernel_intern.h"
 #include <aros/apple/runtime.h>
+#if defined(AROS_VM_GUEST) && AROS_VM_GUEST
 #include "gic.h"
 #include "vm_irq.h"
 static struct AROSGIC secondary_gic;
 static struct AROSGIC *boot_gic;
+#endif
 #define PROBE_REQUEST_SGI 14U
 #define PROBE_REPLY_SGI 15U
 static uint32_t ipi_sent,ipi_handled,ipi_acked,ipi_fault;
@@ -51,6 +53,7 @@ void AROSCPUProbeIPICounters(uint32_t *sent,uint32_t *handled,uint32_t *acked)
 /* Private secondary IRQ entry saves all GPRs. No Exec calls or SIMD use. */
 void AROSCPUProbeHandleIRQ(void)
 {
+#if defined(AROS_VM_GUEST) && AROS_VM_GUEST
     AROSCPUCurrentState(AROS_CPU_BUSY);
     uint32_t token=AROSGICAcknowledge(&secondary_gic),id=token&0x3ff;
     if (id<1020) {
@@ -65,11 +68,14 @@ void AROSCPUProbeHandleIRQ(void)
         AROSGICEnd(&secondary_gic,token);
     }
     AROSCPUCurrentState(__atomic_load_n(&command,__ATOMIC_ACQUIRE)==1?AROS_CPU_BUSY:AROS_CPU_IDLE);
+#endif
 }
 static uintptr_t send_request(void)
 {
+#if defined(AROS_VM_GUEST) && AROS_VM_GUEST
     if (!boot_gic || !AROSGICSendIPI(boot_gic,PROBE_REQUEST_SGI,target)) return 0;
     __atomic_add_fetch(&ipi_sent,1,__ATOMIC_RELAXED);
+#endif
     return 1;
 }
 static __attribute__((noreturn)) void probe_start_failed(void)
@@ -92,6 +98,7 @@ void AROSCPUProbeMain(void)
         local->return_pc || local->proof || local->idle_active) {
         probe_start_failed();
     }
+#if defined(AROS_VM_GUEST) && AROS_VM_GUEST
     const void *blob;uint64_t bytes;struct AROSEarlyFDT tree;
     if (!boot_gic || !AROSAppleKernelRetainedDeviceTree(&blob,&bytes) ||
         !AROSEarlyFDTOpen(&tree,blob,bytes) ||
@@ -100,16 +107,21 @@ void AROSCPUProbeMain(void)
         !AROSGICEnable(&secondary_gic,PROBE_REQUEST_SGI,1)) {
         probe_start_failed();
     }
+#endif
     AROSCPUCurrentState(AROS_CPU_IDLE);
     __atomic_store_n(&ready,1,__ATOMIC_RELEASE);
+#if defined(AROS_VM_GUEST) && AROS_VM_GUEST
     __asm__ volatile("msr daifclr,#2":::"memory");
+#endif
     unsigned previous=0;
     for (;;) {
         unsigned cmd=__atomic_load_n(&command,__ATOMIC_ACQUIRE);
         if (cmd==3) {
             __asm__ volatile("msr daifset,#3":::"memory");
+#if defined(AROS_VM_GUEST) && AROS_VM_GUEST
             AROSGICDisable(&secondary_gic,PROBE_REQUEST_SGI);
             AROSGICClearPending(&secondary_gic,PROBE_REQUEST_SGI);
+#endif
             AROSCPUCurrentState(AROS_CPU_OFFLINE);
             (void)psci(UINT64_C(0x84000002),0,0,0);
             AROSCPUCurrentState(AROS_CPU_IDLE); /* CPU_OFF returned: still executing. */
@@ -118,7 +130,9 @@ void AROSCPUProbeMain(void)
         if (cmd!=previous) {
             __asm__ volatile("msr daifset,#2":::"memory");
             AROSCPUCurrentState(cmd==1?AROS_CPU_BUSY:AROS_CPU_IDLE);previous=cmd;
+#if defined(AROS_VM_GUEST) && AROS_VM_GUEST
             __asm__ volatile("msr daifclr,#2":::"memory");
+#endif
         }
         if (cmd==1) __asm__ volatile("yield");
         else __asm__ volatile("wfe");
@@ -137,8 +151,10 @@ uintptr_t AROSCPUProbeStart(void)
     struct AROSAppleRuntimeLocal *boot_local=AROSAppleRuntimeLocal();
     uint32_t boot_active=boot_local->active,boot_irq=boot_local->irq_ready;
     uint32_t boot_fiq=boot_local->fiq_ready,boot_depth=boot_local->interrupt_depth;
+#if defined(AROS_VM_GUEST) && AROS_VM_GUEST
     boot_gic=AROSVMKernelBootController();
     if (!boot_gic || boot_gic->version!=3) { probe_cpu=AROS_CPU_MAX;return 0; }
+#endif
     hvc=t->psci_hvc;
     int64_t version=psci(0x84000000,0,0,0);
     if (version<2) { probe_cpu=AROS_CPU_MAX;return 0; }
@@ -153,9 +169,11 @@ uintptr_t AROSCPUProbeStart(void)
     uint64_t frequency;__asm__ volatile("mrs %0,cntfrq_el0":"=r"(frequency));
     uint64_t end=now()+frequency;
     while (!__atomic_load_n(&ready,__ATOMIC_ACQUIRE) && now()<end) __asm__ volatile("yield");
+#if defined(AROS_VM_GUEST) && AROS_VM_GUEST
     if (__atomic_load_n(&ready,__ATOMIC_ACQUIRE)!=1 ||
         !AROSGICClearPending(boot_gic,PROBE_REPLY_SGI) ||
         !AROSGICEnable(boot_gic,PROBE_REPLY_SGI,1) || !send_request()) return 0;
+#endif
     return __atomic_load_n(&ready,__ATOMIC_ACQUIRE)==1 &&
         boot_local==AROSAppleRuntimeLocal() && boot_local->active==boot_active &&
         boot_local->irq_ready==boot_irq && boot_local->fiq_ready==boot_fiq &&
@@ -194,8 +212,10 @@ uintptr_t AROSCPUProbeStop(void)
     uint64_t frequency;__asm__ volatile("mrs %0,cntfrq_el0":"=r"(frequency));
     uint64_t end=now()+frequency;
     while (now()<end) if (psci(UINT64_C(0xc4000004),target,0,0)==1) {
+#if defined(AROS_VM_GUEST) && AROS_VM_GUEST
         AROSGICDisable(boot_gic,PROBE_REPLY_SGI);
         AROSGICClearPending(boot_gic,PROBE_REPLY_SGI);
+#endif
         probe_cpu=AROS_CPU_MAX;return 1;
     }
     /* Keep the kernel mapped if firmware has not stopped the secondary. */

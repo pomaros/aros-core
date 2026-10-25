@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 2002, The AROS Development Team.
     All rights reserved.
     
@@ -11,6 +12,7 @@
 #include <proto/exec.h>
 #include <proto/intuition.h>
 #include <proto/graphics.h>
+#include <proto/gadtools.h>
 #include <proto/keymap.h>
 #include <proto/utility.h>
 
@@ -223,4 +225,52 @@ ULONG IsObjectVisible(Object * child, struct Library * MUIMasterBase)
             return FALSE;
     }
     return TRUE;
+}
+
+/* Screen metrics stay in points in attributes/preferences. Convert only when
+ * calculating layout, so repeated layout and live scale changes cannot compound.
+ */
+ULONG zune_screen_scale(struct Screen *screen)
+{
+    IPTR scale = 100;
+    if (screen)
+        GetAttr(SA_Scale, (Object *)screen, &scale);
+    return scale;
+}
+
+ULONG zune_legacy_factor(struct Screen *screen)
+{
+    IPTR factor = 1;
+    if (screen) GetAttr(SA_LegacyScaleFactor, (Object *)screen, &factor);
+    return factor;
+}
+
+LONG zune_scale_value(LONG points, ULONG scale)
+{
+    if (points == MUI_MAXMAX)
+        return points;
+    return (points * scale + 50) / 100;
+}
+
+LONG zune_scale(Object *obj, LONG points)
+{
+    struct MUI_RenderInfo *mri = muiRenderInfo(obj);
+    return zune_scale_value(points, zune_render_scale(mri));
+}
+
+/* One immutable setup snapshot and its nested resources remain borrowed until
+ * screen close, including during in-flight drawing and queued notifications. */
+const struct ScreenRenderContext *zune_screen_context(struct Screen *screen)
+{
+    IPTR context = 0;
+    if (!screen || !GetAttr(SA_RenderContext, (Object *)screen, &context)) return NULL;
+    return (const struct ScreenRenderContext *)context;
+}
+
+APTR zune_visualinfo(struct MUI_RenderInfo *mri)
+{
+    if (!mri || !mri->mri_RenderContext) return NULL;
+    struct TagItem tags[] = {{GTVI_RenderContext, (IPTR)mri->mri_RenderContext},
+        {GTVI_Logical, !mri->mri_ScaleAware}, {TAG_DONE, 0}};
+    return GetVisualInfoA(mri->mri_Screen, tags);
 }

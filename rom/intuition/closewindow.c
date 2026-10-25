@@ -1,4 +1,6 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
+    Licensed under the AROS Public License, version 1.1.
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
 */
@@ -8,6 +10,10 @@
 #include <proto/layers.h>
 #include <proto/timer.h>
 #include "intuition_intern.h"
+#include "systemrequestscale.h"
+#include "windowframe.h"
+#include "windowcomposition.h"
+#include "windowscale.h"
 #include "inputhandler.h"
 #include "inputhandler_actions.h"
 #include "inputhandler_support.h"
@@ -286,6 +292,7 @@ VOID int_closewindow(struct CloseWindowActionMsg *msg,
         EndRequest(msg->window->FirstRequest, msg->window);*/
 
     lock = LockIBase (0);
+    DetachSystemRequesterScale(msg->window, IntuitionBase);
 
     if (msg->window == IntuitionBase->ActiveWindow)
         IntuitionBase->ActiveWindow = NULL;
@@ -383,6 +390,7 @@ VOID int_closewindow(struct CloseWindowActionMsg *msg,
     if (msg->window->IFont)
         CloseFont (msg->window->IFont);
 
+
     #ifdef DAMAGECACHE
     if (IW(msg->window)->trashregion) DisposeRegion(IW(msg->window)->trashregion);
     #endif
@@ -413,6 +421,10 @@ VOID int_closewindow(struct CloseWindowActionMsg *msg,
     /* Let the driver clean up. Driver will dealloc msg->window's rastport */
     intui_CloseWindow (msg->window, IntuitionBase);
 
+    /* Frame generations send WDM_EXITWINDOW to window->WScreen's decorator,
+     * so they must be retired before that pointer is poisoned below. */
+    FreeWindowFrames(msg->window, IntuitionBase);
+
     /* jDc: trash the screen pointer to avoid unnecessary checks in WindowValid() and
        memory corruption */
     msg->window->WScreen = (struct Screen *)0xC0DEBAD0;
@@ -426,21 +438,8 @@ VOID int_closewindow(struct CloseWindowActionMsg *msg,
     }
 
     /* Remove the Window Outline Shape */
+    FreeWindowScaleShapes(msg->window, IntuitionBase);
     if (((struct IntWindow *)msg->window)->OutlineShape) DisposeRegion(((struct IntWindow *)msg->window)->OutlineShape);
-    /* Push ExitScreen Message to the Screensdecoration Class */
-    struct wdpExitWindow       wemsg;
-
-    wemsg.MethodID             = WDM_EXITWINDOW;
-    wemsg.wdp_UserBuffer       = ((struct IntWindow *)msg->window)->DecorUserBuffer;
-    wemsg.wdp_TrueColor        = (((struct IntScreen *)screen)->DInfo.dri_Flags & DRIF_DIRECTCOLOR) ? TRUE : FALSE;
-
-    DoMethodA(((struct IntScreen *)(screen))->WinDecorObj, (Msg)&wemsg);
-
-    if (((struct IntWindow *)msg->window)->DecorUserBuffer)
-    {
-        FreeMem((APTR)((struct IntWindow *)msg->window)->DecorUserBuffer, ((struct IntWindow *)msg->window)->DecorUserBufferSize);
-    }
-
 
     /* Free memory for the msg->window */
     FreeMem (msg->window, sizeof(struct IntWindow));
@@ -471,8 +470,11 @@ void intui_CloseWindow (struct Window * w,
         /* not a GZZ window */
         if (WLAYER(w))
             DeleteLayer(0, WLAYER(w));
-        DeinitRastPort(w->BorderRPort);
-        FreeMem(w->BorderRPort, sizeof(struct RastPort));
+        if (w->BorderRPort)
+        {
+            DeinitRastPort(w->BorderRPort);
+            FreeMem(w->BorderRPort, sizeof(struct RastPort));
+        }
     }
     else
     {
@@ -485,6 +487,11 @@ void intui_CloseWindow (struct Window * w,
         if (NULL != BLAYER(w))
             DeleteLayer(0, BLAYER(w));
     }
+
+    WLAYER(w) = BLAYER(w) = NULL;
+    w->WLayer = NULL;
+    w->RPort = w->BorderRPort = NULL;
+    WindowCompositionDispose(w, IntuitionBase);
 
     if (IW(w)->free_pointer)
         DisposeObject(IW(w)->pointer);

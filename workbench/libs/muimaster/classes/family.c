@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * Licensed under the AROS Public License (APL) Version 1.1. */
 /*
     Copyright (C) 1999, David Le Corfec.
     Copyright (C) 2002-2015, The AROS Development Team.
@@ -459,6 +461,8 @@ BOOPSI_DISPATCHER(IPTR, Family_Dispatcher, cl, obj, msg)
 {
     switch (msg->MethodID)
     {
+    case MUIM_ScaleContextChildren:
+        return (IPTR)&((struct MUI_FamilyData *)INST_DATA(cl, obj))->children;
     case OM_NEW:
         return Family__OM_NEW(cl, obj, (struct opSet *)msg);
 
@@ -516,5 +520,6 @@ const struct __MUIBuiltinClass _MUI_Family_desc =
     MUIC_Family,
     MUIC_Notify,
     sizeof(struct MUI_FamilyData),
-    (void *) Family_Dispatcher
+    (void *) Family_Dispatcher,
+    MUI_CLASS_SCALE_AWARE
 };

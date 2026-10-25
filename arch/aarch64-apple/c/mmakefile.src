@@ -1,0 +1,82 @@
+# Copyright (C) 2026 John KNIPPER. All rights reserved.
+# Licensed under the AROS Public License (APL) Version 1.1.
+include $(SRCDIR)/config/aros.cfg
+
+# Shared commands; hardware providers and native tools have separate targets.
+
+#MM apple-loadresident : includes linklibs
+%build_prog mmake=apple-loadresident \
+  progname=LoadResident targetdir=$(AROS_C) \
+  files="LoadResident"
+
+#MM apple-systemupdate : includes linklibs
+%build_prog mmake=apple-systemupdate \
+  progname=SystemUpdate targetdir=$(AROS_C) \
+  files="SystemUpdate system_update_index"
+
+#MM apple-reload : includes linklibs
+%build_prog mmake=apple-reload \
+  progname=Reload targetdir=$(AROS_C) \
+  files="Reload persistence_sha256"
+
+#MM apple-magnifier : includes linklibs
+%build_prog mmake=apple-magnifier \
+  progname=Magnifier targetdir=$(AROS_TOOLS) \
+  files="Magnifier"
+
+#MM apple-entropydiag : includes linklibs kernel-entropy-includes
+%build_prog mmake=apple-entropydiag \
+  progname=EntropyDiag targetdir=$(AROS_C) \
+  files="EntropyDiag" uselibs="posixc"
+
+#MM apple-clockready : includes linklibs
+%build_prog mmake=apple-clockready \
+  progname=ClockReady targetdir=$(AROS_C) \
+  files="ClockReady"
+
+#MM apple-fontdiag : includes linklibs
+%build_prog mmake=apple-fontdiag \
+  progname=FontDiag targetdir=$(AROS_C) \
+  files="FontDiag"
+
+#MM apple-cpuidle : includes linklibs
+%build_prog mmake=apple-cpuidle \
+  progname=CPUIdle targetdir=$(AROS_C) \
+  files="CPUIdle"
+
+#MM apple-klog : includes linklibs
+%build_prog mmake=apple-klog \
+  progname=KLog targetdir=$(AROS_C) \
+  files="KLog"
+
+#MM apple-crashlog : includes linklibs
+%build_prog mmake=apple-crashlog \
+  progname=CrashLog targetdir=$(AROS_C) \
+  files="CrashLog"
+
+#MM apple-faultdiag : includes linklibs
+%build_prog mmake=apple-faultdiag \
+  progname=FaultDiag targetdir=$(AROS_C) \
+  files="FaultDiag"
+
+#MM apple-jitdiag : includes linklibs kernel-kernel-includes
+%build_prog mmake=apple-jitdiag \
+  progname=JitDiag targetdir=$(AROS_C) \
+  files="JitDiag"
+
+#MM apple-locksnoop : includes linklibs
+%build_prog mmake=apple-locksnoop \
+  progname=LockSnoop targetdir=$(AROS_C) \
+  files="LockSnoop"
+
+#MM apple-memprobe : includes linklibs
+%build_prog mmake=apple-memprobe \
+  progname=MemProbe targetdir=$(AROS_C) \
+  files="MemProbe"
+
+#MM apple-stallwatch : includes linklibs
+%build_prog mmake=apple-stallwatch \
+  progname=StallWatch targetdir=$(AROS_C) \
+  files="StallWatch"
+
+%common

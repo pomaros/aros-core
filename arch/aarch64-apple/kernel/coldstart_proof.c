@@ -41,11 +41,15 @@
 #include <aros/apple/platformtimer.h>
 #include "cpu_monitor.h"
 #include "guard_proof.h"
+#include <aros/apple/crashlog.h>
 #include <proto/kernel.h>
 #include <aros/kernel.h>
 #include <libraries/expansionbase.h>
 #include <proto/exec.h>
 #include <exec_platform.h>
+#if defined(__AROSEXEC_SMP__)
+#include "smp.h"
+#endif
 #include <resources/filesysres.h>
 #include <resources/task.h>
 #include <workbench/startup.h>
@@ -73,16 +77,21 @@ static APTR proof_task_base;
 #include <stdint.h>
 
 #include "page_allocator.h"
+#include "code_window.h"
 #include "vm_irq.h"
+#include "coldstart_platform.h"
 #include <resources/kernel.h>
 #include "kernel_intern.h"
 #include "cpu_monitor.h"
 
+static const struct ColdStartPlatform *const platform = COLDSTART_PLATFORM;
 static struct AROSAppleColdStartProof *active_proof;
 static struct DosLibrary *proof_dos_base;
 static APTR proof_bootloader_base;
 static struct GfxBase *proof_graphics_base;
 static struct IntuitionBase *proof_intuition_base;
+#define WIDGET_DESKTOP_VAR_ONLY
+#include "../include/widgetstart.h"
 
 struct graphics_probe_state {
     struct View view;
@@ -460,6 +469,7 @@ AROS_UFP3S(APTR, dos_takeover_observer,
  * to the bundle, nothing else. Set once, before the resident checks.
  */
 static int vm_graphics_profile_flag;
+static int vm_pci_profile_flag;
 static int desktop_profile_flag;
 
 /* Built only after the ROM scan so it cannot alter the production resident set. */
@@ -813,15 +823,35 @@ static int task_is_live(const struct Task *task)
  * lock, segment and reply port until the observer exits to stage two.  The
  * G4 candidate intentionally halts with Wanderer alive for the final capture.
  */
+static void hold_puts(const char *text);
+
+/* Crashes the kernel suspended so far (aros/apple/crashlog.h). */
+static uint64_t crash_suspended(void)
+{
+    IPTR attr = KrnGetSystemAttr(AROS_APPLE_KATTR_CRASH_LOG);
+    const struct AROSAppleCrashLog *log = (attr != (IPTR)-1 && attr != 0) ?
+        (const struct AROSAppleCrashLog *)attr : NULL;
+
+    return log != NULL && log->version == AROS_APPLE_CRASH_LOG_VERSION ?
+        log->suspended : 0;
+}
+
 static int run_wanderer(
     struct AROSAppleColdStartProof *proof, BPTR sys_lock)
 {
+    int fault_required = 0;
     static const char program_name[] = "Wanderer";
+    /* Wanderer opens datatypes from its own task, and a datatype's first
+       open runs the InitLib of its whole library chain on this stack
+       (png.datatype, png.library, z1.library, posixc.library) on top of
+       MUI's. Past its stack, the switch-time stack check suspends
+       Wanderer for good while it holds the loader's lock, and every
+       library open in the system waits behind it. */
     static struct TagItem launch_tags[] = {
         { NP_Seglist, 0 },
         { NP_Name, (IPTR)program_name },
         { NP_Priority, 1 },
-        { NP_StackSize, AROS_STACKSIZE * 2U },
+        { NP_StackSize, 256U * 1024U },
         { NP_Input, (IPTR)BNULL },
         { NP_Output, (IPTR)BNULL },
         { NP_Error, (IPTR)BNULL },
@@ -887,6 +917,19 @@ static int run_wanderer(
         &wanderer_launch.startup.sm_Message);
     proof->detail = UINT32_C(0x905);
 
+    /* The task-fault qualification: the fixture carries FAULT.REQ and its
+     * startup runs a command that crashes in a process of its own. The
+     * kernel suspends that process (task_crash.c): the crash log then
+     * counts a suspended crash, and the desktop stays exactly as the
+     * ordinary run requires it, backdrop in front and no requester, with
+     * the Initial CLI gone as always. */
+    {
+        BPTR requirement = Lock("SYS:FAULT.REQ", SHARED_LOCK);
+        fault_required = requirement != BNULL;
+        if (requirement != BNULL)
+            UnLock(requirement);
+    }
+
     /* Let Initial CLI finish EndCLI and let the priority-one Wanderer reach
      * its normal event wait before the observer tests final foreground state. */
     SetTaskPri(FindTask(NULL), -1);
@@ -897,10 +940,14 @@ static int run_wanderer(
         struct Window *candidate;
         struct Window *front_window;
         int requester = 0;
+        int failure_in_front = 0;
 
-        /* GPU commands sleep until completion. Reschedule alone can exhaust
-         * this loop while every desktop task waits on IO. Sample at real timer
-         * ticks: retain all readiness conditions and 64 stable observations. */
+        /* Opening Wanderer performs asynchronous graphics, filesystem and
+         * datatype work on both VM and native targets. A bare Reschedule()
+         * loop can consume all 1024 observations before those tasks finish,
+         * especially when the installed Workbench uses a scaled screen. Pace
+         * the observer with real timer ticks so the bound measures elapsed
+         * time and retains all readiness conditions plus 64 stable samples. */
         Delay(1);
         intuition_lock = LockIBase(0);
         screen = proof_intuition_base != NULL ?
@@ -915,6 +962,9 @@ static int run_wanderer(
                 name_equal((const char *)candidate->Title,
                     "Software Failure!")))
                 requester = 1;
+            if (candidate == front_window && candidate->Title != NULL &&
+                name_equal((const char *)candidate->Title, "Software Failure!"))
+                failure_in_front = 1;
             if (screen != NULL && candidate->LeftEdge == 0 &&
                 candidate->Title == NULL &&
                 candidate->Width == screen->Width &&
@@ -929,12 +979,15 @@ static int run_wanderer(
             !task_is_live(wanderer_initial_cli_task))
             proof->wanderer_initial_cli_closed = 1;
         if (FindTask(program_name) != NULL && window != NULL &&
-            window == front_window && !requester &&
+            window == front_window && !requester && !failure_in_front &&
+            (!fault_required || crash_suspended() != 0) &&
             proof->wanderer_initial_cli_closed == 1)
             ++stable;
         else
             stable = 0;
     }
+    if (fault_required && stable == 64U)
+        hold_puts("[G4F] task fault suspended, desktop alive PASS\n");
 
     proof->wanderer_seglist = (uintptr_t)BADDR(wanderer_launch.seglist);
     proof->wanderer_process = (uintptr_t)FindTask(program_name);
@@ -968,8 +1021,6 @@ extern int AROSAppleKernelChosenProperty(
     const void *fdt, uint64_t size, const char *name,
     const uint8_t **value, uint32_t *length);
 extern int AROSAppleKernelRetainedDeviceTree(const void **fdt, uint64_t *size);
-extern void AROSAppleKernelPublishBattery(
-    const struct AROSAppleBatteryInfo *sample);
 extern void AROSAppleKernelPublishSystemTime(
     const struct AROSAppleSystemTimeInfo *info);
 
@@ -984,6 +1035,7 @@ static void hold_zero(void *target, size_t size)
 extern void AROSAppleKernelScreenLogStop(void);
 
 
+#if defined(AROS_VM_GUEST) && AROS_VM_GUEST
 static volatile uint32_t irq_probe_first, irq_probe_second;
 static void irq_probe_callback(void *data, void *cookie)
 {
@@ -991,6 +1043,7 @@ static void irq_probe_callback(void *data, void *cookie)
     if (cookie != (void *)(uintptr_t)0x495251) *count = UINT32_MAX;
     else ++*count;
 }
+#endif
 
 static void hold_puts(const char *text)
 {
@@ -1040,7 +1093,6 @@ static uintptr_t proof_caller_spsr(void)
  * 0 on a violation (FIQ on physical Apple, IRQ on the VM).
  */
 extern volatile uint64_t AROSAppleKernelLastDispatchSPSR;
-extern volatile uint32_t AROSAppleKernelIdleMode;
 extern volatile uint64_t AROSAppleKernelIdleEntries;
 
 static int prove_dispatch_masks(struct timerequest *request, ULONG frequency)
@@ -1171,13 +1223,6 @@ static void log_residents(void)
     }
 }
 
-/*
- * What the interrupt controller did. The counters belong to the kernel's own
- * controller state, not to any driver, so a device interrupt counted here was
- * acknowledged from the event register and dispatched through the kernel's
- * handler chain. Reported when they move and once at the end of the hold.
- */
-
 static uint64_t hold_counter(void)
 {
     uint64_t value;
@@ -1204,6 +1249,76 @@ static uint64_t hold_frequency(void)
 static struct Device *alive_timer_device;
 /* The hold's own timer request; the drain sets the system time through it. */
 static struct timerequest *alive_timer_request;
+
+/* Seconds from 1970-01-01 to AROS's epoch, 1978-01-01. */
+#define HOLD_UNIX_TO_AMIGA UINT64_C(252460800)
+
+/*
+ * A virtual machine has no PMIC clock. Its UEFI loader read the firmware's
+ * wall clock (GetTime) and the virtual counter at the same moment, and passed
+ * both in /chosen (aros,boot-unix-seconds, aros,boot-counter). The system
+ * time is set from them, adding the time elapsed since; without them it
+ * stays at the boot volume's date.
+ */
+static int rtc_disabled_by_cell(void)
+{
+    const void *fdt;
+    uint64_t size;
+    const uint8_t *value;
+    uint32_t length;
+
+    if (!AROSAppleKernelRetainedDeviceTree(&fdt, &size) ||
+        !AROSAppleKernelChosenProperty(fdt, size, "aros,desktop-rtc",
+            &value, &length))
+        return 0;
+    return AROSAppleKernelChosenDecimal("aros,desktop-rtc") == 0;
+}
+
+static void publish_system_time(uint64_t unix_seconds, int32_t rtc_status)
+{
+    struct AROSAppleSystemTimeInfo info;
+
+    hold_zero(&info, sizeof(info));
+    info.version = AROS_APPLE_SYSTEM_TIME_VERSION;
+    info.size = sizeof(info);
+    info.rtc_status = rtc_status;
+    if (unix_seconds != 0) {
+        info.flags = AROS_APPLE_SYSTEM_TIME_RTC_SET;
+        info.unix_seconds = unix_seconds;
+        info.counter_at_set = hold_counter();
+    }
+    AROSAppleKernelPublishSystemTime(&info);
+}
+
+static uint64_t set_system_time_from_firmware(void)
+{
+    uint64_t firmware_seconds =
+        AROSAppleKernelChosenDecimal("aros,boot-unix-seconds");
+    uint64_t firmware_counter =
+        AROSAppleKernelChosenDecimal("aros,boot-counter");
+    uint64_t now = hold_counter();
+    uint64_t frequency = hold_frequency();
+    uint64_t ticks, unix_seconds;
+
+    if (firmware_seconds < HOLD_UNIX_TO_AMIGA || firmware_counter == 0 ||
+            firmware_counter > now || frequency == 0 ||
+            alive_timer_request == NULL) {
+        hold_puts("[KI] rtc unavailable: no firmware clock\n");
+        return 0;
+    }
+    ticks = now - firmware_counter;
+    unix_seconds = firmware_seconds + ticks / frequency;
+    alive_timer_request->tr_node.io_Command = TR_SETSYSTIME;
+    alive_timer_request->tr_time.tv_secs =
+        (ULONG)(unix_seconds - HOLD_UNIX_TO_AMIGA);
+    alive_timer_request->tr_time.tv_micro =
+        (ULONG)(((ticks % frequency) * 1000000U) / frequency);
+    DoIO(&alive_timer_request->tr_node);
+    hold_puts("[KI] rtc from the firmware clock: unix ");
+    hold_put_decimal(unix_seconds);
+    hold_puts("\n");
+    return unix_seconds;
+}
 
 /*
  * The injection mailbox. The host writes slots and advances head through
@@ -1297,367 +1412,6 @@ static void inject_drain(struct IOStdReq *input_request)
     hold_puts("[KI] inject drained\n");
 }
 
-static void put_two_digits(char *at, uint32_t value)
-{
-    at[0] = (char)('0' + (value / 10U) % 10U);
-    at[1] = (char)('0' + value % 10U);
-}
-
-/* The drive line of the widget: model and partition table, from the proof. */
-static char alive_drive[40];
-static uint32_t alive_drive_length;
-
-/* The live sensor readings the alive widget shows, refreshed on a throttle. */
-static int alive_sensors_ok;
-static uint32_t alive_battery;          /* percent, 0..100 */
-static int32_t alive_temp_tenths;       /* tenths of a degree C */
-static uint32_t alive_millivolts;       /* battery voltage */
-static uint32_t alive_adapter;          /* 1 when the adapter is connected */
-
-static uint32_t append_uint(char *buffer, uint32_t length, uint32_t value);
-
-#define ALIVE_NET_INTERFACE "wl0"
-#define ALIVE_SIOCGIFFLAGS UINT32_C(0xC0206911)
-#define ALIVE_SIOCGIFADDR UINT32_C(0xC0206921)
-#define ALIVE_IFF_UP 0x1
-#define ALIVE_IFF_RUNNING 0x40
-#define ALIVE_AF_INET 2
-#define ALIVE_SOCK_DGRAM 2
-#define ALIVE_WLC_GET_RSSI 127
-#define ALIVE_BWFM_STATS_LVO 21
-
-struct alive_ifreq {
-    char name[16];
-    union {
-        struct {
-            uint8_t length, family;
-            uint16_t port;
-            uint8_t address[4];
-            uint8_t zero[8];
-        } in;
-        int16_t flags;
-        uint8_t raw[16];
-    } u;
-};
-
-static char alive_net[80];
-static uint32_t alive_net_length;
-static char alive_net_logged[80];
-static uint32_t alive_net_logged_length;
-
-static void read_net_status(void)
-{
-    struct Library *SocketBase;
-    APTR BWFMBase;
-    struct alive_ifreq ifr;
-    int32_t rssi = 0;
-    int have_rssi = 0;
-    uint32_t length = 0;
-    const char *state = "NO NET";
-    int s;
-
-    if (FindName(&SysBase->ResourceList, (CONST_STRPTR)"bwfm.resource") == NULL) {
-        alive_net_length = 0;
-        return;
-    }
-    BWFMBase = OpenResource((CONST_STRPTR)"bwfm.resource");
-    if (BWFMBase != NULL &&
-        AROS_LC4(int, BWFMIoctl, AROS_LCA(uint32_t, ALIVE_WLC_GET_RSSI, D0),
-            AROS_LCA(int, 0, D1), AROS_LCA(void *, &rssi, A0),
-            AROS_LCA(uint32_t, sizeof(rssi), D2), APTR, BWFMBase, 5, Bwfm) == 0 &&
-        rssi < 0 && rssi > -120)
-        have_rssi = 1;
-
-    alive_net[length++] = 'W'; alive_net[length++] = 'I';
-    alive_net[length++] = 'F'; alive_net[length++] = 'I';
-    alive_net[length++] = ' ';
-    SocketBase = FindName(&SysBase->LibList, (CONST_STRPTR)"bsdsocket.library") != NULL
-        ? OpenLibrary((CONST_STRPTR)"bsdsocket.library", 4) : NULL;
-    if (SocketBase != NULL) {
-        state = "NO IF";
-        s = AROS_LC3(int, socket, AROS_LCA(int, ALIVE_AF_INET, D0),
-            AROS_LCA(int, ALIVE_SOCK_DGRAM, D1), AROS_LCA(int, 0, D2),
-            struct Library *, SocketBase, 5, BSDSocket);
-        if (s >= 0) {
-            uint32_t index;
-
-            for (index = 0; index < sizeof(ifr); index++)
-                ((volatile uint8_t *)&ifr)[index] = 0;
-            for (index = 0; ALIVE_NET_INTERFACE[index] != '\0'; index++)
-                ifr.name[index] = ALIVE_NET_INTERFACE[index];
-            if (AROS_LC3(int, IoctlSocket, AROS_LCA(int, s, D0),
-                    AROS_LCA(uint32_t, ALIVE_SIOCGIFFLAGS, D1), AROS_LCA(char *, (char *)&ifr, A0),
-                    struct Library *, SocketBase, 19, BSDSocket) == 0) {
-                int16_t flags = ifr.u.flags;
-
-                state = (flags & ALIVE_IFF_UP) == 0 ? "DOWN"
-                      : (flags & ALIVE_IFF_RUNNING) == 0 ? "UP" : "NO ADDR";
-                for (index = 0; index < sizeof(ifr.u); index++)
-                    ((volatile uint8_t *)ifr.u.raw)[index] = 0;
-                if ((flags & ALIVE_IFF_UP) != 0 && (flags & ALIVE_IFF_RUNNING) != 0 &&
-                    AROS_LC3(int, IoctlSocket, AROS_LCA(int, s, D0),
-                        AROS_LCA(uint32_t, ALIVE_SIOCGIFADDR, D1), AROS_LCA(char *, (char *)&ifr, A0),
-                        struct Library *, SocketBase, 19, BSDSocket) == 0 &&
-                    (ifr.u.in.address[0] | ifr.u.in.address[1] |
-                     ifr.u.in.address[2] | ifr.u.in.address[3]) != 0) {
-                    state = NULL;
-                    for (index = 0; index < 4; index++) {
-                        if (index != 0)
-                            alive_net[length++] = '.';
-                        length = append_uint(alive_net, length, ifr.u.in.address[index]);
-                    }
-                }
-            }
-            AROS_LC1(int, CloseSocket, AROS_LCA(int, s, D0),
-                struct Library *, SocketBase, 20, BSDSocket);
-        }
-        CloseLibrary(SocketBase);
-    }
-    if (state != NULL)
-        while (*state != '\0')
-            alive_net[length++] = *state++;
-    if (have_rssi) {
-        alive_net[length++] = ' ';
-        alive_net[length++] = '-';
-        length = append_uint(alive_net, length, (uint32_t)(-rssi));
-        alive_net[length++] = 'D'; alive_net[length++] = 'B';
-    }
-    /* "I<msi> P<poll wakeups> R<rx> T<tx>": whether the interrupt or the
-     * poll task drives the RX pump, and the frames both ways. */
-    if (BWFMBase != NULL) {
-        struct {
-            uint32_t version, size, msi_source, msi_count, poll_ticks, poll_wakeups;
-            uint32_t rx_frames, tx_frames, rx_dropped;
-        } stats;
-
-        if (AROS_LC2(int, BWFMStats, AROS_LCA(void *, &stats, A0),
-                AROS_LCA(uint32_t, sizeof(stats), D0), APTR, BWFMBase,
-                ALIVE_BWFM_STATS_LVO, Bwfm) == 0 && stats.version == 1U) {
-            alive_net[length++] = ' '; alive_net[length++] = 'I';
-            length = append_uint(alive_net, length, stats.msi_count);
-            alive_net[length++] = ' '; alive_net[length++] = 'P';
-            length = append_uint(alive_net, length, stats.poll_wakeups);
-            alive_net[length++] = ' '; alive_net[length++] = 'R';
-            length = append_uint(alive_net, length, stats.rx_frames);
-            alive_net[length++] = ' '; alive_net[length++] = 'T';
-            length = append_uint(alive_net, length, stats.tx_frames);
-        }
-    }
-    alive_net_length = length;
-    /* Each change of state reaches the console once, for the run's verdict. */
-    {
-        /* Compare and copy in one conditional loop: the early-kernel gate
-         * refuses any call to memcpy/memcmp in the cold-start proof, and a
-         * plain copy loop is what clang turns into one. */
-        uint32_t index;
-        int changed = length != alive_net_logged_length;
-
-        for (index = 0; index < length; index++) {
-            if (alive_net_logged[index] != alive_net[index]) {
-                alive_net_logged[index] = alive_net[index];
-                changed = 1;
-            }
-        }
-        if (!changed)
-            return;
-        alive_net_logged_length = length;
-        hold_puts("[KI] net ");
-        alive_net_logged[length] = '\0';
-        hold_puts(alive_net_logged);
-        hold_puts("\n");
-    }
-}
-
-static uint32_t append_uint(char *buffer, uint32_t length, uint32_t value)
-{
-    char digits[10];
-    uint32_t count = 0;
-
-    do {
-        digits[count++] = (char)('0' + value % 10U);
-        value /= 10U;
-    } while (value != 0 && count < sizeof(digits));
-    while (count > 0)
-        buffer[length++] = digits[--count];
-    return length;
-}
-
-/*
- * The panel is 2560 by 1600 and the ROM font is eight pixels tall, so the
- * clock draws its own five-by-seven glyphs at ALIVE_SCALE with RectFill: no
- * font on disk is needed and the digits read from across a room. Only the
- * characters the clock uses exist.
- */
-#define ALIVE_SCALE 5
-#define ALIVE_GLYPH_W 5
-#define ALIVE_GLYPH_H 7
-#define ALIVE_ADVANCE ((ALIVE_GLYPH_W + 1) * ALIVE_SCALE)
-#define ALIVE_TEXT_CHARS 20
-#define ALIVE_DATE_SCALE 2
-#define ALIVE_DATE_CHARS 10
-#define ALIVE_LINE_GAP 8
-#define ALIVE_PAD 12
-#define ALIVE_LEFT 1140
-#define ALIVE_TOP 20
-#define ALIVE_WIDTH (ALIVE_TEXT_CHARS * ALIVE_ADVANCE + 2 * ALIVE_PAD + 8)
-#define ALIVE_CPU_ROWS 8
-#define ALIVE_SMALL_LINES (10 + 1 + ALIVE_CPU_ROWS)
-#define ALIVE_HEIGHT (ALIVE_GLYPH_H * ALIVE_SCALE + \
-    ALIVE_SMALL_LINES * (ALIVE_LINE_GAP + ALIVE_GLYPH_H * ALIVE_DATE_SCALE) + \
-    2 * ALIVE_PAD + 24)
-
-#include <aros/monitor_render.h>
-
-
-#define KBD_FPWM_BASE UINT64_C(0x235044000)
-#define KBD_DOMAIN_REGISTER UINT64_C(0x23b7001e0)
-#define KBD_PERIOD 960U
-#define ALIVE_ROW_KBD_MINUS 4U
-#define ALIVE_ROW_KBD_PLUS 10U
-#define ALIVE_ROW_LCD_MINUS 17U
-#define ALIVE_ROW_LCD_PLUS 23U
-#define ALIVE_ROW_VOL_MINUS 30U
-#define ALIVE_ROW_VOL_PLUS 36U
-/* bta2dp.device's command, as <devices/bta2dp.h> defines it */
-#define ALIVE_BTA2DPCMD_SETVOLUME (CMD_NONSTD + 1)
-static char alive_zone[48];
-/* What fits after the date at ALIVE_DATE_SCALE. */
-#define ALIVE_ZONE_CHARS ((ALIVE_WIDTH - 2 * ALIVE_PAD - 8) / \
-    ((ALIVE_GLYPH_W + 1) * ALIVE_DATE_SCALE) - (ALIVE_DATE_CHARS + 2))
-static ULONG alive_zone_length;
-
-static LONG alive_read_env(CONST_STRPTR name, char *buffer, LONG size)
-{
-    BPTR file = Open(name, MODE_OLDFILE);
-    LONG length;
-
-    if (file == BNULL)
-        return 0;
-    length = Read(file, buffer, size - 1);
-    Close(file);
-    if (length < 0)
-        length = 0;
-    buffer[length] = 0;
-    return length;
-}
-
-static void alive_refresh_zone(void)
-{
-    char zone[40], applied[64];
-    LONG zone_length, applied_length, i, field = 0, east = 0, sign = 1;
-    ULONG out = 0;
-    int in_number = 0;
-    char abbreviation[8];
-    ULONG abbreviation_length = 0;
-
-    zone_length = alive_read_env("ENV:Sys/timezone", zone, sizeof(zone));
-    applied_length = alive_read_env("ENV:TimeZone/Applied", applied, sizeof(applied));
-    for (i = 0; i < zone_length && zone[i] != '\n' && out < 30U; i++) {
-        char c = zone[i];
-
-        if (c >= 'a' && c <= 'z')
-            c = (char)(c - 32);
-        if (c == '_')
-            c = ' ';
-        alive_zone[out++] = c;
-    }
-    /* Fields: utc, seconds east, abbreviation. */
-    for (i = 0; i < applied_length; i++) {
-        char c = applied[i];
-
-        if (c == ' ' || c == '\n') {
-            if (in_number)
-                field++;
-            in_number = 0;
-            continue;
-        }
-        if (!in_number)
-            in_number = 1;
-        if (field == 1) {
-            if (c == '-')
-                sign = -1;
-            else if (c >= '0' && c <= '9')
-                east = east * 10 + (c - '0');
-        } else if (field == 2 && abbreviation_length < sizeof(abbreviation)) {
-            if (c >= 'a' && c <= 'z')
-                c = (char)(c - 32);
-            abbreviation[abbreviation_length++] = c;
-        }
-    }
-    if (applied_length > 0) {
-        LONG minutes = (east * sign) / 60;
-        LONG magnitude = minutes < 0 ? -minutes : minutes;
-
-        if (abbreviation_length != 0 && !(abbreviation_length == 1 &&
-                abbreviation[0] == '-')) {
-            ULONG k;
-
-            if (out != 0)
-                alive_zone[out++] = ' ';
-            for (k = 0; k < abbreviation_length; k++)
-                alive_zone[out++] = abbreviation[k];
-        }
-        if (out != 0)
-            alive_zone[out++] = ' ';
-        alive_zone[out++] = minutes < 0 ? '-' : '+';
-        alive_zone[out++] = (char)('0' + (magnitude / 60) / 10);
-        alive_zone[out++] = (char)('0' + (magnitude / 60) % 10);
-        alive_zone[out++] = ':';
-        alive_zone[out++] = (char)('0' + (magnitude % 60) / 10);
-        alive_zone[out++] = (char)('0' + (magnitude % 60) % 10);
-    }
-    alive_zone_length = out;
-}
-
-/*
- * The system's build number, the first line of SYS:S/SystemVersion
- * ("1.0.0.2610012130": the version, then the build's date and time,
- * written by tools/sysupdate). Shown only when that line is a version.
- */
-static char alive_build[24];
-static ULONG alive_build_length;
-
-static void alive_refresh_build(void)
-{
-    char line[32];
-    LONG length = alive_read_env("SYS:S/SystemVersion", line, sizeof(line));
-    LONG i;
-    ULONG out = 0;
-
-    if (length <= 0 || line[0] < '0' || line[0] > '9') {
-        alive_build_length = 0;
-        return;
-    }
-    for (i = 0; i < length && out < sizeof(alive_build); i++) {
-        if (line[i] == '\n' || line[i] == ' ')
-            break;
-        if ((line[i] < '0' || line[i] > '9') && line[i] != '.') {
-            alive_build_length = 0;
-            return;
-        }
-        alive_build[out++] = line[i];
-    }
-    alive_build_length = out;
-}
-
-static struct Window *open_alive_window(void)
-{
-    /* A constant list: a varargs list this long is copied to the stack with
-     * memcpy, which the cold-start proof's code may not call. */
-    static const struct TagItem tags[] = {
-        { WA_Left, ALIVE_LEFT }, { WA_Top, ALIVE_TOP },
-        { WA_Width, ALIVE_WIDTH }, { WA_Height, ALIVE_HEIGHT },
-        { WA_Title, (IPTR)"PomAROS  github.com/pomaros  |  github.com/jonx" },
-        { WA_Flags, WFLG_DRAGBAR | WFLG_DEPTHGADGET | WFLG_SMART_REFRESH |
-            WFLG_NOCAREREFRESH },
-        { WA_Activate, FALSE },
-        { WA_IDCMP, IDCMP_MOUSEBUTTONS },
-        { TAG_DONE, 0 }
-    };
-
-    return OpenWindowTagList(NULL, (struct TagItem *)tags);
-}
-
 static void report_cpu_probe(void)
 {
     const struct AROSCPUTopology *t=AROSCPUMonitorTopology();
@@ -1677,246 +1431,6 @@ static void report_cpu_probe(void)
     }
 }
 
-
-#define ALIVE_PAD_ITEMS 8U
-#define ALIVE_PAD_COLUMN 300
-#define ALIVE_PAD_SQUARE 14
-static void draw_alive(struct Window *window, uint64_t uptime_seconds)
-{
-    struct RastPort *rp;
-    struct Device *timer_device = alive_timer_device;
-    struct timeval now = {0, 0};
-    uint32_t day_seconds;
-    char text[40];
-    uint32_t length = 0;
-    uint32_t digits;
-    char count[12];
-    char date[ALIVE_DATE_CHARS];
-    char sensor[32];
-    uint32_t sensor_length;
-    uint64_t seconds_for_page = uptime_seconds;
-
-    if (window == NULL || window->RPort == NULL || window->WLayer == NULL)
-        return;
-    /*
-     * Text() takes the window's layer lock, and a window drag in progress
-     * holds every layer on the screen. Blocking here would stop the hold
-     * loop, its ticks and its injection drain for the whole drag, so the
-     * clock only draws when the layer is free and skips the second otherwise.
-     * The same task may nest the lock, so Text() then succeeds at once.
-     */
-    if (!AttemptSemaphore(&window->WLayer->Lock))
-        return;
-    rp = window->RPort;
-    if (timer_device != NULL)
-        GetSysTime(&now);
-    day_seconds = (uint32_t)(now.tv_secs % 86400U);
-    put_two_digits(text + 0, day_seconds / 3600U);
-    text[2] = ':';
-    put_two_digits(text + 3, (day_seconds / 60U) % 60U);
-    text[5] = ':';
-    put_two_digits(text + 6, day_seconds % 60U);
-    length = 8;
-    {
-        static const char label[] = "  up ";
-        uint32_t index;
-
-        for (index = 0; label[index] != 0; index++)
-            text[length++] = label[index];
-    }
-    digits = 0;
-    do {
-        count[digits++] = (char)('0' + uptime_seconds % 10U);
-        uptime_seconds /= 10U;
-    } while (uptime_seconds != 0 && digits < sizeof(count));
-    while (digits > 0)
-        text[length++] = count[--digits];
-    text[length++] = 's';
-
-    /* The date, from the same clock: days since 1978-01-01 to a civil date. */
-    {
-        uint64_t days = (uint64_t)now.tv_secs / 86400U + 2922U + 719468U;
-        uint64_t era = days / 146097U;
-        uint64_t doe = days - era * 146097U;
-        uint64_t yoe = (doe - doe / 1460U + doe / 36524U - doe / 146096U) / 365U;
-        uint64_t year = yoe + era * 400U;
-        uint64_t doy = doe - (365U * yoe + yoe / 4U - yoe / 100U);
-        uint64_t mp = (5U * doy + 2U) / 153U;
-        uint64_t day = doy - (153U * mp + 2U) / 5U + 1U;
-        uint64_t month = mp < 10U ? mp + 3U : mp - 9U;
-
-        if (month <= 2U)
-            year++;
-        put_two_digits(date + 0, (uint32_t)(year / 100U));
-        put_two_digits(date + 2, (uint32_t)(year % 100U));
-        date[4] = '-';
-        put_two_digits(date + 5, (uint32_t)month);
-        date[7] = '-';
-        put_two_digits(date + 8, (uint32_t)day);
-    }
-
-
-    sensor_length = 0;
-    if (alive_sensors_ok) {
-        int32_t tenths = alive_temp_tenths;
-
-        sensor_length = append_uint(sensor, sensor_length, alive_battery);
-        sensor[sensor_length++] = '%';
-        if (tenths > INT32_C(-1000000) && tenths < INT32_C(10000)) {
-            sensor[sensor_length++] = ' ';
-            if (tenths < 0) {
-                sensor[sensor_length++] = '-';
-                tenths = -tenths;
-            }
-            sensor_length = append_uint(sensor, sensor_length,
-                (uint32_t)tenths / 10U);
-            sensor[sensor_length++] = '.';
-            sensor[sensor_length++] = (char)('0' + (uint32_t)tenths % 10U);
-            sensor[sensor_length++] = 'C';
-        }
-        if (alive_millivolts != 0) {
-            sensor[sensor_length++] = ' ';
-            sensor_length = append_uint(sensor, sensor_length,
-                alive_millivolts / 1000U);
-            sensor[sensor_length++] = '.';
-            sensor[sensor_length++] =
-                (char)('0' + (alive_millivolts / 100U) % 10U);
-            sensor[sensor_length++] = (char)('0' + (alive_millivolts / 10U) % 10U);
-            sensor[sensor_length++] = 'V';
-        }
-        sensor[sensor_length++] = ' ';
-        sensor[sensor_length++] = alive_adapter ? 'A' : 'B';
-        sensor[sensor_length++] = alive_adapter ? 'C' : 'A';
-        if (!alive_adapter)
-            sensor[sensor_length++] = 'T';
-    }
-
-    SetDrMd(rp, JAM1);
-    SetAPen(rp, 1);
-    alive_draw_text(rp, window->BorderLeft + ALIVE_PAD,
-        window->BorderTop + ALIVE_PAD, text, length, ALIVE_SCALE);
-    alive_draw_text(rp, window->BorderLeft + ALIVE_PAD,
-        window->BorderTop + ALIVE_PAD + ALIVE_GLYPH_H * ALIVE_SCALE +
-            ALIVE_LINE_GAP, date, ALIVE_DATE_CHARS, ALIVE_DATE_SCALE);
-    if (alive_zone_length == 0 || now.tv_secs % 30U == 0) {
-        alive_refresh_zone();
-        alive_refresh_build();
-    }
-    alive_draw_text(rp, window->BorderLeft + ALIVE_PAD +
-                (ALIVE_DATE_CHARS + 2) * (ALIVE_GLYPH_W + 1) * ALIVE_DATE_SCALE,
-            window->BorderTop + ALIVE_PAD + ALIVE_GLYPH_H * ALIVE_SCALE +
-                ALIVE_LINE_GAP, alive_zone,
-            alive_zone_length < ALIVE_ZONE_CHARS ? alive_zone_length : ALIVE_ZONE_CHARS,
-            ALIVE_DATE_SCALE);
-    alive_draw_text(rp, window->BorderLeft + ALIVE_PAD,
-            window->BorderTop + ALIVE_PAD + ALIVE_GLYPH_H * ALIVE_SCALE +
-                2 * ALIVE_LINE_GAP + ALIVE_GLYPH_H * ALIVE_DATE_SCALE,
-            sensor, sensor_length, ALIVE_DATE_SCALE);
-    alive_draw_text(rp, window->BorderLeft + ALIVE_PAD,
-            window->BorderTop + ALIVE_PAD + ALIVE_GLYPH_H * ALIVE_SCALE +
-                3 * ALIVE_LINE_GAP + 2 * ALIVE_GLYPH_H * ALIVE_DATE_SCALE,
-            alive_drive, alive_drive_length, ALIVE_DATE_SCALE);
-    alive_draw_text(rp, window->BorderLeft + ALIVE_PAD,
-            window->BorderTop + ALIVE_PAD + ALIVE_GLYPH_H * ALIVE_SCALE +
-                4 * ALIVE_LINE_GAP + 3 * ALIVE_GLYPH_H * ALIVE_DATE_SCALE,
-            alive_net, alive_net_length, ALIVE_DATE_SCALE);
-    {
-        static const char label[] = "BUILD ";
-        char build[sizeof(label) - 1 + sizeof(alive_build)];
-        ULONG index, length = 0;
-
-        for (index = 0; alive_build_length != 0 && index < sizeof(label) - 1; index++)
-            build[length++] = label[index];
-        for (index = 0; index < alive_build_length; index++)
-            build[length++] = alive_build[index];
-        alive_draw_text(rp, window->BorderLeft + ALIVE_PAD,
-            window->BorderTop + ALIVE_PAD + ALIVE_GLYPH_H * ALIVE_SCALE +
-                6 * ALIVE_LINE_GAP + 5 * ALIVE_GLYPH_H * ALIVE_DATE_SCALE,
-            build, length, ALIVE_DATE_SCALE);
-    }
-    {
-        static struct AROSCPUSample previous[AROS_CPU_MAX];
-        static unsigned valid[AROS_CPU_MAX];
-        static int loads[AROS_CPU_MAX];
-        static uint64_t sampled_second=UINT64_MAX;
-        int refresh=sampled_second!=seconds_for_page;
-        const struct AROSCPUTopology *topology=AROSCPUMonitorTopology();
-        unsigned pages=(topology->count+ALIVE_CPU_ROWS-1)/ALIVE_CPU_ROWS;
-        unsigned first=pages ? (unsigned)(seconds_for_page/5%pages)*ALIVE_CPU_ROWS : 0;
-        LONG left=window->BorderLeft+ALIVE_PAD;
-        LONG top=window->BorderTop+ALIVE_PAD+ALIVE_GLYPH_H*ALIVE_SCALE+
-            11*ALIVE_LINE_GAP+10*ALIVE_GLYPH_H*ALIVE_DATE_SCALE;
-        unsigned active=0;
-        for (unsigned cpu=0;cpu<topology->count;cpu++) {
-            struct AROSCPUSample sample;
-            int sampled=AROSCPUMonitorSample(cpu,&sample);
-            /* Trackpad redraws must not turn one-second load into tiny samples. */
-            if (refresh) {
-                loads[cpu]=(sampled && valid[cpu]) ? AROSCPULoad(&previous[cpu],&sample) : -1;
-                if (sampled) { previous[cpu]=sample;valid[cpu]=1; }
-                else valid[cpu]=0;
-            }
-            if (sampled && sample.state!=AROS_CPU_OFFLINE) ++active;
-            int load=sampled ? loads[cpu] : -1;
-            if (cpu<first || cpu>=first+ALIVE_CPU_ROWS) continue;
-            char row[48];unsigned n=0;
-            row[n++]='C';row[n++]='P';row[n++]='U';row[n++]=' ';
-            n=append_uint(row,n,cpu);row[n++]=' ';
-            const char *state=!topology->cpu[cpu].enabled?"DISABLED":
-                !sampled?"UNAVAILABLE":sample.state==AROS_CPU_OFFLINE?"OFF":
-                AROSCPUProbeCPU(cpu)?"TEST":cpu==topology->boot_cpu?"BOOT":"RUN";
-            for (unsigned j=0;state[j];j++) row[n++]=state[j];
-            if (sampled && sample.state!=AROS_CPU_OFFLINE) {
-                while (n<14) row[n++]=' ';
-                if (load>=0) {
-                    n=append_uint(row,n,(unsigned)load/10);row[n++]='.';
-                    row[n++]=(char)('0'+load%10);row[n++]='%';
-                } else { row[n++]='-';row[n++]='-';row[n++]='-'; }
-            }
-            LONG y=top+(LONG)(cpu-first+1)*(ALIVE_LINE_GAP+ALIVE_GLYPH_H*ALIVE_DATE_SCALE);
-            alive_draw_text(rp,left,y,row,n,ALIVE_DATE_SCALE);
-            unsigned width=load>0 ? (unsigned)load/5 : 0;
-            SetAPen(rp,0);
-            if (width<200) RectFill(rp,left+300+width,y,left+499,y+ALIVE_GLYPH_H*ALIVE_DATE_SCALE-1);
-            SetAPen(rp,1);
-            if (width) RectFill(rp,left+300,y,left+299+width,y+ALIVE_GLYPH_H*ALIVE_DATE_SCALE-1);
-        }
-        for (unsigned row=topology->count-first;row<ALIVE_CPU_ROWS;row++) {
-            LONG y=top+(LONG)(row+1)*(ALIVE_LINE_GAP+ALIVE_GLYPH_H*ALIVE_DATE_SCALE);
-            alive_draw_text(rp,left,y,"",0,ALIVE_DATE_SCALE);
-            SetAPen(rp,0);
-            RectFill(rp,left+300,y,left+499,y+ALIVE_GLYPH_H*ALIVE_DATE_SCALE-1);
-            SetAPen(rp,1);
-        }
-        char title[48];unsigned len=0;
-        const char *prefix="CORES ";
-        while (*prefix) title[len++]=*prefix++;
-        if (AROSCPUMonitorFirmwareValid()) {
-            len=append_uint(title,len,active);title[len++]='/';
-            len=append_uint(title,len,topology->count);
-            const char *suffix=" ACTIVE";
-            while (*suffix) title[len++]=*suffix++;
-            if (pages>1) {
-                title[len++]=' ';len=append_uint(title,len,first/ALIVE_CPU_ROWS+1);
-                title[len++]='/';len=append_uint(title,len,pages);
-            }
-        } else {
-            const char *unknown="FIRMWARE UNKNOWN";
-            while (*unknown) title[len++]=*unknown++;
-        }
-        alive_draw_text(rp,left,top,title,len,ALIVE_DATE_SCALE);
-        sampled_second=seconds_for_page;
-    }
-    ReleaseSemaphore(&window->WLayer->Lock);
-}
-
-/*
- * The distribution on the drive: when ESP:arosfs carries the AROS tree, its
- * directories join the boot assigns behind the RAM ones, so C:, LIBS:,
- * DEVS:, S: and LOCALE: reach everything the RAM image left out, and
- * FONTS: exists. The RAM image stays first and stays the boot volume; a
- * missing directory is skipped, and an absent ESP:arosfs changes nothing.
- */
 /* Inspect assign names without resolving a relative filesystem path or
  * opening a volume requester. -1 leaves startup configuration untouched. */
 static int boot_assign_exists(const char *name)
@@ -1932,63 +1446,8 @@ static int boot_assign_exists(const char *name)
     return found;
 }
 
-static void extend_assign_from_esp(const char *assign, const char *path,
-    int create)
-{
-    BPTR lock = Lock(path, ACCESS_READ);
-    int existing;
-    int added = 0;
-
-    if (lock == BNULL) {
-        hold_puts("[KI] esp assign ");
-        hold_puts(assign);
-        hold_puts(" absent ");
-        hold_puts(path);
-        hold_puts("\n");
-        return;
-    }
-    existing = boot_assign_exists(assign);
-    if (existing > 0) {
-        added = AssignAdd(assign, lock) != 0;
-    } else if (existing == 0 && create) {
-        added = AssignLock(assign, lock) != 0;
-    }
-    if (!added)
-        UnLock(lock);
-    hold_puts("[KI] esp assign ");
-    hold_puts(assign);
-    hold_puts(added ? " + " : " skipped ");
-    hold_puts(path);
-    hold_puts("\n");
-}
-
-static void extend_assigns_from_esp(void)
-{
-    BPTR root = Lock("ESP:arosfs", ACCESS_READ);
-
-    if (root == BNULL) {
-        hold_puts("[KI] esp arosfs absent\n");
-        return;
-    }
-    UnLock(root);
-    extend_assign_from_esp("C", "ESP:arosfs/C", 0);
-    extend_assign_from_esp("LIBS", "ESP:arosfs/Libs", 0);
-    /* Zune's external classes open as LIBS:Zune/<class>, the way the
-     * standard startup adds SYS:Classes to LIBS:. */
-    extend_assign_from_esp("LIBS", "ESP:arosfs/Classes", 0);
-    extend_assign_from_esp("DEVS", "ESP:arosfs/Devs", 0);
-    extend_assign_from_esp("S", "ESP:arosfs/S", 0);
-    extend_assign_from_esp("LOCALE", "ESP:arosfs/Locale", 1);
-    extend_assign_from_esp("FONTS", "ESP:arosfs/Fonts", 1);
-    extend_assign_from_esp("ENVARC", "ESP:arosfs/Prefs/Env-Archive", 1);
-}
-
-/*
- * What a client of the drive sees: the device opens, describes itself,
- * answers a 64-bit read of block 1 with the GPT header, and DOS locks the
- * EFI System Partition the device mounted. Logs one verdict line each.
- */
-
+extern volatile uint32_t AROSAppleKernelIdleMode;
+extern volatile uint64_t AROSAppleKernelIdleEntries;
 
 static void open_shell_and_hold(struct AROSAppleColdStartProof *proof)
 {
@@ -1998,7 +1457,6 @@ static void open_shell_and_hold(struct AROSAppleColdStartProof *proof)
     int forever;
     int hide_shell = AROSAppleKernelChosenDecimal("aros,desktop-hide-shell") == 1;
     uint64_t deadline;
-    struct Window *alive = NULL;
     struct MsgPort *timer_port = NULL;
     struct timerequest *timer_request = NULL;
     struct MsgPort *input_port = NULL;
@@ -2007,12 +1465,16 @@ static void open_shell_and_hold(struct AROSAppleColdStartProof *proof)
     uint64_t started;
     uint64_t next_draw;
     uint64_t next_tick;
-    uint64_t next_net;
 
     /* Each step leaves its number in the proof, so a run that never comes
      * back from here still says where it stopped. */
     proof->detail = UINT32_C(0x9a1);
-    hold_puts("[KI] desktop stable\n");
+    /* The architectural counter runs from the SoC's reset: the time to a
+     * stable desktop, firmware and loader included, for boot-time checks. */
+    hold_puts("[KI] desktop stable at ");
+    hold_put_decimal(hold_frequency() >= 1000 ?
+        hold_counter() / (hold_frequency() / 1000) : 0);
+    hold_puts(" ms after reset\n");
     hold_puts("[KI] idle mode ");
     hold_put_hex(AROSAppleKernelIdleMode);
     hold_puts(" entries ");
@@ -2044,6 +1506,11 @@ static void open_shell_and_hold(struct AROSAppleColdStartProof *proof)
          * Match CLI/NewShell's optional S:Shell-Startup input; successful
          * asynchronous launch owns both streams. Missing startup is normal. */
         BPTR startup = Open("S:Shell-Startup", MODE_OLDFILE);
+        /* SYS: as its current directory, not this task's RAM volume: a
+         * library is looked up in the caller's current directory before
+         * LIBS:, and the RAM image's Libs hold the boot image's copies. The
+         * new process owns the lock. */
+        BPTR home = Lock("SYS:", SHARED_LOCK);
         LONG status = SystemTags("",
             SYS_Asynch, TRUE,
             SYS_Background, FALSE,
@@ -2053,6 +1520,7 @@ static void open_shell_and_hold(struct AROSAppleColdStartProof *proof)
             SYS_UserShell, TRUE,
             SYS_ScriptInput, (IPTR)startup,
             NP_StackSize, AROS_STACKSIZE * 2U,
+            home != BNULL ? NP_CurrentDir : TAG_IGNORE, (IPTR)home,
             TAG_DONE);
 
         /* An asynchronous shell answers with anything but -1 on success;
@@ -2061,6 +1529,8 @@ static void open_shell_and_hold(struct AROSAppleColdStartProof *proof)
             hold_puts("[KI] shell launched\n");
         else {
             hold_puts("[KI] shell launch failed\n");
+            if (home != BNULL)
+                UnLock(home);
             if (startup != BNULL)
                 Close(startup);
             Close(console);
@@ -2077,25 +1547,63 @@ static void open_shell_and_hold(struct AROSAppleColdStartProof *proof)
         OpenDevice(TIMERNAME, UNIT_VBLANK, &timer_request->tr_node, 0) == 0)
         alive_timer_device = timer_request->tr_node.io_Device;
     alive_timer_request = timer_request;
+    /* The wall clock, before anything dates a file or checks a certificate. */
+    set_system_time_from_firmware();
     uintptr_t probe_started=0;
     if (AROSAppleKernelChosenDecimal("aros,smp-probe")==1) {
         unsigned current_cpu=AROSCPUCurrentIndex();
         hold_puts(current_cpu==AROSCPUMonitorTopology()->boot_cpu &&
             AROSCPUCurrentExecIndex()==current_cpu ?
             "[SMP] EL0 CPU anchor PASS\n" : "[SMP] FAIL: EL0 CPU anchor\n");
+#if defined(__AROSEXEC_SMP__)
+        if (AROSAppleSMPPrepare())
+            probe_started=AROSAppleRuntimeSupervisor(AROSAppleSMPStart);
+        if (!probe_started) hold_puts("[SMP] FAIL: Exec secondary startup\n");
+#else
         probe_started=AROSAppleRuntimeSupervisor(AROSCPUProbeStart);
         if (probe_started) hold_puts("[SMP] CPU runtime isolation PASS\n");
         hold_puts(probe_started?"[SMP] secondary execution probe started\n":
             "[SMP] FAIL: secondary execution probe startup\n");
+#endif
     }
-    alive = open_alive_window();
-    hold_puts(alive != NULL ? "[KI] alive window open\n"
-                            : "[KI] alive window failed\n");
-    alive_sensors_ok = 0;
-    alive_temp_tenths = INT32_C(-1000000);
-    alive_drive_length = 0;
-    alive_net_length = 0;
-    alive_net_logged_length = 0;
+    /* The desktop is accepted: the widgets the Startup-Sequence started
+     * (widgetstart.h) may open their windows now. */
+    hold_puts(SetVar(WIDGET_DESKTOP_VAR, "1", 1, GVF_GLOBAL_ONLY)
+        ? "[KI] desktop accepted\n" : "[KI] desktop accepted, variable failed\n");
+#if defined(__AROSEXEC_SMP__)
+    if (probe_started) {
+        /* Sample before and after ordinary work so the log records both
+         * cores' load, rather than only the idle interval afterwards. */
+        report_cpu_probe();
+        if (!AROSAppleSMPWorkProof(timer_request))
+            hold_puts("[SMP] FAIL: ordinary task execution\n");
+        else {
+            hold_puts("[SMP] Exec two-core tasks PASS\n");
+            report_cpu_probe();
+            hold_puts("[SMP] load samples reported\n");
+            /* Keep the measured update visible for a bounded host capture. */
+            timer_request->tr_node.io_Command=TR_ADDREQUEST;
+            timer_request->tr_time.tv_secs=1;
+            timer_request->tr_time.tv_micro=0;
+            DoIO(&timer_request->tr_node);
+        }
+    }
+#endif
+    struct ColdStartServices services = {
+        proof_dos_base, timer_request, hold_puts, hold_put_hex,
+        hold_put_decimal, hold_zero, hold_counter, hold_frequency,
+        set_system_time_from_firmware, rtc_disabled_by_cell,
+        boot_assign_exists, publish_system_time
+    };
+    if (platform != NULL)
+        platform->begin(&services);
+    else if (!rtc_disabled_by_cell()) {
+        uint64_t unix_seconds = set_system_time_from_firmware();
+        publish_system_time(unix_seconds, unix_seconds != 0 ? 0 : -1);
+    } else {
+        hold_puts("[KI] rtc disabled by the cell\n");
+        publish_system_time(0, -1);
+    }
     input_port = CreateMsgPort();
     if (input_port != NULL)
         input_request = (struct IOStdReq *)CreateIORequest(
@@ -2114,7 +1622,8 @@ static void open_shell_and_hold(struct AROSAppleColdStartProof *proof)
     hold_puts(forever ? "[KI] hold endless\n" : "[KI] hold bounded\n");
     next_draw = started;
     next_tick = started;
-    next_net = started + frequency * 5U;
+    if (platform != NULL)
+        platform->start_polling(started, frequency);
     uint64_t starve_last = 0;
     uint64_t starve_ticks = 0;
     uint64_t starve_next = 0;
@@ -2147,35 +1656,18 @@ static void open_shell_and_hold(struct AROSAppleColdStartProof *proof)
         }
 
         inject_drain(input_open ? input_request : NULL);
-        if (alive != NULL && alive->UserPort != NULL) {
-            struct IntuiMessage *message;
-
-            while ((message = (struct IntuiMessage *)GetMsg(alive->UserPort)) != NULL) {
-                ULONG class = message->Class;
-                UWORD code = message->Code;
-                WORD mx = message->MouseX, my = message->MouseY;
-
-                ReplyMsg(&message->ExecMessage);
-                if (class == IDCMP_MOUSEBUTTONS && code == SELECTDOWN) {
-                    draw_alive(alive, (hold_counter() - started) / frequency);
-                }
-            }
-        }
         if (now >= next_tick) {
             /* A trap every two seconds, so the host can act on its queue. */
             hold_puts("[KI] tick\n");
+            if (platform != NULL) platform->report_irqs(1);
             next_tick = now + frequency * 2U;
         }
-
-        if (now >= next_net) {
-            read_net_status();
-            next_net = hold_counter() + frequency * 5U;
-        }
+        if (platform != NULL)
+            platform->poll(now, started, frequency);
         if (now >= next_draw) {
             uint64_t uptime = (now - started) / frequency;
 
             AROSCPUProbeTick(uptime);
-            draw_alive(alive, uptime);
             /* Let observers capture a completed update instead of mid-redraw. */
             report_cpu_probe();
             if (uptime != 0 && (uptime % 60U) == 0) {
@@ -2189,7 +1681,7 @@ static void open_shell_and_hold(struct AROSAppleColdStartProof *proof)
          * Sleep between rounds rather than yield: a Reschedule() loop at
          * priority -5 kept the CPU busy every moment no other task ran, so
          * it never reached the idle loop and never slowed down. 10 ms keeps
-         * the injection mailbox and the once-a-second widget responsive.
+         * the injection mailbox and the once-a-second sampling responsive.
          */
         if (timer_request != NULL && alive_timer_device != NULL) {
             timer_request->tr_node.io_Command = TR_ADDREQUEST;
@@ -2199,6 +1691,17 @@ static void open_shell_and_hold(struct AROSAppleColdStartProof *proof)
         } else
             Reschedule();
     }
+#if defined(__AROSEXEC_SMP__)
+    if (!AROSAppleRuntimeSupervisor(AROSAppleSMPStop)) {
+        hold_puts("[SMP] FAIL: secondary did not stop; retaining kernel\n");
+        for (;;) Reschedule();
+    }
+    if (platform != NULL)
+        platform->finish(timer_request, alive_timer_device != NULL, probe_started);
+    else if (probe_started)
+        hold_puts("[SMP] Exec secondary stopped PASS\n");
+
+#else
     if (probe_started && !AROSCPUProbeDrain())
         hold_puts("[SMP] FAIL: IPI drain timeout\n");
     if (!AROSAppleRuntimeSupervisor(AROSCPUProbeStop)) {
@@ -2210,13 +1713,11 @@ static void open_shell_and_hold(struct AROSAppleColdStartProof *proof)
         hold_puts(AROSCPUProbeIPIPassed()?"[SMP] IPI roundtrip PASS\n":
             "[SMP] FAIL: IPI roundtrip\n");
     }
+#endif
     hold_puts("[KI] hold complete\n");
-
-    alive_sensors_ok = 0;
+    if (platform != NULL) platform->report_irqs(0);
     if (input_open)
         CloseDevice((struct IORequest *)input_request);
-    if (alive != NULL)
-        CloseWindow(alive);
     proof->detail = 0;
 }
 
@@ -2548,6 +2049,8 @@ static int ui_deferred_resident(const struct Resident *resident)
 
     if (resident == NULL)
         return 0;
+    if (platform != NULL && name_equal(resident->rt_Name, platform->input_resident))
+        return 1;
     for (index = 0; index < sizeof(names) / sizeof(names[0]); ++index) {
         if (name_equal(resident->rt_Name, names[index]))
             return 1;
@@ -2588,7 +2091,9 @@ AROS_UFH3S(APTR, dos_takeover_observer,
     LONG boot_signature_read = -1;
     LONG abi_probe_return = -1;
     LONG abi_probe_bad_return = -1;
+#if defined(AROS_VM_GUEST) && AROS_VM_GUEST
     int vm_pci_valid = 1;
+#endif
     BPTR abi_probe = BNULL;
     BPTR abi_output = BNULL;
     BPTR previous_output = BNULL;
@@ -2684,6 +2189,17 @@ AROS_UFH3S(APTR, dos_takeover_observer,
              * initialised by name, not by flag: a driver left off this
              * list simply never runs.
              */
+            if (platform != NULL && index == 3U &&
+                FindResident(platform->input_resident) != NULL) {
+                proof->detail = UINT32_C(0x7af);
+                log_component(platform->input_resident);
+                g3_component = ensure_resident_component(platform->input_resident);
+                log_component(platform->input_resident);
+                if (g3_component == NULL) {
+                    intuition_detail = UINT32_C(0x71f);
+                    break;
+                }
+            }
         }
         proof->detail = UINT32_C(0x501);
         if (g3_component != NULL && intuition_detail == 0)
@@ -2807,9 +2323,9 @@ AROS_UFH3S(APTR, dos_takeover_observer,
     proof->detail = UINT32_C(0x505);
 
     if (dos_base != NULL) {
-        AROSApplePageAllocatorGetStats(&abi_before);
+        AROSAppleCodeMemoryGetStats(&abi_before);
         abi_probe = LoadSeg(marker_path(path, "ABIPROBE"));
-        AROSApplePageAllocatorGetStats(&abi_loaded);
+        AROSAppleCodeMemoryGetStats(&abi_loaded);
     }
     proof->abi_probe_seglist = (uintptr_t)BADDR(abi_probe);
     proof->abi_probe_entry = abi_probe != BNULL ?
@@ -2837,7 +2353,7 @@ AROS_UFH3S(APTR, dos_takeover_observer,
             Close(abi_output);
         }
         UnLoadSeg(abi_probe);
-        AROSApplePageAllocatorGetStats(&abi_unloaded);
+        AROSAppleCodeMemoryGetStats(&abi_unloaded);
         proof->abi_probe_argument_size = (uint64_t)abi_arguments_size;
     }
     proof->abi_probe_return = (uint64_t)(int64_t)abi_probe_return;
@@ -2854,6 +2370,7 @@ AROS_UFH3S(APTR, dos_takeover_observer,
     proof->abi_unload_rw_protections =
         abi_unloaded.rw_protection_count - abi_loaded.rw_protection_count;
     proof->detail = UINT32_C(0x506);
+#if defined(AROS_VM_GUEST) && AROS_VM_GUEST
     /* Optional driver qualification runs outside the transient ABI arena
      * accounting: loaded libraries intentionally remain resident. */
     if (dos_base != NULL) {
@@ -2876,6 +2393,7 @@ AROS_UFH3S(APTR, dos_takeover_observer,
             }
         }
     }
+#endif
 
 
     workbench_required = dos_base != NULL ? workbench_probe_required() : 0;
@@ -2891,10 +2409,10 @@ AROS_UFH3S(APTR, dos_takeover_observer,
         static char tls_arguments[] = "";
 
         proof->tls_probe_requested = 1;
-        AROSApplePageAllocatorGetStats(&tls_before);
+        AROSAppleCodeMemoryGetStats(&tls_before);
         tls_probe = tls_required == 1 ?
             LoadSeg(marker_path(path, "TLSPROBE")) : BNULL;
-        AROSApplePageAllocatorGetStats(&tls_loaded);
+        AROSAppleCodeMemoryGetStats(&tls_loaded);
         proof->tls_probe_seglist = (uintptr_t)BADDR(tls_probe);
         if (tls_probe != BNULL) {
             tls_output = Open("NIL:", MODE_NEWFILE);
@@ -2907,7 +2425,7 @@ AROS_UFH3S(APTR, dos_takeover_observer,
             }
             UnLoadSeg(tls_probe);
         }
-        AROSApplePageAllocatorGetStats(&tls_unloaded);
+        AROSAppleCodeMemoryGetStats(&tls_unloaded);
         proof->tls_probe_return = (uint64_t)(int64_t)tls_probe_return;
         proof->tls_probe_argument_size = 0;
         proof->tls_pages_before = tls_before.pages_in_use;
@@ -2949,10 +2467,10 @@ AROS_UFH3S(APTR, dos_takeover_observer,
             (LONG)(sizeof(small_arguments_sys) - 1U);
 
         proof->small_probe_requested = 1;
-        AROSApplePageAllocatorGetStats(&small_before);
+        AROSAppleCodeMemoryGetStats(&small_before);
         small_probe = small_required == 1 ?
             LoadSeg(marker_path(path, "SMLPROBE")) : BNULL;
-        AROSApplePageAllocatorGetStats(&small_loaded);
+        AROSAppleCodeMemoryGetStats(&small_loaded);
         proof->small_probe_seglist = (uintptr_t)BADDR(small_probe);
         if (small_probe != BNULL) {
             small_output = Open("NIL:", MODE_NEWFILE);
@@ -2968,7 +2486,7 @@ AROS_UFH3S(APTR, dos_takeover_observer,
             }
             UnLoadSeg(small_probe);
         }
-        AROSApplePageAllocatorGetStats(&small_unloaded);
+        AROSAppleCodeMemoryGetStats(&small_unloaded);
         proof->small_probe_return = (uint64_t)(int64_t)small_probe_return;
         proof->small_probe_bad_return =
             (uint64_t)(int64_t)small_probe_bad_return;
@@ -3006,10 +2524,10 @@ AROS_UFH3S(APTR, dos_takeover_observer,
         static char settings_arguments[] = "";
 
         proof->settings_probe_requested = 1;
-        AROSApplePageAllocatorGetStats(&settings_before);
+        AROSAppleCodeMemoryGetStats(&settings_before);
         settings_probe = settings_required == 1 ?
             LoadSeg(marker_path(path, "SETPROBE")) : BNULL;
-        AROSApplePageAllocatorGetStats(&settings_loaded);
+        AROSAppleCodeMemoryGetStats(&settings_loaded);
         proof->settings_probe_seglist = (uintptr_t)BADDR(settings_probe);
         if (settings_probe != BNULL) {
             settings_output = Open("NIL:", MODE_NEWFILE);
@@ -3022,7 +2540,7 @@ AROS_UFH3S(APTR, dos_takeover_observer,
             }
             UnLoadSeg(settings_probe);
         }
-        AROSApplePageAllocatorGetStats(&settings_unloaded);
+        AROSAppleCodeMemoryGetStats(&settings_unloaded);
         proof->settings_probe_return = (uint64_t)(int64_t)settings_probe_return;
         proof->settings_pages_before = settings_before.pages_in_use;
         proof->settings_pages_loaded = settings_loaded.pages_in_use;
@@ -3139,7 +2657,9 @@ AROS_UFH3S(APTR, dos_takeover_observer,
         final_detail = UINT32_C(0x52f);
     else if (!wanderer_valid)
         final_detail = UINT32_C(0x529);
+#if defined(AROS_VM_GUEST) && AROS_VM_GUEST
     if (!vm_pci_valid) final_detail = UINT32_C(0x52c);
+#endif
     valid = final_detail == 0;
     if (oldsys_lock != BNULL)
         UnLock(oldsys_lock);
@@ -3230,7 +2750,8 @@ void AROSAppleColdStartRecordRuntimeException(
     proof->runtime_exception_spsr = frame->spsr;
     proof->runtime_exception_lr = frame->x[30];
     proof->runtime_exception_sp = frame->sp;
-    /* Guest x18 is arbitrary application state, never a dereferenceable task. */
+    /* x18 is ordinary task state on this target (D-117), never a
+     * dereferenceable task: the record names the task the CPU runs. */
     task = SysBase != NULL ? GET_THIS_TASK : NULL;
     proof->runtime_exception_task = (uint64_t)(uintptr_t)task;
     name = task != NULL ? task->tc_Node.ln_Name : NULL;
@@ -3369,7 +2890,7 @@ static int desktop_storage_nodes_valid(const struct BootNode *first,
         const struct DeviceNode *device = node->bn_DeviceNode;
         const struct FileSysStartupMsg *startup;
         const struct DosEnvec *environment;
-        const char *driver = "appleboot.device";
+        const char *driver = platform != NULL ? platform->storage_device : NULL;
         ULONG dos_type = ID_FAT32_DISK;
         unsigned bit;
         ULONG unit;
@@ -3392,7 +2913,7 @@ static int desktop_storage_nodes_valid(const struct BootNode *first,
         seen |= bit;
         startup = BADDR(device->dn_Startup);
         if (startup == NULL || startup->fssm_Unit != unit ||
-            !bstr_equal(startup->fssm_Device, driver))
+            (driver == NULL || !bstr_equal(startup->fssm_Device, driver)))
             return 0;
         environment = BADDR(startup->fssm_Environ);
         if (environment == NULL || environment->de_DosType != dos_type)
@@ -3448,59 +2969,30 @@ static int desktop_profile_detect(
         find_resident_index(state, "con-handler") >= 0;
 }
 
-struct desktop_resident {
-    const char *name;
-    BYTE priority;
-    ULONG flags;
-};
 
 /*
  * The desktop bundle's residents in the order the loader sorts them: by
  * priority, and by bundle order within a priority. One row per component;
  * the proof checks every position, name, priority and flag against it.
  */
-static const struct desktop_resident headless_residents[] = {
+static const struct ColdStartResident desktop_residents[] = {
     { "kernel.resource", 127, RTF_SINGLETASK },
     { "exec.library", 120, RTF_COLDSTART },
     { "expansion.library", 110, RTF_SINGLETASK },
+    { "debug.library", 105, RTF_SINGLETASK },
     { "utility.library", 103, RTF_COLDSTART },
-    { "openfirmware.resource", 102, RTF_COLDSTART },
     { "aros.library", 101, RTF_COLDSTART },
     { "bootloader.resource", 100, RTF_COLDSTART },
     { "task.resource", 100, RTF_COLDSTART },
-    { "FileSystem.resource", 80, RTF_COLDSTART },
-    { "timer.device", 50, RTF_COLDSTART },
-    { "partition.library", 40, RTF_COLDSTART },
-    { "locale.library", 0, RTF_COLDSTART },
-    { "stdc.library", 0, RTF_COLDSTART },
-    { "stdcio.library", 0, RTF_COLDSTART },
-    { "posixc.library", 0, RTF_COLDSTART },
-    { "fat-handler", -1, RTF_COLDSTART },
-    { "appleboot.device", -40, RTF_COLDSTART },
-    { "dos.library", -120, 0 },
-    { "iffparse.library", -121, RTF_AFTERDOS },
-    { "lddemon.resource", -123, RTF_AFTERDOS },
-};
-
-static const struct desktop_resident desktop_residents[] = {
-    { "kernel.resource", 127, RTF_SINGLETASK },
-    { "exec.library", 120, RTF_COLDSTART },
-    { "expansion.library", 110, RTF_SINGLETASK },
-    { "utility.library", 103, RTF_COLDSTART },
-    { "openfirmware.resource", 102, RTF_COLDSTART },
-    { "aros.library", 101, RTF_COLDSTART },
-    { "bootloader.resource", 100, RTF_COLDSTART },
-    { "task.resource", 100, RTF_COLDSTART },
+    { "processor.resource", 99, RTF_COLDSTART },
     { "oop.library", 94, RTF_COLDSTART },
     { "hiddclass.hidd", 92, RTF_COLDSTART },
-    { "pci.hidd", 88, RTF_COLDSTART },
-    { "pciecam.hidd", 87, RTF_COLDSTART },
-    { "vmpci.hidd", 86, RTF_COLDSTART },
     { "FileSystem.resource", 80, RTF_COLDSTART },
     { "gfx.hidd", 66, RTF_COLDSTART },
     { "graphics.library", 65, RTF_COLDSTART },
     { "layers.library", 64, RTF_COLDSTART },
     { "timer.device", 50, RTF_COLDSTART },
+    { "entropy.resource", 45, RTF_COLDSTART | RTF_AUTOINIT },
     { "inputclass.hidd", 45, RTF_COLDSTART },
     { "keyboard.hidd", 45, RTF_COLDSTART },
     { "mouse.hidd", 45, RTF_COLDSTART },
@@ -3510,7 +3002,7 @@ static const struct desktop_resident desktop_residents[] = {
     { "keymap.library", 40, RTF_COLDSTART },
     { "input.device", 30, RTF_COLDSTART },
     { "intuition.library", 15, RTF_COLDSTART },
-    { "virtiogfx.hidd", 9, RTF_COLDSTART },
+    { "efifbgfx.hidd", 9, RTF_COLDSTART },
     { "cybergraphics.library", 8, RTF_COLDSTART },
     { "console.device", 4, RTF_COLDSTART | RTF_AUTOINIT },
     { "locale.library", 0, RTF_COLDSTART },
@@ -3545,6 +3037,21 @@ static const struct desktop_resident desktop_residents[] = {
 #define DESKTOP_RESIDENT_COUNT \
     ((uint32_t)(sizeof(desktop_residents) / sizeof(desktop_residents[0])))
 
+static const struct ColdStartResident *desktop_resident_at(uint32_t index)
+{
+    uint32_t common = 0, extra = 0;
+    const struct ColdStartResident *row;
+    do {
+        if (platform != NULL && extra < platform->resident_count &&
+            (common == DESKTOP_RESIDENT_COUNT ||
+             platform->residents[extra].priority >= desktop_residents[common].priority))
+            row = &platform->residents[extra++];
+        else
+            row = &desktop_residents[common++];
+    } while (index-- != 0);
+    return row;
+}
+
 static void core_coldstart_el0(struct AROSAppleRuntimeProof *unused)
 {
     struct AROSAppleColdStartProof *proof = active_proof;
@@ -3557,6 +3064,7 @@ static void core_coldstart_el0(struct AROSAppleRuntimeProof *unused)
     struct Task *guru;
     struct Node *task_resource;
     struct Node *bootloader_resource;
+    int platform_resources_valid;
     struct Library *oop_library;
     struct Library *hiddclass_library;
     struct Library *gfx_hidd_library;
@@ -3630,6 +3138,8 @@ static void core_coldstart_el0(struct AROSAppleRuntimeProof *unused)
     proof_task_base = (APTR)task_resource;
     bootloader_resource = FindName(
         &SysBase->ResourceList, "bootloader.resource");
+    platform_resources_valid = platform == NULL ||
+        platform->resources_valid(proof->resident_count);
     proof_bootloader_base = (APTR)bootloader_resource;
     if (proof_bootloader_base != NULL)
         video = (struct VesaInfo *)GetBootInfo(BL_Video);
@@ -3670,6 +3180,7 @@ static void core_coldstart_el0(struct AROSAppleRuntimeProof *unused)
             eclock_after.ev_lo == eclock_before.ev_lo; ++attempt)
             (void)ReadEClock(&eclock_after);
         GetSysTime(&time_after);
+#if defined(AROS_VM_GUEST) && AROS_VM_GUEST
         struct KrnPlatformTimer *platform =
             (struct KrnPlatformTimer *)KrnGetSystemAttr(KATTR_PlatformTimer);
         if (platform != NULL && platform != (APTR)-1 &&
@@ -3737,6 +3248,7 @@ static void core_coldstart_el0(struct AROSAppleRuntimeProof *unused)
                 "[VM] FAIL: IRQ handler chain\n");
             if (!passed) timer_frequency = 0;
         }
+#endif
         if (!prove_dispatch_masks(timer_request, timer_frequency))
             timer_frequency = 0;
         AROSAppleKernelIdleTraceEnable = 1;
@@ -3856,7 +3368,11 @@ static void core_coldstart_el0(struct AROSAppleRuntimeProof *unused)
     valid = proof->el0_is_super == 0 && bootstrap != NULL &&
         bootstrap->tc_State == TS_RUN &&
         name_equal(bootstrap->tc_Node.ln_Name,
+#if defined(__AROSEXEC_SMP__)
+            "Exec BSP Bootstrap Task"
+#else
             "Exec Bootstrap Task"
+#endif
         ) &&
         proof->bootstrap_context != 0 && proof->kernel_base != 0 &&
         utility != NULL && utility->lib_Node.ln_Type == NT_LIBRARY &&
@@ -3865,6 +3381,7 @@ static void core_coldstart_el0(struct AROSAppleRuntimeProof *unused)
         task_resource != NULL && task_resource->ln_Type == NT_RESOURCE &&
         bootloader_resource != NULL &&
         bootloader_resource->ln_Type == NT_RESOURCE &&
+        platform_resources_valid &&
         housekeeper != NULL && guru != NULL &&
         timer_device != NULL && timer_frequency != 0;
     if (!valid)
@@ -4047,9 +3564,15 @@ int AROSAppleKernelProveCoreColdStart(
     desktop_profile_flag = state->resident_list != 0 &&
         state->resident_count <= AROS_APPLE_STARTUP_MAX_RESIDENTS &&
         desktop_profile_detect(state);
+#if defined(AROS_VM_GUEST) && AROS_VM_GUEST
+    vm_pci_profile_flag = desktop_profile_flag &&
+        find_resident_index(state, "pci.hidd") >= 0;
     vm_graphics_profile_flag = desktop_profile_flag &&
         find_resident_index(state, "virtiogfx.hidd") >= 0;
-    REQUIRE_ENTRY(state->resident_count == 20 || WANDERER_PROFILE(state->resident_count),
+#endif
+    REQUIRE_ENTRY(state->resident_count == 20 || state->resident_count == 21 ||
+        state->resident_count == 22 || state->resident_count == 25 ||
+        state->resident_count == 34 || WANDERER_PROFILE(state->resident_count),
         UINT32_C(0x105));
     REQUIRE_ENTRY(state->resident_list != 0, UINT32_C(0x106));
     REQUIRE_ENTRY(SysBase != NULL, UINT32_C(0x107));
@@ -4083,11 +3606,11 @@ int AROSAppleKernelProveCoreColdStart(
         UINT32_C(0x111));
 #undef REQUIRE_ENTRY
 
+    proof->kernel_index = 0;
+    proof->exec_index = 1;
+    proof->expansion_index = 2;
     proof->pmgr_index = UINT32_MAX;
     proof->rtkit_index = UINT32_MAX;
-    proof->kernel_index = (uint32_t)find_resident_index(state, "kernel.resource");
-    proof->exec_index = (uint32_t)find_resident_index(state, "exec.library");
-    proof->expansion_index = (uint32_t)find_resident_index(state, "expansion.library");
     proof->utility_index = (uint32_t)find_resident_index(state, "utility.library");
     proof->aros_index = (uint32_t)find_resident_index(state, "aros.library");
     proof->bootloader_index = (uint32_t)find_resident_index(state, "bootloader.resource");
@@ -4103,23 +3626,123 @@ int AROSAppleKernelProveCoreColdStart(
     proof->appleboot_index = (uint32_t)find_resident_index(state, "appleboot.device");
     proof->dos_index = (uint32_t)find_resident_index(state, "dos.library");
     proof->iffparse_index = (uint32_t)find_resident_index(state, "iffparse.library");
-    {
-        const struct desktop_resident *expected = desktop_profile_flag ?
-            desktop_residents : headless_residents;
-        const uint32_t count = desktop_profile_flag ? DESKTOP_RESIDENT_COUNT :
-            (uint32_t)(sizeof(headless_residents) / sizeof(headless_residents[0]));
-        if (state->resident_count != count) {
+    if (platform != NULL && !platform->prepare_proof(state, proof,
+            desktop_profile_flag, resident_at, find_resident_index))
+        return 0;
+#define REQUIRE_RESIDENT(index, name, priority, flags) \
+    do { \
+        if (!resident_at(state, (index), (name), (priority), (flags))) { \
+            proof->detail = UINT32_C(0x300) + (index); \
+            return 0; \
+        } \
+    } while (0)
+
+    REQUIRE_RESIDENT(proof->kernel_index, "kernel.resource", 127,
+        RTF_SINGLETASK);
+    REQUIRE_RESIDENT(proof->exec_index, "exec.library", 120,
+        RTF_COLDSTART);
+    REQUIRE_RESIDENT(proof->expansion_index, "expansion.library", 110,
+        RTF_SINGLETASK);
+    REQUIRE_RESIDENT(proof->utility_index, "utility.library", 103,
+        RTF_COLDSTART);
+    REQUIRE_RESIDENT(proof->aros_index, "aros.library", 101,
+        RTF_COLDSTART);
+    REQUIRE_RESIDENT(proof->bootloader_index, "bootloader.resource", 100,
+        RTF_COLDSTART);
+    REQUIRE_RESIDENT(proof->task_index, "task.resource", 100,
+        RTF_COLDSTART);
+    REQUIRE_RESIDENT(proof->filesystem_index, "FileSystem.resource", 80,
+        RTF_COLDSTART);
+    REQUIRE_RESIDENT(proof->timer_index, "timer.device", 50,
+        RTF_COLDSTART);
+    REQUIRE_RESIDENT(proof->partition_index, "partition.library", 40,
+        RTF_COLDSTART);
+    REQUIRE_RESIDENT(proof->locale_index, "locale.library", 0,
+        RTF_COLDSTART);
+    REQUIRE_RESIDENT(proof->stdc_index, "stdc.library", 0,
+        RTF_COLDSTART);
+    REQUIRE_RESIDENT(proof->stdcio_index, "stdcio.library", 0,
+        RTF_COLDSTART);
+    REQUIRE_RESIDENT(proof->posixc_index, "posixc.library", 0,
+        RTF_COLDSTART);
+    REQUIRE_RESIDENT(proof->fat_index, "fat-handler", -1, RTF_COLDSTART);
+    REQUIRE_RESIDENT(proof->appleboot_index, "appleboot.device", -40,
+        RTF_COLDSTART);
+    REQUIRE_RESIDENT(proof->dos_index, "dos.library", -120, 0);
+    REQUIRE_RESIDENT(proof->iffparse_index, "iffparse.library", -121,
+        RTF_AFTERDOS);
+    if (WANDERER_PROFILE(state->resident_count)) {
+        uint32_t index;
+        uint32_t position = 0;
+        const uint32_t has_usb =
+            platform != NULL &&
+            find_resident_index(state, platform->optional_usb_resident) >= 0 ? 1U : 0U;
+        const uint32_t has_afs =
+            find_resident_index(state, "afsplus-handler") >= 0 ? 1U : 0U;
+
+        const uint32_t has_of =
+            find_resident_index(state, "openfirmware.resource") >= 0 ? 1U : 0U;
+
+        /* Optional residents have fixed insertion points, so an extra module
+         * cannot weaken the exact order, priority and flags proof. */
+        if ((vm_graphics_profile_flag && !vm_pci_profile_flag) ||
+            (vm_pci_profile_flag && !has_of) ||
+            state->resident_count != DESKTOP_RESIDENT_COUNT +
+            (platform != NULL ? platform->resident_count : 0) + has_usb + has_afs +
+            has_of + (vm_pci_profile_flag ? 3U : 0U)) {
             proof->detail = UINT32_C(0x3ff);
             return 0;
         }
-        for (uint32_t index = 0; index < count; ++index) {
-            if (!resident_at(state, index, expected[index].name,
-                    expected[index].priority, expected[index].flags)) {
-                proof->detail = UINT32_C(0x300) + index;
-                return 0;
+        for (index = 0; index < DESKTOP_RESIDENT_COUNT +
+                (platform != NULL ? platform->resident_count : 0); index++) {
+            const struct ColdStartResident *expected = desktop_resident_at(index);
+            if (has_usb && name_equal(expected->name,
+                    platform->usb_before_resident)) {
+                REQUIRE_RESIDENT(position, platform->optional_usb_resident, 99, RTF_COLDSTART);
+                position++;
+            }
+            REQUIRE_RESIDENT(position,
+                vm_graphics_profile_flag && name_equal(expected->name, "efifbgfx.hidd") ?
+                    "virtiogfx.hidd" : expected->name,
+                expected->priority,
+                expected->flags);
+            position++;
+            /* Firmware follows the product's last early resource. */
+            if (has_of && name_equal(expected->name, platform != NULL ?
+                    platform->firmware_after_resident : "utility.library")) {
+                REQUIRE_RESIDENT(position, "openfirmware.resource", 102, RTF_COLDSTART);
+                position++;
+            }
+            if (vm_pci_profile_flag && name_equal(expected->name, "hiddclass.hidd")) {
+                REQUIRE_RESIDENT(position, "pci.hidd", 88, RTF_COLDSTART); position++;
+                REQUIRE_RESIDENT(position, "pciecam.hidd", 87, RTF_COLDSTART); position++;
+                REQUIRE_RESIDENT(position, "vmpci.hidd", 86, RTF_COLDSTART); position++;
+            }
+            if (has_afs && name_equal(expected->name, "fat-handler")) {
+                REQUIRE_RESIDENT(position, "afsplus-handler", -1, RTF_COLDSTART);
+                position++;
             }
         }
+    } else if (state->resident_count == 25 || state->resident_count == 34) {
+        REQUIRE_RESIDENT(9, "oop.library", 94, RTF_COLDSTART);
+        REQUIRE_RESIDENT(10, "hiddclass.hidd", 92, RTF_COLDSTART);
+        REQUIRE_RESIDENT(12, "gfx.hidd", 66, RTF_COLDSTART);
+        REQUIRE_RESIDENT(13, "graphics.library", 65, RTF_COLDSTART);
+        REQUIRE_RESIDENT(state->resident_count == 34 ? 25 : 16,
+            "efifbgfx.hidd", 9, RTF_COLDSTART);
+        if (state->resident_count == 34) {
+            REQUIRE_RESIDENT(14, "layers.library", 64, RTF_COLDSTART);
+            REQUIRE_RESIDENT(16, "inputclass.hidd", 45, RTF_COLDSTART);
+            REQUIRE_RESIDENT(17, "keyboard.hidd", 45, RTF_COLDSTART);
+            REQUIRE_RESIDENT(18, "mouse.hidd", 45, RTF_COLDSTART);
+            REQUIRE_RESIDENT(19, "keyboard.device", 44, RTF_COLDSTART);
+            REQUIRE_RESIDENT(20, "gameport.device", 44, RTF_COLDSTART);
+            REQUIRE_RESIDENT(22, "keymap.library", 40, RTF_COLDSTART);
+            REQUIRE_RESIDENT(23, "input.device", 30, RTF_COLDSTART);
+            REQUIRE_RESIDENT(24, "intuition.library", 15, RTF_COLDSTART);
+        }
     }
+#undef REQUIRE_RESIDENT
 
     stack_top = user_stack + (uintptr_t)user_stack_size;
     if ((stack_top & 15U) != 0) {

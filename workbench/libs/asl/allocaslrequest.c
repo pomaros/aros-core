@@ -74,6 +74,7 @@
         return (NULL);
 
     reqinfo = &(ASLB(AslBase)->ReqInfo[reqType]);
+    RefreshPrefs(ASLB(AslBase));
 
     /* Allocate memory for internal requester structure */
     intreq = AllocVec(reqinfo->IntReqSize, MEMF_ANY);
@@ -84,8 +85,13 @@
         {
             CopyMem(reqinfo->DefaultReq, intreq, reqinfo->IntReqSize);
 
-            if (ASLB(AslBase)->Prefs.ap_SizePosition & 0x10)
+            if (ASLB(AslBase)->Prefs.ap_SizePosition & ASLPREFS_SIZE_RELATIVE)
                 intreq->ir_Flags |= IF_SIZE_REL;
+
+            /* Asl prefs encode drawer placement as ASLFRSORTDRAWERS_* */
+            if (reqType == ASL_FileRequest && (ASLB(AslBase)->Prefs.ap_Reserved[0] & 0x1)
+                && ASLB(AslBase)->Prefs.ap_SortDrawers <= ASLFRSORTDRAWERS_Last)
+                ((struct IntFileReq *)intreq)->ifr_SortDrawers = ASLB(AslBase)->Prefs.ap_SortDrawers;
 
             if (intreq->ir_MemPoolPuddle)
             {

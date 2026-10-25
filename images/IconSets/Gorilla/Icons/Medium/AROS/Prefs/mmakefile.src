@@ -7,10 +7,14 @@ ADDITIONALICONS := AHI Asl Appearance Boot  \
  ReqTools Wanderer Zune Editor Trackdisk PSI Network Trident \
  OpenURL BoingIconBar Bluetooth
 
-# The WiFi preferences program is built for raspi only.
-ifeq ($(AROS_TARGET_ARCH),raspi)
+# The WiFi preferences program is built for raspi and apple only.
+ifneq ($(filter raspi apple,$(AROS_TARGET_ARCH)),)
 ADDITIONALICONS += WiFi
 endif
+
+# The apple target's own preferences programs. Their images are the Prefs
+# drawer's until each has its own.
+APPLEICONS := Battery Brightness Firewall Indicators Keyring Settings SoftwareUpdate Storage
 
 #MM- iconset-Gorilla-wbench-icons-aros-clean : iconset-Gorilla-wbench-icons-aros-prefs-clean
 #MM- iconset-Gorilla-additional-icons-aros-clean : iconset-Gorilla-additional-icons-aros-prefs-clean
@@ -21,6 +25,10 @@ endif
              dir=$(AROS_PREFS)
 
 %build_icons mmake=iconset-Gorilla-additional-icons-aros-prefs icons=$(ADDITIONALICONS) \
+             dir=$(AROS_PREFS)
+
+#MM- iconset-Gorilla-additional-icons-aros : iconset-Gorilla-apple-icons-aros-prefs
+%build_icons mmake=iconset-Gorilla-apple-icons-aros-prefs icons=$(APPLEICONS) \
              dir=$(AROS_PREFS)
 
 #MM- icons-wbench-prefs : gorilla-icons-wbench-prefs

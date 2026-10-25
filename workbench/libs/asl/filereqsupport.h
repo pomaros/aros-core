@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2001, The AROS Development Team. All rights reserved.
 
     Desc:
@@ -30,7 +31,7 @@ void FRSetFile(STRPTR file, struct LayoutData *ld, struct AslBase_intern *AslBas
 void FRFreeListviewNode(struct ASLLVFileReqNode *node, struct LayoutData *ld, struct AslBase_intern *AslBase);
 void FRFreeListviewList(struct LayoutData *ld, struct AslBase_intern *AslBase);
 void FRReSortListview(struct LayoutData *ld, struct AslBase_intern *AslBase);
-void FRChangeActiveLVItem(struct LayoutData *ld, WORD delta, ULONG quali, struct Gadget *gad, struct AslBase_intern *AslBase);
+void FRChangeActiveLVItem(struct LayoutData *ld, LONG delta, ULONG quali, struct Gadget *gad, struct AslBase_intern *AslBase);
 void FRActivateMainStringGadget(struct LayoutData *ld, struct AslBase_intern *AslBase);
 void FRMultiSelectOnOff(struct LayoutData *ld, BOOL onoff, struct AslBase_intern *AslBase);
 void FRSetPattern(STRPTR pattern, struct LayoutData *ld, struct AslBase_intern *AslBase);
@@ -40,3 +41,5 @@ void FRNewDrawerRequester(struct LayoutData *ld, struct AslBase_intern *AslBase)
 void FRRenameRequester(struct LayoutData *ld, struct AslBase_intern *AslBase);
 void FRDropFromDifferentDrawersRequester(struct LayoutData *ld, struct AslBase_intern *AslBase);
 BOOL FRIsDupeVolume(CONST_STRPTR volname, struct LayoutData *ld, struct AslBase_intern *AslBase);
+
+void FRCalcColumnWidths(struct LayoutData *, struct AslBase_intern *);

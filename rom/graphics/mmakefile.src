@@ -155,6 +155,7 @@ FUNCTIONS := \
 	readpixel \
 	readpixelarray8 \
 	readpixelline8 \
+	readdisplaypixels \
 	rectfill \
 	releasepen \
 	remfont \

@@ -3,7 +3,9 @@
 # Distributed under the AROS Public License, version 1.1.
 """Compile the settings.library schema parser and IFF codec with the host
 compiler under ASan/UBSan and run the fixture over the real Font schema and
-the default font.prefs, then the items fixture over the Zune schema."""
+the default font.prefs, the items fixture over the Zune schema, the mask
+fixture over the Asl schema, then the catalogue fixture over the shipped
+Settings groups and rows."""
 import argparse
 from pathlib import Path
 import subprocess
@@ -43,6 +45,44 @@ with tempfile.TemporaryDirectory(prefix='settings-host-') as work:
                     '-o', str(items)], check=True)
     run = subprocess.run([str(items), str(core / 'workbench/prefs/Schemas/zune.schema')],
                          capture_output=True, text=True)
+    sys.stdout.write(run.stdout)
+    sys.stderr.write(run.stderr)
+    if run.returncode != 0:
+        sys.exit(run.returncode)
+    # Masked records: two settings sharing the Asl ap_SizePosition byte.
+    mask = Path(work) / 'mask_fixture'
+    subprocess.run([args.cc, '-std=c11', '-O1', '-g', '-fsanitize=address,undefined',
+                    '-fno-sanitize-recover=all', '-Wall', '-Wextra', '-Werror',
+                    '-I', str(lib), str(here / 'mask_fixture.c'),
+                    str(lib / 'settings_schema.c'), str(lib / 'settings_iff.c'),
+                    '-o', str(mask)], check=True)
+    run = subprocess.run([str(mask), str(core / 'workbench/prefs/Schemas/asl.schema')],
+                         capture_output=True, text=True)
+    sys.stdout.write(run.stdout)
+    sys.stderr.write(run.stderr)
+    if run.returncode != 0:
+        sys.exit(run.returncode)
+    # Screen scale: exact 25-percent grid and neighbouring mode fields.
+    scale = Path(work) / 'scale_fixture'
+    subprocess.run([args.cc, '-std=c11', '-O1', '-g', '-fsanitize=address,undefined',
+                    '-fno-sanitize-recover=all', '-Wall', '-Wextra', '-Werror',
+                    '-I', str(lib), str(here / 'scale_fixture.c'),
+                    str(lib / 'settings_schema.c'), str(lib / 'settings_iff.c'),
+                    '-o', str(scale)], check=True)
+    run = subprocess.run([str(scale), str(core / 'workbench/prefs/Schemas/screenmode.schema')],
+                         capture_output=True, text=True)
+    sys.stdout.write(run.stdout)
+    sys.stderr.write(run.stderr)
+    if run.returncode != 0:
+        sys.exit(run.returncode)
+    # The Settings catalogue: the shipped groups and rows, page requests.
+    window = core / 'workbench/prefs/settings'
+    catalogue = Path(work) / 'catalogue_fixture'
+    subprocess.run([args.cc, '-std=c11', '-O1', '-g', '-fsanitize=address,undefined',
+                    '-fno-sanitize-recover=all', '-Wall', '-Wextra', '-Werror',
+                    '-I', str(window), str(here / 'catalogue_fixture.c'),
+                    str(window / 'catalogue.c'), '-o', str(catalogue)], check=True)
+    run = subprocess.run([str(catalogue), str(window)], capture_output=True, text=True)
     sys.stdout.write(run.stdout)
     sys.stderr.write(run.stderr)
     sys.exit(run.returncode)

@@ -119,6 +119,16 @@ struct PosixCIntBase
     struct Task *upath_task;
     struct MinList upath_others;
     struct SignalSemaphore upath_sem;
+
+    /* __dl.c, at the end likewise. The modules dlopen() loaded are listed
+       in the owner base (see fd_owner), so that a Process and its pthread
+       workers share them; dl_release is the exit-list node that unloads
+       them, queued once. dl_errors holds one dlerror() record per task
+       that had an error, also in the owner base. */
+    struct MinList dl_modules;
+    struct SignalSemaphore dl_sem;
+    APTR dl_release;
+    struct MinList dl_errors;
 };
 
 /* flags; values of flags are power of two so they can be ORed together */

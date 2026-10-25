@@ -63,6 +63,7 @@ struct SysMonData
 
 struct SysMonModule
 {
+    CONST_STRPTR Name;
     BOOL (*Init)(struct SysMonData *);
     VOID (*DeInit)(struct SysMonData *);
 };

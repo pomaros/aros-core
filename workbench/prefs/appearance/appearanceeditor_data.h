@@ -48,7 +48,7 @@ struct AppearanceEditor_DATA
     Object *ae_ThemeDescGrp;
     Object *ae_ThemeDescA;
     Object *ae_ThemeDescB;
-
+    
     Object *ae_CompEnable;
     Object *ae_CompBelow;
     Object *ae_CompLeft;

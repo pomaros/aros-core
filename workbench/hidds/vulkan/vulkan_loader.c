@@ -6,7 +6,8 @@
 
     This is the AROS equivalent of the Khronos Vulkan Loader (libvulkan.so
     on Linux).  Any AROS application that uses Vulkan should link -lvulkan.
-    The loader opens vulkan.hidd at first use and routes all calls through
+    The loader opens vulkan.hidd at first use, keeps it open while it is
+    loaded, and routes all calls through
     VulkanDriverCallbacks to whichever driver is registered (venus.hidd,
     llvmpipe.hidd, etc.).
 
@@ -75,9 +76,12 @@ struct VkLoaderPhysicalDeviceMemoryBudgetPropertiesEXT {
 
 /* ---- Global loader state ------------------------------------------ */
 
+static struct Library *vk_hidd     = NULL;   /* vulkan.hidd, its class */
 static OOP_Object   *vk_obj       = NULL;   /* HiddVulkan instance  */
 static OOP_MethodID  vk_mbase     = 0;      /* IID_Hidd_Vulkan base */
-static BOOL          vk_init_done = FALSE;
+static OOP_AttrBase  vk_abase     = 0;      /* IID_Hidd_Vulkan attributes */
+static struct SignalSemaphore vk_init_lock;
+static int           vk_lock_state = 0;     /* 0 none, 1 initialising, 2 ready */
 
 /* ---- Loader-owned command trampolines ---------------------------- */
 
@@ -195,29 +199,79 @@ static void *vk_loader_local_proc(const char *pName)
 
 /* ---- One-time initialisation -------------------------------------- */
 
+/*
+ * The first call from any task creates the Vulkan object; an application's
+ * threads may race to it (Dawn does). The object is published last, after
+ * the IDs it is used with, so a task that sees it sees them. A failure is
+ * not remembered: the next call tries again (a driver may appear later).
+ */
+/* Every use reads the object with acquire: a task whose own initialisation
+   failed may see another task's later publication, and must see the IDs
+   published before it (vk_loader_init). */
+#define VK_OBJ() __atomic_load_n(&vk_obj, __ATOMIC_ACQUIRE)
+
 static void vk_loader_init(void)
 {
     OOP_AttrBase attrBase;
+    OOP_Object  *obj;
+    int          expected = 0;
 
-    if (vk_init_done)
-        return;
-    vk_init_done = TRUE;
-
-    attrBase = OOP_ObtainAttrBase(IID_Hidd_Vulkan);
-    if (!attrBase)
+    if (__atomic_load_n(&vk_obj, __ATOMIC_ACQUIRE))
         return;
 
-    struct TagItem tags[] = {
-        { attrBase + aoHidd_Vulkan_InterfaceVersion, VULKAN_INTERFACE_VERSION },
-        { TAG_DONE, 0 }
-    };
-    vk_obj = OOP_NewObject(NULL, CLID_Hidd_Vulkan, tags);
-    OOP_ReleaseAttrBase(IID_Hidd_Vulkan);
-    if (!vk_obj)
-        return;
+    /* The lock itself, once: Forbid keeps this CPU's initialiser from being
+       preempted while another CPU waits for it */
+    Forbid();
+    if (__atomic_compare_exchange_n(&vk_lock_state, &expected, 1, 0,
+                                    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+    {
+        InitSemaphore(&vk_init_lock);
+        __atomic_store_n(&vk_lock_state, 2, __ATOMIC_RELEASE);
+    }
+    Permit();
+    while (__atomic_load_n(&vk_lock_state, __ATOMIC_ACQUIRE) != 2)
+        ;
 
-    /* Cache the method ID base — used for all subsequent dispatch */
-    vk_mbase = OOP_GetMethodID(IID_Hidd_Vulkan, 0);
+    ObtainSemaphore(&vk_init_lock);
+    /* The class exists only while vulkan.hidd is open: an application that
+       loads the loader by itself (Dawn, wgpu) is the only one to open it */
+    if (!vk_hidd)
+        vk_hidd = OpenLibrary("vulkan.hidd", 0);
+    if (vk_hidd && !__atomic_load_n(&vk_obj, __ATOMIC_ACQUIRE) &&
+        (attrBase = OOP_ObtainAttrBase(IID_Hidd_Vulkan)) != 0)
+    {
+        struct TagItem tags[] = {
+            { attrBase + aoHidd_Vulkan_InterfaceVersion, VULKAN_INTERFACE_VERSION },
+            { TAG_DONE, 0 }
+        };
+
+        obj = OOP_NewObject(NULL, CLID_Hidd_Vulkan, tags);
+        if (obj)
+        {
+            vk_abase = attrBase;
+            vk_mbase = OOP_GetMethodID(IID_Hidd_Vulkan, 0);
+            __atomic_store_n(&vk_obj, obj, __ATOMIC_RELEASE);
+        }
+        else
+            OOP_ReleaseAttrBase(IID_Hidd_Vulkan);
+    }
+    ReleaseSemaphore(&vk_init_lock);
+}
+
+/* When the module is unloaded, or the program that links the loader ends */
+__attribute__((destructor)) static void vk_loader_exit(void)
+{
+    if (vk_obj)
+    {
+        OOP_DisposeObject(vk_obj);
+        vk_obj = NULL;
+        OOP_ReleaseAttrBase(IID_Hidd_Vulkan);
+    }
+    if (vk_hidd)
+    {
+        CloseLibrary(vk_hidd);
+        vk_hidd = NULL;
+    }
 }
 
 /* ---- Root Vulkan entry points ------------------------------------- */
@@ -227,40 +281,54 @@ static void vk_loader_init(void)
  * ggml-vulkan (and Vulkan-Hpp DispatchLoaderDynamic) bootstraps all
  * other function pointers through this call.
  */
+/*
+ * Global functions (no instance yet) are the loader's own: they find the
+ * drivers and pass the application's create info. Once an instance or a
+ * device exists, its functions are the driver's own, as an ICD loader
+ * hands them out: an application that drives Vulkan fully (wgpu, Dawn,
+ * ANGLE) needs every instance, physical-device and device function, with
+ * the exact pNext semantics. The loader's wrappers answer only what the
+ * driver does not.
+ */
 void *vkGetInstanceProcAddr(void *instance, const char *pName)
 {
-    void *proc = vk_loader_local_proc(pName);
-    if (proc)
-        return proc;
+    void *proc;
+
+    if (!instance)
+    {
+        proc = vk_loader_local_proc(pName);
+        if (proc)
+            return proc;
+    }
 
     vk_loader_init();
-    if (!vk_obj)
-        return NULL;
+    if (!VK_OBJ())
+        return instance ? vk_loader_local_proc(pName) : NULL;
 
     struct pHidd_Vulkan_GetInstanceProcAddr msg = {
         .mID      = vk_mbase + moHidd_Vulkan_GetInstanceProcAddr,
         .instance = instance,
         .pName    = pName,
     };
-    return (void *)OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    proc = (void *)OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
+    return proc ? proc : vk_loader_local_proc(pName);
 }
 
 void *vkGetDeviceProcAddr(void *device, const char *pName)
 {
-    void *proc = vk_loader_local_proc(pName);
-    if (proc)
-        return proc;
+    void *proc;
 
     vk_loader_init();
-    if (!vk_obj)
-        return NULL;
+    if (!VK_OBJ())
+        return vk_loader_local_proc(pName);
 
     struct pHidd_Vulkan_GetDeviceProcAddr msg = {
         .mID    = vk_mbase + moHidd_Vulkan_GetDeviceProcAddr,
         .device = device,
         .pName  = pName,
     };
-    return (void *)OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    proc = (void *)OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
+    return proc ? proc : vk_loader_local_proc(pName);
 }
 
 /* ---- Instance/device bootstrap entry points ---------------------- */
@@ -271,9 +339,9 @@ int32_t vkEnumerateInstanceVersion(uint32_t *pApiVersion)
     int32_t result;
 
     vk_loader_init();
-    if (!vk_obj) {
+    if (!VK_OBJ()) {
         if (pApiVersion)
-            *pApiVersion = (1u << 22); /* VK_API_VERSION_1_0 */
+            *pApiVersion = VULKAN_LOADER_API_VERSION;
         return 0;
     }
 
@@ -282,7 +350,7 @@ int32_t vkEnumerateInstanceVersion(uint32_t *pApiVersion)
         .mID         = vk_mbase + moHidd_Vulkan_EnumerateInstanceVersion,
         .pApiVersion = &apiVersion,
     };
-    result = (int32_t)OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    result = (int32_t)OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
     if (pApiVersion)
         *pApiVersion = (uint32_t)apiVersion;
     return result;
@@ -296,7 +364,7 @@ int32_t vkEnumerateInstanceExtensionProperties(const char *pLayerName,
     int32_t result;
 
     vk_loader_init();
-    if (!vk_obj) {
+    if (!VK_OBJ()) {
         if (pPropertyCount)
             *pPropertyCount = 0;
         return 0;
@@ -309,7 +377,7 @@ int32_t vkEnumerateInstanceExtensionProperties(const char *pLayerName,
         .pPropertyCount = &propertyCount,
         .pProperties    = pProperties,
     };
-    result = (int32_t)OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    result = (int32_t)OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
     if (pPropertyCount)
         *pPropertyCount = (uint32_t)propertyCount;
     return result;
@@ -329,22 +397,30 @@ int32_t vkCreateInstance(const void *pCreateInfo, const void *pAllocator,
 {
     void *instance;
 
-    (void)pCreateInfo;
     (void)pAllocator;
 
     vk_loader_init();
-    if (!vk_obj)
+    if (!VK_OBJ())
         return -3; /* VK_ERROR_INITIALIZATION_FAILED */
 
+    /* The driver gets the application's API version and extensions */
     struct pHidd_Vulkan_CreateInstance msg = {
-        .mID                = vk_mbase + moHidd_Vulkan_CreateInstance,
-        .applicationName    = "AROS Vulkan Loader",
-        .applicationVersion = 1,
+        .mID        = vk_mbase + moHidd_Vulkan_CreateInstance,
+        .createInfo = pCreateInfo,
     };
-    instance = (void *)OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    instance = (void *)OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
     if (pInstance)
         *pInstance = instance;
-    return instance ? 0 : -3;
+    if (!instance)
+    {
+        IPTR gpus = 0;
+
+        /* No driver at all is VK_ERROR_INCOMPATIBLE_DRIVER, as an ICD
+           loader reports it; a driver that fails is a failed initialisation */
+        OOP_GetAttr(VK_OBJ(), vk_abase + aoHidd_Vulkan_GPUCount, &gpus);
+        return gpus ? -3 : -9;
+    }
+    return 0;
 }
 
 void vkDestroyInstance(void *instance, const void *pAllocator)
@@ -352,14 +428,14 @@ void vkDestroyInstance(void *instance, const void *pAllocator)
     (void)pAllocator;
 
     vk_loader_init();
-    if (!vk_obj)
+    if (!VK_OBJ())
         return;
 
     struct pHidd_Vulkan_DestroyInstance msg = {
         .mID      = vk_mbase + moHidd_Vulkan_DestroyInstance,
         .instance = instance,
     };
-    OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
 }
 
 int32_t vkEnumeratePhysicalDevices(void *instance,
@@ -370,7 +446,7 @@ int32_t vkEnumeratePhysicalDevices(void *instance,
     int32_t result;
 
     vk_loader_init();
-    if (!vk_obj) {
+    if (!VK_OBJ()) {
         if (pPhysicalDeviceCount)
             *pPhysicalDeviceCount = 0;
         return -3;
@@ -383,7 +459,7 @@ int32_t vkEnumeratePhysicalDevices(void *instance,
         .pPhysicalDeviceCount = &physicalDeviceCount,
         .pPhysicalDevices     = (APTR *)pPhysicalDevices,
     };
-    result = (int32_t)OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    result = (int32_t)OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
     if (pPhysicalDeviceCount)
         *pPhysicalDeviceCount = (uint32_t)physicalDeviceCount;
     return result;
@@ -392,7 +468,7 @@ int32_t vkEnumeratePhysicalDevices(void *instance,
 void vkGetPhysicalDeviceProperties(void *physicalDevice, void *pProperties)
 {
     vk_loader_init();
-    if (!vk_obj)
+    if (!VK_OBJ())
         return;
 
     struct pHidd_Vulkan_GetPhysicalDeviceProperties msg = {
@@ -400,13 +476,13 @@ void vkGetPhysicalDeviceProperties(void *physicalDevice, void *pProperties)
         .physicalDevice = physicalDevice,
         .pProperties    = pProperties,
     };
-    OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
 }
 
 void vkGetPhysicalDeviceProperties2(void *physicalDevice, void *pProperties)
 {
     vk_loader_init();
-    if (!vk_obj)
+    if (!VK_OBJ())
         return;
 
     struct pHidd_Vulkan_GetPhysicalDeviceProperties2 msg = {
@@ -414,13 +490,13 @@ void vkGetPhysicalDeviceProperties2(void *physicalDevice, void *pProperties)
         .physicalDevice = physicalDevice,
         .pProperties    = pProperties,
     };
-    OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
 }
 
 void vkGetPhysicalDeviceFeatures(void *physicalDevice, void *pFeatures)
 {
     vk_loader_init();
-    if (!vk_obj)
+    if (!VK_OBJ())
         return;
 
     struct pHidd_Vulkan_GetPhysicalDeviceFeatures msg = {
@@ -428,13 +504,13 @@ void vkGetPhysicalDeviceFeatures(void *physicalDevice, void *pFeatures)
         .physicalDevice = physicalDevice,
         .pFeatures      = pFeatures,
     };
-    OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
 }
 
 void vkGetPhysicalDeviceFeatures2(void *physicalDevice, void *pFeatures)
 {
     vk_loader_init();
-    if (!vk_obj)
+    if (!VK_OBJ())
         return;
 
     struct pHidd_Vulkan_GetPhysicalDeviceFeatures2 msg = {
@@ -442,14 +518,14 @@ void vkGetPhysicalDeviceFeatures2(void *physicalDevice, void *pFeatures)
         .physicalDevice = physicalDevice,
         .pFeatures      = pFeatures,
     };
-    OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
 }
 
 void vkGetPhysicalDeviceMemoryProperties(void *physicalDevice,
                                          void *pMemoryProperties)
 {
     vk_loader_init();
-    if (!vk_obj)
+    if (!VK_OBJ())
         return;
 
     struct pHidd_Vulkan_GetPhysicalDeviceMemoryProperties msg = {
@@ -457,7 +533,7 @@ void vkGetPhysicalDeviceMemoryProperties(void *physicalDevice,
         .physicalDevice    = physicalDevice,
         .pMemoryProperties = pMemoryProperties,
     };
-    OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
 }
 
 void vkGetPhysicalDeviceMemoryProperties2(void *physicalDevice,
@@ -504,7 +580,7 @@ void vkGetPhysicalDeviceQueueFamilyProperties(void *physicalDevice,
     ULONG queueFamilyPropertyCount;
 
     vk_loader_init();
-    if (!vk_obj) {
+    if (!VK_OBJ()) {
         if (pQueueFamilyPropertyCount)
             *pQueueFamilyPropertyCount = 0;
         return;
@@ -517,7 +593,7 @@ void vkGetPhysicalDeviceQueueFamilyProperties(void *physicalDevice,
         .pQueueFamilyPropertyCount = &queueFamilyPropertyCount,
         .pQueueFamilyProperties    = pQueueFamilyProperties,
     };
-    OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
     if (pQueueFamilyPropertyCount)
         *pQueueFamilyPropertyCount = (uint32_t)queueFamilyPropertyCount;
 }
@@ -531,7 +607,7 @@ int32_t vkEnumerateDeviceExtensionProperties(void *physicalDevice,
     int32_t result;
 
     vk_loader_init();
-    if (!vk_obj) {
+    if (!VK_OBJ()) {
         if (pPropertyCount)
             *pPropertyCount = 0;
         return -3;
@@ -545,7 +621,7 @@ int32_t vkEnumerateDeviceExtensionProperties(void *physicalDevice,
         .pPropertyCount = &propertyCount,
         .pProperties    = pProperties,
     };
-    result = (int32_t)OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    result = (int32_t)OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
     if (pPropertyCount)
         *pPropertyCount = (uint32_t)propertyCount;
     return result;
@@ -559,7 +635,7 @@ int32_t vkCreateDevice(void *physicalDevice, const void *pCreateInfo,
     (void)pAllocator;
 
     vk_loader_init();
-    if (!vk_obj)
+    if (!VK_OBJ())
         return -3;
 
     struct pHidd_Vulkan_CreateDevice msg = {
@@ -567,7 +643,7 @@ int32_t vkCreateDevice(void *physicalDevice, const void *pCreateInfo,
         .physicalDevice = physicalDevice,
         .pCreateInfo    = (APTR)pCreateInfo,
     };
-    device = (void *)OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    device = (void *)OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
     if (pDevice)
         *pDevice = device;
     return device ? 0 : -3;
@@ -578,21 +654,21 @@ void vkDestroyDevice(void *device, const void *pAllocator)
     (void)pAllocator;
 
     vk_loader_init();
-    if (!vk_obj)
+    if (!VK_OBJ())
         return;
 
     struct pHidd_Vulkan_DestroyDevice msg = {
         .mID    = vk_mbase + moHidd_Vulkan_DestroyDevice,
         .device = device,
     };
-    OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
 }
 
 void vkGetDeviceQueue(void *device, uint32_t queueFamilyIndex,
                       uint32_t queueIndex, void **pQueue)
 {
     vk_loader_init();
-    if (!vk_obj) {
+    if (!VK_OBJ()) {
         if (pQueue)
             *pQueue = NULL;
         return;
@@ -605,20 +681,20 @@ void vkGetDeviceQueue(void *device, uint32_t queueFamilyIndex,
         .queueIndex       = queueIndex,
         .pQueue           = (APTR *)pQueue,
     };
-    OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
 }
 
 int32_t vkDeviceWaitIdle(void *device)
 {
     vk_loader_init();
-    if (!vk_obj)
+    if (!VK_OBJ())
         return -3;
 
     struct pHidd_Vulkan_DeviceWaitIdle msg = {
         .mID    = vk_mbase + moHidd_Vulkan_DeviceWaitIdle,
         .device = device,
     };
-    return (int32_t)OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    return (int32_t)OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
 }
 
 /* ---- Direct entry points referenced by ggml-vulkan.cpp ----------- */
@@ -627,7 +703,7 @@ void vkCmdBindPipeline(void *commandBuffer, uint32_t pipelineBindPoint,
                        void *pipeline)
 {
     vk_loader_init();
-    if (!vk_obj)
+    if (!VK_OBJ())
         return;
 
     struct pHidd_Vulkan_CmdBindPipeline msg = {
@@ -636,7 +712,7 @@ void vkCmdBindPipeline(void *commandBuffer, uint32_t pipelineBindPoint,
         .pipelineBindPoint = pipelineBindPoint,
         .pipeline          = pipeline,
     };
-    OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
 }
 
 void vkCmdBindDescriptorSets(void *commandBuffer, uint32_t pipelineBindPoint,
@@ -647,7 +723,7 @@ void vkCmdBindDescriptorSets(void *commandBuffer, uint32_t pipelineBindPoint,
                              const uint32_t *pDynamicOffsets)
 {
     vk_loader_init();
-    if (!vk_obj)
+    if (!VK_OBJ())
         return;
 
     struct pHidd_Vulkan_CmdBindDescriptorSets msg = {
@@ -661,7 +737,7 @@ void vkCmdBindDescriptorSets(void *commandBuffer, uint32_t pipelineBindPoint,
         .dynamicOffsetCount = dynamicOffsetCount,
         .pDynamicOffsets    = (const ULONG *)pDynamicOffsets,
     };
-    OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
 }
 
 void vkCmdPushConstants(void *commandBuffer, void *layout,
@@ -669,7 +745,7 @@ void vkCmdPushConstants(void *commandBuffer, void *layout,
                         uint32_t size, const void *pValues)
 {
     vk_loader_init();
-    if (!vk_obj)
+    if (!VK_OBJ())
         return;
 
     struct pHidd_Vulkan_CmdPushConstants msg = {
@@ -681,14 +757,14 @@ void vkCmdPushConstants(void *commandBuffer, void *layout,
         .size          = size,
         .pValues       = (APTR)pValues,
     };
-    OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
 }
 
 void vkCmdDispatch(void *commandBuffer, uint32_t groupCountX,
                    uint32_t groupCountY, uint32_t groupCountZ)
 {
     vk_loader_init();
-    if (!vk_obj)
+    if (!VK_OBJ())
         return;
 
     struct pHidd_Vulkan_CmdDispatch msg = {
@@ -698,7 +774,7 @@ void vkCmdDispatch(void *commandBuffer, uint32_t groupCountX,
         .groupCountY   = groupCountY,
         .groupCountZ   = groupCountZ,
     };
-    OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
 }
 
 /*
@@ -708,7 +784,7 @@ void vkCmdCopyBuffer(void *commandBuffer, void *srcBuffer, void *dstBuffer,
                      uint32_t regionCount, const void *pRegions)
 {
     vk_loader_init();
-    if (!vk_obj)
+    if (!VK_OBJ())
         return;
 
     struct pHidd_Vulkan_CmdCopyBuffer msg = {
@@ -719,14 +795,14 @@ void vkCmdCopyBuffer(void *commandBuffer, void *srcBuffer, void *dstBuffer,
         .regionCount   = regionCount,
         .pRegions      = (APTR)pRegions,
     };
-    OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
 }
 
 void vkCmdFillBuffer(void *commandBuffer, void *dstBuffer,
                      uint64_t dstOffset, uint64_t size, uint32_t data)
 {
     vk_loader_init();
-    if (!vk_obj)
+    if (!VK_OBJ())
         return;
 
     struct pHidd_Vulkan_CmdFillBuffer msg = {
@@ -737,7 +813,7 @@ void vkCmdFillBuffer(void *commandBuffer, void *dstBuffer,
         .size          = size,
         .data          = data,
     };
-    OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
 }
 
 void vkCmdPipelineBarrier(void *commandBuffer, uint32_t srcStageMask,
@@ -750,7 +826,7 @@ void vkCmdPipelineBarrier(void *commandBuffer, uint32_t srcStageMask,
                           const void *pImageMemoryBarriers)
 {
     vk_loader_init();
-    if (!vk_obj)
+    if (!VK_OBJ())
         return;
 
     struct pHidd_Vulkan_CmdPipelineBarrier msg = {
@@ -766,13 +842,13 @@ void vkCmdPipelineBarrier(void *commandBuffer, uint32_t srcStageMask,
         .imageMemoryBarrierCount  = imageMemoryBarrierCount,
         .pImageMemoryBarriers     = (APTR)pImageMemoryBarriers,
     };
-    OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
 }
 
 void vkCmdSetEvent(void *commandBuffer, void *event, uint32_t stageMask)
 {
     vk_loader_init();
-    if (!vk_obj)
+    if (!VK_OBJ())
         return;
 
     struct pHidd_Vulkan_CmdSetEvent msg = {
@@ -781,13 +857,13 @@ void vkCmdSetEvent(void *commandBuffer, void *event, uint32_t stageMask)
         .event         = event,
         .stageMask     = stageMask,
     };
-    OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
 }
 
 void vkCmdResetEvent(void *commandBuffer, void *event, uint32_t stageMask)
 {
     vk_loader_init();
-    if (!vk_obj)
+    if (!VK_OBJ())
         return;
 
     struct pHidd_Vulkan_CmdResetEvent msg = {
@@ -796,7 +872,7 @@ void vkCmdResetEvent(void *commandBuffer, void *event, uint32_t stageMask)
         .event         = event,
         .stageMask     = stageMask,
     };
-    OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
 }
 
 void vkCmdWaitEvents(void *commandBuffer, uint32_t eventCount,
@@ -809,7 +885,7 @@ void vkCmdWaitEvents(void *commandBuffer, uint32_t eventCount,
                      const void *pImageMemoryBarriers)
 {
     vk_loader_init();
-    if (!vk_obj)
+    if (!VK_OBJ())
         return;
 
     struct pHidd_Vulkan_CmdWaitEvents msg = {
@@ -826,14 +902,14 @@ void vkCmdWaitEvents(void *commandBuffer, uint32_t eventCount,
         .imageMemoryBarrierCount  = imageMemoryBarrierCount,
         .pImageMemoryBarriers     = (APTR)pImageMemoryBarriers,
     };
-    OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
 }
 
 void vkCmdWriteTimestamp(void *commandBuffer, uint32_t pipelineStage,
                          void *queryPool, uint32_t query)
 {
     vk_loader_init();
-    if (!vk_obj)
+    if (!VK_OBJ())
         return;
 
     struct pHidd_Vulkan_CmdWriteTimestamp msg = {
@@ -843,14 +919,14 @@ void vkCmdWriteTimestamp(void *commandBuffer, uint32_t pipelineStage,
         .queryPool     = queryPool,
         .query         = query,
     };
-    OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
 }
 
 void vkCmdResetQueryPool(void *commandBuffer, void *queryPool,
                          uint32_t firstQuery, uint32_t queryCount)
 {
     vk_loader_init();
-    if (!vk_obj)
+    if (!VK_OBJ())
         return;
 
     struct pHidd_Vulkan_CmdResetQueryPool msg = {
@@ -860,5 +936,5 @@ void vkCmdResetQueryPool(void *commandBuffer, void *queryPool,
         .firstQuery    = firstQuery,
         .queryCount    = queryCount,
     };
-    OOP_DoMethod(vk_obj, (OOP_Msg)&msg);
+    OOP_DoMethod(VK_OBJ(), (OOP_Msg)&msg);
 }

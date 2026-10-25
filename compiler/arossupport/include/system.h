@@ -233,11 +233,11 @@
 /*
     __mayalias is placed on struct definitions (exec Node/List/Resident).
     gcc before 9 then rejects a function declared with the struct before its
-    definition was seen ("conflicting types"), which headers that use a type
-    before including its defining header do, so leave it out there.
+    definition was seen ("conflicting types"), so a header that uses one of
+    these types in a prototype must include its defining header first.
 */
 #ifndef __mayalias
-#if defined(__clang__) || (defined(__GNUC__) && __GNUC_PREREQ(9,0))
+#if defined(__GNUC__) && __GNUC_PREREQ(3,3)
 #    define __mayalias  __attribute__((__may_alias__))
 #else
 #    define __mayalias
@@ -316,9 +316,9 @@
    'value' has to be an asm constant, thus either an address number or an asm symbol name, */
 #if !defined AROS_MAKE_ASM_SYM 
 #    define AROS_MAKE_ASM_SYM(type, csym, asym, value)             \
-         extern type csym asm(__AROS_STR(asym));                   \
+         extern type csym __asm__(__AROS_STR(asym));                   \
 	 typedef int __CONCAT(__you_must_first_make_asym_, asym);  \
-         asm(".set " __AROS_STR(asym) ", " __AROS_STR(value) "\n")
+         __asm__(".set " __AROS_STR(asym) ", " __AROS_STR(value) "\n")
 #endif
 
 /* Makes an ASM symbol 'asym' available for use in the compilation unit this
@@ -327,8 +327,8 @@
    module where the ASM symbol is actually defined.  */
 #if !defined AROS_IMPORT_ASM_SYM 
 #    define AROS_IMPORT_ASM_SYM(type, csym, asym)     \
-         extern type csym asm(__AROS_STR(asym));      \
-         asm("\n.globl " __AROS_STR(asym) "\n") 
+         extern type csym __asm__(__AROS_STR(asym));      \
+         __asm__("\n.globl " __AROS_STR(asym) "\n") 
 #endif
 
 /* Make sure other compilation units can see the symbol 'asym' created with AROS_MAKE_ASM_SYM.
@@ -340,7 +340,7 @@
 	 {                                                               \
 	     int a[sizeof(__CONCAT(__you_must_first_make_asym_, asym))]; \
 	 };                                                              \
-         asm("\n.globl " __AROS_STR(asym) "\n")
+         __asm__("\n.globl " __AROS_STR(asym) "\n")
 #endif
 
 /* As AROS_EXPORT_ASM_SYM, but for symbols that several compilation units of the
@@ -355,7 +355,7 @@
 	 {                                                               \
 	     int a[sizeof(__CONCAT(__you_must_first_make_asym_, asym))]; \
 	 };                                                              \
-         asm("\n.weak " __AROS_STR(asym) "\n")
+         __asm__("\n.weak " __AROS_STR(asym) "\n")
 #endif
 
 #endif /* AROS_SYSTEM_H */

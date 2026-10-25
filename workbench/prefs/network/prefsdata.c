@@ -14,6 +14,8 @@
 #include <string.h>
 #include <stdio.h>
 #include "prefsdata.h"
+#include <libraries/wifi_keyring.h>
+#include "../../devs/networks/bwfm/wireless_prefs.h"
 #include "protocols.h"
 #include "netprefs_intern.h"
 
@@ -545,6 +547,32 @@ BOOL WriteWirelessPrefs(CONST_STRPTR destdir)
     ULONG filenamelen = strlen(destdir) + 4 + 20;
     TEXT filename[filenamelen];
 
+    CombinePath2P(filename, filenamelen, destdir, "Wireless.prefs");
+    /* Commit every secret before opening the metadata file for replacement. */
+    for (i = 0; i < prefs.networkCount; ++i) {
+        struct wifi_secret secret;
+        LONG result;
+        char metadata[160];
+        net = &prefs.networks[i];
+        if (!wireless_prefs_format((const char *)net->name, net->encType != 0,
+                                   metadata, sizeof(metadata))) return FALSE;
+        if (!net->encType) continue;
+        memset(&secret, 0, sizeof(secret));
+        secret.version = 1;
+        secret.security = net->encType;
+        secret.hex = net->keyIsHex;
+        if (strlen(net->key) >= sizeof(secret.key)) return FALSE;
+        if (!net->key[0]) {
+            result = wifi_keyring(NULL, 0, net->name, &secret);
+            if (result == KR_SUCCESS && secret.security != net->encType) result = KR_ERR_FORMAT;
+        } else {
+            strcpy(secret.key, net->key);
+            result = wifi_keyring(NULL, 1, net->name, &secret);
+        }
+        wifi_secret_wipe(&secret, sizeof(secret));
+        if (result != KR_SUCCESS) return FALSE;
+    }
+
     /* Write wireless config */
     CombinePath2P(filename, filenamelen, destdir, "Wireless.prefs");
     if (prefs.networkCount > 0)
@@ -561,17 +589,10 @@ BOOL WriteWirelessPrefs(CONST_STRPTR destdir)
             switch (net->encType)
             {
                 case 2:
-                    if (net->keyIsHex)
-                        fprintf(ConfFile, "\tpsk=%s\n", net->key);
-                    else
-                        fprintf(ConfFile, "\tpsk=\"%s\"\n", net->key);
                     fprintf(ConfFile, "\tkey_mgmt=WPA-PSK\n");
                     break;
                 case 1:
-                    if (net->keyIsHex)
-                        fprintf(ConfFile, "\twep_key0=%s\n", net->key);
-                    else
-                        fprintf(ConfFile, "\twep_key0=\"%s\"\n", net->key);
+                    fprintf(ConfFile, "\tkeyring_security=WEP\n");
                     fprintf(ConfFile, "\twep_tx_keyidx=0\n");
                 default:
                     fprintf(ConfFile, "\tkey_mgmt=NONE\n");
@@ -583,7 +604,8 @@ BOOL WriteWirelessPrefs(CONST_STRPTR destdir)
             fprintf(ConfFile, "}\n\n");
         }
 
-        fclose(ConfFile);
+        if (ferror(ConfFile)) { fclose(ConfFile); return FALSE; }
+        if (fclose(ConfFile)) return FALSE;
     }
     else
         DeleteFile(filename);
@@ -1451,7 +1473,6 @@ void ReadWirelessPrefs(CONST_STRPTR directory)
     struct Tokenizer tok;
     LONG networkCount;
     struct Network *net = NULL;
-    BOOL keyIsHex;
 
     CombinePath2P(filename, filenamelen, directory, "Wireless.prefs");
     OpenTokenFile(&tok, filename);
@@ -1483,21 +1504,10 @@ void ReadWirelessPrefs(CONST_STRPTR directory)
                     *strchr(tstring, '\"') = '\0';
                     SetNetworkName(net, tstring);
                 }
-                else if (strncmp(tok.token, "psk=", 4) == 0
-                    || strncmp(tok.token, "wep_key0=", 9) == 0)
-                {
-                    tstring = strchr(tok.token, '=') + 1;
-                    if (*tstring == '\"')
-                    {
-                        keyIsHex = FALSE;
-                        tstring++;
-                        *strchr(tstring, '\"') = '\0';
-                    }
-                    else
-                        keyIsHex = TRUE;
-                    SetKey(net, tstring, keyIsHex);
-                    SetEncType(net, (*tok.token == 'p') ? 2 : 1);
-                }
+                else if (strncmp(tok.token, "key_mgmt=WPA-PSK", 16) == 0)
+                    SetEncType(net, 2);
+                else if (strncmp(tok.token, "keyring_security=WEP", 20) == 0)
+                    SetEncType(net, 1);
                 else if (strncmp(tok.token, "scan_ssid=", 10) == 0)
                 {
                     tstring = strchr(tok.token, '=') + 1;
@@ -1510,6 +1520,15 @@ void ReadWirelessPrefs(CONST_STRPTR directory)
                 }
             }
         }
+    }
+    /* A locked vault leaves the editor's password fields empty. */
+    for (LONG i = 0; i < networkCount; ++i) {
+        struct wifi_secret secret;
+        net = GetNetwork(i);
+        SetKey(net, "", FALSE);
+        if (wifi_keyring(NULL, 0, net->name, &secret) == KR_SUCCESS)
+            SetKey(net, secret.key, secret.hex);
+        wifi_secret_wipe(&secret, sizeof(secret));
     }
     CloseTokenFile(&tok);
 }

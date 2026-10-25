@@ -62,17 +62,27 @@ char *mktemp(char *);
 int getloadavg(double loadavg[], int n);
 #endif
 
+/* POSIX.1-2008 */
+#if defined(_GNU_SOURCE) || (_POSIX_C_SOURCE >= 200809L) || defined(__USE_XOPEN2K8) \
+    || defined(__USE_XOPEN_EXTENDED)
+char *mkdtemp(char *);
+#endif
+
+/* XSI pseudo-terminals. They fail with ENOSYS until AROS has a
+   pseudo-terminal device; that work keeps these entry points. */
+#if defined(_GNU_SOURCE) || defined(_XOPEN_SOURCE) || defined(__USE_XOPEN_EXTENDED)
+int grantpt(int);
+int posix_openpt(int);
+char *ptsname(int);
+int unlockpt(int);
+#endif
+
 /* Deprecated or unimplemented functions (preserved) */
 /* NOTIMPL long a64l(const char *); */
 /* NOTIMPL int getsubopt(char **, char *const *, char **); */
-/* NOTIMPL int grantpt(int); */
 /* NOTIMPL char *l64a(long); */
-/* NOTIMPL char *mkdtemp(char *); */
-/* NOTIMPL int posix_openpt(int); */
-/* NOTIMPL char *ptsname(int); */
 int rand_r(unsigned int *);
 /* NOTIMPL void setkey(const char *); */
-/* NOTIMPL int unlockpt(int); */
 
 /* Always available */
 int putenv(const char *);

@@ -35,6 +35,8 @@ struct PrefsEditor_DATA
     Object *ped_MarkedGadget[64];
     BOOL    ped_PreviousMark[64];
     ULONG   ped_MarkedCount;
+    Object *ped_Registers[8];   /* registers given tab counts */
+    ULONG   ped_RegisterCount;
 };
 
 #define BACKUP_PREFIX "T:PT"

@@ -188,6 +188,32 @@ static int contains(const char *haystack, const char *needle)
     return 0;
 }
 
+int cat_find_row(const struct catalogue *catalogue, const char *what)
+{
+    size_t i;
+    for (i = 0; i < catalogue->row_count; i++) {
+        const struct cat_row *row = &catalogue->rows[i];
+        char stem[CAT_NAME];
+        size_t n = strlen(row->class_name);
+        if (compare_names(row->id, what) == 0 || compare_names(row->class_name, what) == 0 ||
+            compare_names(row->name, what) == 0)
+            return (int)i;
+        memcpy(stem, row->class_name, n + 1);
+        if (n > 4 && compare_names(stem + n - 4, ".mcc") == 0) {
+            stem[n - 4] = '\0';
+            if (compare_names(stem, what) == 0)
+                return (int)i;
+            n -= 4;
+            if (n > 6 && compare_names(stem + n - 6, "Editor") == 0) {
+                stem[n - 6] = '\0';
+                if (compare_names(stem, what) == 0)
+                    return (int)i;
+            }
+        }
+    }
+    return -1;
+}
+
 int cat_row_matches(const struct catalogue *catalogue, const struct cat_row *row,
     const char *query)
 {

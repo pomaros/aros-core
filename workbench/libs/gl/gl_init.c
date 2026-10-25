@@ -116,6 +116,8 @@ void GetGLVar(struct Library *base, const char *var, char **varstore)
     D(bug("[GL] %s()\n", __func__));
 
     FreeVec(*varstore);
+    /* An unset variable leaves no name: never a freed one. */
+    *varstore = NULL;
 
     Var_Length = GetVar(var,
               &Var_Value[0],
@@ -246,6 +248,13 @@ static AROS_LH1(struct Library *, GM_UNIQUENAME(LibOpen),
         glImplementation = GLB(base)->glb_GLImpl;
     else
         glImplementation = GLB(base)->glb_GLDef;
+
+    /* Neither ENV:SYS/GL nor ENV:SYS/GL.default names one: no GL. */
+    if (!glImplementation)
+    {
+        bug("[GL] no implementation: ENV:SYS/GL and ENV:SYS/GL.default are unset\n");
+        return NULL;
+    }
 
     D(bug("[GL] %s: Attempting to use '%s' version %d\n", __func__, glImplementation, version));
 

@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
 */
 
@@ -189,7 +190,7 @@ struct DisplayMode *SMGetActiveMode(struct LayoutData *ld, struct AslBase_intern
 
 /*****************************************************************************************/
 
-void SMChangeActiveLVItem(struct LayoutData *ld, WORD delta, UWORD quali, struct AslBase_intern *AslBase)
+void SMChangeActiveLVItem(struct LayoutData *ld, LONG delta, UWORD quali, struct AslBase_intern *AslBase)
 {
     struct SMUserData   *udata = (struct SMUserData *)ld->ld_UserData;
     IPTR                active, total, visible;
@@ -319,7 +320,7 @@ void SMFixValues(struct LayoutData *ld, struct DisplayMode *dispmode,
 
 /*****************************************************************************************/
 
-void SMActivateMode(struct LayoutData *ld, WORD which, LONG depth, struct AslBase_intern *AslBase)
+void SMActivateMode(struct LayoutData *ld, LONG which, LONG depth, struct AslBase_intern *AslBase)
 {
     struct SMUserData   *udata = (struct SMUserData *)ld->ld_UserData;
     struct IntSMReq     *ismreq = (struct IntSMReq *)ld->ld_IntReq;
@@ -467,6 +468,7 @@ void SMActivateMode(struct LayoutData *ld, WORD which, LONG depth, struct AslBas
     SMFixValues(ld, dispmode, &width, &height, 0, AslBase);
 
     SMRefreshPropertyWindow(ld, dispmode, AslBase);
+    if (!ShowWindow(ld->ld_Window2, NULL)) SMClosePropertyWindow(ld, AslBase);
 }
 
 /*****************************************************************************************/
@@ -654,6 +656,8 @@ void SMOpenPropertyWindow(struct LayoutData *ld, struct AslBase_intern *AslBase)
     STRPTR              *properties = (STRPTR *)&ismreq->ism_PropertyList_NotWB;
     WORD                i, x, y, w, h;
 
+    const struct ScreenRenderContext *popupcontext = AslPopupContext(ld);
+    if (!popupcontext) return;
     if (ld->ld_Window2) return;
 
     for(i = 0; propertyids[i] != -1; i++)
@@ -661,8 +665,8 @@ void SMOpenPropertyWindow(struct LayoutData *ld, struct AslBase_intern *AslBase)
         properties[i] = GetString(propertyids[i], GetIR(ismreq)->ir_Catalog, AslBase);
     }
 
-    x = ld->ld_Window->LeftEdge + ismreq->ism_InfoLeftEdge;
-    y = ld->ld_Window->TopEdge  + ismreq->ism_InfoTopEdge;
+    x = ld->ld_Window->LeftEdge + AslScaleValue(ld, ismreq->ism_InfoLeftEdge);
+    y = ld->ld_Window->TopEdge  + AslScaleValue(ld, ismreq->ism_InfoTopEdge);
 
     i = (&SREQ_LAST_PROPERTY_ITEM(ismreq) - &SREQ_FIRST_PROPERTY_ITEM(ismreq)) /
         sizeof(STRPTR) + 1;
@@ -673,20 +677,20 @@ void SMOpenPropertyWindow(struct LayoutData *ld, struct AslBase_intern *AslBase)
                           &(ld->ld_DummyRP),
                           AslBase);
 
-    w += OUTERSPACINGX * 2 + BORDERLVSPACINGX * 2 + BORDERLVITEMSPACINGX * 2;
+    w += AslScaleValue(ld, OUTERSPACINGX) * 2 + AslScaleValue(ld, BORDERLVSPACINGX) * 2 + AslScaleValue(ld, BORDERLVITEMSPACINGX) * 2;
 
-    h = SREQ_MAX_PROPERTIES * (ld->ld_Font->tf_YSize + BORDERLVITEMSPACINGY * 2);
+    h = SREQ_MAX_PROPERTIES * (ld->ld_Font->tf_YSize + AslScaleValue(ld, BORDERLVITEMSPACINGY) * 2);
 
-    h += OUTERSPACINGY * 2 + BORDERLVSPACINGY * 2;
+    h += AslScaleValue(ld, OUTERSPACINGY) * 2 + AslScaleValue(ld, BORDERLVSPACINGY) * 2;
 
     {
         struct TagItem  lv_tags[] =
         {
-            {GA_Left            , ld->ld_WBorLeft + OUTERSPACINGX       },
-            {GA_Top             , ld->ld_WBorTop + OUTERSPACINGY        },
-            {GA_Width           , w - OUTERSPACINGX * 2                 },
-            {GA_Height          , h - OUTERSPACINGY * 2                 },
-            {GA_UserData        , (IPTR)ld                              },
+            {GA_Left            , ld->ld_WBorLeft + AslScaleValue(ld, OUTERSPACINGX)       },
+            {GA_Top             , ld->ld_WBorTop + AslScaleValue(ld, OUTERSPACINGY)        },
+            {GA_Width           , w - AslScaleValue(ld, OUTERSPACINGX) * 2                 },
+            {GA_Height          , h - AslScaleValue(ld, OUTERSPACINGY) * 2                 },
+            {GA_UserData        , (IPTR)ld->ld_GadgetContext              },
             {ASLLV_ReadOnly     , TRUE                                  },
             {ASLLV_Font         , (IPTR)ld->ld_Font                     },
             {TAG_DONE                                                   }
@@ -698,6 +702,9 @@ void SMOpenPropertyWindow(struct LayoutData *ld, struct AslBase_intern *AslBase)
     }
 
     {
+        struct ScaleWindowGeometry geometry;
+        struct LayoutData propertyLayout = *ld;
+        struct NewWindow outer = {0};
         struct TagItem  win_tags[] =
         {
             {WA_CustomScreen    , (IPTR)ld->ld_Screen           },
@@ -714,11 +721,29 @@ void SMOpenPropertyWindow(struct LayoutData *ld, struct AslBase_intern *AslBase)
             {WA_NoCareRefresh   , TRUE                          },
             {WA_IDCMP           , 0                             },
             {WA_Gadgets         , (IPTR)udata->PropertyGadget   },
+            {WA_ScaleAware, ld->ld_ScaleAware},
+            {WA_RenderContext, (IPTR)popupcontext},
+            {WA_Hidden, TRUE},
+            {WA_ScaleGeometry, 0},
             {TAG_DONE                                           }
         };
 
         win_tags[1].ti_Data = (IPTR)GetString(MSG_MODEREQ_PROPERTIES_TITLE, GetIR(ismreq)->ir_Catalog, AslBase);
 
+        if (ld->ld_ScaleAware)
+        {
+            /* Keep the ordinary requester frame envelope, including its
+             * footer, as the canonical outer rectangle. Actual live borders
+             * are used by the generation's measured minimum reconciliation. */
+            outer.LeftEdge = x; outer.TopEdge = y;
+            outer.Width = w + ld->ld_WBorLeft + ld->ld_WBorRight;
+            outer.Height = h + ld->ld_WBorTop + ld->ld_WBorBottom;
+            propertyLayout.ld_MinWidth = outer.Width;
+            propertyLayout.ld_MinHeight = outer.Height;
+            AslPrepareWindowGeometry(&propertyLayout, &outer, &geometry);
+            FindTagItem(WA_ScaleGeometry, win_tags)->ti_Data = (IPTR)&geometry;
+        }
+        else FindTagItem(WA_ScaleGeometry, win_tags)->ti_Tag = TAG_IGNORE;
         ld->ld_Window2 = OpenWindowTagList(0, win_tags);
         if (!ld->ld_Window2)
         {
@@ -728,7 +753,8 @@ void SMOpenPropertyWindow(struct LayoutData *ld, struct AslBase_intern *AslBase)
         }
 
         ld->ld_Window2->UserPort = ld->ld_Window->UserPort;
-        ModifyIDCMP(ld->ld_Window2, IDCMP_CLOSEWINDOW | IDCMP_VANILLAKEY);
+        ModifyIDCMP(ld->ld_Window2, IDCMP_CLOSEWINDOW | IDCMP_VANILLAKEY |
+            (ld->ld_ScaleAware ? IDCMP_CHANGESCALE | IDCMP_CHANGEWINDOW | IDCMP_NEWSIZE : 0));
     }
 
     dispmode = SMGetActiveMode(ld, AslBase);
@@ -750,9 +776,10 @@ void SMClosePropertyWindow(struct LayoutData *ld, struct AslBase_intern *AslBase
     DisposeObject(udata->PropertyGadget);
     udata->PropertyGadget = 0;
 
-    ismreq->ism_InfoLeftEdge = ld->ld_Window2->LeftEdge - ld->ld_Window->LeftEdge;
-    ismreq->ism_InfoTopEdge  = ld->ld_Window2->TopEdge  - ld->ld_Window->TopEdge;
+    ismreq->ism_InfoLeftEdge = AslUnscaleValue(ld, ld->ld_Window2->LeftEdge - ld->ld_Window->LeftEdge);
+    ismreq->ism_InfoTopEdge  = AslUnscaleValue(ld, ld->ld_Window2->TopEdge - ld->ld_Window->TopEdge);
 
+    AslDiscardEvents(ld, ld->ld_Window2, AslBase);
     CloseWindowSafely(ld->ld_Window2, AslBase);
 
     ld->ld_Window2 = 0;

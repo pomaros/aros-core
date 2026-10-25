@@ -1,10 +1,12 @@
 /*
     Copyright (C) 1995-2013, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
 */
 
 #include <proto/layers.h>
 #include "intuition_intern.h"
+#include "windowcomposition.h"
 #include "inputhandler_actions.h"
 
 struct MoveWindowInFrontOfActionMsg
@@ -90,33 +92,37 @@ static VOID int_movewindowinfrontof(struct MoveWindowInFrontOfActionMsg *msg,
 
     LOCK_REFRESH(screen);
 
-    behindlayer = WLAYER(behindwindow);
-    for (req = behindwindow->FirstRequest; req; req = req->OlderRequest)
+    /* Presentation layers share the screen LI. Logical layers belonging to
+       a composed window live in that window's private LI, and are ordered
+       only against its own border/requester layers. */
+    behindlayer = WindowCompositionLayer(behindwindow);
+    if (behindlayer == WLAYER(behindwindow))
     {
-        if (req->ReqLayer)
-        {
-            behindlayer = req->ReqLayer;
-            break;
-        }
+        for (req = behindwindow->FirstRequest; req; req = req->OlderRequest)
+            if (req->ReqLayer)
+            {
+                behindlayer = req->ReqLayer;
+                break;
+            }
     }
 
-    if (BLAYER(window))
+    if (WindowCompositionLayer(window) != layer)
+    {
+        MoveLayerInFrontOf(WindowCompositionLayer(window), behindlayer);
+        if (BLAYER(window)) UpfrontLayer(0, BLAYER(window));
+        UpfrontLayer(0, layer);
+    }
+    else if (BLAYER(window))
     {
         MoveLayerInFrontOf(BLAYER(window), behindlayer);
         MoveLayerInFrontOf(layer, BLAYER(window));
     }
     else
-    {
         MoveLayerInFrontOf(layer, behindlayer);
-    }
 
     for (req = window->FirstRequest; req; req = req->OlderRequest)
-    {
         if (req->ReqLayer)
-        {
             MoveLayerInFrontOf(req->ReqLayer, layer);
-        }
-    }
 
     CheckLayers(screen, IntuitionBase);
 

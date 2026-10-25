@@ -16,11 +16,28 @@
 #include LC_LIBDEFS_FILE
 #include <libraries/power.h>
 #include <proto/power.h>
+#include "../../system/Indicators/consumers.h"
 #define PowerBase data->power
+
+APTR TaskResBase;
+
+/* The tasks taking the most CPU now, as the battery indicator shows them:
+   what drains the battery, in the only measure the system keeps. */
+static void show_consumers(struct BatteryEditor_DATA *data)
+{
+    struct IndicatorConsumers list;
+    char text[192];
+    if (!TaskResBase)
+        TaskResBase = OpenResource("task.resource");
+    if (!IndicatorConsumersRead(&list) || !IndicatorConsumersFormat(&list, text, sizeof(text)))
+        snprintf(text, sizeof(text), "CPU: per-task accounting unavailable");
+    SET(data->consumers, MUIA_Text_Contents, (IPTR)text);
+}
 
 static void refresh(struct BatteryEditor_DATA *data)
 {
     struct PowerState state;
+    show_consumers(data);
     char text[384], estimate[64], current[64], capacity[80];
     if (!data->power || GetPowerStateA(&state, NULL) != POWER_OK ||
         !(state.pst_Flags & POWERSTF_KNOWN))
@@ -61,7 +78,7 @@ static void refresh(struct BatteryEditor_DATA *data)
 
 IPTR BatteryEditor__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
 {
-    Object *status, *button;
+    Object *status, *consumers, *button;
     self = (Object *)DoSuperNewTags(CLASS, self, NULL,
         MUIA_PrefsEditor_Name, (IPTR)"Battery",
         MUIA_PrefsEditor_CanSave, FALSE,
@@ -72,12 +89,21 @@ IPTR BatteryEditor__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
             MUIA_ShortHelp, (IPTR)"Battery charge, source, current, capacity and time estimate",
             MUIA_Text_Contents, (IPTR)"Battery information unavailable",
         End),
+        Child, (IPTR)VGroup,
+            GroupFrameT("Top consumers"),
+            Child, (IPTR)(consumers = TextObject,
+                MUIA_ObjectID, MAKE_ID('B','A','C','O'),
+                MUIA_ShortHelp, (IPTR)"The tasks using the most processor time now, which drain the battery most",
+                MUIA_Text_Contents, (IPTR)"Not measured yet",
+            End),
+        End,
         Child, (IPTR)(button = SimpleButton("Refresh")),
         TAG_MORE, (IPTR)message->ops_AttrList);
     if (self)
     {
         struct BatteryEditor_DATA *data = INST_DATA(CLASS, self);
         data->status = status;
+        data->consumers = consumers;
         SET(button, MUIA_ObjectID, MAKE_ID('B','A','R','F'));
         SET(button, MUIA_ShortHelp, (IPTR)"Read the latest power service sample");
         DoMethod(button, MUIM_Notify, MUIA_Pressed, FALSE, (IPTR)self, 1, MUIM_BatteryEditor_Refresh);

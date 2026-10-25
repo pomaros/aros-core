@@ -8,7 +8,6 @@
 #define AROS_APPLE_STARTUP_H
 
 #include <stdint.h>
-#include <aros/apple/spihidstats.h>
 
 #define AROS_APPLE_BOOT_MAGIC UINT32_C(0x41524f53)
 #define AROS_APPLE_TAG_DONE UINT32_C(0)
@@ -65,41 +64,8 @@
 #define AROS_APPLE_KATTR_COUNTER_FREQUENCY UINT32_C(0x83f10005)
 #define AROS_APPLE_KATTR_BOARD_MODEL UINT32_C(0x83f10006)
 #define AROS_APPLE_KATTR_BOARD_COMPATIBLE UINT32_C(0x83f10007)
-/* Non-zero when the built-in keyboard is an ISO layout (chosen property
- * aros,keyboard-iso): Apple ISO keyboards report the key left of 1 and the
- * key right of the left Shift with each other's HID usage. */
-#define AROS_APPLE_KATTR_KEYBOARD_ISO UINT32_C(0x83f10008)
-/* Non-zero when the cell asks the desktop to bring the AIC up and take
- * device interrupts (chosen property aros,desktop-aic). */
-#define AROS_APPLE_KATTR_DESKTOP_AIC UINT32_C(0x83f10009)
-/* Non-zero when the built-in trackpad stays in HID reporting (chosen
- * property aros,trackpad-hid). By default the driver switches it to raw
- * multitouch: absolute finger positions, which it turns into motion and a
- * two-finger secondary click. */
-#define AROS_APPLE_KATTR_TRACKPAD_HID UINT32_C(0x83f1000e)
-/* The built-in trackpad as the spihid driver last saw it, for the desktop
- * widget's event grid: the attribute returns a pointer to this struct, which
- * the driver writes and the widget reads. Counters only grow; generation
- * moves on every change. */
-#define AROS_APPLE_KATTR_TRACKPAD_STATE UINT32_C(0x83f1000f)
-#define AROS_APPLE_TRACKPAD_STATE_VERSION UINT32_C(1)
-struct AROSAppleTrackpadState {
-    uint32_t version;
-    uint32_t raw;               /* multitouch frames decoded */
-    uint32_t fingers;           /* fingers on the pad now (raw mode only) */
-    uint32_t buttons;           /* bit 0 primary, bit 1 secondary held */
-    uint32_t clicks;            /* primary presses */
-    uint32_t ctrl_clicks;       /* secondary presses made with Control */
-    uint32_t two_finger_clicks; /* secondary presses made with two fingers */
-    uint32_t motions;           /* pointer motion events */
-    uint32_t generation;
-};
-/* Non-zero when the cell asks for the internal drive to be brought up
- * read-only by applenvme.device (chosen property aros,desktop-nvme). */
-#define AROS_APPLE_KATTR_DESKTOP_NVME UINT32_C(0x83f1000a)
-/* The boot loader's random seed (/chosen/rng-seed, which m1n1 fills from
- * the SEP's generator or iBoot's random-seed), taken once at EL1 and wiped
- * from the tree. The attribute returns a struct AROSAppleBootSeed while
+/* The boot loader's random seed (/chosen/rng-seed), taken once at EL1 and
+ * wiped from the tree. The attribute returns a struct AROSAppleBootSeed while
  * length is non-zero; its one consumer, entropy.resource, folds the bytes
  * into its generator and clears the struct, after which it returns -1. */
 #define AROS_APPLE_KATTR_BOOT_SEED UINT32_C(0x83f1000b)
@@ -109,83 +75,21 @@ struct AROSAppleBootSeed {
     uint8_t bytes[AROS_APPLE_BOOT_SEED_BYTES];
 };
 /*
- * The battery and adapter state the desktop hold reads from the SMC every
- * five seconds (BRSC, TB0T, B0AV, AC-W, B0RM, B0FC, B0DC, B0AC, B0CT). The
- * hold is the SMC's one client; applications read this struct instead of
- * opening the SMC. The attribute returns a pointer once the first sample is
- * in, -1 before (no SMC on this cell, or the hold has not run yet). The
- * writer bumps `sequence` around each update, odd while writing:
- * AROSAppleBatteryRead() copies a consistent sample.
- */
-#define AROS_APPLE_KATTR_BATTERY UINT32_C(0x83f1000c)
-#define AROS_APPLE_BATTERY_VERSION UINT32_C(1)
-#define AROS_APPLE_BATTERY_PRESENT UINT32_C(0x1)      /* a battery answered */
-#define AROS_APPLE_BATTERY_ADAPTER UINT32_C(0x2)      /* AC adapter connected */
-#define AROS_APPLE_BATTERY_CHARGING UINT32_C(0x4)     /* current flows in */
-#define AROS_APPLE_BATTERY_TEMPERATURE UINT32_C(0x8)  /* temperature_tenths valid */
-#define AROS_APPLE_BATTERY_CAPACITY UINT32_C(0x10)    /* mAh fields valid */
-#define AROS_APPLE_BATTERY_CURRENT UINT32_C(0x20)     /* current_ma valid */
-#define AROS_APPLE_BATTERY_CYCLES UINT32_C(0x40)      /* cycles valid */
-struct AROSAppleBatteryInfo {
-    uint32_t version;
-    uint32_t size;
-    uint32_t sequence;          /* even: stable; odd: being written */
-    uint32_t flags;             /* AROS_APPLE_BATTERY_* */
-    uint32_t charge_percent;    /* BRSC, 0..100 */
-    uint32_t millivolts;        /* B0AV */
-    int32_t temperature_tenths; /* TB0T, tenths of a degree C */
-    int32_t current_ma;         /* B0AC, negative while discharging */
-    uint32_t remaining_mah;     /* B0RM */
-    uint32_t full_charge_mah;   /* B0FC */
-    uint32_t design_mah;        /* B0DC */
-    uint32_t cycles;            /* B0CT */
-    uint64_t sample_counter;    /* CNTVCT_EL0 at the sample */
-    uint64_t counter_frequency; /* ticks per second, to age the sample */
-};
-
-/* One consistent copy; returns 0 when the writer never settles. */
-static inline int AROSAppleBatteryRead(
-    const volatile struct AROSAppleBatteryInfo *published,
-    struct AROSAppleBatteryInfo *out)
-{
-    unsigned attempt;
-
-    for (attempt = 0; attempt < 16U; ++attempt) {
-        uint32_t before = published->sequence;
-        uint32_t after;
-        const volatile uint32_t *source = (const volatile uint32_t *)published;
-        uint32_t *target = (uint32_t *)out;
-        unsigned index;
-
-        if (before & 1U)
-            continue;
-        __asm__ volatile("dmb ishld" ::: "memory");
-        for (index = 0; index < sizeof(*out) / sizeof(uint32_t); ++index)
-            target[index] = source[index];
-        __asm__ volatile("dmb ishld" ::: "memory");
-        after = published->sequence;
-        if (after == before)
-            return out->version == AROS_APPLE_BATTERY_VERSION &&
-                out->size == sizeof(*out);
-    }
-    return 0;
-}
-/*
  * What set the system clock at boot. The desktop hold publishes it after
- * its PMIC clock attempt, once per boot: a pointer to the struct once
+ * its firmware or platform clock attempt: a pointer to the struct once
  * published, -1 before. unix_seconds is 0 when the hold set nothing;
- * rtc_status is the AROSAppleSPMIStatus of the attempt, or -1 when the
- * resource was absent or predates the clock vectors. Network time is not
+ * rtc_status is the provider-specific status of the attempt, or -1 when no
+ * usable clock was available. Network time is not
  * here: SNTPSync writes ENV:SNTPSync/LastSync ("<unix seconds> <server>").
  */
 #define AROS_APPLE_KATTR_SYSTEM_TIME UINT32_C(0x83f1000d)
 #define AROS_APPLE_SYSTEM_TIME_VERSION UINT32_C(1)
-#define AROS_APPLE_SYSTEM_TIME_RTC_SET UINT32_C(0x1)   /* the clock was set from the PMIC */
+#define AROS_APPLE_SYSTEM_TIME_RTC_SET UINT32_C(0x1)   /* the clock was set from a boot-time source */
 struct AROSAppleSystemTimeInfo {
     uint32_t version;
     uint32_t size;
     uint32_t flags;             /* AROS_APPLE_SYSTEM_TIME_* */
-    int32_t rtc_status;         /* AROSAppleSPMIStatus, -1 when no usable resource */
+    int32_t rtc_status;         /* provider-specific status, -1 when unavailable */
     uint64_t unix_seconds;      /* what was set, 0 when nothing was */
     uint64_t counter_at_set;    /* CNTVCT_EL0 then, 0 when nothing was */
 };

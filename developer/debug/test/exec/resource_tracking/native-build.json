@@ -1,0 +1,31 @@
+{
+  "result": "PASS",
+  "target": "apple-aarch64 UP",
+  "toolchain": "/Users/jknipper/Source/aros-personal/aros-crosstools",
+  "goals": [
+    "kernel-task",
+    "kernel-dos"
+  ],
+  "exit_code": 0,
+  "source_base": "e9d0e0f43749ee0c6d827d5e1b90d87d6ac9e840",
+  "source_sha256": {
+    "rom/task/TaskResourceControl.c": "4ed2e764fe7487582f030a45cfbdd7d91bad3d36627de2a4a8e9560a3943d7bd",
+    "rom/task/task_rt.h": "b35a648707f3f46c74eb104d208231213bce50c13f603f9d0b8dece6a7ddb7e7",
+    "rom/task/task_execfuncs.c": "1ab66e3f917069ff407f8b6e9a8d904ed689c437cfc8d05cb4c6918f390eff9b",
+    "rom/task/task_init.c": "a469829ff46ac5ed0df0f0186e347e14c81eb4397f2510aa08d2335f2c2a9b38",
+    "rom/task/task_intern.h": "f623f29d62dc409c5957ad23bc6a713c33f45bdae7bde1224f10564a04fbe70e",
+    "rom/task/task.conf": "e9a24a1ad2863d12e6d14774dd74231494b1cebff09dfe547da78cda5530355a",
+    "rom/task/mmakefile.src": "56712c06c1bfe90b175051c69c9c95528640e9a36a1b4785a8cd32d09d9a41bc",
+    "rom/dos/createnewproc.c": "2d6bcde6abdb5b59a592d5ae228d8f59a757c6bbf94f1af9d991bb575f563cc2"
+  },
+  "logs": {
+    "configure.log": "dbd9bd19b7314679585d34859f8dfb879b5713c372e5d2c83fc15d680fd70692",
+    "task-build-02.log": "7fae2300ae1734e3789a26f0e83857bfcd93844b7cb8da51654152efadada088",
+    "dos-build.log": "2af9a4ced6b2d9072131ebf082b1c1d1068c70f7a18f8bf8bd7ab9d4da0eaae7"
+  },
+  "artifacts": {
+    "bin/apple-aarch64/AROS/Devs/task.resource": "3c296b9d7188f87de17365af81653f7baefae5fd2dd8218a052fb9835920c2f4",
+    "bin/apple-aarch64/AROS/Libs/dos.library": "1d61cd4caf3074d6905abf576cfd9a329e817f97b696d57861eb9b3d71f9ac32"
+  },
+  "scope": "Native compilation and linking only; no AROS boot or SMP runtime result"
+}

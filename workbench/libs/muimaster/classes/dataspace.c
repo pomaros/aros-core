@@ -140,6 +140,9 @@ IPTR Dataspace__MUIM_Clear(struct IClass *cl, Object *obj,
 
         FreeVecPooled(data->current_pool, tmp);
     }
+    /* The list is empty now: an Add after a Clear must not walk the freed
+       nodes, nor a second Clear free them again. */
+    NewList((struct List *)&data->list);
 
     return 1;
 }

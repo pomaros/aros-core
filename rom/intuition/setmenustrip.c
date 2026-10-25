@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2013, The AROS Development Team. All rights reserved.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
 */
@@ -6,8 +7,10 @@
 #include "intuition_intern.h"
 #include "menus.h"
 #include "menutask.h"
+#include "menuscale.h"
 
-void CalculateDims(struct Window *win, struct Menu *menu);
+#define HASSUBITEM 0x8000
+
 void Characterize(struct Menu *menu);
 
 /*****************************************************************************
@@ -59,84 +62,11 @@ void Characterize(struct Menu *menu);
 
     SANITY_CHECKR(window,FALSE)
 
-    if (!EnsureDefaultMenuHandler(IntuitionBase))
-        return FALSE;
-
-#define HASSUBITEM 0x8000
-
-    ObtainSemaphore(&GetPrivIBase(IntuitionBase)->MenuLock);
-
-    /* If a menu is active for this task, we must wait until the
-       user is done. We check the task rather than the window as
-       semaphores is owned by tasks... */
-    /* struct Task *me = FindTask(NULL); */
-
-    /* This must be before CalculateDims(). */
-    Characterize(menu);
-
-    /* When entering here, this menustrip is NOT displayed as the user has
-       removed it from the window using ClearMenuStrip() if it was ever
-       attached to a window. */
-    CalculateDims(window, menu);
-
-#if 0 /* stegerg: ??? */
-
-    /*
-    if(me == GPB(IntuiBase)->ib_ActiveMenuTask)
-{
-    ObtainSemaphore(&GPB(IntuiBase)->ib_MenuWaitLock);
-
-    AddTail((struct Node *)me, &GPB(IntuiBase)->ib_MenuWaitList);
-
-    ReleaseSemaphore(&GPB(IntuiBase)->ib_MenuWaitLock);
-
-    Wait(SIGF_INTUITION);
-}
-    */
-#endif
-
-    window->MenuStrip = menu;
-
-#if 0 /* stegerg: ??? */
-    /* Note that we have to do a similar test in the input handler
-       as well. */
-
-    /* If we were just one of the tasks in the list... */
-
-    /*    if(me != GPB(IntuitionBase)->ib_ActiveMenuTask)
-{
-    struct Task *sleeper;
-
-    ObtainSemaphore(&GPB(IntuitionBase)->ib_MenuWaitLock);
-    sleeper = RemHead(&GPB(IntuitionBase)->ib_MenuWaitList);
-    ReleaseSemaphore(&GPB(IntuitionBase)->ib_MenuWaitLock);
-
-    if(sleeper)
-     Signal(sleeper, SIGF_INTUITION);
-}
-    */
-#endif
-
-    ReleaseSemaphore(&GetPrivIBase(IntuitionBase)->MenuLock);
-
-    return TRUE;
+    const struct ScreenRenderContext *context = CaptureMenuScaleContext(window, IntuitionBase);
+    return SetMenuStripContext(window, menu, context, !IW(window)->ScaleAware);
 
     AROS_LIBFUNC_EXIT
 } /* SetMenuStrip */
-
-void CalculateDims(struct Window *win, struct Menu *menu)
-{
-    struct MenuItem *item;
-
-    while(menu != NULL)
-    {
-        item = menu->FirstItem;
-
-        GetMenuBox(win, item, &menu->JazzX, &menu->JazzY, &menu->BeatX, &menu->BeatY);
-
-        menu = menu->NextMenu;
-    }
-}
 
 /* Mark items that has subitems. This is necessary for the input handler
    code. It's not possible to check item->SubItem within it as we save

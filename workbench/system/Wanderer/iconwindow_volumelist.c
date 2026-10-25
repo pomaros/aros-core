@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
   Copyright (C)  2004-2026, The AROS Development Team. All rights reserved.
 */
 
@@ -48,6 +49,7 @@
 #include "wandererprefs.h"
 #include "iconwindow.h"
 #include "iconwindow_iconlist.h"
+#include "wandererscale.h"
 #include "appobjects.h"
 
 extern struct IconWindow_BackFill_Descriptor  *iconwindow_BackFill_Active;
@@ -1251,7 +1253,7 @@ IPTR IconWindowVolumeList__MUIM_IconList_DestroyEntry(struct IClass *CLASS, Obje
 
     volPrivate = message->entry->ie_IconListEntry.udata;
 
-    if ((message->entry->ie_IconListEntry.type == ST_ROOT))
+    if (message->entry->ie_IconListEntry.type == ST_ROOT)
     {
         if (volPrivate->vip_FSNotifyRequest.nr_Name != NULL)
         {
@@ -1278,6 +1280,8 @@ IPTR IconWindowVolumeList__MUIM_IconList_DrawEntry(struct IClass *CLASS, Object 
     /* If the Entry is an AppIcon, and it has a renderhook - use the hook to perform the rendering, otherwise fall back to our parent's handling */
     if (message->entry->ie_IconListEntry.type == ILE_TYPE_APPICON)
     {
+        if (XGET(self, MUIA_RenderScale) != 100)
+            return DoSuperMethodA(CLASS, self, (Msg)message);
         if (AppIcon_Supports((struct AppIcon *)message->entry->ie_User1, WBAPPICONA_RenderHook))
         {
             struct AppIconRenderMsg  renderMsg;
@@ -1325,8 +1329,8 @@ IPTR IconWindowVolumeList__MUIM_IconList_PropagateEntryPos(struct IClass *CLASS,
         if (AppIcon_Supports(ai, WBAPPICONA_PropagatePosition))
         {
             struct DiskObject * diskobj = AppIcon_GetDiskObject(ai);
-            diskobj->do_CurrentX = message->entry->ie_IconX;
-            diskobj->do_CurrentY = message->entry->ie_IconY;
+            diskobj->do_CurrentX = WandererUnscalePoint(message->entry->ie_IconX, XGET(obj, MUIA_RenderScale));
+            diskobj->do_CurrentY = WandererUnscalePoint(message->entry->ie_IconY, XGET(obj, MUIA_RenderScale));
         }
     }
 
@@ -1354,6 +1358,9 @@ IPTR IconWindowVolumeList__MUIM_IconList_Tile(struct IClass *CLASS, Object *self
     struct AppIcon *icon = (struct AppIcon *)message->entry->ie_User1;
     if (message->entry->ie_IconListEntry.type != ILE_TYPE_APPICON)
         return FALSE;
+    /* A newly added foreign tile waits for queued whole-window fallback.
+     * Never send it physical drawing/input coordinates during that interval. */
+    if (XGET(self, MUIA_RenderScale) != 100) return FALSE;
     switch (request->action) {
     case ICONTILE_SIZE: return AppIcon_TileSize(icon, &request->width, &request->height);
     case ICONTILE_DRAW: return AppIcon_DrawTile(icon, request->rp, request->x, request->y);

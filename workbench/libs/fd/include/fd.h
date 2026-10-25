@@ -17,6 +17,7 @@ typedef UBYTE fd_owner_t;
 #define FD_OWNER_NONE      ((fd_owner_t)0)
 #define FD_OWNER_POSIXC    ((fd_owner_t)1)
 #define FD_OWNER_BSDSOCKET ((fd_owner_t)2)
+#define FD_OWNER_NATIVE_SOCKET ((fd_owner_t)3) /* task-independent sockets */
 #define FD_OWNER_MAX       ((fd_owner_t)16)   /* size of the owner-hooks table */
 
 /*

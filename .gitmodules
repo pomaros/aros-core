@@ -148,9 +148,6 @@
 [submodule "workbench/prefs/serial/catalogs"]
 	path = workbench/prefs/serial/catalogs
 	url = https://github.com/aros-translation-team/serial-prefs.git
-[submodule "workbench/prefs/time/catalogs"]
-	path = workbench/prefs/time/catalogs
-	url = https://github.com/aros-translation-team/time-prefs.git
 [submodule "workbench/prefs/trackdisk/catalogs"]
 	path = workbench/prefs/trackdisk/catalogs
 	url = https://github.com/aros-translation-team/trackdisk-prefs.git
@@ -226,3 +223,6 @@
 [submodule "workbench/prefs/wifi/catalogs"]
 	path = workbench/prefs/wifi/catalogs
 	url = https://github.com/aros-translation-team/wifi-prefs.git
+[submodule "workbench/system/accounts/catalogs"]
+	path = workbench/system/accounts/catalogs
+	url = https://github.com/aros-translation-team/accounts.git

@@ -49,6 +49,10 @@ PTHREADFUNCS :=  \
 #    files="$(LIBRARYFILES) $(PTHREADFUNCS)" \
 #    linklibfiles=$(LINKLIBFILES)
 
+# The library sees the real exec structures inside the pthread types;
+# programs see their layout twins (see aros/types/pthread_types.h).
+USER_CPPFLAGS := -D__PTHREAD_EXEC_MEMBERS
+
 %build_linklib mmake=linklibs-pthread \
     libname=pthread \
     files="$(LINKLIBFILES) $(PTHREADFUNCS)"

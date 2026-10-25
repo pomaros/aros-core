@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 2002-2026, The AROS Development Team. All rights reserved.
 
 */
@@ -1192,4 +1193,69 @@ void dt_put_on_rastport_tiled(struct dt_node *node, struct RastPort *rp,
         DoHookClipRects((struct Hook *)bfi, rp, &rect);
     }
     ReleaseSemaphore(&MUIMB(MUIMasterBase)->ZuneSemaphore);
+}
+
+/* Keep cached datatype objects shared and unmodified across screens. */
+void dt_put_scaled_on_rastport(struct dt_node *node, struct RastPort *rp,
+    int x, int y, ULONG scale, ULONG density, BOOL mim, LONG state)
+{
+    struct pdtBlitPixelArray pa;
+    ULONG *source, *target;
+    LONG sx, sy, sourcewidth = dt_width(node);
+    LONG height = dt_height(node), width, dw, dh, sourceleft;
+    UBYTE *mask = NULL;
+    struct BitMap *bitmap = NULL;
+    ULONG maskmod = 0;
+
+    if (sourcewidth <= 0 || sourcewidth > 65535 || height <= 0 || height > 65535 ||
+        scale < 100 || scale > 400 || (density != 100 && density != 200)) return;
+    width = sourcewidth / (mim ? 2 : 1);
+    sourceleft = mim && state ? width : 0;
+    dw = ((IPTR)width * scale + density / 2) / density;
+    dh = ((IPTR)height * scale + density / 2) / density;
+    /* WritePixelArrayAlpha has 16-bit dimensions and a 16-bit byte stride. */
+    if (width <= 0 || dw <= 0 || dw > 65535 / 4 || dh <= 0 || dh > 65535) return;
+    if (scale == density && !mim) {
+        dt_put_on_rastport(node, rp, x, y);
+        return;
+    }
+    source = AllocVec((IPTR)sourcewidth * height * 4, MEMF_ANY);
+    target = AllocVec((IPTR)dw * dh * 4, MEMF_ANY);
+    if (source && target) {
+        /* Read the complete source before selecting a MIM state. The datatype
+         * conversion path walks its full source width even for a subrectangle.
+         * A full-width buffer/stride also keeps that path within its bounds. */
+        pa.MethodID = PDTM_READPIXELARRAY;
+        pa.pbpa_PixelData = (UBYTE *)source;
+        pa.pbpa_PixelFormat = PBPAFMT_ARGB;
+        pa.pbpa_PixelArrayMod = sourcewidth * 4;
+        pa.pbpa_Left = 0;
+        pa.pbpa_Top = 0;
+        pa.pbpa_Width = sourcewidth;
+        pa.pbpa_Height = height;
+        if (DoMethodA(node->o, (Msg)&pa)) {
+            if (node->mask == mskHasMask || node->mask == mskHasTransparentColor) {
+                GetDTAttrs(node->o, PDTA_DestBitMap, (IPTR)&bitmap, TAG_DONE);
+                if (!bitmap) GetDTAttrs(node->o, PDTA_BitMap, (IPTR)&bitmap, TAG_DONE);
+                GetDTAttrs(node->o, PDTA_MaskPlane, (IPTR)&mask, TAG_DONE);
+                if (mask && bitmap)
+                    maskmod = ((GetBitMapAttr(bitmap, BMA_WIDTH) + 15) & ~15) / 8;
+            }
+            for (sy = 0; sy < dh; sy++) {
+                LONG sourcey = (IPTR)sy * height / dh;
+                for (sx = 0; sx < dw; sx++) {
+                    LONG sourcex = sourceleft + (IPTR)sx * width / dw;
+                    UBYTE *pixel = (UBYTE *)&target[(IPTR)sy * dw + sx];
+                    target[(IPTR)sy * dw + sx] = source[(IPTR)sourcey * sourcewidth + sourcex];
+                    if (maskmod)
+                        pixel[0] = mask[(IPTR)sourcey * maskmod + sourcex / 8] & (0x80 >> (sourcex & 7)) ? 255 : 0;
+                    else if (node->mask == mskNone)
+                        pixel[0] = 255;
+                }
+            }
+            WritePixelArrayAlpha(target, 0, 0, dw * 4, rp, x, y, dw, dh, 0xffffffff);
+        }
+    }
+    FreeVec(source);
+    FreeVec(target);
 }

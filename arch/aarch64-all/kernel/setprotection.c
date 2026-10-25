@@ -41,12 +41,17 @@ int AArch64ProtectPage(const struct AArch64ProtectionOps *ops, uint64_t ttbr0,
     uint64_t page_size, mask, count, *table, *slot, desc;
 
     if (!ops || !ops->resolve || !ops->allocate || !ops->clean ||
-        !ops->invalidate || !ops->synchronize || (permissions & ~31U) ||
+        !ops->invalidate || !ops->synchronize || (permissions & ~63U) ||
         ((permissions & AARCH64_PROTECT_EXEC_BOTH) &&
             (permissions & (AARCH64_PROTECT_EXEC | AARCH64_PROTECT_USER)) !=
                 (AARCH64_PROTECT_EXEC | AARCH64_PROTECT_USER)) ||
-        ((permissions & (AARCH64_PROTECT_WRITE | AARCH64_PROTECT_EXEC)) ==
-            (AARCH64_PROTECT_WRITE | AARCH64_PROTECT_EXEC)) ||
+        ((permissions & AARCH64_PROTECT_JIT) &&
+            permissions != (AARCH64_PROTECT_JIT | AARCH64_PROTECT_READ |
+                AARCH64_PROTECT_WRITE | AARCH64_PROTECT_EXEC |
+                AARCH64_PROTECT_USER)) ||
+        (!(permissions & AARCH64_PROTECT_JIT) &&
+            (permissions & (AARCH64_PROTECT_WRITE | AARCH64_PROTECT_EXEC)) ==
+                (AARCH64_PROTECT_WRITE | AARCH64_PROTECT_EXEC)) ||
         ((permissions & (AARCH64_PROTECT_WRITE | AARCH64_PROTECT_EXEC)) &&
             !(permissions & AARCH64_PROTECT_READ)))
         return 0;
@@ -124,7 +129,13 @@ int AArch64ProtectPage(const struct AArch64ProtectionOps *ops, uint64_t ttbr0,
         /* Execute is granted only at the requested privilege level. */
         if (!(permissions & AARCH64_PROTECT_EXEC))
             desc |= PXN | UXN;
-        else {
+        else if (permissions & AARCH64_PROTECT_JIT) {
+            /* The JIT descriptor: writable at EL0, PXN, no UXN. Published
+             * readable and non-executable first, like any code page. */
+            desc |= PXN;
+            replace(ops, slot, desc | UXN);
+            ops->synchronize(ops->context, address, (size_t)page_size);
+        } else {
             if (!(permissions & AARCH64_PROTECT_EXEC_BOTH))
                 desc |= permissions & AARCH64_PROTECT_USER ? PXN : UXN;
             /* A guard has no translation: publish a readable NX mapping

@@ -2953,7 +2953,7 @@ int static inline
 __attribute__((always_inline, const)) do_alpha(int a, int f, int b)
 {
     int tmp  = (a*(f-b));
-    return ((tmp<<8) + tmp + 32768)>>16;
+    return ((tmp * 256) + tmp + 32768)>>16;
 }
 #endif
 
@@ -5325,4 +5325,35 @@ void BM__Hidd_BitMap__SetVisible(OOP_Class *cl, OOP_Object *o, BOOL val)
     ObtainSemaphore(&data->lock);
     data->visible = val;
     ReleaseSemaphore(&data->lock);
+}
+
+/* Unsupported drivers never acquire the prepared-mapping capability by
+ * default. The refusal names the object's own class. */
+BOOL BM__Hidd_BitMap__PreparePixels(OOP_Class *cl, OOP_Object *o,
+    struct pHidd_BitMap_PreparePixels *msg)
+{
+    (void)cl;
+    if (msg->map)
+    {
+        msg->map->refusal = HIDD_PIXELS_REFUSE_UNSUPPORTED;
+        msg->map->refusalClass = OOP_OCLASS(o)->ClassNode.ln_Name;
+    }
+    return FALSE;
+}
+VOID BM__Hidd_BitMap__ReleasePixels(OOP_Class *cl, OOP_Object *o,
+    struct pHidd_BitMap_ReleasePixels *msg)
+{
+    (void)cl; (void)o; (void)msg;
+}
+
+BOOL BM__Hidd_BitMap__RenderPreparedCursor(OOP_Class *cl, OOP_Object *o,
+    struct pHidd_BitMap_RenderPreparedCursor *msg)
+{
+    (void)cl;
+    if (msg->map)
+    {
+        msg->map->refusal = HIDD_PIXELS_REFUSE_UNSUPPORTED;
+        msg->map->refusalClass = OOP_OCLASS(o)->ClassNode.ln_Name;
+    }
+    return FALSE;
 }

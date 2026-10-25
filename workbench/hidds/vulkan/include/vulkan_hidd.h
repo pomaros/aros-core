@@ -95,8 +95,9 @@ struct VulkanDriverCallbacks
                                  APTR driverData);
 
     /* ---- Instance ---- */
-    APTR    (*CreateInstance)(const char *appName, ULONG appVersion,
-                              APTR driverData);
+    /* createInfo is the application's VkInstanceCreateInfo: its API
+     * version and the extensions it enables (NULL: the driver's defaults) */
+    APTR    (*CreateInstance)(const void *createInfo, APTR driverData);
     void    (*DestroyInstance)(APTR instance, APTR driverData);
     int32_t (*EnumeratePhysicalDevices)(APTR instance, ULONG *pCount,
                                         APTR *pPhysicalDevices,
@@ -398,7 +399,15 @@ extern OOP_AttrBase HiddVulkanAttrBase;
  * Vulkan HIDD interface version.
  * Bump when the method table or struct layouts change.
  */
-#define VULKAN_INTERFACE_VERSION    2
+#define VULKAN_INTERFACE_VERSION    3
+
+/*
+ * The instance-level version the loader reports with no driver, as the
+ * Khronos loader reports its own: an application then fails at
+ * vkCreateInstance with VK_ERROR_INCOMPATIBLE_DRIVER, not on a version
+ * check. With a driver, its own version is reported.
+ */
+#define VULKAN_LOADER_API_VERSION   ((1u << 22) | (4u << 12))   /* 1.4 */
 
 /* ---- Methods ---- */
 enum
@@ -556,8 +565,7 @@ enum
 struct pHidd_Vulkan_CreateInstance
 {
     STACKED OOP_MethodID    mID;
-    STACKED const char     *applicationName;
-    STACKED ULONG           applicationVersion;
+    STACKED const void     *createInfo;     /* VkInstanceCreateInfo */
 };
 
 struct pHidd_Vulkan_DestroyInstance

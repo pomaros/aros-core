@@ -308,7 +308,10 @@ static void mhac_MemChunkClaimed(struct MemChunk * mc, struct MemHeaderAllocator
     }
 }
 
-static LONG mhac_CalcIndex(LONG size, ULONG indexsize)
+/* size is unsigned and full width: a request of 2 GiB or more, truncated to
+ * a negative LONG, never shifted down to 0 and hung the allocator with the
+ * memory lock held (the whole system stopped). */
+static LONG mhac_CalcIndex(IPTR size, ULONG indexsize)
 {
     LONG r = 0;
     size >>= FIRSTPOTBIT;
@@ -424,8 +427,8 @@ void mhac_PoolMemHeaderSetup(struct MemHeader * mh, struct ProtectedPool * pool)
 
 #ifdef NO_CONSISTENCY_CHECKS
 
-#define validateHeader(mh, op, addr, size, SysBase) TRUE
-#define validateChunk(mc, prev, mh, op, addr, size, SysBase) TRUE
+#define validateHeader(mh, op, addr, size, tp, pa) TRUE
+#define validateChunk(mc, prev, mh, op, addr, size, tp, pa) TRUE
 
 #else
 
@@ -436,6 +439,41 @@ static ULONG memAlerts[] =
     AN_FreeTwice                /* MM_OVERLAP */
 };
 
+#endif
+
+/*
+ * A consistency failure found while a MemHeader's spin lock is held. It is
+ * recorded here and posted only once every allocator lock is released
+ * (mmPostAlert(), mmPostPendingAlert()): posting it shows a requester or a
+ * Guru, which allocates memory and waits for the user, and with the
+ * allocator's locks held the machine froze instead of reporting the error.
+ */
+struct MMPendingAlert
+{
+    BOOL             set;
+    ULONG            code;
+    struct MMContext data;
+};
+
+#ifndef NO_CONSISTENCY_CHECKS
+
+static void mmRecordAlert(struct MMPendingAlert *pa, UBYTE op, struct MemHeader *mh,
+                          struct MemChunk *mc, struct MemChunk *mcPrev,
+                          APTR addr, IPTR size, struct TraceLocation *tp)
+{
+    if (pa->set)
+        return;
+    pa->set         = TRUE;
+    pa->code        = memAlerts[op];
+    pa->data.mh     = mh;
+    pa->data.mc     = mc;
+    pa->data.mcPrev = mcPrev;
+    pa->data.func   = tp ? tp->function : NULL;
+    pa->data.addr   = addr;
+    pa->data.size   = size;
+    pa->data.op     = op;
+}
+
 /*
  * MemHeader validation routine. Rules are:
  *
@@ -444,27 +482,15 @@ static ULONG memAlerts[] =
  * We intentionally don't check header's own location. We assume that in future we'll
  * be able to put MEMF_CHIP headers inside MEMF_FAST memory, for speed up.
  */
-static BOOL validateHeader(struct MemHeader *mh, UBYTE op, APTR addr, IPTR size, struct TraceLocation *tp, struct ExecBase *SysBase)
+static BOOL validateHeader(struct MemHeader *mh, UBYTE op, APTR addr, IPTR size, struct TraceLocation *tp, struct MMPendingAlert *pa)
 {
     if (((IPTR)mh->mh_First & (MEMCHUNK_TOTAL - 1)) || (mh->mh_Free & (MEMCHUNK_TOTAL - 1)) ||        /* 1 */
     (mh->mh_First &&
      (((APTR)mh->mh_First < mh->mh_Lower) || ((APTR)mh->mh_First + mh->mh_Free > mh->mh_Upper))))    /* 2 */
     {
+        /* TraceLocation is not supplied by PrepareExecBase(). Fail silently. */
         if (tp)
-        {
-            /* TraceLocation is not supplied by PrepareExecBase(). Fail silently. */
-            struct MMContext alertData;
-
-            alertData.mh     = mh;
-            alertData.mc     = NULL;
-            alertData.mcPrev = NULL;
-            alertData.func   = tp->function;
-            alertData.addr   = addr;
-            alertData.size   = size;
-            alertData.op     = op;
-
-            Exec_ExtAlert(memAlerts[op], tp->caller, tp->stack, AT_MEMORY, &alertData, SysBase);
-        }
+            mmRecordAlert(pa, op, mh, NULL, NULL, addr, size, tp);
 
         /*
          * Theoretically during very early boot we can fail to post an alert (no KernelBase yet).
@@ -487,7 +513,7 @@ static BOOL validateHeader(struct MemHeader *mh, UBYTE op, APTR addr, IPTR size,
  */
 static inline BOOL validateChunk(struct MemChunk *p2, struct MemChunk *p1, struct MemHeader *mh,
                  UBYTE op, APTR addr, IPTR size,
-                 struct TraceLocation *tp, struct ExecBase *SysBase)
+                 struct TraceLocation *tp, struct MMPendingAlert *pa)
 {
     if (((IPTR)p2->mc_Next & (MEMCHUNK_TOTAL-1)) || (p2->mc_Bytes == 0) || (p2->mc_Bytes & (MEMCHUNK_TOTAL-1))    ||    /* 1 */
     ((APTR)p2 + p2->mc_Bytes > mh->mh_Upper)                                ||    /* 2 */
@@ -495,19 +521,8 @@ static inline BOOL validateChunk(struct MemChunk *p2, struct MemChunk *p1, struc
                  ((APTR)p2->mc_Next > mh->mh_Upper - MEMCHUNK_TOTAL))))
     {
         if (tp)
-        {
-            struct MMContext alertData;
-
-            alertData.mh     = mh;
-            alertData.mc     = p2;
-            alertData.mcPrev = (p1 == (struct MemChunk *)&mh->mh_First) ? NULL : p1;
-            alertData.func   = tp->function;
-            alertData.addr   = addr;
-            alertData.size   = size;
-            alertData.op     = op;
-
-            Exec_ExtAlert(memAlerts[op], tp->caller, tp->stack, AT_MEMORY, &alertData, SysBase);
-        }
+            mmRecordAlert(pa, op, mh, p2, (p1 == (struct MemChunk *)&mh->mh_First) ? NULL : p1,
+                          addr, size, tp);
         return FALSE;
     }
 
@@ -524,6 +539,61 @@ static inline BOOL validateChunk(struct MemChunk *p2, struct MemChunk *p1, struc
  *      However if it was passed once for a given MemHeader it needs to be passed
  *      in all consecutive calls.
  */
+/*
+ * Hand an alert recorded under a header's spin lock (see MMPendingAlert) to
+ * the calling task, for mmPostPendingAlert() once the caller has released
+ * every allocator lock: AllocMem()/FreeMem() still hold the memory list
+ * lock and Forbid() here, and the requester the alert puts up waits for the
+ * user with them held. A task without an ETask has nowhere to keep it and
+ * posts it at once, as before.
+ */
+static void mmPostAlert(struct MMPendingAlert *pa, struct TraceLocation *tp, struct ExecBase *SysBase)
+{
+    struct Task *task = GET_THIS_TASK;
+    struct IntETask *iet = NULL;
+
+    if (!pa->set)
+        return;
+    if (task && (task->tc_Flags & TF_ETASK) && (task->tc_State != TS_REMOVED))
+        iet = GetIntETask(task);
+    if (iet && !(iet->iet_AlertFlags & (AF_Alert | AF_MemPending)))
+    {
+        iet->iet_AlertCode = pa->code;
+        if (tp)
+        {
+            iet->iet_AlertType = AT_MEMORY;
+            CopyMem(&pa->data, ETaskAlertData(iet), sizeof(pa->data));
+            iet->iet_AlertLocation = tp->caller;
+            iet->iet_AlertStack    = tp->stack;
+            iet->iet_AlertFlags   |= AF_Location;
+        }
+        else
+            iet->iet_AlertType = AT_NONE;
+        iet->iet_AlertFlags |= AF_MemPending;
+        return;
+    }
+    if (tp)
+        Exec_ExtAlert(pa->code, tp->caller, tp->stack, AT_MEMORY, &pa->data, SysBase);
+    else
+        Alert(pa->code);
+}
+
+void mmPostPendingAlert(struct ExecBase *SysBase)
+{
+    struct Task *task = GET_THIS_TASK;
+    struct IntETask *iet;
+
+    if (!task || !(task->tc_Flags & TF_ETASK))
+        return;
+    iet = GetIntETask(task);
+    if (!iet || !(iet->iet_AlertFlags & AF_MemPending))
+        return;
+    iet->iet_AlertFlags &= ~AF_MemPending;
+    /* With no data, Exec_ExtAlert() takes the stored type, data and location. */
+    Exec_ExtAlert(iet->iet_AlertCode, iet->iet_AlertLocation, iet->iet_AlertStack,
+                  iet->iet_AlertType, NULL, SysBase);
+}
+
 APTR stdAlloc(struct MemHeader *mh, struct MemHeaderAllocatorCtx *mhac, IPTR size,
         ULONG requirements, struct TraceLocation *tp, struct ExecBase *SysBase)
 {
@@ -565,6 +635,7 @@ APTR stdAlloc(struct MemHeader *mh, struct MemHeaderAllocatorCtx *mhac, IPTR siz
         /* First round byteSize up to a multiple of MEMCHUNK_TOTAL */
         IPTR byteSize = AROS_ROUNDUP2(size, MEMCHUNK_TOTAL);
         struct MemChunk *mc=NULL, *p1, *p2;
+        struct MMPendingAlert pa = { FALSE };
 
 #if defined(__AROSEXEC_SMP__)
         EXEC_SPINLOCK_LOCK(&mh->mh_SpinLock, NULL, SPINLOCK_MODE_WRITE);
@@ -572,7 +643,7 @@ APTR stdAlloc(struct MemHeader *mh, struct MemHeaderAllocatorCtx *mhac, IPTR siz
 
 retry_alloc:
         /* Validate MemHeader before doing anything. */
-        if (!validateHeader(mh, MM_ALLOC, NULL, size, tp, SysBase))
+        if (!validateHeader(mh, MM_ALLOC, NULL, size, tp, &pa))
         {
             mc = NULL;
             goto stdalloc_done;
@@ -603,7 +674,7 @@ retry_alloc:
         while (p2 != NULL)
         {
             /* Validate the current chunk */
-            if (!validateChunk(p2, p1, mh, MM_ALLOC, NULL, size, tp, SysBase))
+            if (!validateChunk(p2, p1, mh, MM_ALLOC, NULL, size, tp, &pa))
             {
                 mc = NULL;
                 goto stdalloc_done;
@@ -690,6 +761,7 @@ stdalloc_done:
 #if defined(__AROSEXEC_SMP__)
         EXEC_SPINLOCK_UNLOCK(&mh->mh_SpinLock);
 #endif
+        mmPostAlert(&pa, tp, SysBase);
         return mc;
     }
 }
@@ -705,6 +777,7 @@ void stdDealloc(struct MemHeader *freeList, struct MemHeaderAllocatorCtx *mhac, 
     IPTR byteSize;
     struct MemChunk *p1, *p2, *p3;
     UBYTE *p4;
+    struct MMPendingAlert pa = { FALSE };
 
     if ((freeList->mh_Node.ln_Type == NT_MEMORY) && IsManagedMem(freeList))
     {
@@ -732,7 +805,7 @@ void stdDealloc(struct MemHeader *freeList, struct MemHeaderAllocatorCtx *mhac, 
 #endif
 
         /* Make sure the MemHeader is OK */
-        if (!validateHeader(freeList, MM_FREE, addr, size, tp, SysBase))
+        if (!validateHeader(freeList, MM_FREE, addr, size, tp, &pa))
             goto stddealloc_done;
 
         /* Align size to the requirements */
@@ -772,7 +845,7 @@ void stdDealloc(struct MemHeader *freeList, struct MemHeaderAllocatorCtx *mhac, 
         /* Follow the list to find a place where to insert our memory. */
         do
         {
-            if (!validateChunk(p2, p1, freeList, MM_FREE, addr, size, tp, SysBase))
+            if (!validateChunk(p2, p1, freeList, MM_FREE, addr, size, tp, &pa))
                 goto stddealloc_done;
 
             /* Found a block with a higher address? */
@@ -792,7 +865,7 @@ void stdDealloc(struct MemHeader *freeList, struct MemHeaderAllocatorCtx *mhac, 
                         tp ? tp->function : "?", tp ? tp->caller : NULL,
                         FindTask(NULL)->tc_Node.ln_Name);
 
-                    Alert(AN_FreeTwice);
+                    mmRecordAlert(&pa, MM_OVERLAP, freeList, p2, p1, addr, size, tp);
                     goto stddealloc_done;
                 }
 #endif
@@ -820,7 +893,7 @@ void stdDealloc(struct MemHeader *freeList, struct MemHeaderAllocatorCtx *mhac, 
                     tp ? tp->function : "?", tp ? tp->caller : NULL,
                     FindTask(NULL)->tc_Node.ln_Name);
 
-                Alert(AN_FreeTwice);
+                mmRecordAlert(&pa, MM_OVERLAP, freeList, p1, NULL, addr, size, tp);
                 goto stddealloc_done;
             }
 #endif
@@ -865,7 +938,7 @@ stddealloc_done:
 #if defined(__AROSEXEC_SMP__)
         EXEC_SPINLOCK_UNLOCK(&freeList->mh_SpinLock);
 #endif
-        ;
+        mmPostAlert(&pa, tp, SysBase);
     }
 }
 
@@ -1068,9 +1141,37 @@ APTR InternalAllocPooled(APTR poolHeader, IPTR memSize, ULONG flags, struct Trac
         ObtainSemaphore(&pool->sem);
     }
 
+    /*
+     * A block larger than a puddle gets a puddle of its own, kept on a list
+     * that no allocation searches. In the puddle list, every such block made
+     * each later allocation walk one more puddle (and re-sort past it):
+     * writing a RAM: file in 32 KB blocks took 0.6 s for the first 256 MB,
+     * 3.3 s for the next, 15.6 s for the third, and starved every
+     * lower-priority task. The page tail of the puddle stays unused;
+     * FreePooled() gives the puddle back with the block.
+     */
+    if (memSize > pool->pool.PuddleSize - (MEMHEADER_TOTAL + mhac_GetCtxSize()))
+    {
+        IPTR align = PrivExecBase(SysBase)->PageSize - 1;
+        IPTR puddleSize = (memSize + MEMHEADER_TOTAL + mhac_GetCtxSize() + align) & ~align;
+
+        mh = AllocMemHeader(puddleSize, flags, loc, SysBase);
+        if (mh != NULL)
+        {
+            mhac_PoolMemHeaderSetup(mh, pool);
+            AddHead((struct List *)&pool->pool.LargeList, &mh->mh_Node);
+            ret = stdAlloc(mh, mhac_PoolMemHeaderGetCtx(mh), memSize, flags, loc, SysBase);
+            mmPostPendingAlert(SysBase);
+            if (ret == NULL)
+            {
+                Remove(&mh->mh_Node);
+                FreeMemHeader(mh, loc, SysBase);
+            }
+        }
+    }
+    else
     /* Follow the list of MemHeaders */
-    mh = (struct MemHeader *)pool->pool.PuddleList.mlh_Head;
-    for(;;)
+    for (mh = (struct MemHeader *)pool->pool.PuddleList.mlh_Head;;)
     {
         ULONG physFlags = flags & MEMF_PHYSICAL_MASK;
 
@@ -1078,34 +1179,13 @@ APTR InternalAllocPooled(APTR poolHeader, IPTR memSize, ULONG flags, struct Trac
         if (mh->mh_Node.ln_Succ == NULL)
         {
             /*
-             * Get a new one.
-             * Usually we allocate puddles of default size, specified during
-             * pool creation. However we can be asked to allocate block whose
-             * size will be larger than default puddle size.
-             * Previously this was handled by threshSize parameter. In our new
-             * implementation we just allocate enlarged puddle. This is done
-             * in order not to waste page tails beyond the allocated large block.
-             * These tails will be used for our pool too. Their size is smaller
-             * than page size but they still perfectly fit for small allocations
-             * (the primary use for pools).
-             * Since our large block is also a puddle, it will be reused for our
-             * pool when the block is freed. It can also be reused for another
-             * large allocation, if it fits in.
-             * Our final puddle size still includes MEMHEADER_TOTAL +
-             * allocator ctx size in any case.
+             * Get a new one, of the default puddle size at most (a larger
+             * block has its own puddle, above). The puddle size includes
+             * MEMHEADER_TOTAL + allocator ctx size.
              */
             IPTR puddleSize = pool->pool.PuddleSize;
             struct Node *head = (struct Node *)pool->pool.PuddleList.mlh_Head;
 
-            if (memSize > puddleSize - (MEMHEADER_TOTAL + mhac_GetCtxSize()))
-            {
-                IPTR align = PrivExecBase(SysBase)->PageSize - 1;
-
-                puddleSize = memSize + MEMHEADER_TOTAL + mhac_GetCtxSize();
-                /* Align the size up to page boundary */
-                puddleSize = (puddleSize + align) & ~align;
-            }
-            else
             {
                 struct MemHeader *puddle;
                 IPTR neededSize;
@@ -1182,6 +1262,8 @@ APTR InternalAllocPooled(APTR poolHeader, IPTR memSize, ULONG flags, struct Trac
 
         /* Try to get the memory */
         ret = stdAlloc(mh, mhac_PoolMemHeaderGetCtx(mh), memSize, flags, loc, SysBase);
+        /* The pool's own lock is a semaphore: the requester may wait under it. */
+        mmPostPendingAlert(SysBase);
         D(bug("[InternalAllocPooled] Allocated memory at 0x%p from puddle 0x%p\n", ret, mh));
 
         /* Got it? */
@@ -1289,6 +1371,7 @@ void InternalFreePooled(APTR poolHeader, APTR memory, IPTR memSize, struct Trace
 
         /* Free the memory. */
         stdDealloc(mh, mhac_PoolMemHeaderGetCtx(mh), freeStart, freeSize, loc, SysBase);
+        mmPostPendingAlert(SysBase);
         D(bug("[FreePooled] Deallocated chunk, %u free bytes in the puddle\n", mh->mh_Free));
 
         /* Is this MemHeader completely free now? */

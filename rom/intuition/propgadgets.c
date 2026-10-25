@@ -23,6 +23,7 @@
 #include "morphos/proprender.h"
 #endif
 #include "gadgets.h"
+#include "windowcomposition.h"
 
 #undef DEBUG
 #define DEBUG 0
@@ -112,13 +113,109 @@ static void RenderPropBackground(struct Gadget *gad, struct Window *win, struct 
 }
 
 
+const struct PropInputPosition *PropInputForMessage(struct Gadget *gadget,
+    const struct gpInput *message, struct IntuitionBase *IntuitionBase)
+{
+    struct PropInputDispatch *input = &GetPrivIBase(IntuitionBase)->prop_input;
+    if (input->message == message && input->gadget == gadget &&
+        input->event == message->gpi_IEvent && input->ginfo == message->gpi_GInfo &&
+        input->window == message->gpi_GInfo->gi_Window &&
+        input->requester == message->gpi_GInfo->gi_Requester &&
+        input->localX == message->gpi_Mouse.X &&
+        input->localY == message->gpi_Mouse.Y &&
+        input->position.screen == message->gpi_GInfo->gi_Screen)
+        return &input->position;
+    return NULL;
+}
+
+/* Input messages carry gadget-local coordinates, including synthetic BOOPSI
+ * input. Reconstruct their physical pixel interval, never the global mouse.
+ * Keeping a previous subpixel phase when possible prevents a factor change
+ * from inventing movement at an unchanged physical pointer. */
+static LONG PropPointer(LONG first, UWORD factor, struct PropDragAxis *axis, BOOL changed)
+{
+    LONG pointer;
+    if (!changed) pointer = first + axis->pointer - axis->cell;
+    else if (axis->pointer < first) pointer = first;
+    else if (axis->pointer >= first + factor) pointer = first + factor - 1;
+    else pointer = axis->pointer;
+    axis->cell = first;
+    return pointer;
+}
+
+static UWORD PropDragPot(struct PropDragAxis *axis, LONG pointer, LONG track,
+                        UWORD pot, UWORD body, BOOL rebase)
+{
+    QUAD value;
+    if (rebase || axis->track != track || axis->pot != pot || axis->body != body)
+    {
+        axis->anchor = axis->pointer;
+        axis->anchorPot = pot;
+    }
+    axis->track = track;
+    axis->body = body;
+    value = pot;
+    if (track > 0)
+        value = (QUAD)axis->anchorPot +
+            (((QUAD)pointer - axis->anchor) * MAXPOT) / track;
+    if (value <= 0 || value >= MAXPOT)
+    {
+        value = value <= 0 ? 0 : MAXPOT;
+        /* Reverse immediately after reaching an endpoint. */
+        axis->anchor = pointer;
+        axis->anchorPot = value;
+    }
+    axis->pointer = pointer;
+    axis->pot = value;
+    return value;
+}
+
+static void PropCapture(struct Gadget *gadget, struct Window *w,
+                        struct Requester *req, LONG x, LONG y,
+                        const struct PropInputPosition *position,
+                        struct IntuitionBase *IntuitionBase)
+{
+    struct PropDragState *drag = &GetPrivIBase(IntuitionBase)->prop_drag;
+    struct PropInfo *pi = gadget->SpecialInfo;
+    struct IBox box;
+    struct BBox knob;
+    LONG ox, oy;
+    UWORD factor;
+
+    drag->gadget = NULL;
+    if (!pi || !(pi->Flags & KNOBHIT)) return;
+    GetWinGadgetIBox(gadget, w->WScreen, w, req, &box);
+    CalcBBox(w, req, gadget, &knob);
+    if (!CalcKnobSize(gadget, &knob)) return;
+    if (!WindowCompositionInputFrame(w, &ox, &oy, &factor)) return;
+    drag->window = w; drag->requester = req;
+    drag->factor = factor;
+    drag->freedom = pi->Flags & (FREEHORIZ | FREEVERT);
+    drag->originX = ox + box.Left * factor;
+    drag->originY = oy + box.Top * factor;
+    drag->x = (struct PropDragAxis){
+        position ? position->x : ox + (x + box.Left) * factor,
+        position ? position->x : ox + (x + box.Left) * factor,
+        (pi->CWidth - knob.Width) * factor, ox + (x + box.Left) * factor,
+        pi->HorizPot, pi->HorizBody, pi->HorizPot};
+    drag->y = (struct PropDragAxis){
+        position ? position->y : oy + (y + box.Top) * factor,
+        position ? position->y : oy + (y + box.Top) * factor,
+        (pi->CHeight - knob.Height) * factor, oy + (y + box.Top) * factor,
+        pi->VertPot, pi->VertBody, pi->VertPot};
+    drag->gadget = gadget;
+}
+
 VOID HandlePropSelectDown(struct Gadget *gadget, struct Window *w, struct Requester *req,
-                          UWORD mouse_x, UWORD mouse_y, struct IntuitionBase *IntuitionBase)
+                          UWORD mouse_x, UWORD mouse_y,
+                          const struct PropInputPosition *position,
+                          struct IntuitionBase *IntuitionBase)
 {
     struct BBox          knob;
     struct PropInfo     *pi;
     UWORD                dx, dy, flags;
 
+    GetPrivIBase(IntuitionBase)->prop_drag.gadget = NULL;
     pi = (struct PropInfo *)gadget->SpecialInfo;
 
     if (!pi)
@@ -133,9 +230,6 @@ VOID HandlePropSelectDown(struct Gadget *gadget, struct Window *w, struct Reques
 
     if (!CalcKnobSize (gadget, &knob))
         return;
-
-    GetPrivIBase(IntuitionBase)->prop_clickoffset_x = mouse_x - knob.Left;
-    GetPrivIBase(IntuitionBase)->prop_clickoffset_y = mouse_y - knob.Top;
 
     dx = pi->HorizPot;
     dy = pi->VertPot;
@@ -208,6 +302,13 @@ VOID HandlePropSelectDown(struct Gadget *gadget, struct Window *w, struct Reques
     D(bug("New HPot: %d, new VPot: %d\n", dx, dy));
 
     NewModifyProp(gadget, w, req, flags, dx, dy, pi->HorizBody, pi->VertBody, 1);
+    /* Original arguments remain gadget-local; mouse_x/y above were translated. */
+    {
+        struct BBox box;
+        CalcBBox(w, req, gadget, &box);
+        PropCapture(gadget, w, req, (WORD)(mouse_x - box.Left),
+                    (WORD)(mouse_y - box.Top), position, IntuitionBase);
+    }
 
     return;
 }
@@ -219,6 +320,8 @@ VOID HandlePropSelectUp(struct Gadget *gadget, struct Window *w,
 
     pi = (struct PropInfo *)gadget->SpecialInfo;
 
+    if (GetPrivIBase(IntuitionBase)->prop_drag.gadget == gadget)
+        GetPrivIBase(IntuitionBase)->prop_drag.gadget = NULL;
     gadget->Flags &= ~GFLG_SELECTED;
     if (pi) pi->Flags &= ~KNOBHIT;
 
@@ -240,86 +343,65 @@ VOID HandlePropSelectUp(struct Gadget *gadget, struct Window *w,
 }
 
 VOID HandlePropMouseMove(struct Gadget *gadget, struct Window *w,struct Requester *req,
-                         LONG dx, LONG dy, struct IntuitionBase *IntuitionBase)
+                         LONG dx, LONG dy, const struct PropInputPosition *position,
+                         struct IntuitionBase *IntuitionBase)
 {
-    struct BBox      knob;
-    struct PropInfo *pi;
+    struct BBox knob;
+    struct IBox box;
+    struct PropInfo *pi = gadget->SpecialInfo;
+    struct PropDragState *drag = &GetPrivIBase(IntuitionBase)->prop_drag;
+    LONG ox, oy, x, y;
+    UWORD factor, hp, vp, freedom;
+    BOOL rebase, frameX, frameY;
 
-    pi = (struct PropInfo *)gadget->SpecialInfo;
-
-    /* Has propinfo and the mouse was over the knob */
-    if (pi && (pi->Flags & KNOBHIT))
+    if (!pi || !(pi->Flags & KNOBHIT))
     {
-        CalcBBox (w, req, gadget, &knob);
-
-        if (!CalcKnobSize (gadget, &knob))
-            return;
-
-        /* Move the knob the same amount, ie.
-        knob.Left += dx; knob.Top += dy;
-
-        knob.Left = knob.Left
-        + (pi->CWidth - knob.Width)
-        * pi->HorizPot / MAXPOT;
-
-        ie. dx = (pi->CWidth - knob.Width)
-        * pi->HorizPot / MAXPOT;
-
-        or
-
-        pi->HorizPot = (dx * MAXPOT) /
-        (pi->CWidth - knob.Width);
-        */
-
-        /* stegerg: dx and dy are not delta values
-                anymore but relative to gadget
-                box */
-
-        dx = dx - GetPrivIBase(IntuitionBase)->prop_clickoffset_x;
-        dy = dy - GetPrivIBase(IntuitionBase)->prop_clickoffset_y;
-
-        if (pi->Flags & FREEHORIZ
-                && pi->CWidth != knob.Width)
-        {
-
-            dx = (dx * MAXPOT) / (pi->CWidth - knob.Width);
-            if (dx < 0)
-            {
-                dx = 0;
-            }
-            else if (dx > MAXPOT)
-            {
-                dx = MAXPOT;
-            }
-
-        } /* FREEHORIZ */
-
-        if (pi->Flags & FREEVERT
-                && pi->CHeight != knob.Height)
-        {
-            dy = (dy * MAXPOT) / (pi->CHeight - knob.Height);
-
-            if (dy < 0)
-            {
-                dy = 0;
-            }
-            else if (dy > MAXPOT)
-            {
-                dy = MAXPOT;
-            }
-
-        } /* FREEVERT */
-
-        if ( ((pi->Flags & FREEHORIZ) && (dx != pi->HorizPot)) ||
-                ((pi->Flags & FREEVERT)  && (dy != pi->VertPot)) )
-
-        {
-            NewModifyProp (gadget, w, req, pi->Flags, dx, dy, pi->HorizBody, pi->VertBody, 1);
-        }
-
-    } /* Has PropInfo and Mouse is over knob */
-
-    return;
+        if (drag->gadget == gadget) drag->gadget = NULL;
+        return;
+    }
+    if (drag->gadget != gadget || drag->window != w || drag->requester != req)
+    {
+        PropCapture(gadget, w, req, dx, dy, position, IntuitionBase);
+        return;
+    }
+    CalcBBox(w, req, gadget, &knob);
+    if (!CalcKnobSize(gadget, &knob)) return;
+    GetWinGadgetIBox(gadget, w->WScreen, w, req, &box);
+    if (!WindowCompositionInputFrame(w, &ox, &oy, &factor)) return;
+    frameX = drag->factor != factor || drag->originX != ox + box.Left * factor;
+    frameY = drag->factor != factor || drag->originY != oy + box.Top * factor;
+    x = PropPointer(ox + (dx + box.Left) * factor, factor, &drag->x,
+                    frameX);
+    y = PropPointer(oy + (dy + box.Top) * factor, factor, &drag->y,
+                    frameY);
+    if (position)
+    {
+        x = position->x; y = position->y;
+    }
+    else if (drag->factor > 1 || factor > 1)
+    {
+        /* A synthetic logical event cannot reveal its old subpixel phase.
+         * On a changed frame its first delta is ambiguous; preserve the pot.
+         * Native input has exact event provenance and never takes this path. */
+        if (frameX) { drag->x.pointer = x; drag->x.track = -1; }
+        if (frameY) { drag->y.pointer = y; drag->y.track = -1; }
+    }
+    freedom = pi->Flags & (FREEHORIZ | FREEVERT);
+    rebase = drag->factor != factor || drag->freedom != freedom;
+    hp = pi->HorizPot; vp = pi->VertPot;
+    if (freedom & FREEHORIZ)
+        hp = PropDragPot(&drag->x, x, (pi->CWidth - knob.Width) * factor,
+                         hp, pi->HorizBody, rebase);
+    if (freedom & FREEVERT)
+        vp = PropDragPot(&drag->y, y, (pi->CHeight - knob.Height) * factor,
+                         vp, pi->VertBody, rebase);
+    drag->x.pointer = x; drag->y.pointer = y;
+    drag->originX = ox + box.Left * factor;
+    drag->originY = oy + box.Top * factor;
+    drag->factor = factor; drag->freedom = freedom;
+    if (hp != pi->HorizPot || vp != pi->VertPot)
+        NewModifyProp(gadget, w, req, pi->Flags, hp, vp,
+                      pi->HorizBody, pi->VertBody, 1);
 }
 
 int CalcKnobSize (struct Gadget * propGadget, struct BBox * knobbox)
@@ -426,7 +508,7 @@ void RefreshPropGadget (struct Gadget * gadget, struct Window * window,
 
     onborder = (IS_BORDER_GADGET(gadget) || isonborder(gadget,window));
 
-    if ((dri = GetScreenDrawInfo(window->WScreen)))
+    if ((dri = WindowDrawInfo(window->WScreen, window)))
     {
 
         SetupGInfo(&gi, window, req, gadget, IntuitionBase);
@@ -497,9 +579,7 @@ void RefreshPropGadget (struct Gadget * gadget, struct Window * window,
 
         if (rp) ReleaseGIRPort(rp);
 
-        FreeScreenDrawInfo(window->WScreen, (struct DrawInfo *)dri);
-
-    } /* if ((dri = GetScreenDrawInfo(window->WScreen))) */
+    } /* if ((dri = WindowDrawInfo(window->WScreen, window))) */
 
     ReturnVoid("RefreshPropGadget");
 } /* RefreshPropGadget */
@@ -528,7 +608,7 @@ void RefreshPropGadgetKnob (struct Gadget * gadget, struct BBox * clear,
     pi = (struct PropInfo *)gadget->SpecialInfo;
     flags = pi->Flags;
 
-    if ((dri = GetScreenDrawInfo(window->WScreen)))
+    if ((dri = WindowDrawInfo(window->WScreen, window)))
     {
         SetupGInfo(&gi, window, req, gadget, IntuitionBase);
 
@@ -543,7 +623,6 @@ void RefreshPropGadgetKnob (struct Gadget * gadget, struct BBox * clear,
             if ((bbox.Width < 1) || (bbox.Height < 1))
             {
                 ReleaseGIRPort(rp);
-                FreeScreenDrawInfo(window->WScreen, (struct DrawInfo *)dri);
 
                 return;
             }
@@ -853,9 +932,7 @@ void RefreshPropGadgetKnob (struct Gadget * gadget, struct BBox * clear,
 
         } /* if ((rp = ObtainGIRPort(&gi))) */
 
-        FreeScreenDrawInfo(window->WScreen, (struct DrawInfo *)dri);
-
-    } /* if ((dri = GetScreenDrawInfo(window->WScreen))) */
+    } /* if ((dri = WindowDrawInfo(window->WScreen, window))) */
 
     ReturnVoid("RefreshPropGadgetKnob");
 

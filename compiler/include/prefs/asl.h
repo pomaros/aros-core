@@ -17,6 +17,18 @@
 
 #define ID_ASL MAKE_ID('A','S','L',' ')
 
+/* ap_SizePosition: where a requester opens when its program gives no
+   position, and whether its first size is relative to the screen. */
+#define ASLPREFS_POS_MASK         0x07
+#define ASLPREFS_POS_DEFAULT      0    /* centred on the screen */
+#define ASLPREFS_POS_CENTERWIN    1    /* centred on the parent window */
+#define ASLPREFS_POS_CENTERSCR    2
+#define ASLPREFS_POS_TOPLEFTWIN   3    /* parent window corner + offset */
+#define ASLPREFS_POS_TOPLEFTSCR   4    /* screen corner + offset */
+#define ASLPREFS_POS_POINTER      5    /* centred under the pointer */
+#define ASLPREFS_SIZE_RELATIVE    0x10 /* ap_RelativeWidth/Height percent */
+#define ASLPREFS_OVERRIDE         0x40
+
 struct AslPrefs
 {
     LONG    ap_Reserved[4];

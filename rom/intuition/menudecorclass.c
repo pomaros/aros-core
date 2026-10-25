@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright  1995-2011, The AROS Development Team. All rights reserved.
     Copyright  2001-2003, The MorphOS Development Team. All Rights Reserved.
 */
@@ -35,6 +36,7 @@
 
 #include "intuition_intern.h"
 #include "gadgets.h"
+#include "menuscale.h"
 
 
 /**************************************************************************************************/
@@ -326,3 +328,177 @@ IPTR MenuDecorClass__MDM_EXITMENU(Class *cl, Object *obj, struct mdpExitMenu *ms
 }
 
 /**************************************************************************************************/
+
+/* Context-qualified vector images. The exact-class check prevents a custom
+ * subclass from inheriting a sharp-rendering promise for foreign resources. */
+static BOOL menu_scale_context(Class *cl, Object *obj,
+    const struct ScreenRenderContext *context)
+{
+    return OCLASS(obj) == cl && context && context->src_Scale >= 100 &&
+        context->src_Scale <= 400 && !(context->src_Scale % 25) &&
+        context->src_LogicalDrawInfo && context->src_PhysicalDrawInfo;
+}
+static ULONG menu_scale_metric(ULONG value, ULONG scale)
+{
+    return ((UQUAD)value * scale + 50) / 100;
+}
+IPTR MenuDecorClass__MDM_QUERYCAPABILITIES(Class *cl, Object *obj,
+    struct mdpQueryCapabilities *msg)
+{
+    (void)msg;
+    return OCLASS(obj) == cl ? MDM_CAP_SCALE : 0;
+}
+IPTR MenuDecorClass__MDM_GETSCALESPACES(Class *cl, Object *obj,
+    struct mdpGetScaleSpaces *msg)
+{
+    /* The caller's defaults already came from this immutable context. */
+    return menu_scale_context(cl, obj, msg->context);
+}
+BOOL MenuScaleVectorSize(struct mdpGetScaleDefSizeSysImage *msg,
+    struct IntuitionBase *IntuitionBase)
+{
+    struct GfxBase *GfxBase = GetPrivIBase(IntuitionBase)->GfxBase;
+    struct TextFont *font;
+    ULONG width, height, scale;
+    struct RastPort rp;
+    if (!msg->prepared || !msg->base.mdp_Width || !msg->base.mdp_Height ||
+        !msg->context || !msg->context->src_LogicalDrawInfo ||
+        msg->context->src_Scale < 100 || msg->context->src_Scale > 400 ||
+        msg->context->src_Scale % 25) return FALSE;
+    *msg->prepared = NULL; /* The built-in images are vectors. */
+    scale = msg->logical ? 100 : msg->context->src_Scale;
+    font = msg->logical ? msg->base.mdp_ReferenceFont :
+        msg->context->src_LogicalDrawInfo->dri_Font;
+    if (!font) return FALSE;
+    switch (msg->base.mdp_Which)
+    {
+        case SUBMENUIMAGE:
+            /* Measure the actual destination font, including a typeface change. */
+            font = msg->base.mdp_ReferenceFont;
+            if (!font) return FALSE;
+            InitRastPort(&rp);
+            SetFont(&rp, font);
+            width = TextLength(&rp, "\xBB", 1);
+            height = font->tf_YSize;
+            DeinitRastPort(&rp);
+            break;
+        case MENUCHECK:
+            width = menu_scale_metric(font->tf_YSize / 2 + 4, scale);
+            height = menu_scale_metric(font->tf_YSize, scale);
+            break;
+        case AMIGAKEY:
+            width = height = menu_scale_metric(DEFSIZE_WIDTH, scale);
+            break;
+        default: return FALSE;
+    }
+    if (!width || !height) return FALSE;
+    if (msg->requestedHeight > 32767 || msg->requestedWidth > 32767) return FALSE;
+    if (msg->requestedHeight && !msg->requestedWidth)
+    {
+        UQUAD aspect = ((UQUAD)width * msg->requestedHeight + height / 2) / height;
+        if (!aspect || aspect > 32767) return FALSE;
+        width = aspect;
+    }
+    if (msg->requestedWidth) width = msg->requestedWidth;
+    if (msg->requestedHeight) height = msg->requestedHeight;
+    if (!width || !height || width > 32767 || height > 32767) return FALSE;
+    *msg->base.mdp_Width = width;
+    *msg->base.mdp_Height = height;
+    return TRUE;
+}
+BOOL MenuScaleVectorDraw(struct mdpDrawScaleSysImage *msg,
+    struct IntuitionBase *IntuitionBase)
+{
+    struct GfxBase *GfxBase = GetPrivIBase(IntuitionBase)->GfxBase;
+    struct mdpDrawSysImage *m = &msg->base;
+    struct RastPort *rp = m->mdp_RPort;
+    UWORD *pens;
+    LONG left = m->mdp_X, top = m->mdp_Y, right, bottom;
+    LONG stroke, i, inset;
+    if (!msg->context || !msg->context->src_LogicalDrawInfo ||
+        !msg->context->src_PhysicalDrawInfo ||
+        msg->context->src_Scale < 100 || msg->context->src_Scale > 400 ||
+        msg->context->src_Scale % 25 || msg->prepared || !rp ||
+        (m->mdp_Which != SUBMENUIMAGE && m->mdp_Which != MENUCHECK && m->mdp_Which != AMIGAKEY) ||
+        !m->mdp_Dri || m->mdp_Width <= 0 || m->mdp_Height <= 0 ||
+        m->mdp_Width > 32767 || m->mdp_Height > 32767) return FALSE;
+    right = left + m->mdp_Width - 1;
+    bottom = top + m->mdp_Height - 1;
+    stroke = menu_scale_metric(1, msg->logical ? 100 : msg->context->src_Scale);
+    if (stroke > m->mdp_Width) stroke = m->mdp_Width;
+    if (stroke > m->mdp_Height) stroke = m->mdp_Height;
+    pens = m->mdp_Dri->dri_Pens;
+    SetDrMd(rp, JAM1);
+    SetAPen(rp, pens[MENUS_AMIGALOOK(IntuitionBase) ? BARBLOCKPEN :
+        (m->mdp_State == IDS_SELECTED ? FILLPEN : BACKGROUNDPEN)]);
+    RectFill(rp, left, top, right, bottom);
+    SetAPen(rp, pens[BARDETAILPEN]);
+    switch (m->mdp_Which)
+    {
+        case SUBMENUIMAGE:
+            /* Two vector chevrons also respect explicit caller extents; a
+             * destination-font glyph could overdraw a smaller requested box. */
+            for (i = 0; i < stroke; i++)
+            {
+                LONG half = m->mdp_Width / 2;
+                Move(rp, left, top + i);
+                Draw(rp, left + half, top + m->mdp_Height / 2);
+                Draw(rp, left, bottom - i);
+                Move(rp, left + half, top + i);
+                Draw(rp, right, top + m->mdp_Height / 2);
+                Draw(rp, left + half, bottom - i);
+            }
+            break;
+        case MENUCHECK:
+            for (i = 0; i < stroke; i++)
+            {
+                Move(rp, left + i, top + m->mdp_Height / 2);
+                Draw(rp, left + m->mdp_Width / 3 + i, bottom);
+                Draw(rp, right, top + i);
+            }
+            break;
+        case AMIGAKEY:
+            /* Stroke the key border and A at the target pixel density. */
+            for (i = 0; i < stroke; i++)
+            {
+                Move(rp, left + i, bottom - i); Draw(rp, left + i, top + i);
+                Draw(rp, right - i, top + i); Draw(rp, right - i, bottom - i);
+                Draw(rp, left + i, bottom - i);
+            }
+            inset = stroke * 2;
+            if (m->mdp_Width > inset * 2 && m->mdp_Height > inset * 2)
+                for (i = 0; i < stroke; i++)
+                {
+                    Move(rp, left + inset, bottom - inset);
+                    Draw(rp, right - inset - i, top + inset);
+                    Draw(rp, right - inset - i, bottom - inset);
+                }
+            break;
+        default: return FALSE;
+    }
+    return TRUE;
+}
+IPTR MenuDecorClass__MDM_RELEASESCALE_SYSIMAGE(Class *cl, Object *obj,
+    struct mdpReleaseScaleSysImage *msg)
+{
+    return OCLASS(obj) == cl && msg->prepared == NULL;
+}
+
+IPTR MenuDecorClass__MDM_INITSCALEMENU(Class *cl, Object *obj,
+    struct mdpInitScaleMenu *msg)
+{
+    return menu_scale_context(cl, obj, msg->context);
+}
+
+IPTR MenuDecorClass__MDM_GETSCALEDEFSIZE_SYSIMAGE(Class *cl, Object *obj,
+    struct mdpGetScaleDefSizeSysImage *msg)
+{
+    return menu_scale_context(cl, obj, msg->context) &&
+        MenuScaleVectorSize(msg, (struct IntuitionBase *)cl->cl_UserData);
+}
+IPTR MenuDecorClass__MDM_DRAWSCALE_SYSIMAGE(Class *cl, Object *obj,
+    struct mdpDrawScaleSysImage *msg)
+{
+    return menu_scale_context(cl, obj, msg->context) &&
+        MenuScaleVectorDraw(msg, (struct IntuitionBase *)cl->cl_UserData);
+}

@@ -44,15 +44,15 @@ static const struct nameexp layout_expansion_table[] =
     {"us"   , "American"            , "Countries/United_States" },
     {"usx"  , "American"            , "Countries/United_States" },
     {"col"  , "Colemak (US)"        , "Countries/United_States" },
-    {"d"    , "Deutsch"             , "Countries/Germany"       },
-    {"b"    , "Belge"               , "Countries/Belgium"       },
+    {"d"    , "Deutsch (QWERTZ)"             , "Countries/Germany"       },
+    {"b"    , "Belge (AZERTY)"               , "Countries/Belgium"       },
     {"by"   , "Belarussian"         , "Countries/Belarus"       },
     {"br"   , "Brasileiro"          , "Countries/Brazil"        },
     {"gb"   , "British"             , "Countries/United_Kingdom"},
     {"gbx"  , "British Extended"    , "Countries/United_Kingdom"},
     {"bg"   , "Bulgarian"           , "Countries/Bulgaria"      },
     {"cdn"  , "Canadien Fran" ISOASCII_ccedil "ais"   , "Countries/Quebec"        },
-    {"cz"   , "Czech"               , "Countries/Czech_Republic"},
+    {"cz"   , "Czech (QWERTZ)"               , "Countries/Czech_Republic"},
     {"dk"   , "Dansk"               , "Countries/Denmark"       },
     {"nl"   , "Dutch"               , "Countries/Netherlands"   },
     {"dvx"  , "Dvorak"              , "Misc/Unknown"            },
@@ -64,25 +64,25 @@ static const struct nameexp layout_expansion_table[] =
     {"sp"   , "Espa" ISOASCII_ntilde "ol no deadkeys" , "Countries/Spain"         },
     {"est"  , "Eesti"               , "Countries/Estonia"       },
     {"fin"  , "Finnish"             , "Countries/Finland"       },
-    {"f"    , "Fran" ISOASCII_ccedil "ais"            , "Countries/France"        },
+    {"f"    , "Fran" ISOASCII_ccedil "ais (AZERTY)"            , "Countries/France"        },
     {"il"   , "Hebrew"              , "Countries/Israel"        },
     {"gr"   , "Hellenic"            , "Countries/Greece"        },
-    {"hr"   , "Hrvatski"            , "Countries/Croatia"       },
+    {"hr"   , "Hrvatski (QWERTZ)"            , "Countries/Croatia"       },
     {"is"   , ISOASCII_Iacute "slenska"            , "Countries/Iceland"       },
     {"i"    , "Italiana"            , "Countries/Italy"         },
     {"la"   , "Latin American"      , "Misc/Unknown"            },
     {"lv"   , "Latvijas"            , "Countries/Latvia"        },
     {"lt"   , "Lietuvos"            , "Countries/Lithuania"     },
-    {"h"    , "Magyar"              , "Countries/Hungary"       },
+    {"h"    , "Magyar (QWERTZ)"              , "Countries/Hungary"       },
     {"n"    , "Norsk"               , "Countries/Norway"        },
     {"pl"   , "Polski"              , "Countries/Poland"        },
     {"p"    , "Portugu" ISOASCII_ecirc "s"           , "Countries/Portugal"      },
     {"ro"   , "Rom" ISOASCII_acirc "nesc"            , "Countries/Romania"       },
     {"rus"  , "Russian"             , "Countries/Russia"        },
-    {"ch1"  , "Schweizer"           , "Countries/Switzerland"   },
-    {"al"   , "Shqip"               , "Countries/Albania"       },
-    {"sk"   , "Slovak"              , "Countries/Slovakia"      },
-    {"ch2"  , "Suisse"              , "Countries/Switzerland"   },
+    {"ch1"  , "Schweizer (QWERTZ)"           , "Countries/Switzerland"   },
+    {"al"   , "Shqip (QWERTZ)"               , "Countries/Albania"       },
+    {"sk"   , "Slovak (QWERTZ)"              , "Countries/Slovakia"      },
+    {"ch2"  , "Suisse (QWERTZ)"              , "Countries/Switzerland"   },
     {"s"    , "Svenskt"             , "Countries/Sweden"        },
     {"tr"   , "T" ISOASCII_uuml "rk" ISOASCII_ccedil "e"              , "Countries/Turkey"        },
     {"ua"   , "Ukranian"            , "Countries/Ukraine"       },
@@ -561,7 +561,9 @@ BOOL Prefs_HandleArgs(STRPTR from, BOOL use, BOOL save)
 BOOL Prefs_Default(void)
 {
     strcpy(inputprefs.ip_Keymap, DEFAULT_KEYMAP);
-    inputprefs.ip_PointerTicks         = 1;
+    /* The same divisor Intuition uses before any preferences are loaded
+     * (intuition_misc.c): a saved default must not change the speed. */
+    inputprefs.ip_PointerTicks         = 2;
     inputprefs.ip_DoubleClick.tv_secs  = 0;
     inputprefs.ip_DoubleClick.tv_micro = 500000;
     inputprefs.ip_KeyRptDelay.tv_secs  = 0;

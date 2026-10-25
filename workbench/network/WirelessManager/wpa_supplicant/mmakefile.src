@@ -1,5 +1,6 @@
 
 include $(SRCDIR)/config/aros.cfg
+#MM- workbench-network-wirelessmanager : workbench-libs-keyring-includes
 
 #MM- workbench-network : workbench-network-wirelessmanager
 #MM workbench-network-wirelessmanager : workbench-network-wirelessmanager-setup

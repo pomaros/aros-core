@@ -10,6 +10,8 @@
 #include "boot_memory_map.h"
 #include "stage2_memory_plan.h"
 #include "stage2_tags.h"
+#include "stage2_elf.h"
+#include "stage2_module_map.h"
 
 #include "../bootinfo_validate.h"
 
@@ -72,45 +74,6 @@
 #define STAGE2_PAGE_SIZE UINT64_C(4096)
 #define STAGE2_MAX_SECTION_ALIGNMENT UINT64_C(2097152)
 
-struct Stage2ELFHeader {
-    uint8_t ident[16];
-    uint16_t type;
-    uint16_t machine;
-    uint32_t version;
-    uint64_t entry;
-    uint64_t program_offset;
-    uint64_t section_offset;
-    uint32_t flags;
-    uint16_t header_size;
-    uint16_t program_entry_size;
-    uint16_t program_count;
-    uint16_t section_entry_size;
-    uint16_t section_count;
-    uint16_t section_name_index;
-};
-
-struct Stage2Section {
-    uint32_t name;
-    uint32_t type;
-    uint64_t flags;
-    uint64_t address;
-    uint64_t offset;
-    uint64_t size;
-    uint32_t link;
-    uint32_t info;
-    uint64_t alignment;
-    uint64_t entry_size;
-};
-
-struct Stage2Symbol {
-    uint32_t name;
-    uint8_t info;
-    uint8_t other;
-    uint16_t section_index;
-    uint64_t value;
-    uint64_t size;
-};
-
 struct Stage2Rela {
     uint64_t offset;
     uint64_t info;
@@ -122,9 +85,6 @@ struct Stage2Rel {
     uint64_t info;
 };
 
-_Static_assert(sizeof(struct Stage2ELFHeader) == 64, "ELF64 header size");
-_Static_assert(sizeof(struct Stage2Section) == 64, "ELF64 section size");
-_Static_assert(sizeof(struct Stage2Symbol) == 24, "ELF64 symbol size");
 _Static_assert(sizeof(struct Stage2Rela) == 24, "ELF64 rela size");
 _Static_assert(sizeof(struct Stage2Rel) == 16, "ELF64 rel size");
 
@@ -1070,6 +1030,29 @@ enum AROSAppleStage2Status AROSAppleStage2Load(
         result->page_arena_size = page_size;
         cursor = page_start + page_size;
         result->arena_used_end = (uintptr_t)cursor;
+    }
+    /* The code map for the kernel's crash report, inside the protected
+     * area that ends with the boot tags. A kernel without the receiving
+     * pointer (a stage-two test kernel) gets none. */
+    {
+        struct AROSAppleModuleMap *map;
+        uintptr_t receiver;
+
+        status = AROSAppleStage2BuildModuleMap(boot_info, context,
+            arena_end, &cursor, &map);
+        if (status != AROS_APPLE_STAGE2_OK)
+            return status;
+        result->module_map = (uintptr_t)map;
+        result->arena_used_end = (uintptr_t)cursor;
+        status = find_defined_symbol(context, 0, "AROSAppleKernelModuleMap",
+            &receiver);
+        if (status == AROS_APPLE_STAGE2_OK) {
+            if ((receiver & 7U) != 0)
+                return AROS_APPLE_STAGE2_INVALID_SYMBOL_TABLE;
+            *(volatile uint64_t *)receiver = (uint64_t)(uintptr_t)map;
+        } else if (status != AROS_APPLE_STAGE2_MISSING_SYMBOL) {
+            return status;
+        }
     }
     status = AROSAppleStage2BuildMemoryPlan(boot_info, result,
         arena_end, &cursor);

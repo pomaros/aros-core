@@ -1,0 +1,9 @@
+# Copyright (C) 2026 John Knipper
+# Licensed under the AROS Public License (APL) Version 1.1
+include $(SRCDIR)/config/aros.cfg
+#MM- workbench-prefs : workbench-prefs-keyring
+#MM workbench-prefs-keyring : workbench-prefs-keyring-class workbench-classes-zune-systemprefswindow
+#MM workbench-prefs-keyring-class : includes linklibs workbench-classes-zune-prefseditor workbench-libs-keyring-includes
+%build_prog mmake=workbench-prefs-keyring progname=Keyring targetdir=$(AROS_PREFS) files="main"
+%build_module mmake=workbench-prefs-keyring-class modname=KeyringEditor modtype=mcc conffile=editor.conf files="editor"
+%common

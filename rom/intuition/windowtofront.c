@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2013, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
 
     Move window in front of all other windows.
@@ -7,6 +8,7 @@
 
 #include <proto/layers.h>
 #include "intuition_intern.h"
+#include "windowcomposition.h"
 #include "inputhandler_actions.h"
 #include "inputhandler_support.h"
 
@@ -105,6 +107,9 @@ static VOID int_windowtofront(struct WindowToFrontActionMsg *msg,
                 MoveLayerInFrontOf(req->ReqLayer, layer);
             }
         }
+
+        if (WindowCompositionLayer(window) != layer)
+            UpfrontLayer(0, WindowCompositionLayer(window));
 
         CheckLayers(screen, IntuitionBase);
 

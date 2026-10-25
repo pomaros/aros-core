@@ -699,6 +699,135 @@ LONG OpRenameFile(struct ExtFileLock *sdirlock, UBYTE *sname,
     return 0;
 }
 
+/* A directory that is not the root and is marked read-only refuses changes. */
+static LONG CheckDirWritable(struct DirHandle *dh, struct Globals *glob)
+{
+    struct DirEntry de;
+    LONG err;
+
+    if (dh->ioh.first_cluster == dh->ioh.sb->rootdir_cluster)
+        return 0;
+    if ((err = GetDirEntry(dh, 0, &de, glob)) != 0)
+        return err;
+    return (de.e.entry.attr & ATTR_READ_ONLY) ? ERROR_WRITE_PROTECTED : 0;
+}
+
+/*
+ * ACTION_REPLACE_OBJECT: the source file takes the destination's name,
+ * replacing a file of that name. FAT has no atomic rename; the replacement
+ * is published by one directory entry write: the destination's entry takes
+ * the source's clusters, size, dates and attributes, then the source's
+ * entry is removed and the old clusters freed. A crash between the two
+ * writes leaves both names on the new data, a cross-link a check repairs,
+ * and never neither file. Without a destination it is a rename.
+ */
+LONG OpReplaceFile(struct ExtFileLock *sdirlock, UBYTE *sname,
+    ULONG snamelen, struct ExtFileLock *ddirlock, UBYTE *dname,
+    ULONG dnamelen, struct Globals *glob)
+{
+    struct ExtFileLock *source, *target;
+    struct DirHandle sdh, ddh;
+    struct DirEntry sde, dde;
+    struct GlobalLock *gl;
+    struct FSSuper *sb;
+    ULONG scluster, sentry, old_chain, len;
+    UWORD old_lo, old_hi;
+    LONG err;
+
+    /* The source must be a file. */
+    if ((err = LockFileByName(sdirlock, sname, snamelen, SHARED_LOCK,
+        &source, glob)) != 0)
+        return err;
+    scluster = source->gl->dir_cluster;
+    sentry = source->gl->dir_entry;
+    err = (source->gl->attr & ATTR_DIRECTORY) ? ERROR_OBJECT_WRONG_TYPE : 0;
+    FreeLock(source, glob);
+    if (err != 0)
+        return err;
+
+    /* The destination, if there is one, must be a file nobody uses. */
+    err = LockFileByName(ddirlock, dname, dnamelen, EXCLUSIVE_LOCK,
+        &target, glob);
+    if (err == ERROR_OBJECT_NOT_FOUND)
+        return OpRenameFile(sdirlock, sname, snamelen, ddirlock, dname,
+            dnamelen, glob);
+    if (err != 0)
+        return err;
+    if (target->gl->dir_cluster == scluster && target->gl->dir_entry == sentry)
+    {
+        FreeLock(target, glob);
+        return 0;
+    }
+    if (target->gl->attr & ATTR_DIRECTORY)
+        err = ERROR_OBJECT_WRONG_TYPE;
+    else if (target->gl->attr & ATTR_READ_ONLY)
+        err = ERROR_DELETE_PROTECTED;
+    if (err != 0)
+    {
+        FreeLock(target, glob);
+        return err;
+    }
+
+    sb = target->ioh.sb;
+    InitDirHandle(sb, scluster, &sdh, TRUE, glob);
+    InitDirHandle(sb, target->gl->dir_cluster, &ddh, TRUE, glob);
+    if ((err = CheckDirWritable(&sdh, glob)) != 0
+        || (err = CheckDirWritable(&ddh, glob)) != 0
+        || (err = GetDirEntry(&sdh, sentry, &sde, glob)) != 0
+        || (err = GetDirEntry(&ddh, target->gl->dir_entry, &dde, glob)) != 0)
+        goto done;
+
+    old_chain = FIRST_FILE_CLUSTER(&dde);
+    old_lo = dde.e.entry.first_cluster_lo;
+    old_hi = dde.e.entry.first_cluster_hi;
+    dde.e.entry.first_cluster_lo = sde.e.entry.first_cluster_lo;
+    dde.e.entry.first_cluster_hi = sde.e.entry.first_cluster_hi;
+    dde.e.entry.file_size = sde.e.entry.file_size;
+    dde.e.entry.attr = sde.e.entry.attr | ATTR_ARCHIVE;
+    dde.e.entry.create_date = sde.e.entry.create_date;
+    dde.e.entry.create_time = sde.e.entry.create_time;
+    dde.e.entry.create_time_tenth = sde.e.entry.create_time_tenth;
+    dde.e.entry.write_date = sde.e.entry.write_date;
+    dde.e.entry.write_time = sde.e.entry.write_time;
+    dde.e.entry.last_access_date = sde.e.entry.last_access_date;
+    if ((err = UpdateDirEntry(&dde, glob)) != 0)
+        goto done;
+    if ((err = DeleteDirEntry(&sde, glob)) != 0)
+    {
+        /* Both names hold the new data: give the old one back. */
+        dde.e.entry.first_cluster_lo = old_lo;
+        dde.e.entry.first_cluster_hi = old_hi;
+        UpdateDirEntry(&dde, glob);
+        goto done;
+    }
+    ReleaseDirHandle(&ddh, glob);
+    ReleaseDirHandle(&sdh, glob);
+
+    /* The replaced file is gone; the source's locks follow its new entry. */
+    FreeLock(target, glob);
+    err = FreeClusterChain(sb, old_chain);
+    ForeachNode(&sb->info->locks, gl)
+    {
+        if (gl->dir_cluster == sde.cluster && gl->dir_entry == sde.index)
+        {
+            gl->dir_cluster = dde.cluster;
+            gl->dir_entry = dde.index;
+            GetDirEntryShortName(&dde, &(gl->name[1]), &len, glob);
+            gl->name[0] = (UBYTE) len;
+            GetDirEntryLongName(&dde, &(gl->name[1]), &len);
+            gl->name[0] = (UBYTE) len;
+        }
+    }
+    SendNotifyByDirEntry(sb, &dde);
+    return err;
+
+done:
+    ReleaseDirHandle(&ddh, glob);
+    ReleaseDirHandle(&sdh, glob);
+    FreeLock(target, glob);
+    return err;
+}
+
 LONG OpCreateDir(struct ExtFileLock *dirlock, UBYTE *name, ULONG namelen,
     struct ExtFileLock **newdirlock, struct Globals *glob)
 {
@@ -870,6 +999,13 @@ LONG OpRead(struct ExtFileLock *lock, UBYTE *data, ULONG want,
     if (want == 0)
         return 0;
 
+    /* At or beyond the end (a seek may leave the position there) */
+    if (lock->pos >= lock->gl->size)
+    {
+        *read = 0;
+        return 0;
+    }
+
     if (want + lock->pos > lock->gl->size)
     {
         want = lock->gl->size - lock->pos;
@@ -916,6 +1052,27 @@ LONG OpWrite(struct ExtFileLock *lock, UBYTE *data, ULONG want,
     {
         *written = 0;
         return 0;
+    }
+
+    /* A seek left the position beyond the end: the gap reads as zeros, so
+     * write them first, from the end up to the position. */
+    if (lock->pos > lock->gl->size)
+    {
+        static const UBYTE zeros[512];
+        ULONG target = lock->pos, done;
+
+        lock->pos = lock->gl->size;
+        while (lock->pos < target)
+        {
+            ULONG chunk = target - lock->pos;
+
+            if (chunk > sizeof(zeros))
+                chunk = sizeof(zeros);
+            if ((err = OpWrite(lock, (UBYTE *)zeros, chunk, &done, glob)) != 0)
+                return err;
+            if (done == 0)
+                return ERROR_DISK_FULL;
+        }
     }
 
     /* If this is the first write, make a note as we'll have to store the

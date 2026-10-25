@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
 */
 
@@ -332,7 +333,7 @@ void FRDirectoryScanSymbolState(struct LayoutData *ld, BOOL on, struct AslBase_i
 
 /*****************************************************************************************/
 
-static void FRCalcColumnWidths(struct LayoutData *ld, struct AslBase_intern *AslBase)
+void FRCalcColumnWidths(struct LayoutData *ld, struct AslBase_intern *AslBase)
 {
     struct FRUserData           *udata = (struct FRUserData *)ld->ld_UserData;
     struct ASLLVFileReqNode     *node;
@@ -357,9 +358,19 @@ static void FRCalcColumnWidths(struct LayoutData *ld, struct AslBase_intern *Asl
         }
     }
 
-    if (udata->LVColumnWidth[0] < FREQ_MIN_FILECOLUMNWIDTH)
+    if (udata->LVColumnWidth[0] < AslScaleValue(ld, FREQ_MIN_FILECOLUMNWIDTH))
     {
-        udata->LVColumnWidth[0] = FREQ_MIN_FILECOLUMNWIDTH;
+        udata->LVColumnWidth[0] = AslScaleValue(ld, FREQ_MIN_FILECOLUMNWIDTH);
+    }
+    for (i = 0; i < ASLLV_MAXCOLUMNS; ++i)
+    {
+        ld->ld_ColumnWidth[i] = udata->LVColumnWidth[i];
+        ld->ld_ColumnAlign[i] = udata->LVColumnAlign[i];
+        if (ld->ld_GadgetContext)
+        {
+            ld->ld_GadgetContext->ld_ColumnWidth[i] = udata->LVColumnWidth[i];
+            ld->ld_GadgetContext->ld_ColumnAlign[i] = udata->LVColumnAlign[i];
+        }
     }
 }
 
@@ -1034,7 +1045,7 @@ void FRSetFile(STRPTR file, struct LayoutData *ld, struct AslBase_intern *AslBas
 
 /*****************************************************************************************/
 
-void FRChangeActiveLVItem(struct LayoutData *ld, WORD delta, ULONG quali, struct Gadget *gad, struct AslBase_intern *AslBase)
+void FRChangeActiveLVItem(struct LayoutData *ld, LONG delta, ULONG quali, struct Gadget *gad, struct AslBase_intern *AslBase)
 {
     struct FRUserData           *udata = (struct FRUserData *)ld->ld_UserData;
     struct IntFileReq           *ifreq = (struct IntFileReq *)ld->ld_IntReq;
@@ -1087,7 +1098,8 @@ void FRChangeActiveLVItem(struct LayoutData *ld, WORD delta, ULONG quali, struct
 
         char buffer[MAX_FILE_LEN];
         char *val;
-        WORD i, len;
+        LONG i;
+        WORD len;
         BOOL dojump = TRUE;
 
         GetAttr(STRINGA_TextVal, (Object *)gad, (IPTR *)&val);
@@ -1100,7 +1112,7 @@ void FRChangeActiveLVItem(struct LayoutData *ld, WORD delta, ULONG quali, struct
         {
             if (((LONG)active) >= 0)
             {
-                if ((node = (struct ASLLVFileReqNode *)FindListNode(&udata->ListviewList, (WORD)active)))
+                if ((node = (struct ASLLVFileReqNode *)FindListNode(&udata->ListviewList, (LONG)active)))
                 {
                     if (Stricmp(node->node.ln_Name, buffer) == 0) dojump = FALSE;
                 }
@@ -1140,7 +1152,7 @@ void FRChangeActiveLVItem(struct LayoutData *ld, WORD delta, ULONG quali, struct
      */
     if (!(quali & LVUP_NOGADUPDATE))
     {
-        if ((node = (struct ASLLVFileReqNode *)FindListNode(&udata->ListviewList, (WORD)active)))
+        if ((node = (struct ASLLVFileReqNode *)FindListNode(&udata->ListviewList, (LONG)active)))
         {
             char pathstring[MAX_FILE_LEN];
 
@@ -1384,6 +1396,8 @@ void FRNewDrawerRequester(struct LayoutData *ld, struct AslBase_intern *AslBase)
 
     GetAttr(STRINGA_TextVal, udata->PathGad, (IPTR *)&path);
 
+    path = VecPooledCloneString(path, NULL, ld->ld_IntReq->ir_MemPool, AslBase);
+    if (!path) return;
     lock = Lock(path, SHARED_LOCK);
     if (lock)
     {
@@ -1428,6 +1442,7 @@ void FRNewDrawerRequester(struct LayoutData *ld, struct AslBase_intern *AslBase)
 
     } /* if (lock) */
 
+    MyFreeVecPooled(path, AslBase);
 }
 
 /*****************************************************************************************/
@@ -1446,6 +1461,9 @@ void FRRenameRequester(struct LayoutData *ld, struct AslBase_intern *AslBase)
 
     GetAttr(STRINGA_TextVal, udata->PathGad, (IPTR *)&path);
 
+    file = VecPooledCloneString(file, NULL, ld->ld_IntReq->ir_MemPool, AslBase);
+    path = VecPooledCloneString(path, NULL, ld->ld_IntReq->ir_MemPool, AslBase);
+    if (!file || !path) goto done;
     lock = Lock(path, SHARED_LOCK);
     if (lock)
     {
@@ -1497,6 +1515,9 @@ void FRRenameRequester(struct LayoutData *ld, struct AslBase_intern *AslBase)
 
     } /* if (lock) */
 
+done:
+    if (file) MyFreeVecPooled(file, AslBase);
+    if (path) MyFreeVecPooled(path, AslBase);
 }
 
 /*****************************************************************************************/

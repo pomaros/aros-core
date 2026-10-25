@@ -1,5 +1,5 @@
 /*
-    Copyright (C) 1995-2025, The AROS Development Team. All rights reserved.
+    Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
 */
 
 /*********************************************************************************************/
@@ -1836,7 +1836,8 @@ int main(int argc, char **argv)
     if (FromWb)
     {
         WBenchMsg = (struct WBStartup *) argv;
-        char filepath[256];
+        /* static: filename points here after this block ends */
+        static char filepath[256];
 
         if ( WBenchMsg->sm_NumArgs > 0)
         {

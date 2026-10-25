@@ -80,7 +80,15 @@ struct vulkanstaticdata
     struct VulkanGPUEntry  gpus[VULKAN_MAX_GPUS];
     uint32_t               gpu_count;
     struct SignalSemaphore  registry_lock;
+
+    /* Drivers named by ENV:SYS/Vulkan.default, opened on the first request
+     * for a GPU when none has registered (vulkan_init.c) */
+    struct SignalSemaphore  discovery_lock;
+    BOOL                    discovered;
+    struct Library         *drivers[VULKAN_MAX_GPUS];
 };
+
+void VulkanDiscoverDrivers(struct vulkanstaticdata *sd);
 
 LIBBASETYPE
 {

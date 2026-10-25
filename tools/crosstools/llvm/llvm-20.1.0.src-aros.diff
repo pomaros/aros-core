@@ -1453,3 +1453,36 @@ diff --color -ruN llvm-20.1.0.src/lib/TargetParser/Triple.cpp llvm-20.1.0.src.ar
      .StartsWith("darwin", Triple::Darwin)
      .StartsWith("dragonfly", Triple::DragonFly)
      .StartsWith("freebsd", Triple::FreeBSD)
+diff -ruN llvm-20.1.0.src/lib/Target/AArch64/AArch64ISelLowering.cpp llvm-20.1.0.src.aros/lib/Target/AArch64/AArch64ISelLowering.cpp
+--- llvm-20.1.0.src/lib/Target/AArch64/AArch64ISelLowering.cpp
++++ llvm-20.1.0.src.aros/lib/Target/AArch64/AArch64ISelLowering.cpp
+@@ -10224,8 +10224,12 @@
+       Model = TLSModel::GeneralDynamic;
+   }
+ 
++  // AROS loads every module with the large code model, but its loader keeps
++  // the TLS descriptors within ADRP reach of the code, so the small-model
++  // TLSDESC sequence is valid there.
+   if (getTargetMachine().getCodeModel() == CodeModel::Large &&
+-      Model != TLSModel::LocalExec)
++      Model != TLSModel::LocalExec &&
++      !getTargetMachine().getTargetTriple().isAROS())
+     report_fatal_error("ELF TLS only supported in small memory model or "
+                        "in local exec TLS model");
+   // Different choices can be made for the maximum size of the TLS area for a
+diff -ruN llvm-20.1.0.src/lib/Target/TargetMachine.cpp llvm-20.1.0.src.aros/lib/Target/TargetMachine.cpp
+--- llvm-20.1.0.src/lib/Target/TargetMachine.cpp
++++ llvm-20.1.0.src.aros/lib/Target/TargetMachine.cpp
+@@ -236,6 +236,12 @@
+ bool TargetMachine::useTLSDESC() const { return Options.EnableTLSDESC; }
+ 
+ TLSModel::Model TargetMachine::getTLSModel(const GlobalValue *GV) const {
++  // AROS runs every task in one address space, and any task may run any
++  // loaded module's code: there is no static TLS block to take a constant
++  // offset in. LoadSeg() builds a TLS descriptor per variable instead.
++  if (getTargetTriple().isAROS())
++    return TLSModel::GeneralDynamic;
++
+   bool IsPIE = GV->getParent()->getPIELevel() != PIELevel::Default;
+   Reloc::Model RM = getRelocationModel();
+   bool IsSharedLibrary = RM == Reloc::PIC_ && !IsPIE;

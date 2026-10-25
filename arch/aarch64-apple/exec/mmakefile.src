@@ -9,9 +9,12 @@ include $(SRCDIR)/config/aros.cfg
 %get_archincludes modname=kernel includeflag=TARGET_KERNEL_INCLUDES maindir=rom/kernel
 %get_archincludes modname=exec includeflag=TARGET_EXEC_INCLUDES maindir=rom/exec
 USER_INCLUDES := $(TARGET_EXEC_INCLUDES) -I$(SRCDIR)/rom/exec $(TARGET_KERNEL_INCLUDES) -I$(SRCDIR)/rom/kernel -I$(GENINCDIR)
+ifeq ($(AROS_TARGET_VARIANT),smp)
+SMP_FILES := smp_tasks smp_init smp_bridge
+endif
 
 %build_archspecific \
   mainmmake=kernel-exec maindir=rom/exec modname=exec \
-  files="supervisor" asmfiles="superstate_helper" arch=apple-aarch64
+  files="supervisor intserver_vblank $(SMP_FILES)" asmfiles="superstate_helper" arch=apple-aarch64
 
 %common

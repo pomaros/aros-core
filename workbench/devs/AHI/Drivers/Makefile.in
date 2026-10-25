@@ -26,6 +26,7 @@ VPATH           = @srcdir@
 HAVE_ASMIO      = @HAVE_ASMIO@
 HAVE_OPENPCI    = @HAVE_OPENPCI@
 HAVE_DMA_H      = @HAVE_DMA_H@
+HAVE_APPLE_AUDIO_H = @HAVE_APPLE_AUDIO_H@
 
 HAVE_ALSA       = @HAVE_ALSA@
 HAVE_OSS        = @HAVE_OSS@
@@ -104,6 +105,11 @@ SUBDIRS		+= RPiI2S
 endif
 endif
 
+#
+# Apple silicon headphone jack (needs the Apple audio core and its resources)
+ifneq ($(strip $(HAVE_APPLE_AUDIO_H)),)
+SUBDIRS		+= AppleMCA
+endif
 
 all:
 	@for i in $(SUBDIRS); do (cd $$i && $(MAKE) $@) || exit; done

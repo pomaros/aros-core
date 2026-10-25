@@ -2,6 +2,7 @@
 
 File: commands.c
 Author: Neil Cafferkey
+Copyright (C) 2026 John Knipper
 Copyright (C) 2008-2026 The AROS Dev Team
 Copyright (C) 2001-2008 Neil Cafferkey
 
@@ -656,7 +657,7 @@ UPINT CmdWrite(struct Handler *handler, struct Opening *opening,
    {
       length = WriteData(handler, opening, buffer, length);
       error = IoErr();
-      if(length > 0)
+      if(length != (UPINT)-1 && length > 0)
          lock->changed = TRUE;
    }
    else
@@ -702,81 +703,50 @@ UPINT CmdWrite(struct Handler *handler, struct Opening *opening,
 
 UPINT CmdSeek(struct Handler *handler, struct Opening *opening, PINT offset, LONG mode)
 {
-   struct Block *block;
-   struct Object *file;
-   UPINT block_pos, block_length, remainder, old_pos, new_pos;
+   UPINT base, target, magnitude, old_pos = opening->pos;
+   const UPINT max_position = ((UPINT)-1) >> 1;
 
-   /* Get starting point */
-
-   file = opening->file;
-   old_pos = opening->pos;
-
-   if(mode == OFFSET_BEGINNING)
+   (void)handler;
+   switch(mode)
    {
-      block = (APTR)file->elements.mlh_Head;
-      new_pos = block_pos = 0;
-   }
-   else if(mode == OFFSET_CURRENT)
-   {
-      block = opening->block;
-      block_pos = opening->block_pos;
-      new_pos = old_pos;
-   }
-   else
-   {
-      block = (APTR)file->elements.mlh_TailPred;
-      block_pos = file->end_length;
-      new_pos = file->length;
+      case OFFSET_BEGINNING: base = 0; break;
+      case OFFSET_CURRENT: base = old_pos; break;
+      case OFFSET_END: base = opening->file->length; break;
+      default:
+         SetIoErr(ERROR_SEEK_ERROR);
+         return (UPINT)-1;
    }
 
-   /* Check new position is within file */
-
-   new_pos += offset;
-   if(new_pos > file->length)
+   if(base > max_position)
    {
       SetIoErr(ERROR_SEEK_ERROR);
-      return -1;
+      return (UPINT)-1;
    }
-
-   if(offset >= 0)
+   if(offset < 0)
    {
-      /* Go forwards */
-
-      block_length = GetBlockLength(file, block);
-      remainder = offset + block_pos;
-      while(remainder > block_length)
+      /* Also handle the most negative PINT without signed overflow. */
+      magnitude = (UPINT)(-(offset + 1)) + 1;
+      if(magnitude > base)
       {
-         remainder -= block_length;
-         block = (APTR)((struct MinNode *)block)->mln_Succ;
-         block_length = GetBlockLength(file, block);
+         SetIoErr(ERROR_SEEK_ERROR);
+         return (UPINT)-1;
       }
-
-      block_pos = remainder;
+      target = base - magnitude;
    }
    else
    {
-      /* Go backwards */
-
-      block_length = block_pos;
-      remainder = -offset;
-      while(remainder >= block_length && remainder > 0)
+      if((UPINT)offset > max_position - base)
       {
-         remainder -= block_length;
-         block = (APTR)((struct MinNode *)block)->mln_Pred;
-         block_length = GetBlockLength(file, block);
+         SetIoErr(ERROR_SEEK_ERROR);
+         return (UPINT)-1;
       }
-
-      block_pos = block_length - remainder;
+      target = base + (UPINT)offset;
    }
 
-   /* Record new position for next access */
-
-   opening->block = block;
-   opening->block_pos = block_pos;
-   opening->pos = new_pos;
-
-   /* Return old position */
-
+   /* A logical seek never allocates, writes or changes the file length. */
+   if(target != old_pos)
+      SetOpeningPosition(opening, target);
+   SetIoErr(0);
    return old_pos;
 }
 
@@ -813,7 +783,8 @@ UPINT CmdSeek(struct Handler *handler, struct Opening *opening, PINT offset, LON
 PINT CmdSetFileSize(struct Handler *handler, struct Opening *opening,
    PINT offset, LONG mode)
 {
-   LONG error = 0, new_size;
+   LONG error = 0;
+   PINT new_size;
    struct Object *file;
    struct Lock *lock;
 
@@ -1886,8 +1857,8 @@ BOOL CmdSetComment(struct Handler *handler, struct Lock *lock,
 *
 */
 
-BOOL CmdRenameObject(struct Handler *handler, struct Lock *old_lock,
-   STRPTR old_name, struct Lock *new_lock, STRPTR new_name)
+static BOOL RenameObject(struct Handler *handler, struct Lock *old_lock,
+   STRPTR old_name, struct Lock *new_lock, STRPTR new_name, BOOL replace)
 {
    struct Object *parent, *object, *duplicate, *p;
    LONG error = 0;
@@ -1902,7 +1873,7 @@ BOOL CmdRenameObject(struct Handler *handler, struct Lock *old_lock,
       the target name */
 
    duplicate = GetHardObject(handler, new_lock, new_name, &parent);
-   if(duplicate && duplicate != object)
+   if(duplicate && duplicate != object && !replace)
       error = ERROR_OBJECT_EXISTS;
    if(parent == NULL)
       error = IoErr();
@@ -1930,6 +1901,22 @@ BOOL CmdRenameObject(struct Handler *handler, struct Lock *old_lock,
    if(error == 0)
       error = ramSecCheckObject(handler, parent, RAM_ACCESS_WRITE);
 
+   /* Replacement preflights deletion before SetName allocates. The
+      publication below has no failing operations and handles files only. */
+   if(error == 0 && replace && ((struct Node *)object)->ln_Pri != ST_FILE)
+      error = ERROR_OBJECT_WRONG_TYPE;
+   if(error == 0 && replace && duplicate && duplicate != object)
+   {
+      if(((struct Node *)duplicate)->ln_Pri != ST_FILE)
+         error = ERROR_OBJECT_WRONG_TYPE;
+      else if(duplicate->lock != NULL)
+         error = ERROR_OBJECT_IN_USE;
+      else if((GetRealObject(duplicate)->protection & FIBF_DELETE) != 0)
+         error = ERROR_DELETE_PROTECTED;
+      if(error == 0)
+         error = ramSecCheckObject(handler, duplicate, RAM_ACCESS_DELETE);
+   }
+
    /* Give the object its new name */
 
    if(error == 0)
@@ -1940,6 +1927,15 @@ BOOL CmdRenameObject(struct Handler *handler, struct Lock *old_lock,
 
    if(error == 0)
    {
+      if(replace && duplicate && duplicate != object)
+      {
+         NotifyAll(handler, duplicate, FALSE);
+         UnmatchNotifyRequests(handler, duplicate);
+         AdjustExaminations(handler, duplicate);
+         DeleteObject(handler, duplicate);
+         duplicate = NULL;
+      }
+
       if(object->parent != parent)
       {
          /* Remove object from old parent and place it in new parent */
@@ -1969,6 +1965,18 @@ BOOL CmdRenameObject(struct Handler *handler, struct Lock *old_lock,
 }
 
 
+
+BOOL CmdRenameObject(struct Handler *handler, struct Lock *old_lock,
+   STRPTR old_name, struct Lock *new_lock, STRPTR new_name)
+{
+   return RenameObject(handler, old_lock, old_name, new_lock, new_name, FALSE);
+}
+
+BOOL CmdReplaceObject(struct Handler *handler, struct Lock *old_lock,
+   STRPTR old_name, struct Lock *new_lock, STRPTR new_name)
+{
+   return RenameObject(handler, old_lock, old_name, new_lock, new_name, TRUE);
+}
 
 /****i* ram.handler/CmdRenameDisk ******************************************
 *

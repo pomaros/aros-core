@@ -20,6 +20,8 @@
 
 /*  FUNCTION
         Returns a pointer to struct DrawInfo of the passed screen.
+        Font and font-sized images use unscaled logical units. Scale-aware
+        consumers select a view from an immutable SA_RenderContext snapshot.
         This data is READ ONLY. The version of the struct DrawInfo
         is given in the dri_Version field.
 
@@ -56,7 +58,7 @@
 
     SANITY_CHECKR(screen,FALSE)
 
-    return (struct DrawInfo *)&(((struct IntScreen *)screen)->DInfo);
+    return LogicalScreenDrawInfo(screen);
 
     AROS_LIBFUNC_EXIT
 } /* GetScreenDrawInfo */

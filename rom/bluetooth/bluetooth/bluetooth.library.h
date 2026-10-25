@@ -96,9 +96,10 @@ void bDeviceClassScan(struct BtBase *BluetoothBase, struct BtDevice *bd);
 void bApplyDevConfig(struct BtBase *BluetoothBase, struct BtDevice *bd);
 /* persist: registration/bond state changed - also write the config to disk
    (done by the event handler process, which has DOS) */
-void bStoreDevConfig(struct BtBase *BluetoothBase, struct BtDevice *bd, BOOL persist);
+BOOL bLoadKeyringBond(struct BtBase *BluetoothBase, struct BtDevice *bd);
+BOOL bStoreDevConfig(struct BtBase *BluetoothBase, struct BtDevice *bd, BOOL persist);
 ULONG bRestoreDevices(struct BtBase *BluetoothBase, struct BtHardware *bth);
-void bRekeyDevice(struct BtBase *BluetoothBase, struct BtDevice *bd, const UBYTE *addr, UBYTE addrtype);
+BOOL bRekeyDevice(struct BtBase *BluetoothBase, struct BtDevice *bd, const UBYTE *addr, UBYTE addrtype);
 void bReplyChannel(struct BtBase *BluetoothBase, struct BtChannel *bch, LONG error, ULONG actual);
 BOOL bSubmitCtrl(struct BtBase *BluetoothBase, struct BtHardware *bth, struct BtDevice *bd,
                  UWORD request, UWORD val, UWORD idx, APTR data, ULONG len, LONG *error);

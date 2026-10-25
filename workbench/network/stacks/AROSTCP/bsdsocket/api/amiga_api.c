@@ -236,7 +236,8 @@ AROS_LH1(struct Library *, Open,
     ObtainSemaphore(&baselist_semaphore);
     if((newBase = FindSocketBase(FindTask(NULL))) != NULL) {
         /* A same-task callback must not resurrect a base being closed. */
-        if(newBase->libNode.lib_OpenCnt == 0) {
+        if(newBase->libNode.lib_OpenCnt == 0 ||
+                newBase->libNode.lib_OpenCnt == (UWORD)~0U) {
             ReleaseSemaphore(&baselist_semaphore);
             return NULL;
         }
@@ -284,6 +285,13 @@ AROS_LH1(struct Library *, Open,
     newBase->libNode.lib_Node.ln_Succ = NULL;
     newBase->libNode.lib_Node.ln_Pred = NULL;
     ObtainSemaphore(&baselist_semaphore);
+    if(libPtr->lib_OpenCnt == (UWORD)~0U) {
+        ULONG size = newBase->libNode.lib_NegSize + newBase->libNode.lib_PosSize;
+        UBYTE *allocation = (UBYTE *)newBase - newBase->libNode.lib_NegSize;
+        ReleaseSemaphore(&baselist_semaphore);
+        FreeMem(allocation, size);
+        return NULL;
+    }
     libPtr->lib_OpenCnt++;
     libPtr->lib_Flags &= ~LIBF_DELEXP;
     ReleaseSemaphore(&baselist_semaphore);
@@ -583,6 +591,7 @@ struct SocketBase *api_hookbase_open(VOID)
     if(ok) {
         ObtainSemaphore(&baselist_semaphore);
         ok = MasterSocketBase != NULL &&
+             MasterSocketBase->lib_OpenCnt != (UWORD)~0U &&
              (api_state == API_SHOWN || api_state == API_HIDDEN);
         if(ok) {
             AddTail(&socketBaseList, (struct Node *)p);
@@ -600,19 +609,17 @@ struct SocketBase *api_hookbase_open(VOID)
 
 VOID api_hookbase_close(struct SocketBase *p)
 {
-    BOOL expunge;
-
+    /* As in __UL_Close(), decide and run the expunge under one hold. */
     ObtainSemaphore(&baselist_semaphore);
     Remove((struct Node *)p);
     MasterSocketBase->lib_OpenCnt--;
-    expunge = MasterSocketBase->lib_OpenCnt == 0 &&
-            (MasterSocketBase->lib_Flags & LIBF_DELEXP);
+    if(MasterSocketBase->lib_OpenCnt == 0 &&
+            (MasterSocketBase->lib_Flags & LIBF_DELEXP))
+        __ELL_Expunge(MasterSocketBase);
     ReleaseSemaphore(&baselist_semaphore);
 
     closeSleepTimer(p);
     FreeMem(p, sizeof(*p));
-    if(expunge)
-        __ELL_Expunge(MasterSocketBase);
 }
 
 
@@ -877,7 +884,7 @@ VOID api_sendbreaktotasks()
     D(bug("[AROSTCP](amiga_api.c) api_sendbreaktotask()\n"));
 #endif
 
-    ObtainSemaphore(&baselist_semaphore);
+    ObtainSemaphoreShared(&baselist_semaphore);
     for(libNode = socketBaseList.lh_Head; libNode->ln_Succ;
             libNode = libNode->ln_Succ)
         if(((struct SocketBase *)libNode)->thisTask != Nettrace_Task)

@@ -1,5 +1,6 @@
 /*
     Copyright (C) 2011-2026, The AROS Development Team.
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
 */
 
 #define DEBUG 0
@@ -18,23 +19,32 @@
 #include <proto/cybergraphics.h>
 #include <proto/exec.h>
 #include <string.h>
+#include <stddef.h>
 
 #include <libraries/decorator.h>
 #include <proto/decorator.h>
 
 #include "windowdecorclass.h"
 #include "screendecorclass.h"
+#include "scaledimage.h"
 
 /* Compatibility shims for the struct-based decorator.library calls */
 static inline void ShadeLine(LONG pen, BOOL tc, BOOL usegradients, struct RastPort *rp, struct DecorImage *di,
-                             ULONG basecolor, UWORD fact, UWORD offy, UWORD x0, UWORD y0, UWORD x1, UWORD y1)
+                             ULONG basecolor, UWORD fact, UWORD offy, UWORD x0, UWORD y0, UWORD x1, UWORD y1, ULONG thickness)
 {
     struct Rectangle bounds;
-    bounds.MinX = x0;
-    bounds.MinY = y0;
-    bounds.MaxX = x1;
-    bounds.MaxY = y1;
-    DShadeLine(pen, tc, usegradients, rp, di, basecolor, fact, offy, &bounds);
+    ULONG i;
+    for (i = 0; i < thickness; ++i)
+    {
+        /* Endpoints denote the start of their scaled logical pixel. Include
+         * its final physical pixel on the long axis as well as widening the
+         * stroke; otherwise integer scales leave gaps at border corners. */
+        bounds.MinX = x0 + (x0 == x1 ? i : 0);
+        bounds.MinY = y0 + (y0 == y1 ? i : 0);
+        bounds.MaxX = x1 + (x0 == x1 ? i : thickness - 1);
+        bounds.MaxY = y1 + (y0 == y1 ? i : thickness - 1);
+        DShadeLine(pen, tc, usegradients, rp, di, basecolor, fact, offy, &bounds);
+    }
 }
 
 static inline void FillPixelArrayGradient(LONG pen, BOOL tc, struct RastPort *rp, LONG xt, LONG yt, LONG xb, LONG yb,
@@ -86,6 +96,7 @@ struct windecor_data
     struct DecorConfig * dc;
 
     /* Pointers to images used for sys images */
+    struct DecorImage *img_size;
     struct DecorImage *img_close;
     struct DecorImage *img_depth;
     struct DecorImage *img_zoom;
@@ -101,6 +112,61 @@ struct windecor_data
 
     UWORD            TextAlign;
 };
+
+#define WINDOW_SCALE_IMAGE_LIST(X) \
+    X(size) X(close) X(depth) X(zoom) X(up) X(down) X(left) X(right) \
+    X(mui) X(popup) X(snapshot) X(iconify) X(lock) X(winbar_normal) \
+    X(border_normal) X(border_deactivated) X(verticalcontainer) X(verticalknob) \
+    X(horizontalcontainer) X(horizontalknob)
+
+struct WindowScaleData
+{
+    struct windecor_data renderer;
+    struct DecorConfig config;
+    struct DecorThemeScreen theme;
+    struct DecorImages images;
+    struct DecorImage empty;
+    const struct ScreenRenderContext *context;
+    ULONG scale;
+};
+
+/* Theme resource names for refusal records: the THEME: file of each image. */
+static const char *window_scale_image_name(const char *id)
+{
+    static const char *const names[][2] = {
+        {"size", "System/Size/Default"}, {"close", "System/Close/Default"},
+        {"depth", "System/Depth/Default"}, {"zoom", "System/Zoom/Default"},
+        {"up", "System/ArrowUp/Default"}, {"down", "System/ArrowDown/Default"},
+        {"left", "System/ArrowLeft/Default"}, {"right", "System/ArrowRight/Default"},
+        {"mui", "System/MUI/Default"}, {"popup", "System/PopUp/Default"},
+        {"snapshot", "System/Snapshot/Default"}, {"iconify", "System/Iconify/Default"},
+        {"lock", "System/Lock/Default"}, {"winbar_normal", "System/Titlebar/Default"},
+        {"border_normal", "System/Borders/Default"},
+        {"border_deactivated", "System/Borders/Default_Deactivated"},
+        {"verticalcontainer", "System/Container/Vertical"},
+        {"verticalknob", "System/Knob/Vertical"},
+        {"horizontalcontainer", "System/Container/Horizontal"},
+        {"horizontalknob", "System/Knob/Horizontal"}};
+    ULONG i;
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
+        if (!strcmp(names[i][0], id)) return names[i][1];
+    return id;
+}
+
+/* The caller owns the record; it is written only on refusal. */
+static void window_scale_refuse(struct wdpScaleRefusal *refusal, ULONG code,
+    LONG value0, LONG value1, LONG value2, const char *name)
+{
+    ULONG i = 0;
+    if (!refusal) return;
+    refusal->wsr_Code = code;
+    refusal->wsr_Value[0] = value0; refusal->wsr_Value[1] = value1;
+    refusal->wsr_Value[2] = value2;
+    if (name)
+        for (; i + 1 < sizeof(refusal->wsr_Name) && name[i]; ++i)
+            refusal->wsr_Name[i] = name[i];
+    refusal->wsr_Name[i] = 0;
+}
 
 #define CHANGE_NO_CHANGE        0
 #define CHANGE_SIZE_CHANGE      1 /* Whole gadget area has changed */
@@ -170,6 +236,10 @@ static ULONG HasTitleBarChanged(struct CachedTitleBar *cached, struct Window *wi
         return CHANGE_SIZE_CHANGE;
     if (cached->height != window->Height)
         return CHANGE_SIZE_CHANGE;
+    /* A new screen font keeps the outer size but not the bar height: the
+     * cached bitmap is exactly BorderTop rows high. */
+    if (cached->bordertop != window->BorderTop)
+        return CHANGE_SIZE_CHANGE;
 
     /* If there is no cached bitmap at all (this can happen NOT only at first call) */
     if (cached->bm == NULL)
@@ -210,6 +280,7 @@ static VOID CacheTitleBar(struct CachedTitleBar *cached, struct Window *window, 
     cached->bm          = bitmap;
     cached->width       = window->Width;
     cached->height      = window->Height;
+    cached->bordertop   = window->BorderTop;
     cached->windowflags = (window->Flags & (WFLG_WINDOWACTIVE | WFLG_TOOLBOX));
     
     /* Cache the title */
@@ -649,7 +720,42 @@ static VOID DrawPartialTitleBar(struct WindowData *wd, struct windecor_data *dat
         UWORD   ty = (window->BorderTop + dri->dri_Font->tf_Baseline - 1) >> 1;
         if (ty > tymax) ty = tymax;
 
-        if (!wd->truecolor || ((data->dc->TitleOutline == FALSE) && (data->dc->TitleShadow == FALSE)))
+        if (wd->scaleData)
+        {
+            LONG unit = (wd->scaleData->scale + 50) / 100;
+            LONG baseline = dri->dri_Font->tf_Baseline +
+                ((LONG)window->BorderTop - dri->dri_Font->tf_YSize) / 2;
+            LONG maximum = (LONG)window->BorderTop - dri->dri_Font->tf_YSize +
+                dri->dri_Font->tf_Baseline - unit;
+            LONG dx, dy;
+            if (baseline > maximum) baseline = maximum;
+            SetSoftStyle(rp, FS_NORMAL, AskSoftStyle(rp));
+            if (wd->truecolor && (data->dc->TitleOutline || data->dc->TitleShadow))
+            {
+                SetRPAttrs(rp, RPTAG_PenMode, FALSE,
+                    RPTAG_FgColor, data->dc->TitleColorShadow, TAG_DONE);
+                if (data->dc->TitleOutline)
+                {
+                    for (dy = -unit; dy <= unit; dy += unit)
+                        for (dx = -unit; dx <= unit; dx += unit)
+                            if (dx || dy)
+                            {
+                                Move(rp, (LONG)tx + dx, baseline + dy);
+                                Text(rp, window->Title, textlen);
+                            }
+                }
+                else
+                {
+                    Move(rp, tx + unit, baseline + unit);
+                    Text(rp, window->Title, textlen);
+                }
+                SetRPAttrs(rp, RPTAG_PenMode, FALSE,
+                    RPTAG_FgColor, data->dc->TitleColorText, TAG_DONE);
+            }
+            Move(rp, tx, baseline);
+            Text(rp, window->Title, textlen);
+        }
+        else if (!wd->truecolor || ((data->dc->TitleOutline == FALSE) && (data->dc->TitleShadow == FALSE)))
         {
             Move(rp, tx, ty);
             Text(rp, window->Title, textlen);
@@ -711,6 +817,7 @@ static BOOL InitWindowSkinning(struct windecor_data *data, struct DecorImages * 
 
     /* Set pointers to gadget images, used only to get gadget sizes as they
        are requested prior to creation of menu object */
+    data->img_size      = di->img_size;
     data->img_close     = di->img_close;
     data->img_depth     = di->img_depth;
     data->img_zoom      = di->img_zoom;
@@ -775,6 +882,9 @@ static IPTR windecor_get(Class *cl, Object *obj, struct opGet *msg)
 {
     switch(msg->opg_AttrID)
     {
+        case WDA_PreparedScaleWindow:
+            *msg->opg_Storage = OCLASS(obj) == cl;
+            break;
         case WDA_TrueColorOnly:
             *msg->opg_Storage = TRUE;
             break;
@@ -785,6 +895,35 @@ static IPTR windecor_get(Class *cl, Object *obj, struct opGet *msg)
 }
 
 /**************************************************************************************************/
+/* The gadgets drawn over the title bar, whose background is the cached bar. */
+static BOOL titlebar_image(ULONG which)
+{
+    switch (which)
+    {
+        case CLOSEIMAGE: case MUIIMAGE: case POPUPIMAGE: case SNAPSHOTIMAGE:
+        case LOCKIMAGE: case ICONIFYIMAGE: case DEPTHIMAGE: case ZOOMIMAGE:
+            return TRUE;
+    }
+    return FALSE;
+}
+
+/* Restore the cached title bar under a title gadget. The bitmap holds only
+ * the bar (cached width x bordertop): a rectangle elsewhere in the window,
+ * such as the size gadget's corner, would read far outside it. */
+static VOID reblit_titlebar(struct WindowData *wd, struct RastPort *rp,
+    LONG left, LONG top, LONG width, LONG height)
+{
+    LONG right, bottom;
+    if (!wd || !wd->tbar.bm || !rp || width <= 0 || height <= 0) return;
+    right = left + width; bottom = top + height;
+    if (left < 0) left = 0;
+    if (top < 0) top = 0;
+    if (right > (LONG)wd->tbar.width) right = wd->tbar.width;
+    if (bottom > (LONG)wd->tbar.bordertop) bottom = wd->tbar.bordertop;
+    if (left >= right || top >= bottom) return;
+    BltBitMapRastPort(wd->tbar.bm, left, top, rp, left, top, right - left, bottom - top, 0xc0);
+}
+
 static IPTR windecor_draw_sysimage(Class *cl, Object *obj, struct wdpDrawSysImage *msg)
 {
     struct RastPort        *rp = msg->wdp_RPort;
@@ -880,8 +1019,8 @@ static IPTR windecor_draw_sysimage(Class *cl, Object *obj, struct wdpDrawSysImag
         return DoSuperMethodA(cl, obj, (Msg)msg);
 
     /* Reblit title bar (title gadgets have no pad offsets) */
-    if (wd && titlegadget && wd->tbar.bm)
-        BltBitMapRastPort(wd->tbar.bm, left, top, rp, left, top, width, height, 0xc0);
+    if (titlegadget)
+        reblit_titlebar(wd, rp, left, top, width, height);
 
     if (titlegadget)
         DRenderElement(elem, rp, state, left, top, -1, height, 0);
@@ -903,9 +1042,12 @@ static IPTR windecor_draw_winborder(Class *cl, Object *obj, struct wdpDrawWinBor
     ULONG                   bc, color, s_col, e_col, arc;
     UWORD                   bl, bt, br, bb, ww, wh;
     LONG    pen = -1;
+    LONG unit = wd->scaleData ? (wd->scaleData->scale + 50) / 100 : 1;
 
     D(bug("[Decoration:Win] %s(0x%p)\n", __func__, obj);)
     D(bug("[Decoration:Win] %s: window @ 0x%p\n", __func__, window);)
+
+    if (wd->scaleData) data = &wd->scaleData->renderer;
 
     if (wd->img_border_normal->ok)
         di = wd->img_border_normal;
@@ -959,13 +1101,14 @@ static IPTR windecor_draw_winborder(Class *cl, Object *obj, struct wdpDrawWinBor
         int         overlap = 0;
 
         if (data->dc->WinFrameStyle > 0)
-            overlap = 2;
+            overlap = unit * 2;
         
         if (data->dc->UseGradients)
         {
             /* Create one pixel wide buffer */
             buf = AllocVec(1 * window->Height * 3, MEMF_ANY | MEMF_CLEAR);
             
+            if (!buf) return FALSE;
             /* Fill the buffer with gradient */
             DFillMemoryBufferRGBGradient(buf, pen, 0, 0, window->Width - 1, window->Height - 1, 0, 0,
                 1, window->Height , s_col, e_col, arc);
@@ -1002,24 +1145,24 @@ static IPTR windecor_draw_winborder(Class *cl, Object *obj, struct wdpDrawWinBor
         {
             int bbt = bt;
 
-            if (bl > 0) ShadeLine(dpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_d, bbt, 0, bbt, 0, wh - 1);
-            if (bb > 0) ShadeLine(dpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_d, wh - 1, 0, wh - 1, ww - 1, wh - 1);
-            if (br > 0) ShadeLine(dpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_d, bbt , ww - 1, bbt , ww - 1, wh - 1);
-            if (bl > 1) ShadeLine(dpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_d, bbt, bl - 1, bbt, bl - 1, wh - bb);
-            if (bb > 1) ShadeLine(dpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_d, wh - bb, bl - 1, wh - bb, ww - br, wh - bb);
-            if (br > 1) ShadeLine(dpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_d, bbt , ww - br, bbt , ww - br, wh - bb);
-            if (bl > 2) ShadeLine(lpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_l, bbt, 1, bbt, 1, wh - 2);
-            if (bl > 3) {
-                if (bb > 1) ShadeLine(mpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_m, bbt, bl - 2, bbt, bl - 2, wh - bb + 1);
-                else ShadeLine(mpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_m, bbt, bl - 2, bbt, bl - 2, wh - bb);
+            if (bl > 0) ShadeLine(dpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_d, bbt, 0, bbt, 0, wh - unit, unit);
+            if (bb > 0) ShadeLine(dpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_d, wh - unit, 0, wh - unit, ww - unit, wh - unit, unit);
+            if (br > 0) ShadeLine(dpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_d, bbt , ww - unit, bbt , ww - unit, wh - unit, unit);
+            if (bl > unit) ShadeLine(dpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_d, bbt, bl - unit, bbt, bl - unit, wh - bb, unit);
+            if (bb > unit) ShadeLine(dpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_d, wh - bb, bl - unit, wh - bb, ww - br, wh - bb, unit);
+            if (br > unit) ShadeLine(dpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_d, bbt , ww - br, bbt , ww - br, wh - bb, unit);
+            if (bl > unit * 2) ShadeLine(lpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_l, bbt, unit, bbt, unit, wh - unit * 2, unit);
+            if (bl > unit * 3) {
+                if (bb > unit) ShadeLine(mpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_m, bbt, bl - unit * 2, bbt, bl - unit * 2, wh - bb + unit, unit);
+                else ShadeLine(mpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_m, bbt, bl - unit * 2, bbt, bl - unit * 2, wh - bb, unit);
             }
-            if (br > 2) ShadeLine(mpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_m, bbt, ww - 2, bbt, ww - 2, wh - 2);
-            if (bb > 2) ShadeLine(mpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_m, wh - 2, 1, wh - 2, ww - 2, wh - 2);
-            if (bb > 3) {
-                if ((bl > 0) && (br > 0)) ShadeLine(lpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_l, wh - bb + 1, bl, wh - bb + 1, ww - br, wh - bb + 1);
+            if (br > unit * 2) ShadeLine(mpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_m, bbt, ww - unit * 2, bbt, ww - unit * 2, wh - unit * 2, unit);
+            if (bb > unit * 2) ShadeLine(mpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_m, wh - unit * 2, unit, wh - unit * 2, ww - unit * 2, wh - unit * 2, unit);
+            if (bb > unit * 3) {
+                if ((bl > 0) && (br > 0)) ShadeLine(lpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_l, wh - bb + unit, bl, wh - bb + unit, ww - br, wh - bb + unit, unit);
             }
-            if (br > 3) {
-                if (bb > 1) ShadeLine(lpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_l, bbt, ww - br + 1, bbt, ww - br + 1, wh - bb + 1);
+            if (br > unit * 3) {
+                if (bb > unit) ShadeLine(lpen, tc, data->dc->UseGradients, rp, di, bc, data->dc->ShadeValues_l, bbt, ww - br + unit, bbt, ww - br + unit, wh - bb + unit, unit);
             }
         }
         FreeVec(buf);
@@ -1028,7 +1171,8 @@ static IPTR windecor_draw_winborder(Class *cl, Object *obj, struct wdpDrawWinBor
 }
 
 /**************************************************************************************************/
-static IPTR windecor_layout_bordergadgets(Class *cl, Object *obj, struct wdpLayoutBorderGadgets *msg)
+static IPTR windecor_layout_bordergadgets(Class *cl, Object *obj, struct wdpLayoutBorderGadgets *msg,
+    struct wdpScaleRefusal *refusal)
 {
     struct windecor_data   *data = INST_DATA(cl, obj);
     struct Window          *window = msg->wdp_Window;
@@ -1043,7 +1187,25 @@ static IPTR windecor_layout_bordergadgets(Class *cl, Object *obj, struct wdpLayo
     LONG                    width;
     LONG                    refheight = window->BorderTop;
 
-    DoSuperMethodA(cl, obj, (Msg)msg);
+    if (wd->scaleData) data = &wd->scaleData->renderer;
+
+    if (wd->scaleData)
+    {
+        struct wdpLayoutScaleBorderGadgets base = {0};
+        base.base = *msg;
+        base.base.MethodID = WDM_LAYOUTSCALEBORDERGADGETS;
+        base.context = wd->scaleData->context;
+        base.logical = wd->scaleData->scale == 100;
+        base.refusal = refusal;
+        if (!DoSuperMethodA(cl, obj, (Msg)&base))
+        {
+            if (refusal && refusal->wsr_Code == WDP_REFUSE_NONE)
+                window_scale_refuse(refusal, WDP_REFUSE_SUPERCLASS,
+                    WDM_LAYOUTSCALEBORDERGADGETS, 0, 0, NULL);
+            return FALSE;
+        }
+    }
+    else DoSuperMethodA(cl, obj, (Msg)msg);
 
     hasclose = (window->Flags & WFLG_CLOSEGADGET) ? TRUE : FALSE;
     hasdepth = (window->Flags & WFLG_DEPTHGADGET) ? TRUE : FALSE;
@@ -1363,6 +1525,12 @@ static IPTR windecor_layout_bordergadgets(Class *cl, Object *obj, struct wdpLayo
     
             }
         }
+        if (wd->scaleData && (gadget->Flags & GFLG_RELRIGHT) &&
+            (gadget->GadgetType & GTYP_SYSTYPEMASK) != GTYP_SIZING &&
+            (gadget->GadgetType & GTYP_SYSTYPEMASK) != GTYP_WDRAGGING)
+            /* Relative coordinates subtract one physical pixel at use time.
+             * Preserve the original logical-pixel inset at every scale. */
+            gadget->LeftEdge -= (wd->scaleData->scale + 50) / 100 - 1;
         return TRUE;
     }
 
@@ -1502,6 +1670,8 @@ static IPTR windecor_draw_borderpropknob(Class *cl, Object *obj, struct wdpDrawB
     struct BitMap          *cachedgadgetbitmap = NULL;
     ULONG                   changetype = CHANGE_NO_CHANGE;
     ULONG                   subimage = 0;
+
+    if (wd->scaleData) data = &wd->scaleData->renderer;
 
     if (!(pi->Flags & PROPNEWLOOK) || (gadget->Activation && (GACT_RIGHTBORDER | GACT_BOTTOMBORDER) == 0))
     {
@@ -1864,12 +2034,187 @@ static IPTR windecor_getdefsizes(Class *cl, Object *obj, struct wdpGetDefSizeSys
 }
 
 /**************************************************************************************************/
+/* Detached shape preparation. Ordinary WDM_WINDOWSHAPE keeps a title cache
+ * and has ambiguous NULL failure semantics; never call it from a transaction. */
+static BOOL prepare_shape_parts(const struct DecorConfig *dc, LONG width)
+{
+#define CHECK_SHAPE_PART(part) \
+    if ((LONG)dc->part##_o < 0 || (LONG)dc->part##_s < 0 || \
+        (LONG)dc->part##_o > width - (LONG)dc->part##_s) return FALSE
+    CHECK_SHAPE_PART(BarPreGadget);
+    CHECK_SHAPE_PART(BarLGadgetFill);
+    CHECK_SHAPE_PART(BarPre);
+    CHECK_SHAPE_PART(BarJoinGB);
+    CHECK_SHAPE_PART(BarLFill);
+    CHECK_SHAPE_PART(BarJoinBT);
+    CHECK_SHAPE_PART(BarTitleFill);
+    CHECK_SHAPE_PART(BarJoinTB);
+    CHECK_SHAPE_PART(BarRFill);
+    CHECK_SHAPE_PART(BarJoinBG);
+    CHECK_SHAPE_PART(BarRGadgetFill);
+    CHECK_SHAPE_PART(BarPostGadget);
+    CHECK_SHAPE_PART(BarPost);
+#undef CHECK_SHAPE_PART
+    return TRUE;
+}
+
+/* Same vertical sample phase as decorator.library ScaleBuffer, with checked
+ * allocation and no unnecessary horizontal line-pattern allocation. Width is
+ * unchanged. The original ScaleBuffer does not check both of its allocations. */
+static ULONG *prepare_shape_pixels(const struct DecorImage *image, LONG height)
+{
+    ULONG *pixels;
+    LONG y, source_y = 0, accumulated = -(image->h >> 1), boundary = height;
+    IPTR rowbytes = (IPTR)image->w * sizeof(ULONG);
+    if (height <= 0 || (IPTR)height > (IPTR)-1 / rowbytes) return NULL;
+    pixels = AllocVec(rowbytes * height, MEMF_ANY);
+    if (!pixels) return NULL;
+    for (y = 0; y < height; ++y)
+    {
+        accumulated += image->h;
+        while (accumulated > boundary)
+        {
+            ++source_y;
+            boundary += height;
+        }
+        if (source_y >= image->h) { FreeVec(pixels); return NULL; }
+        CopyMem(image->data + (IPTR)source_y * image->w,
+            pixels + (IPTR)y * image->w, rowbytes);
+    }
+    return pixels;
+}
+
+static struct Region *prepare_shape_region(const struct DecorImageLUT8 *mask,
+    LONG width, LONG height)
+{
+    struct Region *region = NewRegion();
+    LONG y;
+    struct Rectangle rect = {0, mask->h, width - 1, height - 1};
+    if (!region) return NULL;
+    if (!OrRectRegion(region, &rect)) goto fail;
+    for (y = 0; y < mask->h; ++y)
+    {
+        LONG x = 0;
+        while (x < width)
+        {
+            LONG first;
+            while (x < width && !mask->data[(IPTR)y * width + x]) ++x;
+            first = x;
+            while (x < width && mask->data[(IPTR)y * width + x]) ++x;
+            if (first == x) continue;
+            rect.MinX = first; rect.MaxX = x - 1;
+            rect.MinY = rect.MaxY = y;
+            if (!OrRectRegion(region, &rect)) goto fail;
+        }
+    }
+    return region;
+fail:
+    DisposeRegion(region);
+    return NULL;
+}
+
+static IPTR windecor_preparescaleshape(Class *cl, Object *obj,
+    struct wdpPrepareScaleShape *msg)
+{
+    struct windecor_data *data = INST_DATA(cl, obj);
+    struct Region *region;
+    if (!msg->wdp_Result) return FALSE;
+    *msg->wdp_Result = NULL;
+    if (OCLASS(obj) != cl || !msg->wdp_Window || !msg->wdp_Font ||
+        msg->wdp_Width <= 0 || msg->wdp_Width > 32767 ||
+        msg->wdp_Height <= 0 || msg->wdp_Height > 32767 ||
+        msg->wdp_BorderTop < 0 || msg->wdp_BorderTop > 127 ||
+        msg->wdp_BorderTop > msg->wdp_Height) return FALSE;
+    const struct WindowData *preparedWindow = (const struct WindowData *)msg->wdp_UserBuffer;
+    if (preparedWindow && preparedWindow->scaleData)
+        data = &preparedWindow->scaleData->renderer;
+    if (data->dc->BarMasking)
+    {
+        const struct WindowData *live = (const struct WindowData *)msg->wdp_UserBuffer;
+        struct Window window = *msg->wdp_Window;
+        struct Screen screen;
+        struct WindowData wd;
+        struct windecor_data localdata = *data;
+        struct DecorConfig config = *data->dc;
+        struct DecorImage image;
+        struct DecorImageLUT8 mask;
+        if (!msg->wdp_BorderTop) return TRUE; /* full rectangular body */
+        if (!live || !window.WScreen || !live->img_winbar_normal ||
+            !live->img_winbar_normal->ok || !live->img_winbar_normal->data ||
+            !live->img_winbar_normal->w || !live->img_winbar_normal->h ||
+            !prepare_shape_parts(data->dc, live->img_winbar_normal->w))
+            return FALSE;
+        screen = *window.WScreen;
+        wd = *live;
+        image = *live->img_winbar_normal;
+        image.data = prepare_shape_pixels(live->img_winbar_normal, msg->wdp_BorderTop * 2);
+        if (!image.data) return FALSE;
+        image.h = msg->wdp_BorderTop * 2;
+        mask.w = msg->wdp_Width; mask.h = msg->wdp_BorderTop;
+        mask.data = AllocVec((IPTR)mask.w * mask.h, MEMF_ANY | MEMF_CLEAR);
+        if (!mask.data) { FreeVec(image.data); return FALSE; }
+        /* Only snapshots are passed to the ordinary pixel-only title layout.
+         * In particular it sees proposed Width and proposed selected font.
+         * Matching BarHeight prevents its unchecked lazy DScaleDecorImage. */
+        window.Width = msg->wdp_Width; window.Height = msg->wdp_Height;
+        window.BorderTop = msg->wdp_BorderTop; window.WScreen = &screen;
+        SetFont(&screen.RastPort, msg->wdp_Font);
+        wd.img_winbar_normal = &image;
+        config.BarHeight = msg->wdp_BorderTop; localdata.dc = &config;
+        DrawShapePartialTitleBar(&wd, &mask, &localdata, &window);
+        region = prepare_shape_region(&mask, msg->wdp_Width, msg->wdp_Height);
+        FreeVec(mask.data); FreeVec(image.data);
+        if (!region) return FALSE;
+        *msg->wdp_Result = region;
+        return TRUE;
+    }
+    if (!data->dc->BarRounded) return TRUE;
+    region = NewRegion();
+    if (!region) return FALSE;
+    {
+        static const WORD inset[] = {9, 6, 4, 3, 2, 1, 0};
+        static const WORD row[] = {0, 1, 2, 3, 4, 6, 9};
+        ULONG i;
+        for (i = 0; i < sizeof(inset) / sizeof(inset[0]); ++i)
+        {
+            ULONG scale = preparedWindow && preparedWindow->scaleData ?
+                preparedWindow->scaleData->scale : 100;
+            LONG x = ((LONG)inset[i] * scale + 50) / 100;
+            LONG y = ((LONG)row[i] * scale + 50) / 100;
+            struct Rectangle rect = {x, y,
+                msg->wdp_Width - 1 - x, msg->wdp_Height - 1};
+            if (!OrRectRegion(region, &rect))
+            {
+                DisposeRegion(region);
+                return FALSE;
+            }
+        }
+    }
+    *msg->wdp_Result = region;
+    return TRUE;
+}
+
 static IPTR windecor_windowshape(Class *cl, Object *obj, struct wdpWindowShape *msg)
 {
     struct windecor_data   *data = INST_DATA(cl, obj);
     struct WindowData      *wd = (struct WindowData *) msg->wdp_UserBuffer;
     struct Window          *window = msg->wdp_Window;
 
+    if (wd->scaleData)
+    {
+        struct Region *preparedShape = NULL;
+        struct wdpPrepareScaleShape prepared = {0};
+        prepared.MethodID = WDM_PREPARESCALESHAPE;
+        prepared.wdp_Window = window;
+        prepared.wdp_Width = msg->wdp_Width;
+        prepared.wdp_Height = msg->wdp_Height;
+        prepared.wdp_BorderTop = window->BorderTop;
+        prepared.wdp_Font = wd->scaleData->context->src_PhysicalDrawInfo->dri_Font;
+        prepared.wdp_UserBuffer = msg->wdp_UserBuffer;
+        prepared.wdp_Result = &preparedShape;
+        if (!windecor_preparescaleshape(cl, obj, &prepared)) return 0;
+        return (IPTR)preparedShape;
+    }
     if (data->dc->BarMasking)
     {
         if (HasTitleBarShapeChanged(&wd->tbarshape, window) != CHANGE_NO_CHANGE)
@@ -1958,6 +2303,564 @@ static IPTR windecor_windowshape(Class *cl, Object *obj, struct wdpWindowShape *
 }
 
 /**************************************************************************************************/
+
+struct WindowScaleSysImage
+{
+    struct DecoratorElement element;
+    const struct ScreenRenderContext *context;
+    BOOL logical;
+    ULONG width, height;
+};
+
+static IPTR windecor_getscaledefsizes(Class *cl, Object *obj,
+    struct wdpGetScaleDefSizeSysImage *msg)
+{
+    struct windecor_data *data = INST_DATA(cl, obj);
+    const struct DecorImage *source = NULL;
+    struct TextFont *font;
+    struct WindowScaleSysImage *prepared;
+    struct wdpScaleRefusal *refusal = msg->refusal;
+    const char *id = NULL;
+    ULONG width, height, scale;
+    BOOL title = FALSE;
+    if (msg->prepared) *msg->prepared = NULL;
+    if (msg->base.wdp_Width && msg->base.wdp_Height)
+        *msg->base.wdp_Width = *msg->base.wdp_Height = 0;
+    if (OCLASS(obj) != cl)
+    {
+        window_scale_refuse(refusal, WDP_REFUSE_UNSUPPORTED, 0, 0, 0, NULL);
+        return WDP_SCALE_FAILED;
+    }
+    if (!msg->base.wdp_Width || !msg->base.wdp_Height || !msg->context ||
+        !msg->context->src_LogicalDrawInfo || !msg->context->src_PhysicalDrawInfo ||
+        msg->context->src_Scale < 100 || msg->context->src_Scale > 400 || msg->context->src_Scale % 25)
+    {
+        window_scale_refuse(refusal, WDP_REFUSE_ARGUMENTS,
+            msg->context ? msg->context->src_Scale : 0, 0, 0, NULL);
+        return WDP_SCALE_FAILED;
+    }
+    switch (msg->base.wdp_Which)
+    {
+        case SIZEIMAGE: source = data->img_size; id = "size"; break;
+        case CLOSEIMAGE: source = data->img_close; id = "close"; title = TRUE; break;
+        case DEPTHIMAGE: source = data->img_depth; id = "depth"; title = TRUE; break;
+        case ZOOMIMAGE: source = data->img_zoom; id = "zoom"; title = TRUE; break;
+        case MUIIMAGE: source = data->img_mui; id = "mui"; title = TRUE; break;
+        case POPUPIMAGE: source = data->img_popup; id = "popup"; title = TRUE; break;
+        case SNAPSHOTIMAGE: source = data->img_snapshot; id = "snapshot"; title = TRUE; break;
+        case ICONIFYIMAGE: source = data->img_iconify; id = "iconify"; title = TRUE; break;
+        case LOCKIMAGE: source = data->img_lock; id = "lock"; title = TRUE; break;
+        case UPIMAGE: source = data->img_up; id = "up"; break;
+        case DOWNIMAGE: source = data->img_down; id = "down"; break;
+        case LEFTIMAGE: source = data->img_left; id = "left"; break;
+        case RIGHTIMAGE: source = data->img_right; id = "right"; break;
+        case JUMPIMAGE: return WDP_SCALE_UNAVAILABLE; /* no shipped asset */
+        default:
+            window_scale_refuse(refusal, WDP_REFUSE_ARGUMENTS, msg->context->src_Scale, 0, 0, NULL);
+            return WDP_SCALE_FAILED;
+    }
+    if (!source || !source->ok) return WDP_SCALE_UNAVAILABLE;
+    if (!source->data || !source->w || !source->h || !source->subimagescols ||
+        !source->subimagesrows || source->w % source->subimagescols ||
+        source->h % source->subimagesrows)
+    {
+        window_scale_refuse(refusal, WDP_REFUSE_IMAGE_GRID, source->w, source->h,
+            source->subimagescols * 100 + source->subimagesrows % 100, window_scale_image_name(id));
+        return WDP_SCALE_FAILED;
+    }
+    font = msg->logical ? msg->base.wdp_ReferenceFont :
+        msg->context->src_LogicalDrawInfo->dri_Font;
+    if (!font)
+    {
+        window_scale_refuse(refusal, WDP_REFUSE_FONT, 0, data->dc->BarHeight, 0, NULL);
+        return WDP_SCALE_FAILED;
+    }
+    width = source->w / source->subimagescols;
+    height = source->h / source->subimagesrows;
+    if (title && font->tf_YSize + 2 > data->dc->BarHeight)
+    {
+        if (data->dc->BarHeight <= 0)
+        {
+            window_scale_refuse(refusal, WDP_REFUSE_FONT, font->tf_YSize, data->dc->BarHeight, 0, NULL);
+            return WDP_SCALE_FAILED;
+        }
+        height = (UQUAD)height * (font->tf_YSize + 2) / data->dc->BarHeight;
+    }
+    scale = msg->logical ? 100 : msg->context->src_Scale;
+    switch (msg->base.wdp_Which)
+    {
+        case SIZEIMAGE:
+            if (data->dc->RightBorderGadgets <= 0 || data->dc->BottomBorderGadgets <= 0)
+            {
+                BOOL right = data->dc->RightBorderGadgets <= 0;
+                window_scale_refuse(refusal, WDP_REFUSE_CONFIG,
+                    right ? data->dc->RightBorderGadgets : data->dc->BottomBorderGadgets, scale, 0,
+                    right ? "RightBorderGadgets" : "BottomBorderGadgets");
+                return WDP_SCALE_FAILED;
+            }
+            width = data->dc->RightBorderGadgets;
+            height = data->dc->BottomBorderGadgets;
+            break;
+        case UPIMAGE: case DOWNIMAGE:
+            if (data->dc->RightBorderGadgets <= 0 || data->dc->UpDownAddY < 0)
+            {
+                BOOL right = data->dc->RightBorderGadgets <= 0;
+                window_scale_refuse(refusal, WDP_REFUSE_CONFIG,
+                    right ? data->dc->RightBorderGadgets : data->dc->UpDownAddY, scale, 0,
+                    right ? "RightBorderGadgets" : "UpDownAddY");
+                return WDP_SCALE_FAILED;
+            }
+            width = data->dc->RightBorderGadgets;
+            height += data->dc->UpDownAddY;
+            break;
+        case LEFTIMAGE: case RIGHTIMAGE:
+            if (data->dc->BottomBorderGadgets <= 0 || data->dc->LeftRightAddX < 0)
+            {
+                BOOL bottom = data->dc->BottomBorderGadgets <= 0;
+                window_scale_refuse(refusal, WDP_REFUSE_CONFIG,
+                    bottom ? data->dc->BottomBorderGadgets : data->dc->LeftRightAddX, scale, 0,
+                    bottom ? "BottomBorderGadgets" : "LeftRightAddX");
+                return WDP_SCALE_FAILED;
+            }
+            width += data->dc->LeftRightAddX;
+            height = data->dc->BottomBorderGadgets;
+            break;
+    }
+    width = ((UQUAD)width * scale + 50) / 100;
+    height = ((UQUAD)height * scale + 50) / 100;
+    if (!width || !height || width > 32767 || height > 32767 ||
+        msg->requestedWidth > 32767 || msg->requestedHeight > 32767)
+    {
+        window_scale_refuse(refusal, WDP_REFUSE_IMAGE_EXTENT,
+            msg->requestedWidth > 32767 ? (LONG)msg->requestedWidth : (LONG)width,
+            msg->requestedHeight > 32767 ? (LONG)msg->requestedHeight : (LONG)height, 0,
+            window_scale_image_name(id));
+        return WDP_SCALE_FAILED;
+    }
+    if (msg->requestedHeight && !msg->requestedWidth)
+    {
+        UQUAD aspect = ((UQUAD)width * msg->requestedHeight + height / 2) / height;
+        if (!aspect || aspect > 32767)
+        {
+            window_scale_refuse(refusal, WDP_REFUSE_IMAGE_EXTENT, aspect > 32767 ? 32768 : (LONG)aspect,
+                msg->requestedHeight, 0, window_scale_image_name(id));
+            return WDP_SCALE_FAILED;
+        }
+        width = aspect;
+    }
+    if (msg->requestedWidth) width = msg->requestedWidth;
+    if (msg->requestedHeight) height = msg->requestedHeight;
+    if (!msg->prepared)
+    {
+        *msg->base.wdp_Width = width; *msg->base.wdp_Height = height;
+        return WDP_SCALE_READY;
+    }
+    prepared = AllocVec(sizeof(*prepared), MEMF_ANY | MEMF_CLEAR);
+    if (!prepared)
+    {
+        window_scale_refuse(refusal, WDP_REFUSE_NO_MEMORY, sizeof(*prepared), 0, 0, NULL);
+        return WDP_SCALE_FAILED;
+    }
+    prepared->element.de_Image = checked_scale_image_cells(source, width, height);
+    if (!prepared->element.de_Image)
+    {
+        FreeVec(prepared);
+        window_scale_refuse(refusal, WDP_REFUSE_IMAGE_EXTENT, width, height, 0,
+            window_scale_image_name(id));
+        return WDP_SCALE_FAILED;
+    }
+    prepared->element.de_Type = DE_TYPE_STATEFUL_GADGET;
+    prepared->element.de_SubImageCols = source->subimagescols;
+    prepared->element.de_SubImageRows = source->subimagesrows;
+    prepared->element.de_Flags = source->subimagescols == 3 ? DEF_THREE_STATE : 0;
+    prepared->context = msg->context; prepared->logical = msg->logical;
+    prepared->width = width; prepared->height = height;
+    *msg->base.wdp_Width = width; *msg->base.wdp_Height = height;
+    *msg->prepared = prepared;
+    return WDP_SCALE_READY;
+}
+
+static IPTR windecor_drawscalesysimage(Class *cl, Object *obj,
+    struct wdpDrawScaleSysImage *msg)
+{
+    struct WindowScaleSysImage *prepared = msg->prepared;
+    struct wdpDrawSysImage *base = &msg->base;
+    struct WindowData *wd = (struct WindowData *)base->wdp_UserBuffer;
+    if (OCLASS(obj) != cl || !prepared || prepared->context != msg->context ||
+        prepared->logical != msg->logical || !base->wdp_RPort ||
+        base->wdp_Width != (LONG)prepared->width || base->wdp_Height != (LONG)prepared->height)
+        return FALSE;
+    if (titlebar_image(base->wdp_Which))
+        reblit_titlebar(wd, base->wdp_RPort, base->wdp_X, base->wdp_Y,
+            base->wdp_Width, base->wdp_Height);
+    /* The owned sheet already has exactly the selected destination extent.
+     * Natural-size rendering never enters unchecked lazy ScaleBuffer. */
+    DRenderElement(&prepared->element, base->wdp_RPort, base->wdp_State,
+        base->wdp_X, base->wdp_Y, -1, -1, 0);
+    return TRUE;
+}
+
+static IPTR windecor_releasescalesysimage(Class *cl, Object *obj,
+    struct wdpReleaseScaleSysImage *msg)
+{
+    struct WindowScaleSysImage *prepared = msg->prepared;
+    if (OCLASS(obj) != cl) return FALSE;
+    if (prepared)
+    {
+        DDisposeImageContainer(prepared->element.de_Image);
+        FreeVec(prepared);
+    }
+    return TRUE;
+}
+
+/* An offset/size theme pair keeps its scaled end point; a refusal names it. */
+static BOOL scale_config_pair(LONG *size, LONG sourceOffset, LONG sourceSize,
+    LONG scaledOffset, ULONG scale, const char *name, struct wdpScaleRefusal *refusal)
+{
+    QUAD end = (QUAD)sourceOffset + sourceSize;
+    if (sourceOffset < 0 || sourceSize < 0 || end > 65535)
+    {
+        window_scale_refuse(refusal, WDP_REFUSE_CONFIG, sourceOffset < 0 ? sourceOffset :
+            sourceSize < 0 ? sourceSize : (LONG)end, scale, 0, name);
+        return FALSE;
+    }
+    *size = (end * scale + 50) / 100 - scaledOffset;
+    if (sourceSize && *size <= 0)
+    {
+        window_scale_refuse(refusal, WDP_REFUSE_CONFIG, sourceSize, scale, 0, name);
+        return FALSE;
+    }
+    return TRUE;
+}
+static BOOL scale_window_config(struct DecorConfig *out,
+    const struct DecorConfig *source, ULONG scale, struct wdpScaleRefusal *refusal)
+{
+    static const struct { ULONG offset; const char *name; } offsets[] = {
+        {offsetof(struct DecorConfig, BarHeight), "BarHeight"},
+        {offsetof(struct DecorConfig, BarFrame), "BarFrame"},
+        {offsetof(struct DecorConfig, BarJoinTB_o), "BarJoinTB_o"},
+        {offsetof(struct DecorConfig, BarJoinTB_s), "BarJoinTB_s"},
+        {offsetof(struct DecorConfig, BarPreGadget_o), "BarPreGadget_o"},
+        {offsetof(struct DecorConfig, BarPreGadget_s), "BarPreGadget_s"},
+        {offsetof(struct DecorConfig, BarPre_o), "BarPre_o"},
+        {offsetof(struct DecorConfig, BarPre_s), "BarPre_s"},
+        {offsetof(struct DecorConfig, BarLGadgetFill_o), "BarLGadgetFill_o"},
+        {offsetof(struct DecorConfig, BarLGadgetFill_s), "BarLGadgetFill_s"},
+        {offsetof(struct DecorConfig, BarJoinGB_o), "BarJoinGB_o"},
+        {offsetof(struct DecorConfig, BarJoinGB_s), "BarJoinGB_s"},
+        {offsetof(struct DecorConfig, BarLFill_o), "BarLFill_o"},
+        {offsetof(struct DecorConfig, BarLFill_s), "BarLFill_s"},
+        {offsetof(struct DecorConfig, BarJoinBT_o), "BarJoinBT_o"},
+        {offsetof(struct DecorConfig, BarJoinBT_s), "BarJoinBT_s"},
+        {offsetof(struct DecorConfig, BarTitleFill_o), "BarTitleFill_o"},
+        {offsetof(struct DecorConfig, BarTitleFill_s), "BarTitleFill_s"},
+        {offsetof(struct DecorConfig, BarRFill_o), "BarRFill_o"},
+        {offsetof(struct DecorConfig, BarRFill_s), "BarRFill_s"},
+        {offsetof(struct DecorConfig, BarJoinBG_o), "BarJoinBG_o"},
+        {offsetof(struct DecorConfig, BarJoinBG_s), "BarJoinBG_s"},
+        {offsetof(struct DecorConfig, BarRGadgetFill_o), "BarRGadgetFill_o"},
+        {offsetof(struct DecorConfig, BarRGadgetFill_s), "BarRGadgetFill_s"},
+        {offsetof(struct DecorConfig, BarPostGadget_o), "BarPostGadget_o"},
+        {offsetof(struct DecorConfig, BarPostGadget_s), "BarPostGadget_s"},
+        {offsetof(struct DecorConfig, BarPost_o), "BarPost_o"},
+        {offsetof(struct DecorConfig, BarPost_s), "BarPost_s"},
+        {offsetof(struct DecorConfig, ContainerTop_o), "ContainerTop_o"},
+        {offsetof(struct DecorConfig, ContainerTop_s), "ContainerTop_s"},
+        {offsetof(struct DecorConfig, ContainerVertTile_o), "ContainerVertTile_o"},
+        {offsetof(struct DecorConfig, ContainerVertTile_s), "ContainerVertTile_s"},
+        {offsetof(struct DecorConfig, ContainerBottom_o), "ContainerBottom_o"},
+        {offsetof(struct DecorConfig, ContainerBottom_s), "ContainerBottom_s"},
+        {offsetof(struct DecorConfig, KnobTop_o), "KnobTop_o"},
+        {offsetof(struct DecorConfig, KnobTop_s), "KnobTop_s"},
+        {offsetof(struct DecorConfig, KnobTileTop_o), "KnobTileTop_o"},
+        {offsetof(struct DecorConfig, KnobTileTop_s), "KnobTileTop_s"},
+        {offsetof(struct DecorConfig, KnobVertGripper_o), "KnobVertGripper_o"},
+        {offsetof(struct DecorConfig, KnobVertGripper_s), "KnobVertGripper_s"},
+        {offsetof(struct DecorConfig, KnobTileBottom_o), "KnobTileBottom_o"},
+        {offsetof(struct DecorConfig, KnobTileBottom_s), "KnobTileBottom_s"},
+        {offsetof(struct DecorConfig, KnobBottom_o), "KnobBottom_o"},
+        {offsetof(struct DecorConfig, KnobBottom_s), "KnobBottom_s"},
+        {offsetof(struct DecorConfig, ContainerLeft_o), "ContainerLeft_o"},
+        {offsetof(struct DecorConfig, ContainerLeft_s), "ContainerLeft_s"},
+        {offsetof(struct DecorConfig, ContainerHorTile_o), "ContainerHorTile_o"},
+        {offsetof(struct DecorConfig, ContainerHorTile_s), "ContainerHorTile_s"},
+        {offsetof(struct DecorConfig, ContainerRight_o), "ContainerRight_o"},
+        {offsetof(struct DecorConfig, ContainerRight_s), "ContainerRight_s"},
+        {offsetof(struct DecorConfig, KnobLeft_o), "KnobLeft_o"},
+        {offsetof(struct DecorConfig, KnobLeft_s), "KnobLeft_s"},
+        {offsetof(struct DecorConfig, KnobTileLeft_o), "KnobTileLeft_o"},
+        {offsetof(struct DecorConfig, KnobTileLeft_s), "KnobTileLeft_s"},
+        {offsetof(struct DecorConfig, KnobHorGripper_o), "KnobHorGripper_o"},
+        {offsetof(struct DecorConfig, KnobHorGripper_s), "KnobHorGripper_s"},
+        {offsetof(struct DecorConfig, KnobTileRight_o), "KnobTileRight_o"},
+        {offsetof(struct DecorConfig, KnobTileRight_s), "KnobTileRight_s"},
+        {offsetof(struct DecorConfig, KnobRight_o), "KnobRight_o"},
+        {offsetof(struct DecorConfig, KnobRight_s), "KnobRight_s"},
+        {offsetof(struct DecorConfig, BottomBorderGadgets), "BottomBorderGadgets"},
+        {offsetof(struct DecorConfig, RightBorderGadgets), "RightBorderGadgets"},
+        {offsetof(struct DecorConfig, UpDownAddY), "UpDownAddY"},
+        {offsetof(struct DecorConfig, LeftRightAddX), "LeftRightAddX"}};
+    ULONG i;
+    *out = *source;
+    for (i = 0; i < sizeof(offsets) / sizeof(offsets[0]); ++i)
+    {
+        LONG old = *(const LONG *)((const UBYTE *)source + offsets[i].offset);
+        QUAD value = old < 0 ? -((-(QUAD)old * scale + 50) / 100) :
+            ((QUAD)old * scale + 50) / 100;
+        if (value < -32768 || value > 32767)
+        {
+            window_scale_refuse(refusal, WDP_REFUSE_CONFIG, old, scale, 0, offsets[i].name);
+            return FALSE;
+        }
+        *(LONG *)((UBYTE *)out + offsets[i].offset) = value;
+    }
+#define SCALE_CONFIG_PAIR(part) \
+    if (!scale_config_pair(&out->part##_s, source->part##_o, source->part##_s, \
+        out->part##_o, scale, #part, refusal)) return FALSE;
+    SCALE_CONFIG_PAIR(BarJoinTB)
+    SCALE_CONFIG_PAIR(BarPreGadget)
+    SCALE_CONFIG_PAIR(BarPre)
+    SCALE_CONFIG_PAIR(BarLGadgetFill)
+    SCALE_CONFIG_PAIR(BarJoinGB)
+    SCALE_CONFIG_PAIR(BarLFill)
+    SCALE_CONFIG_PAIR(BarJoinBT)
+    SCALE_CONFIG_PAIR(BarTitleFill)
+    SCALE_CONFIG_PAIR(BarRFill)
+    SCALE_CONFIG_PAIR(BarJoinBG)
+    SCALE_CONFIG_PAIR(BarRGadgetFill)
+    SCALE_CONFIG_PAIR(BarPostGadget)
+    SCALE_CONFIG_PAIR(BarPost)
+    SCALE_CONFIG_PAIR(ContainerTop)
+    SCALE_CONFIG_PAIR(ContainerVertTile)
+    SCALE_CONFIG_PAIR(ContainerBottom)
+    SCALE_CONFIG_PAIR(KnobTop)
+    SCALE_CONFIG_PAIR(KnobTileTop)
+    SCALE_CONFIG_PAIR(KnobVertGripper)
+    SCALE_CONFIG_PAIR(KnobTileBottom)
+    SCALE_CONFIG_PAIR(KnobBottom)
+    SCALE_CONFIG_PAIR(ContainerLeft)
+    SCALE_CONFIG_PAIR(ContainerHorTile)
+    SCALE_CONFIG_PAIR(ContainerRight)
+    SCALE_CONFIG_PAIR(KnobLeft)
+    SCALE_CONFIG_PAIR(KnobTileLeft)
+    SCALE_CONFIG_PAIR(KnobHorGripper)
+    SCALE_CONFIG_PAIR(KnobTileRight)
+    SCALE_CONFIG_PAIR(KnobRight)
+#undef SCALE_CONFIG_PAIR
+    return TRUE;
+}
+
+static void release_window_scale_data(struct WindowScaleData *scaled)
+{
+    if (!scaled) return;
+#define RELEASE_SCALE_IMAGE(id) \
+    if (scaled->images.img_##id && scaled->images.img_##id != &scaled->empty) \
+        DDisposeImageContainer(scaled->images.img_##id);
+    WINDOW_SCALE_IMAGE_LIST(RELEASE_SCALE_IMAGE)
+#undef RELEASE_SCALE_IMAGE
+    FreeVec(scaled);
+}
+
+static IPTR windecor_preparescalewindow(Class *cl, Object *obj,
+    struct wdpPrepareScaleWindow *msg)
+{
+    struct windecor_data *data = INST_DATA(cl, obj);
+    struct WindowData *wd = (struct WindowData *)msg->base.wdp_UserBuffer;
+    const struct ScreenData *sd = (const struct ScreenData *)msg->base.wdp_ScreenUserBuffer;
+    struct wdpScaleRefusal *refusal = msg->refusal;
+    struct WindowScaleData *scaled;
+    ULONG scale, i;
+    if (OCLASS(obj) != cl)
+    {
+        window_scale_refuse(refusal, WDP_REFUSE_UNSUPPORTED, 0, 0, 0, NULL);
+        return FALSE;
+    }
+    if (!wd || !sd || !sd->dts || !sd->di || wd->dts || wd->scaleData)
+    {
+        window_scale_refuse(refusal, WDP_REFUSE_STATE, 0, 0, 0, NULL);
+        return FALSE;
+    }
+    if (!msg->context || !msg->context->src_LogicalDrawInfo ||
+        msg->width < 1 || msg->width > 32767 || msg->height < 1 || msg->height > 32767 ||
+        msg->borderTop < 0 || msg->borderTop > 127 ||
+        msg->context->src_Scale < 100 || msg->context->src_Scale > 400 ||
+        msg->context->src_Scale % 25)
+    {
+        window_scale_refuse(refusal, WDP_REFUSE_ARGUMENTS,
+            msg->context ? msg->context->src_Scale : 0, msg->width, msg->height, NULL);
+        return FALSE;
+    }
+    if (!msg->context->src_LogicalDrawInfo->dri_Font || !msg->font)
+    {
+        window_scale_refuse(refusal, WDP_REFUSE_FONT, 0, data->dc->BarHeight, 0, NULL);
+        return FALSE;
+    }
+    scale = msg->logical ? 100 : msg->context->src_Scale;
+    scaled = AllocVec(sizeof(*scaled), MEMF_ANY | MEMF_CLEAR);
+    if (!scaled)
+    {
+        window_scale_refuse(refusal, WDP_REFUSE_NO_MEMORY, sizeof(*scaled), 0, 0, NULL);
+        return FALSE;
+    }
+    scaled->context = msg->context; scaled->scale = scale;
+    scaled->renderer = *data;
+    if (!scale_window_config(&scaled->config, data->dc, scale, refusal)) goto fail;
+    scaled->config.BarHeight = msg->borderTop;
+    scaled->renderer.dc = &scaled->config;
+    scaled->theme = *sd->dts;
+    scaled->theme.dts_Images = &scaled->images;
+#define PREPARE_SCALE_IMAGE(id) \
+    do { \
+        const struct DecorImage *source = sd->di->img_##id; \
+        if (!source || !source->ok) scaled->images.img_##id = &scaled->empty; \
+        else { \
+            ULONG cols = source->subimagescols, rows = source->subimagesrows; \
+            ULONG width, height; \
+            if (!cols || !rows || !source->data || source->w % cols || source->h % rows) { \
+                window_scale_refuse(refusal, WDP_REFUSE_IMAGE_GRID, source->w, source->h, \
+                    cols * 100 + rows % 100, window_scale_image_name(#id)); \
+                goto fail; \
+            } \
+            width = ((ULONG)(source->w / cols) * scale + 50) / 100; \
+            height = ((ULONG)(source->h / rows) * scale + 50) / 100; \
+            if (msg->borderTop && (source == sd->di->img_close || source == sd->di->img_depth || \
+                source == sd->di->img_zoom || source == sd->di->img_mui || source == sd->di->img_popup || \
+                source == sd->di->img_snapshot || source == sd->di->img_iconify || source == sd->di->img_lock)) { \
+                ULONG baselineHeight = source->h / rows; \
+                ULONG canonicalHeight = ((ULONG)msg->borderTop * 100 + scale / 2) / scale; \
+                struct TextFont *basefont = msg->context->src_LogicalDrawInfo->dri_Font; \
+                if (!basefont || data->dc->BarHeight <= 0) { \
+                    window_scale_refuse(refusal, WDP_REFUSE_FONT, basefont ? basefont->tf_YSize : 0, \
+                        data->dc->BarHeight, 0, NULL); \
+                    goto fail; \
+                } \
+                if (basefont->tf_YSize + 2 > data->dc->BarHeight) \
+                    baselineHeight = (UQUAD)baselineHeight * (basefont->tf_YSize + 2) / data->dc->BarHeight; \
+                if (!baselineHeight) { \
+                    window_scale_refuse(refusal, WDP_REFUSE_IMAGE_EXTENT, source->w / cols, 0, 0, \
+                        window_scale_image_name(#id)); \
+                    goto fail; \
+                } \
+                if (!canonicalHeight) canonicalHeight = 1; \
+                ULONG canonicalWidth = ((UQUAD)(source->w / cols) * canonicalHeight + baselineHeight / 2) / baselineHeight; \
+                width = ((UQUAD)canonicalWidth * scale + 50) / 100; \
+                height = msg->borderTop; \
+            } \
+            if (source == sd->di->img_winbar_normal) { \
+                if (rows != 2) { \
+                    window_scale_refuse(refusal, WDP_REFUSE_IMAGE_GRID, source->w, source->h, \
+                        cols * 100 + rows % 100, window_scale_image_name(#id)); \
+                    goto fail; \
+                } \
+                height = msg->borderTop ? msg->borderTop : 1; \
+            } \
+            scaled->images.img_##id = checked_scale_image_cells(source, width, height); \
+            if (!scaled->images.img_##id) { \
+                window_scale_refuse(refusal, WDP_REFUSE_IMAGE_EXTENT, width, height, 0, \
+                    window_scale_image_name(#id)); \
+                goto fail; \
+            } \
+        } \
+    } while (0);
+    WINDOW_SCALE_IMAGE_LIST(PREPARE_SCALE_IMAGE)
+#undef PREPARE_SCALE_IMAGE
+#define BIND_SCALE_RENDER_IMAGE(id) scaled->renderer.img_##id = scaled->images.img_##id;
+    BIND_SCALE_RENDER_IMAGE(size)
+    BIND_SCALE_RENDER_IMAGE(close)
+    BIND_SCALE_RENDER_IMAGE(depth)
+    BIND_SCALE_RENDER_IMAGE(zoom)
+    BIND_SCALE_RENDER_IMAGE(up)
+    BIND_SCALE_RENDER_IMAGE(down)
+    BIND_SCALE_RENDER_IMAGE(left)
+    BIND_SCALE_RENDER_IMAGE(right)
+    BIND_SCALE_RENDER_IMAGE(mui)
+    BIND_SCALE_RENDER_IMAGE(popup)
+    BIND_SCALE_RENDER_IMAGE(snapshot)
+    BIND_SCALE_RENDER_IMAGE(iconify)
+    BIND_SCALE_RENDER_IMAGE(lock)
+#undef BIND_SCALE_RENDER_IMAGE
+    for (i = 0; i < DECOR_NUM_ELEMENTS; ++i)
+    {
+        struct DecoratorElement *element = &scaled->theme.dts_Elements[i];
+        const struct DecorImage *original = element->de_Image;
+        const char *imageName = NULL;
+        element->de_Image = NULL;
+#define REMAP_SCALE_ELEMENT(id) \
+        if (original && original == sd->di->img_##id) \
+        { element->de_Image = scaled->images.img_##id; imageName = window_scale_image_name(#id); }
+        WINDOW_SCALE_IMAGE_LIST(REMAP_SCALE_ELEMENT)
+#undef REMAP_SCALE_ELEMENT
+        if (element->de_Image && element->de_Image->ok)
+        {
+            QUAD end = (QUAD)element->de_SrcOffset + element->de_SrcSize;
+            LONG offset, size;
+            if (element->de_SrcOffset < 0 || element->de_SrcSize < 0 || end > 65535)
+            {
+                window_scale_refuse(refusal, WDP_REFUSE_ELEMENT, element->de_SrcOffset,
+                    element->de_SrcSize, 65535, imageName);
+                goto fail;
+            }
+            offset = ((QUAD)element->de_SrcOffset * scale + 50) / 100;
+            size = (end * scale + 50) / 100 - offset;
+            element->de_SrcOffset = offset; element->de_SrcSize = size;
+            element->de_SrcHeight = ((QUAD)element->de_SrcHeight * scale + 50) / 100;
+            QUAD padX = element->de_PadX, padY = element->de_PadY;
+            padX = padX < 0 ? -((-padX * scale + 50) / 100) : (padX * scale + 50) / 100;
+            padY = padY < 0 ? -((-padY * scale + 50) / 100) : (padY * scale + 50) / 100;
+            if (padX < -32768 || padX > 32767 || padY < -32768 || padY > 32767)
+            {
+                window_scale_refuse(refusal, WDP_REFUSE_ELEMENT, padX < -32768 || padX > 32767 ?
+                    (LONG)padX : (LONG)padY, 0, 32767, imageName);
+                goto fail;
+            }
+            element->de_PadX = padX; element->de_PadY = padY;
+            if (size > 0)
+            {
+                ULONG extent = element->de_Type == DE_TYPE_TILED_VERTICAL ?
+                    element->de_Image->h / element->de_Image->subimagesrows :
+                    element->de_Image->w / element->de_Image->subimagescols;
+                if (offset < 0 || (ULONG)offset > extent || (ULONG)size > extent - offset)
+                {
+                    window_scale_refuse(refusal, WDP_REFUSE_ELEMENT, offset, size, extent, imageName);
+                    goto fail;
+                }
+            }
+        }
+    }
+    wd->scaleData = scaled; wd->dts = &scaled->theme;
+    wd->truecolor = msg->base.wdp_TrueColor;
+    wd->ActivePen = sd->ActivePen; wd->DeactivePen = sd->DeactivePen;
+#define BIND_SCALE_WINDOW_IMAGE(id) wd->img_##id = scaled->images.img_##id;
+    WINDOW_SCALE_IMAGE_LIST(BIND_SCALE_WINDOW_IMAGE)
+#undef BIND_SCALE_WINDOW_IMAGE
+    return TRUE;
+fail:
+    release_window_scale_data(scaled);
+    return FALSE;
+}
+
+static IPTR windecor_layoutscalebordergadgets(Class *cl, Object *obj,
+    struct wdpLayoutScaleBorderGadgets *msg)
+{
+    struct WindowData *wd = (struct WindowData *)msg->base.wdp_UserBuffer;
+    if (OCLASS(obj) != cl)
+    {
+        window_scale_refuse(msg->refusal, WDP_REFUSE_UNSUPPORTED, 0, 0, 0, NULL);
+        return FALSE;
+    }
+    if (!msg->context || !wd || !wd->scaleData || wd->scaleData->context != msg->context)
+    {
+        window_scale_refuse(msg->refusal, WDP_REFUSE_STATE, 0, 0, 0, NULL);
+        return FALSE;
+    }
+    if (!msg->base.wdp_Window || !msg->base.wdp_Gadgets)
+    {
+        window_scale_refuse(msg->refusal, WDP_REFUSE_ARGUMENTS, wd->scaleData->scale, 0, 0, NULL);
+        return FALSE;
+    }
+    return windecor_layout_bordergadgets(cl, obj, &msg->base, msg->refusal);
+}
+
 static IPTR windecor_initwindow(Class *cl, Object *obj, struct wdpInitWindow *msg)
 {
     struct WindowData *wd = (struct WindowData *)msg->wdp_UserBuffer;
@@ -2007,6 +2910,8 @@ static IPTR windecor_exitwindow(Class *cl, Object *obj, struct wdpExitWindow *ms
     if (wd->tbar.bm) FreeBitMap(wd->tbar.bm);
     if (wd->tbarshape.shape) DisposeRegion(wd->tbarshape.shape);
     if (wd->tbar.title) FreeVec(wd->tbar.title);
+    release_window_scale_data(wd->scaleData);
+    wd->scaleData = NULL;
 
     return TRUE;
 }
@@ -2039,7 +2944,7 @@ static IPTR windecor_dispatcher(struct IClass *cl, Object *obj, Msg msg)
             break;
 
         case WDM_LAYOUT_BORDERGADGETS:
-            retval = windecor_layout_bordergadgets(cl, obj, (struct wdpLayoutBorderGadgets *)msg);
+            retval = windecor_layout_bordergadgets(cl, obj, (struct wdpLayoutBorderGadgets *)msg, NULL);
             break;
 
         case WDM_DRAW_BORDERPROPBACK:
@@ -2052,6 +2957,28 @@ static IPTR windecor_dispatcher(struct IClass *cl, Object *obj, Msg msg)
 
         case WDM_GETDEFSIZE_SYSIMAGE:
             retval = windecor_getdefsizes(cl, obj, (struct wdpGetDefSizeSysImage *) msg);
+            break;
+
+        case WDM_GETSCALEDEFSIZE_SYSIMAGE:
+            retval = windecor_getscaledefsizes(cl, obj, (struct wdpGetScaleDefSizeSysImage *)msg);
+            break;
+        case WDM_DRAWSCALE_SYSIMAGE:
+            retval = windecor_drawscalesysimage(cl, obj, (struct wdpDrawScaleSysImage *)msg);
+            break;
+        case WDM_RELEASESCALE_SYSIMAGE:
+            retval = windecor_releasescalesysimage(cl, obj, (struct wdpReleaseScaleSysImage *)msg);
+            break;
+
+        case WDM_LAYOUTSCALEBORDERGADGETS:
+            retval = windecor_layoutscalebordergadgets(cl, obj, (struct wdpLayoutScaleBorderGadgets *)msg);
+            break;
+
+        case WDM_PREPARESCALEWINDOW:
+            retval = windecor_preparescalewindow(cl, obj, (struct wdpPrepareScaleWindow *)msg);
+            break;
+
+        case WDM_PREPARESCALESHAPE:
+            retval = windecor_preparescaleshape(cl, obj, (struct wdpPrepareScaleShape *)msg);
             break;
 
         case WDM_WINDOWSHAPE:

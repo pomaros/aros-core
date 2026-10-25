@@ -3,6 +3,7 @@
 #   Follows the SysExplorer module pattern (see workbench/tools/SysExplorer).
 
 include $(SRCDIR)/config/aros.cfg
+#MM- workbench-prefs-network-app : workbench-libs-keyring-includes
 
 NETPREFS_SRCDIR    := $(SRCDIR)/$(CURDIR)
 NETPREFS_GENINCDIR := $(GENDIR)/$(CURDIR)/include

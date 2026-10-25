@@ -12,23 +12,24 @@
 
 IPTR SoftwareUpdateEditor__OM_NEW(Class *CLASS,Object *self,struct opSet *message)
 {
-    Object *installed,*previous,*pending,*delivered,*refresh;
+    Object *installed,*previous,*last,*pending,*delivered,*refresh;
     self=(Object *)DoSuperNewTags(CLASS,self,NULL,
         MUIA_PrefsEditor_Name,(IPTR)"Software update",
         MUIA_PrefsEditor_CanUse,FALSE,
         MUIA_PrefsEditor_CanTest,FALSE,
         Child,(IPTR)ColGroup(2),
-            Child,(IPTR)Label2("Installed snapshot"),Child,(IPTR)(installed=(Object *)TextObject,MUIA_ObjectID,MAKE_ID('U','P','S','I'),MUIA_Text_Contents,(IPTR)"Not available on this target",End),
-            Child,(IPTR)Label2("Previous snapshot record"),Child,(IPTR)(previous=(Object *)TextObject,MUIA_ObjectID,MAKE_ID('U','P','S','O'),MUIA_Text_Contents,(IPTR)"Not queried",End),
+            Child,(IPTR)Label2("Installed system"),Child,(IPTR)(installed=(Object *)TextObject,MUIA_ObjectID,MAKE_ID('U','P','S','I'),MUIA_ShortHelp,(IPTR)"The aros-system package version the last system update installed",MUIA_Text_Contents,(IPTR)"Refresh to read the system volume",End),
+            Child,(IPTR)Label2("Previous version"),Child,(IPTR)(previous=(Object *)TextObject,MUIA_ObjectID,MAKE_ID('U','P','S','O'),MUIA_ShortHelp,(IPTR)"The version the last system update replaced",MUIA_Text_Contents,(IPTR)"Not queried",End),
+            Child,(IPTR)Label2("Last update"),Child,(IPTR)(last=(Object *)TextObject,MUIA_ObjectID,MAKE_ID('U','P','S','L'),MUIA_ShortHelp,(IPTR)"What the last system update did and how it ended, from its receipt",MUIA_Text_Contents,(IPTR)"Not queried",End),
             Child,(IPTR)Label2("Update operation"),Child,(IPTR)(pending=(Object *)TextObject,MUIA_ObjectID,MAKE_ID('U','P','S','P'),MUIA_Text_Contents,(IPTR)"Not queried",End),
             Child,(IPTR)Label2("Delivered update"),Child,(IPTR)(delivered=(Object *)TextObject,MUIA_ObjectID,MAKE_ID('U','P','S','D'),MUIA_Text_Contents,(IPTR)"Not queried",End),
         End,
         Child,(IPTR)(refresh=(Object *)SimpleButton("Refresh update status")),
-        Child,(IPTR)TextObject,MUIA_Text_Contents,(IPTR)"Automatic system updates are unavailable on this target.\nUse the product distribution to update the system.",End,
+        Child,(IPTR)TextObject,MUIA_Text_Contents,(IPTR)"Updates are delivered to WORK:PkgDepot and applied before installed-system startup.\nA system update keeps no previous version to return to, so there is no rollback yet,\nand system updates come from that depot, not from a channel.",End,
         TAG_MORE,(IPTR)message->ops_AttrList);
     if(self) {
         struct SoftwareUpdateEditor_DATA *data=INST_DATA(CLASS,self);
-        data->installed=installed; data->previous=previous; data->pending=pending; data->delivered=delivered;
+        data->installed=installed; data->previous=previous; data->last=last; data->pending=pending; data->delivered=delivered;
         SET(refresh,MUIA_ObjectID,MAKE_ID('U','P','S','R'));
         DoMethod(refresh,MUIM_Notify,MUIA_Pressed,FALSE,self,1,MUIM_SoftwareUpdateEditor_Refresh);
     }
@@ -42,6 +43,7 @@ IPTR SoftwareUpdateEditor__MUIM_SoftwareUpdateEditor_Refresh(Class *CLASS,Object
     SoftwareUpdateReadStatus(&status);
     SET(data->installed,MUIA_Text_Contents,(IPTR)status.installed);
     SET(data->previous,MUIA_Text_Contents,(IPTR)status.previous);
+    SET(data->last,MUIA_Text_Contents,(IPTR)status.last);
     SET(data->pending,MUIA_Text_Contents,(IPTR)status.pending);
     SET(data->delivered,MUIA_Text_Contents,(IPTR)status.delivered);
     return TRUE;

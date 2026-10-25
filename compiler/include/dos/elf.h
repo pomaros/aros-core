@@ -144,6 +144,12 @@
    linker); defined so they can be explicitly rejected with a diagnostic */
 #define R_AARCH64_ADR_GOT_PAGE      311
 #define R_AARCH64_LD64_GOT_LO12_NC  312
+/* TLS descriptors (general dynamic), the only TLS model the loader accepts:
+   code reaches the variable through a descriptor LoadSeg() builds */
+#define R_AARCH64_TLSDESC_ADR_PAGE21 562
+#define R_AARCH64_TLSDESC_LD64_LO12  563
+#define R_AARCH64_TLSDESC_ADD_LO12   564
+#define R_AARCH64_TLSDESC_CALL       569
 
 #define R_RISCV_NONE            0
 #define R_RISCV_32              1
@@ -185,6 +191,7 @@
 #define STT_FUNC                2
 #define STT_SECTION             3
 #define STT_FILE                4
+#define STT_TLS                 6
 #define STT_LOPROC              13
 #define STT_HIPROC              15
 
@@ -207,6 +214,7 @@
 #define SHF_WRITE               (1 << 0)
 #define SHF_ALLOC               (1 << 1)
 #define SHF_EXECINSTR           (1 << 2)
+#define SHF_TLS                 (1 << 10)
 
 #define ELF_ST_BIND(i)          ((i) >> 4)
 #define ELF_ST_TYPE(i)          ((i) & 0x0F)

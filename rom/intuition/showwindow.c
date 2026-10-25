@@ -1,11 +1,14 @@
 /*
     Copyright (C) 1995-2013, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
 */
 
 #include <proto/layers.h>
 #include "showhide.h"
 #include "intuition_intern.h"
+#include "rendercontextbinding.h"
+#include "windowcomposition.h"
 #include "inputhandler_actions.h"
 
 struct ShowWindowActionMsg
@@ -13,9 +16,14 @@ struct ShowWindowActionMsg
     struct IntuiActionMsg    msg;
     struct Window           *window;
     struct Window           *other;
+    const struct ScreenRenderContext *expected;
+    IPTR generation;
+    BOOL performed;
 };
 
 static VOID int_showwindow(struct ShowWindowActionMsg *msg,
+                           struct IntuitionBase *IntuitionBase);
+static VOID int_showboundwindow(struct ShowWindowActionMsg *msg,
                            struct IntuitionBase *IntuitionBase);
 
 /*****************************************************************************
@@ -71,6 +79,29 @@ static VOID int_showwindow(struct ShowWindowActionMsg *msg,
 
     msg.window = window;
     msg.other = other;
+    msg.expected = NULL;
+    msg.generation = 0;
+    msg.performed = FALSE;
+    ULONG lock = LockIBase(0);
+    if (ResourceExisting(window, RESOURCE_WINDOW, IntuitionBase))
+    {
+        msg.expected = WindowBoundRenderContext(window);
+        msg.generation = IW(window)->BoundWindowGeneration;
+    }
+    else
+    {
+        UnlockIBase(lock);
+        return FALSE;
+    }
+    UnlockIBase(lock);
+    if (msg.expected)
+    {
+        if (other != NULL) return FALSE;
+        /* Explicit WA_RenderContext contract: caller holds no layer locks.
+         * Preserve ordinary ShowWindow's async behavior for unbound windows. */
+        DoSyncAction((APTR)int_showboundwindow, &msg.msg, IntuitionBase);
+        return msg.performed;
+    }
     return DoASyncAction((APTR)int_showwindow, &msg.msg, sizeof(msg), IntuitionBase);
 
     AROS_LIBFUNC_EXIT
@@ -112,6 +143,8 @@ static VOID int_showwindow(struct ShowWindowActionMsg *msg,
             ChangeLayerVisibility(BLAYER(window), TRUE);
         }
         ChangeLayerVisibility(WLAYER(window), TRUE);
+        if (WindowCompositionLayer(window) != WLAYER(window))
+            ChangeLayerVisibility(WindowCompositionLayer(window), TRUE);
 
         for (req = window->FirstRequest; req; req = req->OlderRequest)
         {
@@ -138,4 +171,37 @@ static VOID int_showwindow(struct ShowWindowActionMsg *msg,
     {
         MoveWindowInFrontOf(window, other);
     }
+}
+
+/* Same ordering as prepared screen publication: IBase, then LayerInfo. The
+ * expected client snapshot/cookie is checked through the actual visibility
+ * mutation; a later scale commit delivers the already-subscribed notification. */
+static VOID int_showboundwindow(struct ShowWindowActionMsg *msg,
+                           struct IntuitionBase *IntuitionBase)
+{
+    struct LayersBase *LayersBase = GetPrivIBase(IntuitionBase)->LayersBase;
+    struct Window *window = msg->window;
+    ULONG lock = LockIBase(0);
+    msg->performed = FALSE;
+    if (ResourceExisting(window, RESOURCE_WINDOW, IntuitionBase) &&
+        WindowBoundRenderContext(window) == msg->expected &&
+        IW(window)->BoundWindowGeneration == msg->generation)
+    {
+        struct Screen *screen = window->WScreen;
+        LOCK_REFRESH(screen);
+        if (BoundScreenRenderContext(msg->expected, screen))
+        {
+            struct Requester *req;
+            if (BLAYER(window)) ChangeLayerVisibility(BLAYER(window), TRUE);
+            ChangeLayerVisibility(WLAYER(window), TRUE);
+            if (WindowCompositionLayer(window) != WLAYER(window))
+                ChangeLayerVisibility(WindowCompositionLayer(window), TRUE);
+            for (req = window->FirstRequest; req; req = req->OlderRequest)
+                ChangeLayerVisibility(req->ReqLayer, TRUE);
+            CheckLayers(screen, IntuitionBase);
+            msg->performed = IsWindowVisible(window);
+        }
+        UNLOCK_REFRESH(screen);
+    }
+    UnlockIBase(lock);
 }

@@ -32,9 +32,10 @@
 #define F_SETOWN        10
 
 #if defined(_GNU_SOURCE) || (_XOPEN_SOURCE >= 500)
-#define F_GETLK64       5
-#define F_SETLK64       6
-#define F_SETLKW64      7
+/* off_t is 64-bit: the *64 commands are the plain ones */
+#define F_GETLK64       F_GETLK
+#define F_SETLK64       F_SETLK
+#define F_SETLKW64      F_SETLKW
 #define F_GETSIG        11
 #define F_SETSIG        12
 #endif

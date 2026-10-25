@@ -18,7 +18,7 @@ extern uint32_t __arm_affinitymask;
 
 /* We use native context format, no conversion needed */
 #define regs_t struct ExceptionContext
-/* There are no private add-ons */
+/* Public prefix; the owned alignment gap holds private task TP state. */
 #define AROSCPUContext ExceptionContext
 
 /* AArch64 PSTATE/SPSR mode field values */

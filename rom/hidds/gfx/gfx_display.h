@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 2016-2026, The AROS Development Team. All rights reserved.
 
     Desc: Private definitions for the graphics Display class.
@@ -6,6 +7,8 @@
 
 #ifndef GFX_DISPLAY_H
 #define GFX_DISPLAY_H
+
+#include <hidd/preparedcursor.h>
 
 #define DISPLAY_COMPOSITORCURSOR
 
@@ -41,24 +44,7 @@ struct HIDDDisplayData
 	 * it in a save-under bitmap (cursor_backup) so they can be restored when the
 	 * cursor moves or is hidden.
 	 */
-	OOP_Object  *cursor_bm;        /* bitmap the cursor is composited onto       */
-	UBYTE       *cursor_backup;    /* save-under pixels, target's native format  */
-	ULONG        cursor_backup_bpp;/* bytes per pixel of the save-under target   */
-	UBYTE       *cursor_argb;      /* extracted ARGB32 cursor image              */
-	UWORD        cursor_w;         /* cursor image width                         */
-	UWORD        cursor_h;         /* cursor image height                        */
-	WORD         cursor_mouseX;    /* last requested mouse X (pre hotspot)       */
-	WORD         cursor_mouseY;    /* last requested mouse Y (pre hotspot)       */
-	WORD         cursor_xoffset;   /* hotspot X offset                           */
-	WORD         cursor_yoffset;   /* hotspot Y offset                           */
-	WORD         cursor_drawX;     /* current composited top-left X              */
-	WORD         cursor_drawY;     /* current composited top-left Y              */
-	WORD         cursor_backupX;   /* where the save-under was taken             */
-	WORD         cursor_backupY;
-	UWORD        cursor_backupW;
-	UWORD        cursor_backupH;
-	BOOL         cursor_visible;   /* requested visible                          */
-	BOOL         cursor_drawn;     /* currently composited (save-under valid)    */
+	struct HIDD_CursorState cursor;
 };
 
 /* This has to be a #define, otherwise the HIDD_Gfx_CopyBox()

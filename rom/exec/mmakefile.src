@@ -40,7 +40,7 @@ INIT_FILES := exec_init prepareexecbase
 FILES	   := alertextra alert_cpu systemalert initkicktags intservers intserver_vblank \
 	      memory memory_nommu mungwall semaphores service traphandler \
 	      debug_internal \
-	      exec_flags exec_debug exec_vlog exec_util exec_locks task_registry supervisoralert
+	      exec_flags exec_debug exec_vlog exec_util exec_locks task_registry supervisoralert freeze_smp
 
 %get_archincludes modname=kernel \
     includeflag=TARGET_KERNEL_INCLUDES maindir=rom/kernel

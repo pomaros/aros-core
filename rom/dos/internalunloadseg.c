@@ -12,6 +12,7 @@
 
 #include "dos_intern.h"
 #include "internalloadseg.h"
+#include "elf_tls.h"
 
 /*****************************************************************************
 
@@ -61,6 +62,10 @@
 
         if (SECURITY_ACTIVE)
             secUnregisterSegment(seglist);
+
+#ifdef __aarch64__
+        elftls_unregister_seglist(seglist, DOSBase);
+#endif
 
 #ifdef __mc68000
         {

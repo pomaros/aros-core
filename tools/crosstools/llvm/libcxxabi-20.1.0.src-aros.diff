@@ -115,3 +115,20 @@ diff -ruN libcxxabi-20.1.0.src/src/cxa_exception_storage.cpp libcxxabi-20.1.0.sr
  
  namespace __cxxabiv1 {
  namespace {
+diff -ruN libcxxabi-20.1.0.src/src/CMakeLists.txt libcxxabi-20.1.0.src.aros/src/CMakeLists.txt
+--- libcxxabi-20.1.0.src/src/CMakeLists.txt	2026-10-23 18:11:56
++++ libcxxabi-20.1.0.src.aros/src/CMakeLists.txt	2026-10-23 18:11:56
+@@ -36,8 +36,11 @@
+   )
+ endif()
+ 
+-if (LIBCXXABI_ENABLE_THREADS AND (UNIX OR FUCHSIA) AND NOT (APPLE OR CYGWIN)
+-    AND NOT (${CMAKE_SYSTEM_NAME} MATCHES "AIX"))
++# AROS builds the runtimes as CMAKE_SYSTEM_NAME Generic, which is not UNIX; it
++# has the pthread API, so the pthread-key fallback of cxa_thread_atexit.cpp
++# serves thread_local objects with destructors.
++if (LIBCXXABI_ENABLE_THREADS AND (UNIX OR FUCHSIA OR "${CMAKE_CXX_COMPILER_TARGET} ${CMAKE_CXX_FLAGS}" MATCHES "-aros")
++    AND NOT (APPLE OR CYGWIN) AND NOT (${CMAKE_SYSTEM_NAME} MATCHES "AIX"))
+   list(APPEND LIBCXXABI_SOURCES
+     cxa_thread_atexit.cpp
+   )

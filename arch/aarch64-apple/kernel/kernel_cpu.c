@@ -14,12 +14,20 @@
 #include <aros/aarch64/cpucontext.h>
 
 #include "kernel_cpu.h"
+#include "jit_protect.h"
+#include "platform_cpu.h"
 #include "cpu_monitor.h"
 #include "kernel_intr.h"
 #include "kernel_scheduler.h"
 #include "kernel_intern.h"
+#if defined(__AROSEXEC_SMP__)
+#include "../exec/tls.h"
+#endif
 #include <etask.h>
 #include "task_accounting.h"
+#include "task_tls.h"
+
+extern int AROSAppleKernelDebugPutDirect(int chr);
 
 #define TASK_SPSR_ALLOWED UINT64_C(0xf00003c0)
 #define TASK_SPSR_IRQ_MASK UINT64_C(0x80)
@@ -51,8 +59,13 @@ void cpu_ApplyCurrentTaskMasks(uint64_t *spsr)
     /* Early EL1 interrupts have no task TLS yet. */
     if ((*spsr & UINT64_C(0x1f)) != 0)
         return;
+#if defined(__AROSEXEC_SMP__)
+    struct Task *task = TLS_GET(ThisTask);
+    int nesting = TLS_GET(IDNestCnt);
+#else
     struct Task *task = SysBase != NULL ? GET_THIS_TASK : NULL;
     int nesting = SysBase != NULL ? SysBase->IDNestCnt : -1;
+#endif
 
     if (task == NULL)
         return;
@@ -61,8 +74,13 @@ void cpu_ApplyCurrentTaskMasks(uint64_t *spsr)
 
 uint64_t cpu_RequiredCurrentTaskMasks(void)
 {
+#if defined(__AROSEXEC_SMP__)
+    int nesting = AROSCPUCurrentIndex() != AROS_CPU_MAX && TLS_GET(ThisTask) != NULL ?
+        TLS_GET(IDNestCnt) : -1;
+#else
     int nesting = SysBase != NULL && SysBase->ThisTask != NULL ?
         SysBase->IDNestCnt : -1;
+#endif
     return AROSAppleRequiredIRQMasks(AROSAppleRuntimeLocal(), nesting);
 }
 
@@ -85,14 +103,14 @@ static struct ExceptionContext *task_context(struct Task *task)
     return etask->et_RegFrame;
 }
 
-void cpu_Switch(regs_t *regs)
+/* The frame into the task's saved context; 0 when it has none. */
+int cpu_SaveContext(regs_t *regs, struct Task *task)
 {
-    struct Task *task = SysBase != NULL ? GET_THIS_TASK : NULL;
     struct ExceptionContext *context = task_context(task);
     uint32_t index;
 
-    if (regs == NULL || context == NULL)
-        dispatch_contract_halt();
+    if (regs == NULL || context == NULL || context->fpuContext == NULL)
+        return 0;
     /* x0-x28, x18 included: native x18 is ordinary task state. */
     for (index = 0; index < 29; ++index)
         context->x[index] = regs->x[index];
@@ -102,13 +120,32 @@ void cpu_Switch(regs_t *regs)
     context->pc = regs->elr;
     context->cpsr = (uint32_t)regs->spsr;
     context->Flags |= ECF_FPU;
-    if (context->fpuContext == NULL)
-        dispatch_contract_halt();
     for (index = 0; index < 66; ++index)
         ((volatile uint64_t *)context->fpuContext)[index] = regs->simd[index];
     task->tc_SPReg = (APTR)(uintptr_t)regs->sp;
+    return 1;
+}
+
+void cpu_Switch(regs_t *regs)
+{
+    struct Task *task = SysBase != NULL ? GET_THIS_TASK : NULL;
+#if defined(__AROSEXEC_SMP__)
+    BOOL wait_lock_held = task != NULL && task->tc_State == TS_WAIT;
+#endif
+
+    if (!cpu_SaveContext(regs, task))
+        dispatch_contract_halt();
+#if !defined(__AROSEXEC_SMP__)
     AppleTaskSwitch(GetIntETask(task),AppleTaskCounter(),AppleTaskFrequency());
+#endif
     core_Switch();
+#if defined(__AROSEXEC_SMP__)
+    /* Wait carries this lock across KrnSwitch. Publish the complete saved
+     * context, including nesting and quantum, before a remote Signal can
+     * make the task runnable again. */
+    if (wait_lock_held)
+        EXEC_SPINLOCK_UNLOCK(&task->tc_SpinLock);
+#endif
 }
 
 /*
@@ -140,72 +177,12 @@ __asm__(
     ".size AROSAppleKernelIdleLoop, . - AROSAppleKernelIdleLoop\n");
 extern void AROSAppleKernelIdleLoop(void);
 
-/*
- * The deep idle loop: Apple cores power down in WFI when the
- * implementation-defined CYC_OVRD register (s3_5_c15_c5_0) has WFI_MODE,
- * bits 25:24, set to 3; m1n1 leaves it at 2, a plain clock-gated WFI. The
- * core keeps SP and wakes on an interrupt like the plain loop; its SIMD
- * state is not kept, which nothing here needs: the interrupted task's
- * context was saved before the dispatcher came here, and the idle loop has
- * none. Linux (Asahi cpuidle-apple) and OpenBSD idle the same way. It is
- * the default on an Apple core (MIDR implementer 0x61); chosen
- * aros,plain-idle = 1 keeps the plain loop, and any other core (QEMU), where
- * the register does not exist, always gets the plain loop.
- */
-__asm__(
-    ".text\n"
-    ".balign 16\n"
-    ".global AROSAppleKernelDeepIdleLoop\n"
-    ".type AROSAppleKernelDeepIdleLoop, %function\n"
-    "AROSAppleKernelDeepIdleLoop:\n"
-    "    mrs  x0, s3_5_c15_c5_0\n"
-    "    orr  x0, x0, #(3 << 24)\n"
-    "    msr  s3_5_c15_c5_0, x0\n"
-    "    isb\n"
-    "1:  dsb  sy\n"
-    "    wfi\n"
-    "    b 1b\n"
-    ".size AROSAppleKernelDeepIdleLoop, . - AROSAppleKernelDeepIdleLoop\n");
-extern void AROSAppleKernelDeepIdleLoop(void);
-
-/* The plain mode on an Apple core: WFI_MODE back to 2, m1n1's clock-gated
- * WFI. The register keeps whatever was written last, so the plain loop
- * alone would go on powering down once the deep loop has run. */
-__asm__(
-    ".text\n"
-    ".balign 16\n"
-    ".global AROSAppleKernelGatedIdleLoop\n"
-    ".type AROSAppleKernelGatedIdleLoop, %function\n"
-    "AROSAppleKernelGatedIdleLoop:\n"
-    "    mrs  x0, s3_5_c15_c5_0\n"
-    "    bic  x0, x0, #(3 << 24)\n"
-    "    orr  x0, x0, #(2 << 24)\n"
-    "    msr  s3_5_c15_c5_0, x0\n"
-    "    isb\n"
-    "1:  dsb  sy\n"
-    "    wfi\n"
-    "    b 1b\n"
-    ".size AROSAppleKernelGatedIdleLoop, . - AROSAppleKernelGatedIdleLoop\n");
-extern void AROSAppleKernelGatedIdleLoop(void);
-extern uint64_t AROSAppleKernelChosenDecimal(const char *name);
-
 /* 0 decide at the next entry, 1 plain WFI, 2 deep WFI. The desktop hold
  * writes it to compare the two (chosen aros,idle-ab). */
 volatile uint32_t AROSAppleKernelIdleMode;
+/* Non-zero while a sleep holds the secondary cores' ticks (smp.c). */
+volatile uint32_t AROSAppleKernelTicksHeld;
 
-static int apple_core(void)
-{
-    /* HVF can expose Apple's MIDR while trapping implementation registers.
-     * CPU identity does not grant a guest access to native power controls. */
-    return 0;
-}
-
-static uint32_t default_idle_mode(void)
-{
-    if (!apple_core())
-        return 1;
-    return AROSAppleKernelChosenDecimal("aros,plain-idle") == 1 ? 1 : 2;
-}
 /* Entries into the idle loop, for observers. */
 volatile uint64_t AROSAppleKernelIdleEntries;
 
@@ -221,7 +198,11 @@ volatile uint32_t AROSAppleKernelIdleTraceEnable;
  * diagnostics on the BSP, with single-owner counters and no AP interleaving. */
 static int idle_trace_owner(void)
 {
+#if defined(__AROSEXEC_SMP__)
+    return AROSCPUCurrentIndex() == AROSCPUMonitorTopology()->boot_cpu;
+#else
     return 1;
+#endif
 }
 static uint32_t enter_idle_trace;
 static void idle_trace_puts(const char *text);
@@ -231,22 +212,27 @@ static void enter_idle(regs_t *regs)
 {
     uint32_t index;
 
+    /* Idle is not the last sleeping task and must not retain its TCB. */
+    AROSAArch64WriteTaskPointer(0);
     for (index = 0; index < 31; ++index)
         regs->x[index] = 0;
     /* EL1h returns keep SP_EL1 as it is after the frame pops: the kernel
      * stack top. The loop uses no stack; the next exception frames below. */
     if (AROSAppleKernelIdleMode != 1 && AROSAppleKernelIdleMode != 2)
-        AROSAppleKernelIdleMode = default_idle_mode();
+        AROSAppleKernelIdleMode = AROSPlatformDefaultIdleMode();
     ++AROSAppleKernelIdleEntries;
-    regs->elr = (uint64_t)(uintptr_t)(!apple_core() ? AROSAppleKernelIdleLoop :
-        AROSAppleKernelIdleMode == 2 ? AROSAppleKernelDeepIdleLoop :
-        AROSAppleKernelGatedIdleLoop);
+    regs->elr = AROSPlatformIdleEntry(AROSAppleKernelIdleMode);
     regs->spsr = IDLE_SPSR_EL1H;
     if (AROSAppleRuntimeLocal()->irq_ready == 0)
         regs->spsr |= TASK_SPSR_IRQ_MASK;
     if (AROSAppleRuntimeLocal()->fiq_ready == 0)
         regs->spsr |= TASK_SPSR_FIQ_MASK;
     AROSAppleRuntimeLocal()->idle_active = 1;
+#if defined(__AROSEXEC_SMP__)
+    TLS_SET(ThisTask, NULL);
+    TLS_SET(IDNestCnt, -1);
+    TLS_SET(TDNestCnt, -1);
+#endif
     AROSCPUCurrentState(AROS_CPU_IDLE);
     if (idle_trace_owner() && AROSAppleKernelIdleTraceEnable != 0 && enter_idle_trace < 12) {
         struct Task *this = SysBase != NULL ? GET_THIS_TASK : NULL;
@@ -290,6 +276,16 @@ static void idle_trace_hex(const char *label, uint64_t value)
         AROSAppleKernelDebugPutDirect(digits[(value >> shift) & 0xfU]);
 }
 
+#if defined(__AROSEXEC_SMP__)
+int cpu_SoftIntAllowed(void)
+{
+#if defined(AROS_VM_GUEST) && AROS_VM_GUEST
+    return 1;
+#else
+    return AROSCPUCurrentIndex() == AROSCPUMonitorTopology()->boot_cpu;
+#endif
+}
+#endif
 #ifndef CPU_SOFTINT_ALLOWED
 #define CPU_SOFTINT_ALLOWED() 1
 #endif
@@ -318,8 +314,10 @@ int cpu_IdleInterrupted(regs_t *regs)
         idle_trace_hex("[KT] idle-int vector=0x", regs->vector);
         idle_trace_hex(" refused=0x", refused);
         idle_trace_hex(" dispatched=0x", refused ? 0 : (AROSAppleRuntimeLocal()->idle_active == 0));
+#if !defined(__AROSEXEC_SMP__)
         idle_trace_hex(" ready_nonempty=0x", SysBase != NULL &&
             SysBase->TaskReady.lh_Head->ln_Succ != NULL);
+#endif
         idle_trace_hex(" spsr=0x", regs->spsr);
         idle_trace_puts(" this=");
         idle_trace_puts(this != NULL && this->tc_Node.ln_Name != NULL ?
@@ -344,6 +342,9 @@ void cpu_Dispatch(regs_t *regs)
         return;
     }
     AROSAppleRuntimeLocal()->idle_active = 0;
+#if defined(__AROSEXEC_SMP__)
+    GetIntETask(task)->iet_CpuNumber = GetCPUNumber();
+#endif
     AROSCPUCurrentState(AROS_CPU_BUSY);
     context = task_context(task);
     if (context == NULL || context->sp == 0 || context->pc == 0 ||
@@ -370,5 +371,11 @@ void cpu_Dispatch(regs_t *regs)
         regs->simd[index] =
             ((const volatile uint64_t *)context->fpuContext)[index];
     task->tc_SPReg = (APTR)(uintptr_t)context->sp;
+    AROSAppleJitRestore(task);
+#if !defined(__AROSEXEC_SMP__)
     AppleTaskDispatch(GetIntETask(task),AppleTaskCounter());
+#endif
+    /* core_Dispatch has selected this task on this CPU: its TLS anchor's
+     * address, the same on every CPU for the task's whole life. */
+    AROSAppleTaskTLSRestore(context);
 }

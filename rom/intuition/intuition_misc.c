@@ -1,4 +1,6 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
+    Licensed under the AROS Public License, version 1.1.
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
     Copyright (C) 2001-2013, The MorphOS Development Team. All Rights Reserved.
 */
@@ -33,6 +35,8 @@
 
 #include "intuition_preferences.h"
 #include "intuition_intern.h"
+#include "windowframe.h"
+#include "windowcomposition.h"
 
 #include "boopsigadgets.h"
 #include "showhide.h"
@@ -64,6 +68,7 @@ void SetDisplayDefaults(struct IntuitionBase * IntuitionBase)
     {
         _intuitionBase->ScreenModePrefs->smp_DisplayID  = INVALID_ID;
         _intuitionBase->ScreenModePrefs->smp_Control         = 0;
+        _intuitionBase->ScreenModePrefs->smp_Scale = SA_SCALE_MIN;
 
         if ((defmon = OpenMonitor(NULL, INVALID_ID)) != NULL)
         {
@@ -171,40 +176,20 @@ void CheckRectFill(struct RastPort *rp, WORD x1, WORD y1, WORD x2, WORD y2,
 
 /**********************************************************************************/
 
-Object* CreateStdSysImage(WORD which, WORD preferred_height, struct Screen *scr,
-                                      struct DrawInfo *dri, struct IntuitionBase *IntuitionBase)
+Object* CreateStdSysImage(WORD which, WORD preferred_height, struct Window *window,
+    struct DrawInfo *dri, struct IntuitionBase *IntuitionBase)
 {
-    Object *im;
-    
-    struct TagItem image_tags[] =
-    {
-        {SYSIA_Which    , which                                            },
-        {SYSIA_DrawInfo , (IPTR)dri                                 },
-        {SYSIA_Size         , scr->Flags & SCREENHIRES ?
-                          SYSISIZE_MEDRES : SYSISIZE_LOWRES },
-        {TAG_DONE                                                       }
-    };
-
-    im = NewObjectA(NULL, SYSICLASS, image_tags);
-    if (im)
-    {
-            struct TagItem size_tags[] =
-        {
-            {IA_Width        , 0                         },
-            {IA_Height        , preferred_height  },
-            {TAG_DONE                                    }
-        };
-            IPTR width, height;
-        
-        GetAttr(IA_Width, im, &width);
-        GetAttr(IA_Height, im, &height);
-                
-        size_tags[0].ti_Data = preferred_height * width / height;
-        
-        SetAttrsA(im, size_tags);
-    }
-    
-    return im;
+    if (IW(window)->ScaleAware)
+        return CreateWindowFrameImage(window, WindowFrameContext(window),
+            (struct IntDrawInfo *)dri, which, preferred_height, NULL, IntuitionBase);
+    struct TagItem tags[] = {
+        {SYSIA_Which, which}, {SYSIA_DrawInfo, (IPTR)dri},
+        {SYSIA_ReferenceFont, (IPTR)dri->dri_Font},
+        {SYSIA_Size, window->WScreen->Flags & SCREENHIRES ? SYSISIZE_MEDRES : SYSISIZE_LOWRES},
+        {IA_Height, preferred_height},
+        {SYSIA_RenderContext, IW(window)->ScaleAware ? (IPTR)WindowFrameContext(window) : 0},
+        {SYSIA_Logical, !IW(window)->ScaleAware}, {TAG_DONE, 0}};
+    return NewObjectA(NULL, SYSICLASS, tags);
 }
 
 /**********************************************************************************/
@@ -220,7 +205,7 @@ BOOL CreateWinSysGadgets(struct Window *w, struct IntuitionBase *IntuitionBase)
 
     is_gzz = (w->Flags & WFLG_GIMMEZEROZERO) ? TRUE : FALSE;
 
-    dri = GetScreenDrawInfo(w->WScreen);
+    dri = (struct DrawInfo *)WindowFrameDrawInfo(w);
     if (dri)
     {
         LONG db_left, db_width, relright,ewidth; /* dragbar sizes */
@@ -262,6 +247,8 @@ BOOL CreateWinSysGadgets(struct Window *w, struct IntuitionBase *IntuitionBase)
             {
                 {IA_Width           , width                                                                                          },
                 {IA_Height          , height                                                                                         },
+                {SYSIA_RenderContext, IW(w)->ScaleAware ? (IPTR)WindowFrameContext(w) : 0},
+                {SYSIA_Logical, !IW(w)->ScaleAware},
                 {SYSIA_Which    , SIZEIMAGE                                                                                      },
                 {SYSIA_DrawInfo , (IPTR)dri                                                                                      },
                 {SYSIA_Size         , w->WScreen->Flags & SCREENHIRES ? SYSISIZE_MEDRES : SYSISIZE_LOWRES},
@@ -308,7 +295,7 @@ BOOL CreateWinSysGadgets(struct Window *w, struct IntuitionBase *IntuitionBase)
             };
             Object *im;
 
-            im = CreateStdSysImage(DEPTHIMAGE, TitleHeight, w->WScreen, dri, IntuitionBase);
+            im = CreateStdSysImage(DEPTHIMAGE, TitleHeight, w, dri, IntuitionBase);
             if (!im)
             {
                 sysgads_ok = FALSE;
@@ -374,7 +361,7 @@ BOOL CreateWinSysGadgets(struct Window *w, struct IntuitionBase *IntuitionBase)
 
             Object *im;
 
-            im = CreateStdSysImage(ZOOMIMAGE, TitleHeight, w->WScreen, dri, IntuitionBase);
+            im = CreateStdSysImage(ZOOMIMAGE, TitleHeight, w, dri, IntuitionBase);
             if (!im)
             {
                 sysgads_ok = FALSE;
@@ -474,7 +461,7 @@ BOOL CreateWinSysGadgets(struct Window *w, struct IntuitionBase *IntuitionBase)
             };
             Object *im;
 
-            im = CreateStdSysImage(CLOSEIMAGE, TitleHeight, w->WScreen, dri,IntuitionBase);
+            im = CreateStdSysImage(CLOSEIMAGE, TitleHeight, w, dri,IntuitionBase);
             if (!im)
             {
                 sysgads_ok = FALSE;
@@ -531,7 +518,7 @@ BOOL CreateWinSysGadgets(struct Window *w, struct IntuitionBase *IntuitionBase)
         D(bug("Sizegad:  %p\n", SYSGAD(w, SIZEGAD ) ));
 
         /* Don't need drawinfo anymore */
-        FreeScreenDrawInfo(w->WScreen, dri);
+
 
         if (sysgads_ok)
         {
@@ -583,9 +570,12 @@ VOID KillWinSysGadgets(struct Window *w, struct IntuitionBase *IntuitionBase)
     {
         if (SYSGAD(w, i))
         {
-            RemoveGadget( w, (struct Gadget *)SYSGAD(w, i));
-            DisposeObject((Object *)((struct Gadget *)SYSGAD(w, i))->GadgetRender);
-            DisposeObject( SYSGAD(w, i) );
+            Object *gadget = SYSGAD(w, i);
+            SYSGAD(w, i) = NULL;
+            RemoveGadget(w, (struct Gadget *)gadget);
+            if (!WindowFrameOwnsImage(w, ((struct Gadget *)gadget)->GadgetRender))
+                DisposeObject((Object *)((struct Gadget *)gadget)->GadgetRender);
+            DisposeObject(gadget);
         }
     }
 }
@@ -791,18 +781,14 @@ void RenderScreenTitle(struct Screen *scr, struct IntuitionBase *IntuitionBase)
 
 void UpdateMouseCoords(struct Window *win)
 {
-    WORD scrmousex = win->WScreen->MouseX;
-    WORD scrmousey = win->WScreen->MouseY;
+    LONG x, y;
 
-    win->MouseX    = scrmousex - win->LeftEdge;
-    win->MouseY    = scrmousey - win->TopEdge;
-
-    /* stegerg: AmigaOS sets this even if window is not GZZ
-       so we do the same as they are handy also for non-GZZ
-       windows */
-
-    win->GZZMouseX = scrmousex - (win->LeftEdge + win->BorderLeft);
-    win->GZZMouseY = scrmousey - (win->TopEdge + win->BorderTop);
+    WindowCompositionMouse(win, win->WScreen->MouseX,
+                           win->WScreen->MouseY, &x, &y);
+    win->MouseX = x;
+    win->MouseY = y;
+    win->GZZMouseX = x - win->BorderLeft;
+    win->GZZMouseY = y - win->BorderTop;
 }
 
 /**********************************************************************************/
@@ -924,7 +910,7 @@ ULONG addextragadget(struct Window *w,BOOL is_gzz,struct DrawInfo *dri,LONG relr
     if (gadgettype == LOCKGAD)
         gadget_tags[1].ti_Data = TRUE;
 
-    im = CreateStdSysImage(imagetype, TitleHeight, w->WScreen, dri,IntuitionBase);
+    im = CreateStdSysImage(imagetype, TitleHeight, w, dri,IntuitionBase);
     if (im)
     {
         gadget_tags[0].ti_Data = (IPTR)im;

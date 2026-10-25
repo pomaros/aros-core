@@ -75,7 +75,13 @@
 #define SYSISTYLE_NORMAL   0
 #define SYSISTYLE_GADTOOLS 1		/* to get arrow images in gadtools look */
 
-/* next attribute: (IA_Dummy + 0x1c) */
+/* Immutable screen-generation binding. Borrowed context and its nested
+ * resources remain valid until screen close. The selected reference font
+ * already belongs to the chosen drawing domain; it is never scaled twice. */
+#define SYSIA_RenderContext (IA_Dummy + 0x20) /* I: const ScreenRenderContext* */
+#define SYSIA_Logical       (IA_Dummy + 0x21) /* I: BOOL, default FALSE */
+
+/* next attribute: (IA_Dummy + 0x22) */
 
 /* Values for SYSIA_Size */
 #define SYSISIZE_MEDRES (0)

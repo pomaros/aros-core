@@ -167,12 +167,12 @@ BOOL MESA3DGLFillVisual(struct st_visual * stvis, struct pipe_screen * screen, i
     return TRUE;
 }
 
-static VOID MESA3DGLFrameBufferCreateResource(struct mesa3dgl_framebuffer * amfb,
+/* One attachment of AMFB's size and visual; NULL when the screen refuses. */
+static struct pipe_resource * MESA3DGLFrameBufferCreateResource(struct mesa3dgl_framebuffer * amfb,
     const enum st_attachment_type statt)
 {
     struct pipe_resource templ;
 
-    D(bug("[MESA3DGL] %s()\n", __func__));
 
     memset(&templ, 0, sizeof(templ));
 
@@ -206,12 +206,15 @@ static VOID MESA3DGLFrameBufferCreateResource(struct mesa3dgl_framebuffer * amfb
         templ.bind      = PIPE_BIND_DEPTH_STENCIL;
         break;
     default:
-        return;
+        return NULL;
     }
     
-    amfb->textures[statt] = amfb->screen->resource_create(amfb->screen, &templ);
+    return amfb->screen->resource_create(amfb->screen, &templ);
 }
 
+/* The attachments the state tracker asks for. A resize makes a new set
+ * first and replaces the old one only when every requested attachment
+ * exists; a refused allocation answers false with the old set unchanged. */
 static bool MESA3DGLFrameBufferValidate(struct st_context *stctx,
                        struct pipe_frontend_drawable *stfbi,
                        const enum st_attachment_type *statts,
@@ -220,41 +223,48 @@ static bool MESA3DGLFrameBufferValidate(struct st_context *stctx,
                        struct pipe_resource **resolve)
 {
     struct mesa3dgl_framebuffer * amfb = (struct mesa3dgl_framebuffer *)stfbi;
+    struct pipe_resource *staged[ST_ATTACHMENT_COUNT];
+    BOOL resized = amfb->resized;
     LONG i;
 
-    D(bug("[MESA3DGL] %s()\n", __func__));
+    memset(staged, 0, sizeof(staged));
+    for (i = 0; i < count; i++)
+    {
+        enum st_attachment_type a = statts[i];
 
-    if (amfb->resized)
+        if (a >= ST_ATTACHMENT_COUNT)
+            goto refused;
+        if (!resized && amfb->textures[a])
+            pipe_resource_reference(&staged[a], amfb->textures[a]);
+        else if (!staged[a] && !(staged[a] = MESA3DGLFrameBufferCreateResource(amfb, a)))
+            goto refused;
+    }
+
+    /* Commit: the new set replaces the old, kept attachments included. */
+    if (resized)
     {
         amfb->resized = FALSE;
-        pipe_resource_reference(&amfb->render_resource, NULL);
-
         for (i = 0; i < ST_ATTACHMENT_COUNT; i++)
             pipe_resource_reference(&amfb->textures[i], NULL);
     }
-    
-    for (i = 0; i < count; i++)
-    {
-        if (amfb->textures[statts[i]] == NULL)
-        {
-            MESA3DGLFrameBufferCreateResource(amfb, statts[i]);
-            if (statts[i] == ST_ATTACHMENT_FRONT_LEFT)
-            {
-                pipe_resource_reference(&amfb->render_resource, amfb->textures[ST_ATTACHMENT_FRONT_LEFT]);
-            }
-        }
-    }
+    for (i = 0; i < ST_ATTACHMENT_COUNT; i++)
+        if (staged[i])
+            pipe_resource_reference(&amfb->textures[i], staged[i]);
+    pipe_resource_reference(&amfb->render_resource, amfb->textures[ST_ATTACHMENT_FRONT_LEFT]);
 
-    if (!out)
-        return TRUE;
-
-    for (i = 0; i < count; i++)
+    for (i = 0; out && i < count; i++)
     {
         out[i] = NULL;
         pipe_resource_reference(&out[i], amfb->textures[statts[i]]);
     }
-    
+    for (i = 0; i < ST_ATTACHMENT_COUNT; i++)
+        pipe_resource_reference(&staged[i], NULL);
     return TRUE;
+
+refused:
+    for (i = 0; i < ST_ATTACHMENT_COUNT; i++)
+        pipe_resource_reference(&staged[i], NULL);
+    return FALSE;
 }
 
 static bool MESA3DGLFrameBufferFlushFront(struct st_context *stctx,
@@ -309,18 +319,18 @@ VOID MESA3DGLFreeFrameBuffer(struct mesa3dgl_framebuffer * framebuffer)
     }
 }
 
-VOID MESA3DGLCheckAndUpdateBufferSize(struct mesa3dgl_context * ctx)
+VOID MESA3DGLCheckAndUpdateBufferSize(struct mesa3dgl_drawable * d)
 {
     D(bug("[MESA3DGL] %s()\n", __func__));
 
-    MESA3DGLRecalculateBufferWidthHeight(ctx);
-    if (ctx->framebuffer->resized)
+    MESA3DGLRecalculateBufferWidthHeight(d);
+    if (d->framebuffer->resized)
     {
         /* The state tracker revalidates the framebuffer only when the
          * stamp DIFFERS from the one it cached at the last validate.
          * Setting it to a constant made every resize after the first
          * invisible — increment instead. */
-        p_atomic_inc(&ctx->framebuffer->base.stamp);
+        p_atomic_inc(&d->framebuffer->base.stamp);
     }
 }
 

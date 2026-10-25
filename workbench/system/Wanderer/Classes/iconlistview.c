@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
 Copyright (C) 2002-2011, The AROS Development Team.
 */
 
@@ -23,6 +24,7 @@ Copyright (C) 2002-2011, The AROS Development Team.
 #include "iconlist.h"
 #include "iconlistview.h"
 #include "iconlistview_private.h"
+#include "../wandererscale.h"
 
 extern struct Library *MUIMasterBase;
 
@@ -206,6 +208,7 @@ IPTR IconListview__OM_NEW(struct IClass *cl, Object *obj, struct opSet *msg)
     layout_hook->h_SubEntry = (HOOKFUNC)IconListview_Layout_Function;
 
     group = MUI_NewObject(MUIC_Group,
+                MUIA_ScaleAwareHooks, TRUE,
                 (usewinborder ? TAG_IGNORE : MUIA_Group_LayoutHook), layout_hook,
                 (iconlist ? Child : TAG_IGNORE), iconlist,
                 Child, vert= MUI_NewObject(MUIC_Scrollbar,
@@ -351,6 +354,19 @@ IPTR IconListview__MUIM_Show(struct IClass *cl, Object *obj, struct MUIP_Show *m
 }
 ///
 
+/* Prop entries/first/visible are destination pixels; preserve a twenty-point
+ * wheel/arrow step independently of the selected screen/context. */
+IPTR IconListview__MUIM_Setup(struct IClass *cl, Object *obj, struct MUIP_Setup *msg)
+{
+    struct IconListview_DATA *data = INST_DATA(cl, obj);
+    IPTR scale = 100;
+    if (!DoSuperMethodA(cl, obj, (Msg)msg)) return FALSE;
+    GetAttr(MUIA_RenderScale, _win(obj), &scale);
+    set(data->vert, MUIA_Prop_DeltaFactor, WandererScalePoint(20, scale));
+    set(data->horiz, MUIA_Prop_DeltaFactor, WandererScalePoint(20, scale));
+    return TRUE;
+}
+
 #if WANDERER_BUILTIN_ICONLISTVIEW
 BOOPSI_DISPATCHER(IPTR,IconListview_Dispatcher, cl, obj, msg)
 {
@@ -358,6 +374,7 @@ BOOPSI_DISPATCHER(IPTR,IconListview_Dispatcher, cl, obj, msg)
     {
         case OM_NEW:            return IconListview__OM_NEW(cl, obj, (struct opSet *) msg);
         case OM_DISPOSE:        return IconListview__OM_DISPOSE(cl, obj, msg);
+        case MUIM_Setup:        return IconListview__MUIM_Setup(cl, obj, (struct MUIP_Setup*)msg);
         case MUIM_Show:         return IconListview__MUIM_Show(cl, obj, (struct MUIP_Show*)msg);
         case OM_SET:            return IconListview__OM_SET(cl, obj, (struct opGet *) msg);
         case OM_GET:            return IconListview__OM_GET(cl, obj, (struct opSet *) msg);
@@ -375,3 +392,16 @@ const struct __MUIBuiltinClass _MUI_IconListview_desc =
 };
 #endif /* ZUNE_BUILTIN_ICONLISTVIEW */
 
+
+#if !defined(WANDERER_BUILTIN_ICONLISTVIEW)
+#include <aros/symbolsets.h>
+struct MUI_CustomClass *IconListviewScaleClass;
+static int IconListviewScaleStartup(struct Library *base)
+{
+    (void)base;
+    return IconListviewScaleClass && MUI_SetClassCapabilities(
+        IconListviewScaleClass->mcc_Class, MUI_CLASS_SCALE_AWARE);
+}
+/* The generated .mui class initializer runs at priority -1. */
+ADD2SET(IconListviewScaleStartup, CLASSESINIT, 0);
+#endif

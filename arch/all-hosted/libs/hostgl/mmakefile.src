@@ -26,6 +26,7 @@ LIBRARY_SOURCES = \
                 hostgl_glacreatecontext \
                 hostgl_gladestroycontext \
                 hostgl_glagetconfig \
+                hostgl_gladrawable \
                 hostgl_glagetcurrentcontext \
                 hostgl_glagetopenglstatetrackerapi \
                 hostgl_glagetprocaddress \

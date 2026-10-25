@@ -15,7 +15,6 @@
 #include <string.h>
 
 #include "uhwcmd.h"
-#include "xhci_mmio.h"
 #include "xhciproto.h"
 #include "pcixhci.h"
 
@@ -115,26 +114,26 @@ static BOOL XHCIController__Init(struct PCIController *hc)
         pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "Initializing hardware for controller @ 0x%p" DEBUGCOLOR_RESET" \n",
                         hc);
     }
-    pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  CAPLENGTH: 0x%02x" DEBUGCOLOR_RESET" \n", xhciReadMMIO8(&xhciregs->caplength));
-    pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  DBOFF: 0x%08x" DEBUGCOLOR_RESET" \n", xhciReadMMIO32(&xhciregs->dboff));
-    pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  RRSOFF: 0x%08x" DEBUGCOLOR_RESET" \n", xhciReadMMIO32(&xhciregs->rrsoff));
+    pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  CAPLENGTH: 0x%02x" DEBUGCOLOR_RESET" \n", XHCI_RD8(xhciregs->caplength));
+    pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  DBOFF: 0x%08x" DEBUGCOLOR_RESET" \n", XHCI_RD32(xhciregs->dboff));
+    pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  RRSOFF: 0x%08x" DEBUGCOLOR_RESET" \n", XHCI_RD32(xhciregs->rrsoff));
 
-    xhcic->xhc_XHCIOpR   = (APTR)((IPTR)xhciregs + xhciReadMMIO8(&xhciregs->caplength));
+    xhcic->xhc_XHCIOpR   = (APTR)((IPTR)xhciregs + XHCI_RD8(xhciregs->caplength));
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  Operational Registers @ 0x%p" DEBUGCOLOR_RESET" \n", xhcic->xhc_XHCIOpR);
-    xhcic->xhc_XHCIDB    = (APTR)((IPTR)xhciregs + xhciReadMMIO32(&xhciregs->dboff));
+    xhcic->xhc_XHCIDB    = (APTR)((IPTR)xhciregs + XHCI_RD32(xhciregs->dboff));
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  Doorbells @ 0x%p" DEBUGCOLOR_RESET" \n", xhcic->xhc_XHCIDB);
     xhcic->xhc_XHCIPorts = (APTR)((IPTR)xhcic->xhc_XHCIOpR + 0x400);
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  Port Registers @ 0x%p" DEBUGCOLOR_RESET" \n", xhcic->xhc_XHCIPorts);
-    xhcic->xhc_XHCIIntR  = (APTR)((IPTR)xhciregs + xhciReadMMIO32(&xhciregs->rrsoff) + 0x20);
+    xhcic->xhc_XHCIIntR  = (APTR)((IPTR)xhciregs + XHCI_RD32(xhciregs->rrsoff) + 0x20);
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  Interrupt Registers @ 0x%p" DEBUGCOLOR_RESET" \n", xhcic->xhc_XHCIIntR);
 
 
     /* Cache capability parameters once */
-    ULONG hcsparams1 = xhciReadMMIO32(&xhciregs->hcsparams1);
-    ULONG hcsparams2 = xhciReadMMIO32(&xhciregs->hcsparams2);
-    ULONG hcsparams3 = xhciReadMMIO32(&xhciregs->hcsparams3);
-    ULONG hccparams1 = xhciReadMMIO32(&xhciregs->hccparams1);
-    ULONG hccparams2 = xhciReadMMIO32(&xhciregs->hccparams2);
+    ULONG hcsparams1 = XHCI_RD32(xhciregs->hcsparams1);
+    ULONG hcsparams2 = XHCI_RD32(xhciregs->hcsparams2);
+    ULONG hcsparams3 = XHCI_RD32(xhciregs->hcsparams3);
+    ULONG hccparams1 = XHCI_RD32(xhciregs->hccparams1);
+    ULONG hccparams2 = XHCI_RD32(xhciregs->hccparams2);
     ULONG xhciMaxIntrs = (hcsparams1 >> 8) & 0x7FF;
     UWORD xhciPortLimit = (UWORD)((hcsparams1 >> 24) & 0xFF);
 
@@ -151,7 +150,7 @@ static BOOL XHCIController__Init(struct PCIController *hc)
 
     while(xhciECPOff >= 0x40) {
         volatile ULONG *capreg = (volatile ULONG *)((IPTR)xhciregs + xhciECPOff);
-        ULONG caphdr = AROS_LE2LONG(*capreg);
+        ULONG caphdr = XHCI_RD32(*capreg);
         ULONG nextcap = (caphdr >> XHCIS_EXT_CAP_NEXT) & XHCI_EXT_CAP_NEXT_MASK;
         UBYTE capid = caphdr & 0xFF;
 
@@ -171,19 +170,19 @@ takeownership:
                 /*
                  * Change the ownership flag and read back to ensure it is written
                  */
-                *capreg = AROS_LONG2LE(ownershipval);
-                (void)*capreg;
+                XHCI_WR32(*capreg, ownershipval);
+                (void)XHCI_RD32(*capreg);
 
                 /*
                  * Wait for ownership change to take place.
                  * XHCI specification doesn't say how long it can take...
                  */
-                while((AROS_LE2LONG(*capreg) & XHCIF_USBLEGSUP_BIOSOWNED) && (--cnt > 0)) {
+                while((XHCI_RD32(*capreg) & XHCIF_USBLEGSUP_BIOSOWNED) && (--cnt > 0)) {
                     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "Waiting for ownership to change..." DEBUGCOLOR_RESET" \n");
                     uhwDelayMS(10, timerreq);
                 }
                 if((ownershipval != XHCIF_USBLEGSUP_OSOWNED) &&
-                        (AROS_LE2LONG(*capreg) & XHCIF_USBLEGSUP_BIOSOWNED)) {
+                        (XHCI_RD32(*capreg) & XHCIF_USBLEGSUP_BIOSOWNED)) {
                     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "Ownership of xHCI still with BIOS" DEBUGCOLOR_RESET" \n");
 
                     /* Try to force ownership */
@@ -195,18 +194,18 @@ takeownership:
             } else {
                 pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "Forcing ownership of xHCI from (unknown)" DEBUGCOLOR_RESET" \n");
                 /* Try to force ownership */
-                *capreg = AROS_LONG2LE(XHCIF_USBLEGSUP_OSOWNED);
-                (void)*capreg;
+                XHCI_WR32(*capreg, XHCIF_USBLEGSUP_OSOWNED);
+                (void)XHCI_RD32(*capreg);
             }
 
             /* Clear the SMI control bits */
             volatile ULONG *smictl = (volatile ULONG *)((IPTR)capreg + 4);
-            *smictl = AROS_LONG2LE(0);
-            (void)*smictl;
+            XHCI_WR32(*smictl, 0);
+            (void)XHCI_RD32(*smictl);
         } else if(capid == XHCI_EXT_CAP_ID_SUPPORTED_PROTOCOL) {
-            ULONG caprev   = AROS_LE2LONG(*(capreg + 0));  /* DWORD0: revision */
-            ULONG capname  = AROS_LE2LONG(*(capreg + 1));  /* DWORD1: name string */
-            ULONG capports = AROS_LE2LONG(*(capreg + 2));  /* DWORD2: ports */
+            ULONG caprev   = XHCI_RD32(capreg[0]);  /* DWORD0: revision */
+            ULONG capname  = XHCI_RD32(capreg[1]);  /* DWORD1: name string */
+            ULONG capports = XHCI_RD32(capreg[2]);  /* DWORD2: ports */
 
             UBYTE major = (caprev >> XHCIS_XCP_REV_MAJOR) & XHCI_XCP_REV_MAJOR_MASK;
             UBYTE minor_bcd = (caprev >> XHCIS_XCP_REV_MINOR) & XHCI_XCP_REV_MINOR_MASK;
@@ -286,7 +285,7 @@ takeownership:
     }
 
     UWORD xhciversion;
-    xhciversion = xhciReadMMIO16(&xhciregs->hciversion);
+    xhciversion = XHCI_RD16(xhciregs->hciversion);
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "  HCIVERSION: 0x%04x" DEBUGCOLOR_RESET" \n", xhciversion);
     hc->hc_HCIVersionMajor = (UBYTE)((xhciversion >> 8) & 0xFF);
     hc->hc_HCIVersionMinor = (UBYTE)((xhciversion >> 4) & 0x0F);
@@ -315,7 +314,7 @@ takeownership:
                      (hccparams2 & XHCIF_HCCPARAMS2_PRS) ? 1 : 0,
                      (hccparams2 & XHCIF_HCCPARAMS2_CPSM) ? 1 : 0);
     pciusbXHCIDebugV("xHCI", DEBUGCOLOR_SET "  OPR.CONFIG: 0x%08x" DEBUGCOLOR_RESET" \n",
-                     AROS_LE2LONG(((volatile struct xhci_hcopr *)xhcic->xhc_XHCIOpR)->config));
+                     XHCI_RD32(((volatile struct xhci_hcopr *)xhcic->xhc_XHCIOpR)->config));
 
     hc->hc_NumPorts = xhciPortLimit;
     xhcic->xhc_NumSlots = (ULONG)(hcsparams1 & 0xFF);

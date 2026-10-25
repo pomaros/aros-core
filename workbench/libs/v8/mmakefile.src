@@ -1,0 +1,60 @@
+# Copyright (C) 2026 John KNIPPER <code@jkn.me>
+# Licensed under the AROS Public License (APL) Version 1.1
+#
+# v8.library: the V8 JavaScript engine as an AROS library, over a V8
+# monolith built by Chromium's GN for target_os=aros (static V8, its
+# libc++ and V8's own headers). The monolith and the headers come in a V8
+# SDK directory, V8_SDK:
+#
+#   $(V8_SDK)/include/            V8's public headers and GN's generated
+#                                 v8-gn.h (out/<dir>/gen/include)
+#   $(V8_SDK)/lib/libv8_monolith.a
+#
+# integration tools/web-engine/v8/install-v8-sdk fills it from a V8 build.
+# Built only on request (make workbench-libs-v8): the standard build has no
+# V8.
+
+include $(SRCDIR)/config/aros.cfg
+
+V8_SDK ?= $(AROS_DEVELOPER)/V8
+
+#MM workbench-libs-v8 : linklibs-pthread linklibs-libatomic
+
+FUNCS := \
+    v8allocatorinstall v8allocatorisinstalled v8ownerrangeadd \
+    v8ownerrangeremove v8ownercheckadd v8ownercheckremove v8initialize \
+    v8cleanup v8createisolate v8destroyisolate v8createcontext \
+    v8destroycontext v8eval v8compilescript v8runscript v8freescript \
+    v8getglobalobject v8setproperty v8getproperty v8callfunction \
+    v8findenginesymbol
+
+FILES := $(FUNCS) v8_init v8_platform v8_simple_eval v8_aarch64 \
+    engine/platform-context-aros
+
+CXXFILES := v8_bridge std_fix v8_allocator \
+    engine/isolate-aros engine/memory-aros engine/platform-aros \
+    engine/threading-aros engine/v8-embedder engine/v8-embedder-helpers \
+    engine/v8-platform-backend
+
+USER_INCLUDES := -iquote $(SRCDIR)/$(CURDIR) -iquote $(SRCDIR)/$(CURDIR)/engine \
+    -I$(SRCDIR)/$(CURDIR)/include -I$(V8_SDK)/include
+USER_CPPFLAGS := -DV8_USE_REAL_ENGINE
+USER_CXXFLAGS := -std=c++20
+
+# The whole monolith goes in, with the section script that keeps its
+# unwind tables and constants in the code hunk (a separate hunk can load out
+# of reach of their PC-relative references).
+USER_LDFLAGS := -Wl,--whole-archive $(V8_SDK)/lib/libv8_monolith.a -Wl,--no-whole-archive \
+    -Wl,--force-group-allocation -Wl,-T,$(SRCDIR)/$(CURDIR)/aros-relocatable.lds
+
+%build_module mmake=workbench-libs-v8 \
+    modname=v8 modtype=library \
+    files="$(FILES)" cxxfiles="$(CXXFILES)" alwayscxxlink=yes \
+    uselibs="pthread debug m"
+
+#MM includes-copy
+
+INCLUDE_FILES := include/libraries/v8.h
+%copy_includes path=libraries dir=include/libraries
+
+%common

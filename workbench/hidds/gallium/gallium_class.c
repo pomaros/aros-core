@@ -92,6 +92,11 @@ VOID METHOD(HiddGallium, Hidd_Gallium, DisplayResource)
     D(bug ("[Gallium] %s()\n", __func__));
 }
 
+VOID METHOD(HiddGallium, Hidd_Gallium, ReleaseRastPort)
+{
+    /* Default: frames went into the window's bitmap, nothing to take down. */
+}
+
 IPTR METHOD(HiddGallium, Hidd_Gallium, DisplayResourceRP)
 {
     /* Default: not handled. gallium.library falls back to the

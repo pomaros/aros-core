@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C)  2002-2026, The AROS Development Team. All rights reserved.
 */
 
@@ -938,3 +939,16 @@ const struct __MUIBuiltinClass _MUI_IconVolumeList_desc = {
     (void *)IconVolumeList_Dispatcher
 };
 #endif /* WANDERER_BUILTIN_ICONVOLUMELIST */
+
+#if !defined(WANDERER_BUILTIN_ICONVOLUMELIST)
+#include <aros/symbolsets.h>
+struct MUI_CustomClass *IconVolumeListScaleClass;
+static int IconVolumeListScaleStartup(struct Library *base)
+{
+    (void)base;
+    return IconVolumeListScaleClass && MUI_SetClassCapabilities(
+        IconVolumeListScaleClass->mcc_Class, MUI_CLASS_SCALE_AWARE);
+}
+/* The generated .mui class initializer runs at priority -1. */
+ADD2SET(IconVolumeListScaleStartup, CLASSESINIT, 0);
+#endif

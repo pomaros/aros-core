@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
 */
 
@@ -543,3 +544,23 @@ IPTR ScrDecorClass__SDM_EXITSCREEN(Class *cl, Object *obj, struct sdpExitScreen 
 }
 
 /**************************************************************************************************/
+
+/* An unknown subclass must implement its own read-only preparation contract. */
+IPTR ScrDecorClass__SDM_PREPARESCALE(Class *cl, Object *obj,
+    struct sdpPrepareScale *msg)
+{
+    if (OCLASS(obj) != cl || !msg->sdp_Font || !msg->sdp_BaseFont ||
+        !msg->sdp_Metrics || msg->sdp_Scale < 100 || msg->sdp_Scale > 400 ||
+        msg->sdp_Scale % 25)
+        return FALSE;
+    msg->sdp_Metrics->DepthRightInset = -1;
+    msg->sdp_Metrics->DepthTop = 0;
+    return TRUE;
+}
+
+/* A capability query has no preparation inputs, allocations or side effects. */
+IPTR ScrDecorClass__SDM_QUERYCAPABILITIES(Class *cl, Object *obj, Msg msg)
+{
+    (void)msg;
+    return OCLASS(obj) == cl ? SDM_CAP_PREPARESCALE : 0;
+}

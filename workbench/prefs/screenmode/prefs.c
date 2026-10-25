@@ -52,7 +52,7 @@ static BOOL Prefs_Load(STRPTR from)
 BOOL Prefs_ImportFH(BPTR fh)
 {
     struct IFFHandle       *handle;
-    struct ScreenModePrefs  loadprefs = {{0},0};
+    struct ScreenModePrefs  loadprefs = {0};
     BOOL                    success = TRUE;
     LONG                    error;
 
@@ -80,6 +80,9 @@ BOOL Prefs_ImportFH(BPTR fh)
                 }
                 else
                 {
+                    screenmodeprefs.smp_Scale = AROS_BE2LONG(loadprefs.smp_Scale);
+                    if (screenmodeprefs.smp_Scale < 100 || screenmodeprefs.smp_Scale > 400 || screenmodeprefs.smp_Scale % 25)
+                        screenmodeprefs.smp_Scale = 100;
                     CopyMem(loadprefs.smp_Reserved, screenmodeprefs.smp_Reserved, sizeof(screenmodeprefs.smp_Reserved));
                     screenmodeprefs.smp_DisplayID =
                         AROS_BE2LONG(loadprefs.smp_DisplayID);
@@ -127,6 +130,7 @@ BOOL Prefs_ExportFH(BPTR fh)
     BOOL                    success = TRUE;
     LONG                    error   = 0;
 
+    saveprefs.smp_Scale = AROS_LONG2BE(screenmodeprefs.smp_Scale);
     CopyMem(screenmodeprefs.smp_Reserved, saveprefs.smp_Reserved, sizeof(screenmodeprefs.smp_Reserved));
     saveprefs.smp_DisplayID = AROS_LONG2BE(screenmodeprefs.smp_DisplayID);
     saveprefs.smp_Width     = AROS_WORD2BE(screenmodeprefs.smp_Width);
@@ -269,7 +273,7 @@ BOOL Prefs_Default(VOID)
     screenmodeprefs.smp_Reserved[0] = 0;
     screenmodeprefs.smp_Reserved[1] = 0;
     screenmodeprefs.smp_Reserved[2] = 0;
-    screenmodeprefs.smp_Reserved[3] = 0;
+    screenmodeprefs.smp_Scale = 100;
     if ((defScreen = LockPubScreen(NULL)) != NULL)
     {
         screenmodeprefs.smp_DisplayID = GetVPModeID(&defScreen->ViewPort);

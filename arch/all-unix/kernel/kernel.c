@@ -684,6 +684,7 @@ static const char *kernel_functions[] =
 #ifdef HOST_OS_darwin
     "pthread_self",
     "pthread_kill",
+    "pthread_sigmask",
 #endif
     NULL
 };
@@ -818,7 +819,7 @@ int core_Start(void *libc)
 #endif
 
     /* We need to start up with disabled interrupts */
-    pd->iface->sigprocmask(SIG_BLOCK, &pd->sig_int_mask, NULL);
+    pd->iface->KRN_SIGMASK(SIG_BLOCK, &pd->sig_int_mask, NULL);
     AROS_HOST_BARRIER
 
     /*
@@ -830,7 +831,7 @@ int core_Start(void *libc)
     SIGEMPTYSET(&tmp_mask);
     SIGADDSET(&tmp_mask, SIGUSR1);
     SIGADDSET(&tmp_mask, SIGUSR2);
-    pd->iface->sigprocmask(SIG_UNBLOCK, &tmp_mask, NULL);
+    pd->iface->KRN_SIGMASK(SIG_UNBLOCK, &tmp_mask, NULL);
     AROS_HOST_BARRIER
 
     return TRUE;

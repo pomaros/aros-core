@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
 
     Desc:
@@ -442,14 +443,83 @@ static void DoScan(struct filehandle *fh, struct completioninfo *ci)
 
 /****************************************************************************************/
 
+/* Completion is an unadapted logical100 dialog, independently of CON's
+   sharp physical rendering. Convert physical pointer/viewport once. */
+static LONG completion_logical_coord(LONG physical, ULONG factor)
+{
+    return physical < 0 ? -(LONG)((-(QUAD)physical + factor - 1) / factor) :
+        physical / factor;
+}
+
+static APTR completion_visual_info(struct filehandle *fh, struct Screen *screen,
+    const struct ScreenRenderContext **captured)
+{
+    IPTR value = 0;
+    const struct ScreenRenderContext *context;
+    struct TagItem tags[] = {
+        { GTVI_RenderContext, 0 }, { GTVI_Logical, TRUE }, { TAG_DONE, 0 }
+    };
+    APTR vi;
+    *captured = NULL;
+    if (!GetAttr(SA_RenderContext, (Object *)screen, &value) || !value) return NULL;
+    context = (const struct ScreenRenderContext *)value;
+    if (!context->src_LogicalDrawInfo || !context->src_PhysicalDrawInfo ||
+        context->src_LogicalDrawInfo->dri_Screen != screen ||
+        context->src_PhysicalDrawInfo->dri_Screen != screen ||
+        context->src_LegacyScaleFactor < 1 || context->src_LegacyScaleFactor > 4)
+        return NULL;
+    tags[0].ti_Data = value;
+    vi = GetVisualInfoA(screen, tags);
+    if (vi) *captured = context;
+    return vi;
+}
+
+static struct Window *completion_open_window(struct filehandle *fh, struct Screen *screen,
+    const struct ScreenRenderContext *context, LONG winleft, LONG wintop,
+    LONG winwidth, LONG winheight)
+{
+    struct TagItem wintags[] =
+    {
+        { WA_CustomScreen, (IPTR) screen   },
+        { WA_Title, (IPTR) "Select filename"                        },
+        { WA_CloseGadget, TRUE                              },
+        { WA_DragBar, TRUE                                  },
+        { WA_DepthGadget, TRUE                              },
+        { WA_Activate, FALSE                                },
+        { WA_AutoAdjust, TRUE                               },
+        { WA_Left, winleft                                  },
+        { WA_Top, wintop                                    },
+        { WA_InnerWidth, winwidth                           },
+        { WA_InnerHeight, winheight                         },
+        { WA_IDCMP, IDCMP_CHANGESCALE | IDCMP_CLOSEWINDOW | IDCMP_RAWKEY | IDCMP_VANILLAKEY | LISTVIEWIDCMP | BUTTONIDCMP },
+        { WA_Hidden, TRUE },
+        { WA_ScaleAware, FALSE },
+        { WA_RenderContext, (IPTR)context },
+        { TAG_DONE                                          }
+    };
+
+    return OpenWindowTagList(NULL, wintags);
+}
+
+static BOOL completion_publish_window(struct filehandle *fh, struct Window *window, struct Gadget *gadlist)
+{
+    if (AddGList(window, gadlist, (UWORD)-1, (UWORD)-1, NULL) == (UWORD)-1)
+        return FALSE;
+    RefreshGList(gadlist, window, NULL, (UWORD)-1);
+    GT_RefreshWindow(window, NULL);
+    if (!ShowWindow(window, NULL)) return FALSE;
+    ActivateWindow(window);
+    return TRUE;
+}
+
 static BOOL DoChooseReq(struct filehandle *fh, struct completioninfo *ci)
 {
     static const char oktext[] = "Ok";
     static const char canceltext[] = "Cancel";
-    static const char titletext[] = "Select filename";
 
     struct RastPort temprp;
     struct DrawInfo *dri;
+    const struct ScreenRenderContext *context;
     struct Window *win;
     struct Gadget *gadlist, *gad, *lvgad;
     struct NewGadget ng;
@@ -459,296 +529,291 @@ static BOOL DoChooseReq(struct filehandle *fh, struct completioninfo *ci)
     LONG sec, micro, secold, microold;
     BOOL retval = FALSE;
 
-    if ((dri = GetScreenDrawInfo(ci->fh->window->WScreen)))
+    if ((vi = completion_visual_info(fh, ci->fh->window->WScreen, &context)))
     {
-        if ((vi = GetVisualInfoA(ci->fh->window->WScreen, NULL)))
+        dri = context->src_LogicalDrawInfo;
+        InitRastPort(&temprp);
+        SetFont(&temprp, dri->dri_Font);
+
+        buttonwidth = TextLength(&temprp, oktext, strlen(oktext));
+        i = TextLength(&temprp, canceltext, strlen(canceltext));
+        buttonwidth = (buttonwidth > i) ? buttonwidth : i;
+        buttonwidth += BUTTON_EXTRA_WIDTH;
+
+        buttonheight = dri->dri_Font->tf_YSize + BUTTON_EXTRA_HEIGHT;
+
+        i = ci->nummatchnodes > 15 ? 15 : ci->nummatchnodes;
+        if (i < 4)
+            i = 4;
+
+        winheight = i * (dri->dri_Font->tf_YSize + 1) + LV_EXTRA_HEIGHT + LV_BUTTON_SPACING_Y + buttonheight
+                + BORDER_Y * 2;
+
+        winwidth = buttonwidth * 2 + BUTTON_SPACING_X + BORDER_X * 2;
+        i = ci->fh->window->WScreen->Width / context->src_LegacyScaleFactor / 3;
+        if (i > winwidth)
+            winwidth = i;
+
+        winleft = completion_logical_coord(ci->fh->window->WScreen->MouseX,
+            context->src_LegacyScaleFactor) - winwidth / 2;
+        wintop = completion_logical_coord(ci->fh->window->WScreen->MouseY,
+            context->src_LegacyScaleFactor) - winheight / 2;
+
+        win = completion_open_window(fh, ci->fh->window->WScreen, context,
+            winleft, wintop, winwidth, winheight);
+        if (!win) goto done_visual;
+
+        gadlist = NULL;
+        gad = CreateContext(&gadlist);
+        if (!gad) goto done_window;
+        winwidth = win->Width - win->BorderLeft - win->BorderRight;
+        winheight = win->Height - win->BorderTop - win->BorderBottom;
+
+        ng.ng_LeftEdge = win->BorderLeft + BORDER_X;
+        ng.ng_TopEdge = win->BorderTop + BORDER_Y;
+        ng.ng_Width = winwidth - BORDER_X * 2;
+        ng.ng_Height = winheight - BORDER_Y * 2 - buttonheight - LV_BUTTON_SPACING_Y;
+        ng.ng_GadgetText = NULL;
+        ng.ng_TextAttr = NULL;
+        ng.ng_GadgetID = ID_LISTVIEW;
+        ng.ng_Flags = 0;
+        ng.ng_VisualInfo = vi;
+        ng.ng_UserData = 0;
+
         {
-            InitRastPort(&temprp);
-            SetFont(&temprp, dri->dri_Font);
-
-            buttonwidth = TextLength(&temprp, oktext, strlen(oktext));
-            i = TextLength(&temprp, canceltext, strlen(canceltext));
-            buttonwidth = (buttonwidth > i) ? buttonwidth : i;
-            buttonwidth += BUTTON_EXTRA_WIDTH;
-
-            buttonheight = dri->dri_Font->tf_YSize + BUTTON_EXTRA_HEIGHT;
-
-            i = ci->nummatchnodes > 15 ? 15 : ci->nummatchnodes;
-            if (i < 4)
-                i = 4;
-
-            winheight = i * (dri->dri_Font->tf_YSize + 1) + LV_EXTRA_HEIGHT + LV_BUTTON_SPACING_Y + buttonheight
-                    + BORDER_Y * 2;
-
-            winwidth = buttonwidth * 2 + BUTTON_SPACING_X + BORDER_X * 2;
-            i = ci->fh->window->WScreen->Width * 1 / 3;
-            if (i > winwidth)
-                winwidth = i;
-
-            winleft = ci->fh->window->WScreen->MouseX
-                    - (winwidth + ci->fh->window->WScreen->WBorLeft + ci->fh->window->WScreen->WBorRight) / 2;
-            wintop = ci->fh->window->WScreen->MouseY
-                    - (winheight + ci->fh->window->WScreen->WBorTop + dri->dri_Font->tf_YSize + 1
-                            + ci->fh->window->WScreen->WBorBottom) / 2;
-
-            gad = CreateContext(&gadlist);
-
-            ng.ng_LeftEdge = ci->fh->window->WScreen->WBorLeft + BORDER_X;
-            ng.ng_TopEdge = ci->fh->window->WScreen->WBorTop + dri->dri_Font->tf_YSize + 1 + BORDER_Y;
-            ng.ng_Width = winwidth - BORDER_X * 2;
-            ng.ng_Height = winheight - BORDER_Y * 2 - buttonheight - LV_BUTTON_SPACING_Y;
-            ng.ng_GadgetText = NULL;
-            ng.ng_TextAttr = NULL;
-            ng.ng_GadgetID = ID_LISTVIEW;
-            ng.ng_Flags = 0;
-            ng.ng_VisualInfo = vi;
-            ng.ng_UserData = 0;
-
+            struct TagItem lvtags[] =
             {
-                struct TagItem lvtags[] =
-                {
-                { GTLV_Labels, (IPTR) &ci->matchlist },
-                { GTLV_ShowSelected, 0 },
-                { GTLV_Selected, 0 },
-                { TAG_DONE } };
+            { GTLV_Labels, (IPTR) &ci->matchlist },
+            { GTLV_ShowSelected, 0 },
+            { GTLV_Selected, 0 },
+            { TAG_DONE } };
 
-                gad = lvgad = CreateGadgetA(LISTVIEW_KIND, gad, &ng, lvtags);
+            gad = lvgad = CreateGadgetA(LISTVIEW_KIND, gad, &ng, lvtags);
 
-                visible_lv_lines = (ng.ng_Height - LV_EXTRA_HEIGHT) / (dri->dri_Font->tf_YSize + 1);
-            }
+            if (!gad) goto done_window;
+            visible_lv_lines = (ng.ng_Height - LV_EXTRA_HEIGHT) / (dri->dri_Font->tf_YSize + 1);
+        }
 
-            ng.ng_TopEdge += ng.ng_Height + LV_BUTTON_SPACING_Y;
-            ng.ng_Width = buttonwidth;
-            ng.ng_Height = buttonheight;
-            ng.ng_GadgetText = oktext;
-            ng.ng_GadgetID = ID_OK;
+        ng.ng_TopEdge += ng.ng_Height + LV_BUTTON_SPACING_Y;
+        ng.ng_Width = buttonwidth;
+        ng.ng_Height = buttonheight;
+        ng.ng_GadgetText = oktext;
+        ng.ng_GadgetID = ID_OK;
 
-            gad = CreateGadgetA(BUTTON_KIND, gad, &ng, NULL);
+        gad = CreateGadgetA(BUTTON_KIND, gad, &ng, NULL);
+        if (!gad) goto done_window;
 
-            ng.ng_LeftEdge += winwidth - buttonwidth - BORDER_X * 2;
-            ng.ng_GadgetText = canceltext;
-            ng.ng_GadgetID = ID_CANCEL;
+        ng.ng_LeftEdge += winwidth - buttonwidth - BORDER_X * 2;
+        ng.ng_GadgetText = canceltext;
+        ng.ng_GadgetID = ID_CANCEL;
 
-            gad = CreateGadgetA(BUTTON_KIND, gad, &ng, NULL);
+        gad = CreateGadgetA(BUTTON_KIND, gad, &ng, NULL);
 
-            if (gad)
+        if (gad)
+        {
+            if (completion_publish_window(fh, win, gadlist))
             {
-                struct TagItem wintags[] =
+                BOOL done = FALSE;
+                BOOL doit = FALSE;
+                BOOL scalechanged = FALSE;
+
+                CurrentTime(&secold, &microold);
+
+                while (!done && !doit)
                 {
-                    { WA_CustomScreen, (IPTR) ci->fh->window->WScreen   },
-                    { WA_Title, (IPTR) titletext                        },
-                    { WA_CloseGadget, TRUE                              },
-                    { WA_DragBar, TRUE                                  },
-                    { WA_DepthGadget, TRUE                              },
-                    { WA_Activate, TRUE                                 },
-                    { WA_AutoAdjust, TRUE                               },
-                    { WA_Left, winleft                                  },
-                    { WA_Top, wintop                                    },
-                    { WA_InnerWidth, winwidth                           },
-                    { WA_InnerHeight, winheight                         },
-                    { WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_RAWKEY | IDCMP_VANILLAKEY | LISTVIEWIDCMP | BUTTONIDCMP },
-                    { WA_Gadgets, (IPTR) gadlist                        },
-                    { TAG_DONE                                          }
-                };
+                    struct IntuiMessage *msg;
 
-                if ((win = OpenWindowTagList(NULL, wintags)))
-                {
-                    BOOL done = FALSE;
-                    BOOL doit = FALSE;
+                    WaitPort(win->UserPort);
 
-                    CurrentTime(&secold, &microold);
-
-                    while (!done && !doit)
+                    while ((msg = GT_GetIMsg(win->UserPort)))
                     {
-                        struct IntuiMessage *msg;
-
-                        WaitPort(win->UserPort);
-
-                        while ((msg = GT_GetIMsg(win->UserPort)))
+                        if (scalechanged) { GT_ReplyIMsg(msg); continue; }
+                        switch (msg->Class)
                         {
-                            switch (msg->Class)
+                        case IDCMP_CHANGESCALE:
+                            scalechanged = done = TRUE;
+                            doit = FALSE;
+                            break;
+                        case IDCMP_CLOSEWINDOW:
+                            done = TRUE;
+                            break;
+
+                        case IDCMP_VANILLAKEY:
+                            switch (msg->Code)
                             {
-                            case IDCMP_CLOSEWINDOW:
+                            case 27:
                                 done = TRUE;
                                 break;
 
-                            case IDCMP_VANILLAKEY:
-                                switch (msg->Code)
-                                {
-                                case 27:
-                                    done = TRUE;
-                                    break;
-
-                                case 13:
-                                    doit = TRUE;
-                                    break;
-                                }
-                                break;
-
-                            case IDCMP_RAWKEY:
-                            {
-                                WORD scroll = 0;
-                                BOOL page = FALSE;
-                                BOOL extreme = FALSE;
-
-                                switch (msg->Code)
-                                {
-                                case RAWKEY_UP:
-                                    scroll = -1;
-                                    break;
-
-                                case RAWKEY_DOWN:
-                                    scroll = 1;
-                                    break;
-
-                                case RAWKEY_PAGEUP:
-                                    scroll = -1;
-                                    page = TRUE;
-                                    break;
-
-                                case RAWKEY_PAGEDOWN:
-                                    scroll = 1;
-                                    page = TRUE;
-                                    break;
-
-                                case RAWKEY_HOME:
-                                    scroll = -1;
-                                    extreme = TRUE;
-                                    break;
-
-                                case RAWKEY_END:
-                                    scroll = 1;
-                                    extreme = TRUE;
-                                    break;
-
-                                case RAWKEY_NM_WHEEL_UP:
-                                    scroll = -1;
-                                    break;
-
-                                case RAWKEY_NM_WHEEL_DOWN:
-                                    scroll = 1;
-                                    break;
-                                }
-
-                                if (msg->Qualifier & (IEQUALIFIER_LSHIFT | IEQUALIFIER_RSHIFT))
-                                {
-                                    page = TRUE;
-                                }
-
-                                if (msg->Qualifier & (IEQUALIFIER_LALT | IEQUALIFIER_RALT | IEQUALIFIER_CONTROL))
-                                {
-                                    extreme = TRUE;
-                                }
-
-                                if (scroll)
-                                {
-                                    IPTR getsel;
-                                    struct TagItem tags[] =
-                                    {
-                                    { GTLV_Selected, (IPTR) &getsel },
-                                    { TAG_IGNORE, TRUE },
-                                    { TAG_DONE } };
-                                    WORD sel;
-
-                                    GT_GetGadgetAttrsA(lvgad, win, NULL, tags);
-                                    sel = (WORD) getsel;
-
-                                    if (extreme)
-                                    {
-                                        scroll *= ci->nummatchnodes;
-                                    }
-                                    else if (page)
-                                    {
-                                        scroll *= visible_lv_lines;
-                                    }
-
-                                    sel += scroll;
-                                    if (sel < 0)
-                                        sel = ci->nummatchnodes - 1;
-                                    if (sel >= ci->nummatchnodes)
-                                        sel = 0;
-
-                                    tags[0].ti_Data = (IPTR) sel;
-                                    tags[1].ti_Tag = GTLV_MakeVisible;
-                                    tags[1].ti_Data = (IPTR) sel;
-
-                                    GT_SetGadgetAttrsA(lvgad, win, NULL, tags);
-                                }
-                            }
-                                break;
-
-                            case IDCMP_GADGETUP:
-                                gad = (struct Gadget *) msg->IAddress;
-
-                                switch (gad->GadgetID)
-                                {
-                                case ID_OK:
-                                    doit = TRUE;
-                                    break;
-
-                                case ID_CANCEL:
-                                    done = TRUE;
-                                    break;
-
-                                case ID_LISTVIEW:
-                                    CurrentTime(&sec, &micro);
-                                    if (DoubleClick(secold, microold, sec, micro))
-                                        doit = TRUE;
-                                    secold = sec;
-                                    microold = micro;
-                                    break;
-                                }
-                                break;
-
-                            } /* switch(msg->Class) */
-
-                            GT_ReplyIMsg(msg);
-
-                        } /* while((msg = GT_GetIMsg(win->UserPort))) */
-
-                    } /* while (!done && !doit) */
-
-                    if (doit)
-                    {
-                        struct Node *node;
-                        IPTR sel;
-
-                        struct TagItem gettags[] =
-                        {
-                        { GTLV_Selected, (IPTR) &sel },
-                        { TAG_DONE } };
-
-                        GT_GetGadgetAttrsA(lvgad, win, NULL, gettags);
-
-                        i = 0;
-                        ForeachNode(&ci->matchlist, node)
-                        {
-                            if ((WORD) sel == i)
-                            {
-                                AddPart(ci->match, node->ln_Name, sizeof(ci->match));
-
-                                retval = TRUE;
+                            case 13:
+                                doit = TRUE;
                                 break;
                             }
-                            i++;
+                            break;
+
+                        case IDCMP_RAWKEY:
+                        {
+                            WORD scroll = 0;
+                            BOOL page = FALSE;
+                            BOOL extreme = FALSE;
+
+                            switch (msg->Code)
+                            {
+                            case RAWKEY_UP:
+                                scroll = -1;
+                                break;
+
+                            case RAWKEY_DOWN:
+                                scroll = 1;
+                                break;
+
+                            case RAWKEY_PAGEUP:
+                                scroll = -1;
+                                page = TRUE;
+                                break;
+
+                            case RAWKEY_PAGEDOWN:
+                                scroll = 1;
+                                page = TRUE;
+                                break;
+
+                            case RAWKEY_HOME:
+                                scroll = -1;
+                                extreme = TRUE;
+                                break;
+
+                            case RAWKEY_END:
+                                scroll = 1;
+                                extreme = TRUE;
+                                break;
+
+                            case RAWKEY_NM_WHEEL_UP:
+                                scroll = -1;
+                                break;
+
+                            case RAWKEY_NM_WHEEL_DOWN:
+                                scroll = 1;
+                                break;
+                            }
+
+                            if (msg->Qualifier & (IEQUALIFIER_LSHIFT | IEQUALIFIER_RSHIFT))
+                            {
+                                page = TRUE;
+                            }
+
+                            if (msg->Qualifier & (IEQUALIFIER_LALT | IEQUALIFIER_RALT | IEQUALIFIER_CONTROL))
+                            {
+                                extreme = TRUE;
+                            }
+
+                            if (scroll)
+                            {
+                                IPTR getsel;
+                                struct TagItem tags[] =
+                                {
+                                { GTLV_Selected, (IPTR) &getsel },
+                                { TAG_IGNORE, TRUE },
+                                { TAG_DONE } };
+                                WORD sel;
+
+                                GT_GetGadgetAttrsA(lvgad, win, NULL, tags);
+                                sel = (WORD) getsel;
+
+                                if (extreme)
+                                {
+                                    scroll *= ci->nummatchnodes;
+                                }
+                                else if (page)
+                                {
+                                    scroll *= visible_lv_lines;
+                                }
+
+                                sel += scroll;
+                                if (sel < 0)
+                                    sel = ci->nummatchnodes - 1;
+                                if (sel >= ci->nummatchnodes)
+                                    sel = 0;
+
+                                tags[0].ti_Data = (IPTR) sel;
+                                tags[1].ti_Tag = GTLV_MakeVisible;
+                                tags[1].ti_Data = (IPTR) sel;
+
+                                GT_SetGadgetAttrsA(lvgad, win, NULL, tags);
+                            }
                         }
+                            break;
 
-                    } /* if (doit) */
+                        case IDCMP_GADGETUP:
+                            gad = (struct Gadget *) msg->IAddress;
 
-                    CloseWindow(win);
+                            switch (gad->GadgetID)
+                            {
+                            case ID_OK:
+                                doit = TRUE;
+                                break;
 
-                } /* if ((win = OpenWindowTagList(NULL, wintags))) */
+                            case ID_CANCEL:
+                                done = TRUE;
+                                break;
 
-            } /* if (gad) */
+                            case ID_LISTVIEW:
+                                CurrentTime(&sec, &micro);
+                                if (DoubleClick(secold, microold, sec, micro))
+                                    doit = TRUE;
+                                secold = sec;
+                                microold = micro;
+                                break;
+                            }
+                            break;
 
-            FreeGadgets(gadlist);
-            FreeVisualInfo(vi);
+                        } /* switch(msg->Class) */
 
-        } /* if ((vi = GetVisualInfoA(ci->fh->window->WScreen, NULL))) */
+                        GT_ReplyIMsg(msg);
 
-        FreeScreenDrawInfo(ci->fh->window->WScreen, dri);
+                    } /* while((msg = GT_GetIMsg(win->UserPort))) */
 
-    } /* if ((dri = GetScreenDrawInfo(fh->window->WScreen))) */
+                } /* while (!done && !doit) */
+
+                if (doit)
+                {
+                    struct Node *node;
+                    IPTR sel;
+
+                    struct TagItem gettags[] =
+                    {
+                    { GTLV_Selected, (IPTR) &sel },
+                    { TAG_DONE } };
+
+                    GT_GetGadgetAttrsA(lvgad, win, NULL, gettags);
+
+                    i = 0;
+                    ForeachNode(&ci->matchlist, node)
+                    {
+                        if ((WORD) sel == i)
+                        {
+                            AddPart(ci->match, node->ln_Name, sizeof(ci->match));
+
+                            retval = TRUE;
+                            break;
+                        }
+                        i++;
+                    }
+
+                } /* if (doit) */
+
+
+            } /* completion published */
+
+        } /* if (gad) */
+
+done_window:
+        CloseWindow(win);
+        FreeGadgets(gadlist);
+done_visual:
+        DeinitRastPort(&temprp);
+        FreeVisualInfo(vi);
+
+    } /* borrowed context remains owned by the Screen */
 
     return retval;
 }

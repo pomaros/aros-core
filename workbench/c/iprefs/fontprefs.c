@@ -149,6 +149,25 @@ void FontPrefs_Handler(STRPTR filename)
                                 }
                                 if (closed)
                                     OpenWorkBench();
+                                else if (cancel)
+                                {
+                                    /* The screen stays open: setting its
+                                     * current scale again makes Intuition
+                                     * take the new screen font live, the
+                                     * way a scale change does. Without an
+                                     * open screen there is nothing to apply:
+                                     * OpenWorkBench takes the new font. */
+                                    struct Screen *wb = LockPubScreen((CONST_STRPTR)"Workbench");
+
+                                    if (wb)
+                                    {
+                                        IPTR scale = 0;
+
+                                        if (GetAttr(SA_Scale, (Object *)wb, &scale))
+                                            SetAttrs((Object *)wb, SA_Scale, scale, TAG_DONE);
+                                        UnlockPubScreen(NULL, wb);
+                                    }
+                                }
                             }
                             else
                             {

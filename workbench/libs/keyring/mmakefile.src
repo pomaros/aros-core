@@ -1,0 +1,12 @@
+# Copyright (C) 2026 John Knipper
+# Licensed under the AROS Public License (APL) Version 1.1
+include $(SRCDIR)/config/aros.cfg
+#MM- workbench-libs : workbench-libs-keyring
+#MM workbench-libs-keyring : workbench-libs-keyring-includes linklibs-mbedcrypto kernel-entropy-includes
+USER_INCLUDES := -I$(SRCDIR)/workbench/libs/mbedtls -I$(SRCDIR)/workbench/libs/keyring/vendor/argon2/include -I$(SRCDIR)/workbench/libs/keyring/vendor/argon2/src
+USER_CPPFLAGS := -DMBEDTLS_CONFIG_FILE='"mbedtls_aros_config.h"' -DARGON2_NO_THREADS
+%build_module mmake=workbench-libs-keyring modname=keyring modtype=library \
+    files="keyring keyring_prompt engine vendor/argon2/src/argon2 vendor/argon2/src/core vendor/argon2/src/ref vendor/argon2/src/encoding vendor/argon2/src/blake2/blake2b" \
+    uselibs="mbedcrypto stdc"
+%copy_includes mmake=workbench-libs-keyring-includes path=libraries dir=include includes="keyring.h wifi_keyring.h wifi_secret.h bluetooth_secret.h"
+%common

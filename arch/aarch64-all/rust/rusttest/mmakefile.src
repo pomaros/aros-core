@@ -1,0 +1,53 @@
+# Copyright (C) 2026 John KNIPPER <code@jkn.me>
+# Licensed under the AROS Public License (APL) Version 1.1
+
+include $(SRCDIR)/config/aros.cfg
+
+# rusttest.resource: a C module shell linked with a no_std Rust staticlib.
+# Cargo builds rust/ for the native AArch64 target spec into the build tree;
+# the staticlib goes into the module link through USER_OBJS, after the C
+# objects, so only the members they reference are pulled in. The copy that
+# is linked drops the LLVM bitcode compiler_builtins embeds for LTO; it is
+# never loaded, but it would double the file. Cargo's own dependency file
+# makes the module relink when a Rust source changes.
+# The pinned nightly comes from rust/rust-toolchain.toml through rustup;
+# set CARGO to use another cargo binary.
+
+CARGO ?= cargo
+RUSTTEST_CRATE := $(SRCDIR)/$(CURDIR)/rust
+RUSTTEST_SPEC := $(SRCDIR)/arch/aarch64-all/rust/aarch64-unknown-aros.json
+RUSTTEST_CARGODIR := $(GENDIR)/$(CURDIR)/cargo
+RUSTTEST_CARGOLIB := $(RUSTTEST_CARGODIR)/aarch64-unknown-aros/release/librusttest.a
+RUSTTEST_LIB := $(RUSTTEST_CARGODIR)/librusttest.a
+
+USER_OBJS := $(RUSTTEST_LIB)
+
+#MM kernel-rusttest : kernel-exec-includes
+
+%build_module mmake=kernel-rusttest \
+  modname=rusttest modtype=resource \
+  files="rusttest_resource"
+
+USER_OBJS :=
+
+# The target spec leaves x18 to the compiler, which is right for native
+# AArch64 AROS only: hosted AROS must not link this staticlib.
+$(RUSTTEST_CARGOLIB) : $(RUSTTEST_CRATE)/Cargo.toml $(RUSTTEST_CRATE)/Cargo.lock \
+    $(RUSTTEST_CRATE)/rust-toolchain.toml $(RUSTTEST_SPEC)
+	@if [ "$(AROS_TARGET_CPU)" != aarch64 ] || [ "$(AROS_TARGET_ARCH)" = darwin ]; then \
+	    $(ECHO) "rusttest.resource: native AArch64 AROS only, not $(AROS_TARGET_ARCH)-$(AROS_TARGET_CPU)"; \
+	    exit 1; \
+	fi
+	@$(ECHO) "Building Rust staticlib $(notdir $@)..."
+	@cd $(RUSTTEST_CRATE) && CARGO_TARGET_DIR=$(RUSTTEST_CARGODIR) $(CARGO) build \
+	    --release --locked --quiet \
+	    -Zbuild-std=core,alloc -Zbuild-std-features=compiler-builtins-mem \
+	    -Zjson-target-spec --target $(RUSTTEST_SPEC)
+	@touch $@
+
+$(RUSTTEST_LIB) : $(RUSTTEST_CARGOLIB)
+	@$(TARGET_OBJCOPY) --remove-section=.llvmbc --remove-section=.llvmcmd $< $@
+
+-include $(RUSTTEST_CARGOLIB:.a=.d)
+
+%common

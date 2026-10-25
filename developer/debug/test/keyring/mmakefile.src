@@ -1,0 +1,8 @@
+# Copyright (C) 2026 John Knipper
+# Licensed under the AROS Public License (APL) Version 1.1
+include $(SRCDIR)/config/aros.cfg
+#MM- test : test-keyring
+#MM test-keyring : workbench-libs-keyring-includes
+USER_INCLUDES := -I$(SRCDIR)/workbench/libs/keyring/include
+%build_prog mmake=test-keyring progname=keyringprobe files="keyringprobe secretprobe probeexport" targetdir=$(AROS_TESTS)/keyring
+%common

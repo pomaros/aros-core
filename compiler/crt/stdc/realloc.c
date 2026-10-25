@@ -4,7 +4,7 @@
     C99 function realloc().
 */
 
-#include <aros/cpu.h>
+#include "__malloc.h"
 #include <proto/exec.h>
 
 /*****************************************************************************
@@ -48,48 +48,33 @@
 
 ******************************************************************************/
 {
-    UBYTE * mem, * newmem;
+    struct __stdc_malloc_header *header;
+    void *newmem;
     size_t oldsize;
 
-    if (!oldmem)
-        return malloc (size);
-
-    /* C allows realloc(ptr, 0) to free ptr; do so and return NULL, which is
-       the behaviour most callers expect (and matches the historical idiom). */
+    if (oldmem == NULL)
+        return malloc(size);
     if (size == 0)
     {
-        free (oldmem);
+        free(oldmem);
         return NULL;
     }
 
-    mem = (UBYTE *)oldmem - AROS_ALIGN(sizeof(size_t));
-    oldsize = *((size_t *)mem);
-
-    /* Reduce or enlarge the memory ? */
-    if (size < oldsize)
+    header = __stdc_allocation_header(oldmem);
+    oldsize = header->requested_size;
+    if (size == oldsize || (size < oldsize && oldsize - size < 4096))
     {
-        /* Don't change anything for small changes */
-        if ((oldsize - size) < 4096)
-            newmem = oldmem;
-        else
-            goto copy;
-    }
-    else if (size == oldsize) /* Keep the size ? */
-        newmem = oldmem;
-    else
-    {
-copy:
-        newmem = malloc (size);
-
-        if (newmem)
-        {
-            if (size > oldsize)
-                size = oldsize;
-            CopyMem (oldmem, newmem, size);
-            free (oldmem);
-        }
+        header->requested_size = size;
+        return oldmem;
     }
 
+    /* Resizing retains the original allocation domain, even when a different
+       stdc opener calls realloc(). On failure the old block is untouched. */
+    newmem = __stdc_alloc_from_pool(header->pool, size, __alignof__(max_align_t));
+    if (newmem != NULL)
+    {
+        CopyMem(oldmem, newmem, size < oldsize ? size : oldsize);
+        free(oldmem);
+    }
     return newmem;
 } /* realloc */
-

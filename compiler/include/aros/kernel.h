@@ -139,6 +139,10 @@ typedef void (*irqhandler_t)(void *data, void *data2);
  * the caller. Unsupported KrnGetSystemAttr queries return -1. */
 typedef int (*KRN_PageProtect)(void *address, uint32_t length, uint32_t flags);
 #define KATTR_PageProtect (KATTR_CPULoad_END + 11) /* [.G] KRN_PageProtect */
+/* CPU features common to every CPU, as the architecture's feature words
+ * (AArch64: <aros/aarch64/hwcap.h>, the Linux AT_HWCAP layout). */
+#define KATTR_HWCap       (KATTR_CPULoad_END + 12) /* [.G] (IPTR) */
+#define KATTR_HWCap2      (KATTR_CPULoad_END + 13) /* [.G] (IPTR) */
 
 
 /* Tag IDs for KrnStatMemory() */

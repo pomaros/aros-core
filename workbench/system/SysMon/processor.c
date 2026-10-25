@@ -255,6 +255,7 @@ AROS_UFH3(VOID, processorgraphpercpuhookfunc,
 
 struct SysMonModule processormodule =
 {
+    .Name = "processor",
     .Init = InitProcessor,
     .DeInit = DeInitProcessor,
 };

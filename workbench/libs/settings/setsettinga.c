@@ -58,9 +58,12 @@ static BOOL layer_file_exists(struct SettingsBase *SettingsBase,
         SETTING_ERROR_IO (see IoErr(); the old file is intact).
 
     NOTES
-        The replace writes <file>.new beside the file and takes the old
-        name in one rename; ram-handler refuses a rename over an existing
-        name, so on ENV: the old file is deleted in the packet before.
+        The replace claims a private sibling directory with CreateDir(),
+        writes and flushes its temporary file, then publishes it with
+        ReplaceObject(). The handler replaces the old directory entry in
+        one operation. Failed publication preserves the old file and any
+        unrelated neighbour. Empty staging directory cleanup happens after
+        publication; its failure leaves the completed replacement valid.
 
     SEE ALSO
         GetSettingA(), ReplaceSettingsA()

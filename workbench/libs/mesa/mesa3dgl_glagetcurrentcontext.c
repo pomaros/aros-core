@@ -35,8 +35,9 @@
 {
     D(bug("[MESA3DGL] %s()\n", __func__));
 
-    GET_CURRENT_CONTEXT(ctx);
-
-    return (GLAContext)ctx;
+    /* The task's current state tracker context names its GLA owner
+     * (glACreateContext sets frontend_context); not Mesa's gl_context. */
+    struct st_context *current = st_api_get_current();
+    return current ? (GLAContext)current->frontend_context : NULL;
 }
 

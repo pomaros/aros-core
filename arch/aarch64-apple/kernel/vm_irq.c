@@ -2,9 +2,13 @@
  * Licensed under the AROS Public License (APL) Version 1.1.
  * VM adapter for the shared GIC and architectural timer. */
 #include <aros/config.h>
+#if defined(AROS_VM_GUEST) && AROS_VM_GUEST
 #include "vm_irq.h"
 #include "gic.h"
 #include "cpu_monitor.h"
+#if defined(__AROSEXEC_SMP__)
+#include "smp.h"
+#endif
 #include <aros/apple/runtime.h>
 #include "kernel_cpu.h"
 #include "kernel_intr.h"
@@ -16,6 +20,24 @@
 static struct AROSGIC controller;
 static int active;
 static uint32_t timer_id;
+#if defined(__AROSEXEC_SMP__)
+static uint32_t timer_trigger;
+static struct AROSGIC secondary_controller[AROS_APPLE_SMP_MAX_CPUS];
+int AROSVMKernelInitSecondary(void)
+{
+    const void *blob; uint64_t bytes; struct AROSEarlyFDT tree;
+    unsigned cpu=AROSCPUCurrentIndex();
+    if (!active || cpu>=AROS_APPLE_SMP_MAX_CPUS ||
+        !AROSAppleKernelRetainedDeviceTree(&blob,&bytes) ||
+        !AROSEarlyFDTOpen(&tree,blob,bytes)) return 0;
+    struct AROSGIC *gic=&secondary_controller[cpu];
+    if (!AROSGICInitCPU(gic,&tree,controller.node) ||
+        !AROSGICEnable(gic,13,1) ||
+        !AROSGICEnable(gic,timer_id,timer_trigger)) return 0;
+    AROSAppleRuntimeSetIRQReady(1);
+    return 1;
+}
+#endif
 static struct KernelBase *irq_base;
 struct AROSGIC *AROSVMKernelBootController(void) { return active ? &controller : NULL; }
 static uint8_t trigger_by_source[1020];
@@ -153,6 +175,10 @@ int AROSVMKernelTimerInitialize(const void *blob, size_t size, struct KernelBase
     if (!AROSGICInit(&controller, &tree, irq.controller) ||
         !AROSGICEnable(&controller, timer_id, trigger))
         return 0;
+#if defined(__AROSEXEC_SMP__)
+    timer_trigger=trigger;
+    if (!AROSGICEnable(&controller, 13, 1)) return 0;
+#endif
     irq_base = base;
     active = 1;
     AROSAppleRuntimeSetIRQReady(1);
@@ -165,6 +191,13 @@ int AROSVMKernelHandleIRQ(struct AROSAppleRuntimeFrame *frame)
 {
     uint32_t token, id;
     struct AROSGIC *local_controller=&controller;
+#if defined(__AROSEXEC_SMP__)
+    unsigned cpu=AROSCPUCurrentIndex();
+    if(cpu!=AROSCPUMonitorTopology()->boot_cpu) {
+        if(cpu>=AROS_APPLE_SMP_MAX_CPUS) return 0;
+        local_controller=&secondary_controller[cpu];
+    }
+#endif
     int handled;
     if (!active || !frame) return 0;
     __asm__ volatile("msr DAIFSet, #3" ::: "memory");
@@ -174,8 +207,16 @@ int AROSVMKernelHandleIRQ(struct AROSAppleRuntimeFrame *frame)
         if (frame->vector != 9) cpu_IdleInterrupted(frame);
         return 1;
     }
+#if defined(__AROSEXEC_SMP__)
+    if (AROSAppleSMPHandleIPI(id)) handled = 1;
+    else
+#endif
     if (AROSCPUProbeHandleIPI(id)) handled = 1;
     else if (id == timer_id) {
+#if defined(__AROSEXEC_SMP__)
+        if(cpu!=AROSCPUMonitorTopology()->boot_cpu) handled=AROSAppleSMPTick();
+        else
+#endif
         handled = AROSVMKernelTimerFire();
     }
     else if (id < controller.limit && registered[id]) {
@@ -185,8 +226,12 @@ int AROSVMKernelHandleIRQ(struct AROSAppleRuntimeFrame *frame)
     if (!handled) AROSGICDisable(local_controller, id);
     /* Deactivate the source before a callback's reschedule takes effect. */
     AROSGICEnd(local_controller, token);
+#if defined(__AROSEXEC_SMP__)
+    AROSAppleSMPCheckStop();
+#endif
     if (!handled) return 0;
     if (frame->vector == 9) core_ExitInterrupt(frame);
     else cpu_IdleInterrupted(frame);
     return 1;
 }
+#endif

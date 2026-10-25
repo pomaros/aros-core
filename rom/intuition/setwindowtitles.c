@@ -6,12 +6,11 @@
 #include <proto/layers.h>
 #include "intuition_intern.h"
 #include "inputhandler_actions.h"
+#include "windowtitle.h"
 
 #ifdef __MORPHOS__
 #   include "renderwindowframe.h"
 #endif
-
-#include <string.h>
 
 struct SetWindowTitlesActionMsg
 {
@@ -103,10 +102,15 @@ static VOID int_setwindowtitles(struct SetWindowTitlesActionMsg *msg,
     }
     else
     {
-        /* FIXME: Should we be strdup()ing this? */
+        struct LayersBase *LayersBase = GetPrivIBase(IntuitionBase)->LayersBase;
+
+        /* The caller's string is borrowed for rendering. Intuition-owned
+         * diagnostics read only the bounded copy taken here. */
         window->Title = (UBYTE *)windowTitle;
-        if (windowTitle)
-        if (strncmp(windowTitle,IW(window)->titlebuffer,TITLEBUFFERLEN) == 0) change = FALSE;
+        LOCK_REFRESH(window->WScreen);
+        if (WindowTitleUnchanged(window, windowTitle)) change = FALSE;
+        WindowTitleCopy(window, windowTitle);
+        UNLOCK_REFRESH(window->WScreen);
     }
 
     if (change)

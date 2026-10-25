@@ -44,6 +44,7 @@ enum
     moHidd_Gallium_DestroyPipeScreen,
     moHidd_Gallium_DisplayResource,
     moHidd_Gallium_DisplayResourceRP,
+    moHidd_Gallium_ReleaseRastPort,
 
     NUM_GALLIUM_METHODS
 };
@@ -105,6 +106,14 @@ struct pHidd_Gallium_DisplayResourceRP
     STACKED LONG                    dsty;
     STACKED LONG                    width;
     STACKED LONG                    height;
+};
+
+/* The rastport (a window's) no longer receives frames: a driver that shows
+ * its frames on a plane of their own takes that plane down. */
+struct pHidd_Gallium_ReleaseRastPort
+{
+    STACKED OOP_MethodID            mID;
+    STACKED struct RastPort         *rastport;
 };
 
 #endif

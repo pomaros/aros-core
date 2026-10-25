@@ -105,6 +105,7 @@ FILES := \
     support \
     support_aros \
     support_classes \
+    scalecontext \
     textengine
 
 FUNCS := \
@@ -114,6 +115,7 @@ FUNCS := \
     mui_aslrequest \
     mui_beginrefresh \
     mui_createcustomclass \
+    mui_setclasscapabilities \
     mui_deletecustomclass \
     mui_disposeobject \
     mui_endrefresh \

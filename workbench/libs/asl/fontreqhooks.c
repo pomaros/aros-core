@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2003, The AROS Development Team. All rights reserved.
 
     Font requester specific code.
@@ -132,14 +133,14 @@ AROS_UFH3(IPTR, SizeListviewRenderFunc,
                                      &te,
                                      NULL,
                                      1,
-                                     max_x - min_x + 1 - BORDERLVITEMSPACINGX * 2,
+                                     max_x - min_x + 1 - AslScaleValue(msg->lvdm_LayoutData, BORDERLVITEMSPACINGX) * 2,
                                      max_y - min_y + 1);
 
                     SetAPen(rp, dri->dri_Pens[textpen]);
 
                     /* Render text */
-                    Move(rp, min_x + BORDERLVITEMSPACINGX,
-                             min_y + BORDERLVITEMSPACINGY + rp->Font->tf_Baseline);
+                    Move(rp, min_x + AslScaleValue(msg->lvdm_LayoutData, BORDERLVITEMSPACINGX),
+                             min_y + AslScaleValue(msg->lvdm_LayoutData, BORDERLVITEMSPACINGY) + rp->Font->tf_Baseline);
                     Text(rp, s, numfit);
                 }
 
@@ -414,7 +415,7 @@ STATIC BOOL FOGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
 #endif
     WORD                sizelvwidth, labelwidth = 0, maxgadcolwidth = 0;
 
-    NEWLIST(&udata->NameListviewList);
+    if (!ld->ld_Rebuilding) NEWLIST(&udata->NameListviewList);
 
     udata->SizeListviewRenderHook.h_Entry      = (APTR)AROS_ASMSYMNAME(SizeListviewRenderFunc);
     udata->SizeListviewRenderHook.h_SubEntry   = NULL;
@@ -424,7 +425,7 @@ STATIC BOOL FOGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
     udata->StringEditHook.h_SubEntry = NULL;
     udata->StringEditHook.h_Data     = AslBase;
 
-    FOGetFonts(ld, AslBase);
+    if (!ld->ld_Rebuilding) FOGetFonts(ld, AslBase);
 
     error = ERROR_NO_FREE_STORE;
 
@@ -448,17 +449,19 @@ STATIC BOOL FOGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
 #endif
         if (ld->ld_TrueColor)
         {
-            x += IMAGEBUTTONEXTRAWIDTH + bi[i].coolimage->width;
+            x += AslScaleValue(ld, IMAGEBUTTONEXTRAWIDTH) + AslScaleValue(ld, bi[i].coolimage->width);
         }
 #endif
 
         if (x > w) w = x;
     }
 
-    udata->ButWidth = w + BUTTONEXTRAWIDTH;
+    udata->ButWidth = w + AslScaleValue(ld, BUTTONEXTRAWIDTH);
 
     ld->ld_ButWidth = udata->ButWidth;
     ld->ld_NumButtons = 4;
+
+    udata->ButHeight = AslScaleValue(ld, BUTTONEXTRAHEIGHT) + ld->ld_Font->tf_YSize;
 
 #if FOREQ_COOL_BUTTONS
 
@@ -466,10 +469,10 @@ STATIC BOOL FOGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
     if (CoolImagesBase)
     {
 #endif
-        y  = BUTTONEXTRAHEIGHT + ld->ld_Font->tf_YSize;
+        y  = AslScaleValue(ld, BUTTONEXTRAHEIGHT) + ld->ld_Font->tf_YSize;
         if (ld->ld_TrueColor)
         {
-            y2 = IMAGEBUTTONEXTRAHEIGHT + DEF_COOLIMAGEHEIGHT;
+            y2 = AslScaleValue(ld, IMAGEBUTTONEXTRAHEIGHT) + AslScaleValue(ld, DEF_COOLIMAGEHEIGHT);
         } else {
             y2 = 0;
         }
@@ -478,12 +481,12 @@ STATIC BOOL FOGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
     }
     else
     {
-        udata->ButHeight = BUTTONEXTRAHEIGHT + ld->ld_Font->tf_YSize;
+        udata->ButHeight = AslScaleValue(ld, BUTTONEXTRAHEIGHT) + ld->ld_Font->tf_YSize;
     }
 #endif
 
 #else
-    udata->ButHeight = BUTTONEXTRAHEIGHT + ld->ld_Font->tf_YSize;
+    udata->ButHeight = AslScaleValue(ld, BUTTONEXTRAHEIGHT) + ld->ld_Font->tf_YSize;
 #endif
 
     gadrows = 2; /* button row + string gadgets under listviews */
@@ -491,32 +494,32 @@ STATIC BOOL FOGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
     if (iforeq->ifo_Flags & FOF_DOSTYLE) gadrows++;
     if (iforeq->ifo_Flags & (FOF_DOFRONTPEN | FOF_DOBACKPEN)) gadrows++;
 
-    ld->ld_MinWidth =  OUTERSPACINGX * 2 +
-                       GADGETSPACINGX * 1 +
+    ld->ld_MinWidth =  AslScaleValue(ld, OUTERSPACINGX) * 2 +
+                       AslScaleValue(ld, GADGETSPACINGX) * 1 +
                        udata->ButWidth * NUMBUTS;
 
-    ld->ld_MinHeight = OUTERSPACINGY * 2 +
-                       (GADGETSPACINGY + udata->ButHeight) * gadrows +
-                       BORDERLVSPACINGY * 2 +
-                       (ld->ld_Font->tf_YSize + BORDERLVITEMSPACINGY * 2) * FOREQ_MIN_VISIBLELINES +
-                       FONTPREVIEWHEIGHT + GADGETSPACINGY -
-                       GADGETSPACINGY; /* because the string gadgets are attached to listview gadgets */
+    ld->ld_MinHeight = AslScaleValue(ld, OUTERSPACINGY) * 2 +
+                       (AslScaleValue(ld, GADGETSPACINGY) + udata->ButHeight) * gadrows +
+                       AslScaleValue(ld, BORDERLVSPACINGY) * 2 +
+                       (ld->ld_Font->tf_YSize + AslScaleValue(ld, BORDERLVITEMSPACINGY) * 2) * FOREQ_MIN_VISIBLELINES +
+                       AslScaleValue(ld, FONTPREVIEWHEIGHT) + AslScaleValue(ld, GADGETSPACINGY) -
+                       AslScaleValue(ld, GADGETSPACINGY); /* because the string gadgets are attached to listview gadgets */
 
     /* make listview gadgets */
 
-    sizelvwidth = PROPSIZE +
+    sizelvwidth = AslScaleValue(ld, PROPSIZE) +
                   FOREQ_VISIBILE_SIZE_CHARS * ld->ld_Font->tf_XSize +
-                  BORDERLVSPACINGX * 2 +
-                  BORDERLVITEMSPACINGX * 2;
+                  AslScaleValue(ld, BORDERLVSPACINGX) * 2 +
+                  AslScaleValue(ld, BORDERLVITEMSPACINGX) * 2;
 
-    x = ld->ld_WBorLeft + OUTERSPACINGX;
-    y = ld->ld_WBorTop + OUTERSPACINGY;
-    w = -ld->ld_WBorRight - ld->ld_WBorLeft - OUTERSPACINGX * 2 - PROPSIZE - GADGETSPACINGX - sizelvwidth;
-    h = -ld->ld_WBorBottom - ld->ld_WBorTop - OUTERSPACINGY * 2 -
+    x = ld->ld_WBorLeft + AslScaleValue(ld, OUTERSPACINGX);
+    y = ld->ld_WBorTop + AslScaleValue(ld, OUTERSPACINGY);
+    w = -ld->ld_WBorRight - ld->ld_WBorLeft - AslScaleValue(ld, OUTERSPACINGX) * 2 - AslScaleValue(ld, PROPSIZE) - AslScaleValue(ld, GADGETSPACINGX) - sizelvwidth;
+    h = -ld->ld_WBorBottom - ld->ld_WBorTop - AslScaleValue(ld, OUTERSPACINGY) * 2 -
         udata->ButHeight * gadrows -
-        GADGETSPACINGY * gadrows -
-        (FONTPREVIEWHEIGHT + GADGETSPACINGY) +
-        GADGETSPACINGY; /* because the string gadgets are attached to listview gadgets */
+        AslScaleValue(ld, GADGETSPACINGY) * gadrows -
+        (AslScaleValue(ld, FONTPREVIEWHEIGHT) + AslScaleValue(ld, GADGETSPACINGY)) +
+        AslScaleValue(ld, GADGETSPACINGY); /* because the string gadgets are attached to listview gadgets */
 
     {
         struct TagItem lv_tags[] =
@@ -535,34 +538,34 @@ STATIC BOOL FOGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
             {TAG_DONE                                                           }
         };
 
-        udata->NameListview = gad = NewObjectA(AslBase->asllistviewclass, NULL, lv_tags);
+        udata->NameListview = gad = AslLayoutObject(ld, AslBase->asllistviewclass, NULL, lv_tags, udata->NameListview, AslBase);
         if (!gad) goto failure;
 
         lv_tags[0].ti_Tag  = GA_RelRight;
-        lv_tags[0].ti_Data = -ld->ld_WBorRight - OUTERSPACINGX - sizelvwidth + 1;
+        lv_tags[0].ti_Data = -ld->ld_WBorRight - AslScaleValue(ld, OUTERSPACINGX) - sizelvwidth + 1;
         lv_tags[2].ti_Tag  = GA_Width;
-        lv_tags[2].ti_Data = sizelvwidth - PROPSIZE;
+        lv_tags[2].ti_Data = sizelvwidth - AslScaleValue(ld, PROPSIZE);
         lv_tags[5].ti_Data = ID_SIZELISTVIEW;
         lv_tags[7].ti_Data = 0;
         lv_tags[8].ti_Tag  = GA_Previous;
         lv_tags[8].ti_Data = (IPTR)gad;
         lv_tags[9].ti_Tag  = ASLLV_CallBack;
 
-        udata->SizeListview = gad = NewObjectA(AslBase->asllistviewclass, NULL, lv_tags);
+        udata->SizeListview = gad = AslLayoutObject(ld, AslBase->asllistviewclass, NULL, lv_tags, udata->SizeListview, AslBase);
         if (!gad) goto failure;
 
     }
 
     /* make scroller gadgets for listviews */
 
-    x = -ld->ld_WBorRight - OUTERSPACINGX - PROPSIZE - sizelvwidth - GADGETSPACINGX + 1;
-    y = ld->ld_WBorTop + OUTERSPACINGY;
-    w = PROPSIZE;
-    h = -ld->ld_WBorBottom - ld->ld_WBorTop - OUTERSPACINGY * 2 -
+    x = -ld->ld_WBorRight - AslScaleValue(ld, OUTERSPACINGX) - AslScaleValue(ld, PROPSIZE) - sizelvwidth - AslScaleValue(ld, GADGETSPACINGX) + 1;
+    y = ld->ld_WBorTop + AslScaleValue(ld, OUTERSPACINGY);
+    w = AslScaleValue(ld, PROPSIZE);
+    h = -ld->ld_WBorBottom - ld->ld_WBorTop - AslScaleValue(ld, OUTERSPACINGY) * 2 -
         udata->ButHeight * gadrows -
-        GADGETSPACINGY * gadrows -
-        (FONTPREVIEWHEIGHT + GADGETSPACINGY) +
-        GADGETSPACINGY;
+        AslScaleValue(ld, GADGETSPACINGY) * gadrows -
+        (AslScaleValue(ld, FONTPREVIEWHEIGHT) + AslScaleValue(ld, GADGETSPACINGY)) +
+        AslScaleValue(ld, GADGETSPACINGY);
     {
         struct TagItem scroller_tags[] =
         {
@@ -584,7 +587,7 @@ STATIC BOOL FOGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
         if (!makescrollergadget(&udata->NameScrollGad, ld, scroller_tags, AslBase)) goto failure;
         gad = udata->NameScrollGad.arrow2;
 
-        scroller_tags[0].ti_Data  = x + sizelvwidth + GADGETSPACINGX;
+        scroller_tags[0].ti_Data  = x + sizelvwidth + AslScaleValue(ld, GADGETSPACINGX);
         scroller_tags[1].ti_Data  = y;
         scroller_tags[2].ti_Data  = w;
         scroller_tags[3].ti_Data  = h;
@@ -601,10 +604,10 @@ STATIC BOOL FOGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
 
     /* make preview gadget */
 
-    x = ld->ld_WBorLeft + OUTERSPACINGX;
-    y = -ld->ld_WBorBottom - OUTERSPACINGY - udata->ButHeight -
-        GADGETSPACINGY - FONTPREVIEWHEIGHT;
-    w = -ld->ld_WBorRight - ld->ld_WBorLeft - OUTERSPACINGX * 2;
+    x = ld->ld_WBorLeft + AslScaleValue(ld, OUTERSPACINGX);
+    y = -ld->ld_WBorBottom - AslScaleValue(ld, OUTERSPACINGY) - udata->ButHeight -
+        AslScaleValue(ld, GADGETSPACINGY) - AslScaleValue(ld, FONTPREVIEWHEIGHT);
+    w = -ld->ld_WBorRight - ld->ld_WBorLeft - AslScaleValue(ld, OUTERSPACINGX) * 2;
 
     {
         struct TagItem preview_tags[] =
@@ -612,7 +615,7 @@ STATIC BOOL FOGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
             {GA_Left            , x                                 },
             {GA_RelBottom       , y                                 },
             {GA_RelWidth        , w                                 },
-            {GA_Height          , FONTPREVIEWHEIGHT                 },
+            {GA_Height          , AslScaleValue(ld, FONTPREVIEWHEIGHT)                 },
             {GA_Previous        , (IPTR)gad                         },
             {GA_ID              , ID_PREVIEW                        },
             {ASLFP_SampleText   , (IPTR)iforeq->ifo_SampleText      },
@@ -621,18 +624,18 @@ STATIC BOOL FOGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
             {TAG_DONE                                               }
         };
 
-        udata->Preview = gad = NewObjectA(AslBase->aslfontpreviewclass, NULL, preview_tags);
+        udata->Preview = gad = AslLayoutObject(ld, AslBase->aslfontpreviewclass, NULL, preview_tags, udata->Preview, AslBase);
         if (!gad) goto failure;
     }
 
     /* make string gadgets */
 
-    x = ld->ld_WBorLeft + OUTERSPACINGX;
-    y = -ld->ld_WBorBottom - OUTERSPACINGY - udata->ButHeight -
-        (udata->ButHeight + GADGETSPACINGY) * (gadrows - 1) -
-        (FONTPREVIEWHEIGHT + GADGETSPACINGY) + 1;
+    x = ld->ld_WBorLeft + AslScaleValue(ld, OUTERSPACINGX);
+    y = -ld->ld_WBorBottom - AslScaleValue(ld, OUTERSPACINGY) - udata->ButHeight -
+        (udata->ButHeight + AslScaleValue(ld, GADGETSPACINGY)) * (gadrows - 1) -
+        (AslScaleValue(ld, FONTPREVIEWHEIGHT) + AslScaleValue(ld, GADGETSPACINGY)) + 1;
 
-    w = -ld->ld_WBorRight - ld->ld_WBorLeft - OUTERSPACINGX * 2 - GADGETSPACINGX - sizelvwidth;
+    w = -ld->ld_WBorRight - ld->ld_WBorLeft - AslScaleValue(ld, OUTERSPACINGX) * 2 - AslScaleValue(ld, GADGETSPACINGX) - sizelvwidth;
 
     {
         struct TagItem string_tags[] =
@@ -653,11 +656,11 @@ STATIC BOOL FOGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
             {TAG_DONE                                               }
         };
 
-        udata->NameString = gad = NewObjectA(AslBase->aslstringclass, NULL, string_tags);
+        udata->NameString = gad = AslLayoutObject(ld, AslBase->aslstringclass, NULL, string_tags, udata->NameString, AslBase);
         if (!gad) goto failure;
 
         string_tags[0].ti_Tag  = GA_RelRight;
-        string_tags[0].ti_Data = -ld->ld_WBorRight - OUTERSPACINGX - sizelvwidth + 1;
+        string_tags[0].ti_Data = -ld->ld_WBorRight - AslScaleValue(ld, OUTERSPACINGX) - sizelvwidth + 1;
         string_tags[2].ti_Tag  = GA_Width;
         string_tags[2].ti_Data = sizelvwidth;
         string_tags[4].ti_Data = (IPTR)gad;
@@ -666,14 +669,14 @@ STATIC BOOL FOGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
         string_tags[6].ti_Data = 6;
         string_tags[8].ti_Data = ID_SIZESTRING;
 
-        udata->SizeString = gad = NewObjectA(AslBase->aslstringclass, NULL, string_tags);
+        udata->SizeString = gad = AslLayoutObject(ld, AslBase->aslstringclass, NULL, string_tags, udata->SizeString, AslBase);
         if (!gad) goto failure;
 
     }
 
     /* make button row */
 
-    y = -ld->ld_WBorBottom - OUTERSPACINGY - udata->ButHeight + 1;
+    y = -ld->ld_WBorBottom - AslScaleValue(ld, OUTERSPACINGY) - udata->ButHeight + 1;
 
     {
         struct TagItem button_tags[] =
@@ -706,7 +709,7 @@ STATIC BOOL FOGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
         #endif
             button_tags[3].ti_Data = (IPTR)bi[i].coolimage;
 
-            *(bi[i].objvar) = gad = NewObjectA(AslBase->aslbuttonclass, NULL, button_tags);
+            *(bi[i].objvar) = gad = AslLayoutObject(ld, AslBase->aslbuttonclass, NULL, button_tags, *(bi[i].objvar), AslBase);
             if (!gad) goto failure;
         }
 
@@ -716,10 +719,10 @@ STATIC BOOL FOGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
 
     i = 0;
 
-    x = ld->ld_WBorLeft + OUTERSPACINGX;
-    y = -ld->ld_WBorBottom - OUTERSPACINGY - udata->ButHeight -
-        (udata->ButHeight + GADGETSPACINGY) * (gadrows - 2) -
-        (FONTPREVIEWHEIGHT + GADGETSPACINGY) + 1;
+    x = ld->ld_WBorLeft + AslScaleValue(ld, OUTERSPACINGX);
+    y = -ld->ld_WBorBottom - AslScaleValue(ld, OUTERSPACINGY) - udata->ButHeight -
+        (udata->ButHeight + AslScaleValue(ld, GADGETSPACINGY)) * (gadrows - 2) -
+        (AslScaleValue(ld, FONTPREVIEWHEIGHT) + AslScaleValue(ld, GADGETSPACINGY)) + 1;
 
     if (iforeq->ifo_Flags & (FOF_DODRAWMODE | FOF_DOSTYLE | FOF_DOFRONTPEN | FOF_DOBACKPEN))
     {
@@ -799,18 +802,18 @@ STATIC BOOL FOGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
             label_tags[4].ti_Data = (IPTR)li[i].text;
             label_tags[5].ti_Data = (IPTR)gad;
 
-            *(li[i].objvar) = gad = NewObjectA(AslBase->aslbuttonclass, NULL, label_tags);
+            *(li[i].objvar) = gad = AslLayoutObject(ld, AslBase->aslbuttonclass, NULL, label_tags, *(li[i].objvar), AslBase);
             if (!gad) goto failure;
 
-            y += udata->ButHeight + GADGETSPACINGY;
+            y += udata->ButHeight + AslScaleValue(ld, GADGETSPACINGY);
             label_tags[1].ti_Data = y;
         }
 
-        y = -ld->ld_WBorBottom - OUTERSPACINGY - udata->ButHeight -
-            (udata->ButHeight + GADGETSPACINGY) * (gadrows - 2) -
-            (FONTPREVIEWHEIGHT + GADGETSPACINGY) + 1;
+        y = -ld->ld_WBorBottom - AslScaleValue(ld, OUTERSPACINGY) - udata->ButHeight -
+            (udata->ButHeight + AslScaleValue(ld, GADGETSPACINGY)) * (gadrows - 2) -
+            (AslScaleValue(ld, FONTPREVIEWHEIGHT) + AslScaleValue(ld, GADGETSPACINGY)) + 1;
 
-        x = ld->ld_WBorLeft + OUTERSPACINGX + w + LABELSPACINGX;
+        x = ld->ld_WBorLeft + AslScaleValue(ld, OUTERSPACINGX) + w + AslScaleValue(ld, LABELSPACINGX);
 
         /* Make Style gadget */
 
@@ -845,10 +848,10 @@ STATIC BOOL FOGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
 
             if (w > maxgadcolwidth) maxgadcolwidth = w;
 
-            udata->StyleGadget = gad = NewObjectA(AslBase->aslfontstyleclass, NULL, style_tags);
+            udata->StyleGadget = gad = AslLayoutObject(ld, AslBase->aslfontstyleclass, NULL, style_tags, udata->StyleGadget, AslBase);
             if (!gad) goto failure;
 
-            y += udata->ButHeight + GADGETSPACINGY;
+            y += udata->ButHeight + AslScaleValue(ld, GADGETSPACINGY);
 
         }
 
@@ -875,10 +878,10 @@ STATIC BOOL FOGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
 
             };
 
-            udata->FGColorGadget = gad = NewObjectA(AslBase->aslcolorpickerclass, NULL, cp_tags);
+            udata->FGColorGadget = gad = AslLayoutObject(ld, AslBase->aslcolorpickerclass, NULL, cp_tags, udata->FGColorGadget, AslBase);
             if (!gad) goto failure;
 
-            x += w + GADGETSPACINGX;
+            x += w + AslScaleValue(ld, GADGETSPACINGX);
         }
 
         /* Make BackPen gadget */
@@ -902,7 +905,7 @@ STATIC BOOL FOGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
 
             };
 
-            udata->BGColorGadget = gad = NewObjectA(AslBase->aslcolorpickerclass, NULL, cp_tags);
+            udata->BGColorGadget = gad = AslLayoutObject(ld, AslBase->aslcolorpickerclass, NULL, cp_tags, udata->BGColorGadget, AslBase);
             if (!gad) goto failure;
 
         }
@@ -911,21 +914,21 @@ STATIC BOOL FOGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
         {
             if ((iforeq->ifo_Flags & (FOF_DOFRONTPEN | FOF_DOBACKPEN)) == (FOF_DOFRONTPEN | FOF_DOBACKPEN))
             {
-                w += GADGETSPACINGX + w;
+                w += AslScaleValue(ld, GADGETSPACINGX) + w;
             }
 
             if (w > maxgadcolwidth) maxgadcolwidth = w;
 
-            y += udata->ButHeight + GADGETSPACINGY;
+            y += udata->ButHeight + AslScaleValue(ld, GADGETSPACINGY);
         }
 
 
         /* Make DrawMode gadget */
 
-        x = ld->ld_WBorLeft + OUTERSPACINGX + labelwidth + LABELSPACINGX;
+        x = ld->ld_WBorLeft + AslScaleValue(ld, OUTERSPACINGX) + labelwidth + AslScaleValue(ld, LABELSPACINGX);
 
-        w = -ld->ld_WBorLeft - ld->ld_WBorRight - OUTERSPACINGX * 2 -
-            labelwidth - LABELSPACINGX;
+        w = -ld->ld_WBorLeft - ld->ld_WBorRight - AslScaleValue(ld, OUTERSPACINGX) * 2 -
+            labelwidth - AslScaleValue(ld, LABELSPACINGX);
 
 
         if (iforeq->ifo_Flags & FOF_DODRAWMODE)
@@ -971,16 +974,16 @@ STATIC BOOL FOGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
 
             cycle_tags[8].ti_Data = (IPTR)labels;
 
-            i = CYCLEEXTRAWIDTH +  BiggestTextLength(labels,
+            i = AslScaleValue(ld, CYCLEEXTRAWIDTH) +  BiggestTextLength(labels,
                                                      0x7FFF,
                                                      &(ld->ld_DummyRP),
                                                      AslBase);
             if (i > maxgadcolwidth) maxgadcolwidth = i;
 
-            udata->DrawModeGadget = gad = NewObjectA(AslBase->aslcycleclass, NULL, cycle_tags);
+            udata->DrawModeGadget = gad = AslLayoutObject(ld, AslBase->aslcycleclass, NULL, cycle_tags, udata->DrawModeGadget, AslBase);
             if (!gad) goto failure;
 
-            y += udata->ButHeight + GADGETSPACINGY;
+            y += udata->ButHeight + AslScaleValue(ld, GADGETSPACINGY);
 
         } /* if (iforeq->ifo_Flags & FOF_DODRAWMODE) */
 
@@ -994,17 +997,22 @@ STATIC BOOL FOGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
             {TAG_DONE}
         };
 
-        udata->EraserGadget = gad = NewObjectA(AslBase->asleraserclass, NULL, eraser_tags);
+        udata->EraserGadget = gad = AslLayoutObject(ld, AslBase->asleraserclass, NULL, eraser_tags, udata->EraserGadget, AslBase);
         /* Doesn't matter if this failed */
     }
 #endif
 
-    w = OUTERSPACINGX + labelwidth + LABELSPACINGX + maxgadcolwidth + OUTERSPACINGX;
+    w = AslScaleValue(ld, OUTERSPACINGX) + labelwidth + AslScaleValue(ld, LABELSPACINGX) + maxgadcolwidth + AslScaleValue(ld, OUTERSPACINGX);
     if (w > ld->ld_MinWidth) ld->ld_MinWidth = w;
+
+    /* Public native limits are outer extents. The content minimum above
+     * excludes frame metrics, while every relative gadget subtracts them. */
+    ld->ld_MinWidth += ld->ld_WBorLeft + ld->ld_WBorRight;
+    ld->ld_MinHeight += ld->ld_WBorTop + ld->ld_WBorBottom;
 
     ld->ld_GList = (struct Gadget *)udata->NameListview;
 
-    /* Menus */
+    /* Menus are detached and owned by this generation. */
     {
         struct NewMenu nm[] =
         {
@@ -1043,7 +1051,7 @@ STATIC BOOL FOGadInit(struct LayoutData *ld, struct AslBase_intern *AslBase)
         }
     }
 
-    FORestore(ld, iforeq->ifo_TextAttr.ta_Name, iforeq->ifo_TextAttr.ta_YSize,  AslBase);
+    if (!ld->ld_Rebuilding) FORestore(ld, iforeq->ifo_TextAttr.ta_Name, iforeq->ifo_TextAttr.ta_YSize,  AslBase);
 
     SetIoErr(0);
     ReturnBool ("FOGadInit", TRUE);
@@ -1053,7 +1061,7 @@ failure:
 
     D(bug("failure\n"));
 
-    FOGadCleanup(ld, ASLB(AslBase));
+    if (!ld->ld_Rebuilding) FOGadCleanup(ld, ASLB(AslBase));
 
     ReturnBool ("FOGadInit", FALSE);
 
@@ -1161,7 +1169,7 @@ STATIC ULONG FOHandleEvents(struct LayoutData *ld, struct AslBase_intern *AslBas
                         GetAttr(ASLLV_Active, udata->NameListview, &active);
                         GetAttr(STRINGA_LongVal, udata->SizeString, &size);
 
-                        if ((fontnode = (struct ASLLVFontReqNode *)FindListNode(&udata->NameListviewList, (WORD)active)))
+                        if ((fontnode = (struct ASLLVFontReqNode *)FindListNode(&udata->NameListviewList, (LONG)active)))
                         {
                             FOActivateFont(ld, active, (LONG)size, AslBase);
 
@@ -1182,7 +1190,7 @@ STATIC ULONG FOHandleEvents(struct LayoutData *ld, struct AslBase_intern *AslBas
 
                         GetAttr(ASLLV_Active, udata->SizeListview, &active);
 
-                        if ((node = FindListNode(&udata->ActiveFont->SizeList, (WORD)active)))
+                        if ((node = FindListNode(&udata->ActiveFont->SizeList, (LONG)active)))
                         {
                             FOSetSizeString((IPTR)node->ln_Name, ld, AslBase);
                             FOUpdatePreview(ld, AslBase);
@@ -1337,10 +1345,10 @@ STATIC VOID FOGadCleanup(struct LayoutData *ld, struct AslBase_intern *AslBase)
         RemoveGList(ld->ld_Window, ld->ld_GList, -1);
     }
 
-    killscrollergadget(&udata->NameScrollGad, AslBase);
-    killscrollergadget(&udata->SizeScrollGad, AslBase);
+    killscrollergadget(&udata->NameScrollGad, ld, AslBase);
+    killscrollergadget(&udata->SizeScrollGad, ld, AslBase);
 
-    FreeObjects(&FOREQ_FIRST_OBJECT(udata), &FOREQ_LAST_OBJECT(udata), AslBase);
+    FreeObjects(&FOREQ_FIRST_OBJECT(udata), &FOREQ_LAST_OBJECT(udata), ld, AslBase);
 
     FOFreeFonts(ld, AslBase);
 
@@ -1348,10 +1356,10 @@ STATIC VOID FOGadCleanup(struct LayoutData *ld, struct AslBase_intern *AslBase)
 
     if (ld->ld_Window)
     {
-        req->fo_LeftEdge = intreq->ir_LeftEdge = ld->ld_Window->LeftEdge;
-        req->fo_TopEdge  = intreq->ir_TopEdge  = ld->ld_Window->TopEdge;
-        req->fo_Width    = intreq->ir_Width    = ld->ld_Window->Width;
-        req->fo_Height   = intreq->ir_Height   = ld->ld_Window->Height;
+        req->fo_LeftEdge = intreq->ir_LeftEdge = AslUnscaleValue(ld, ld->ld_Window->LeftEdge);
+        req->fo_TopEdge  = intreq->ir_TopEdge  = AslUnscaleValue(ld, ld->ld_Window->TopEdge);
+        req->fo_Width    = intreq->ir_Width    = AslUnscaleValue(ld, ld->ld_Window->Width);
+        req->fo_Height   = intreq->ir_Height   = AslUnscaleValue(ld, ld->ld_Window->Height);
     }
 
     ReturnVoid("FOGadCleanup");

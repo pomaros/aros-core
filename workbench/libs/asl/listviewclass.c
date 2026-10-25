@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2011, The AROS Development Team. All rights reserved.
 */
 
@@ -23,6 +24,7 @@
 
 #include "asl_intern.h"
 #include "layout.h"
+#include "propunits.h"
 
 #define SDEBUG 0
 #define DEBUG 0
@@ -94,7 +96,7 @@ AROS_UFH3(IPTR, ASLLVRenderHook,
                                      &te,
                                      NULL,
                                      1,
-                                     max_x - min_x + 1 - BORDERLVITEMSPACINGX * 2,
+                                     max_x - min_x + 1 - AslScaleValue(((struct LayoutData *)hook->h_Data), BORDERLVITEMSPACINGX) * 2,
                                      max_y - min_y + 1);
 
                     if (numfit < len) numfit++;
@@ -102,8 +104,8 @@ AROS_UFH3(IPTR, ASLLVRenderHook,
                     SetAPen(rp, dri->dri_Pens[textpen]);
 
                     /* Render text */
-                    Move(rp, min_x + BORDERLVITEMSPACINGX,
-                             min_y + BORDERLVITEMSPACINGY + rp->Font->tf_Baseline);
+                    Move(rp, min_x + AslScaleValue(((struct LayoutData *)hook->h_Data), BORDERLVITEMSPACINGX),
+                             min_y + AslScaleValue(((struct LayoutData *)hook->h_Data), BORDERLVITEMSPACINGY) + rp->Font->tf_Baseline);
                     Text(rp, node->ln_Name, numfit);
                 }
 
@@ -127,7 +129,7 @@ AROS_UFH3(IPTR, ASLLVRenderHook,
 #undef AslBase
 #define AslBase CLASS_ASLBASE
 
-static struct Node *findnode(Class *cl, Object *o, WORD which)
+static struct Node *findnode(Class *cl, Object *o, LONG which)
 {
     struct AslListViewData      *data;
     struct Node                 *node = NULL;
@@ -187,9 +189,10 @@ static void renderitem(Class *cl, Object *o, struct Node *node, WORD liney, stru
     msg.lvdm_MethodID = ASLLV_DRAW;
     msg.lvdm_RastPort = rp;
     msg.lvdm_DrawInfo = data->ld->ld_Dri;
-    msg.lvdm_Bounds.MinX  = data->minx + BORDERLVSPACINGX;
-    msg.lvdm_Bounds.MaxX  = data->maxx - BORDERLVSPACINGX;
-    msg.lvdm_Bounds.MinY  = data->miny + BORDERLVSPACINGY + liney * data->lineheight -
+    msg.lvdm_LayoutData = data->ld;
+    msg.lvdm_Bounds.MinX  = data->minx + AslScaleValue(data->ld, BORDERLVSPACINGX);
+    msg.lvdm_Bounds.MaxX  = data->maxx - AslScaleValue(data->ld, BORDERLVSPACINGX);
+    msg.lvdm_Bounds.MinY  = data->miny + AslScaleValue(data->ld, BORDERLVSPACINGY) + liney * data->lineheight -
                             (data->toppixel % data->lineheight);
     msg.lvdm_Bounds.MaxY  = msg.lvdm_Bounds.MinY + data->lineheight - 1;
     msg.lvdm_State = node ? (IS_SELECTED(node) ? ASLLVR_SELECTED : ASLLVR_NORMAL) : ASLLVR_NORMAL;
@@ -232,7 +235,7 @@ static void renderallitems(Class *cl, Object *o, struct RastPort *rp)
 
 /***********************************************************************************/
 
-static void rendersingleitem(Class *cl, Object *o, struct GadgetInfo *gi, WORD which)
+static void rendersingleitem(Class *cl, Object *o, struct GadgetInfo *gi, LONG which)
 {
     struct AslListViewData *data;
 
@@ -270,32 +273,32 @@ static void rendersingleitem(Class *cl, Object *o, struct GadgetInfo *gi, WORD w
 
 /***********************************************************************************/
 
-static WORD mouseitem(Class *cl, Object *o, WORD mousex, WORD mousey)
+static LONG mouseitem(Class *cl, Object *o, WORD mousex, WORD mousey)
 {
     struct AslListViewData      *data;
-    WORD                        result = -5;
+    LONG                        result = -5;
 
     data = INST_DATA(cl, o);
 
-    if (mousey < BORDERLVSPACINGY)
+    if (mousey < AslScaleValue(data->ld, BORDERLVSPACINGY))
     {
         result = -1;
     }
-    else if (mousey > data->maxy - data->miny - BORDERLVSPACINGY)
+    else if (mousey > data->maxy - data->miny - AslScaleValue(data->ld, BORDERLVSPACINGY))
     {
         result = -2;
     }
-    else if (mousex < BORDERLVSPACINGX)
+    else if (mousex < AslScaleValue(data->ld, BORDERLVSPACINGX))
     {
         result = -3;
     }
-    else if (mousex > data->maxx - data->minx - BORDERLVSPACINGX)
+    else if (mousex > data->maxx - data->minx - AslScaleValue(data->ld, BORDERLVSPACINGX))
     {
         result = -4;
     }
     else
     {
-        LONG i = (mousey - BORDERLVSPACINGY + (data->toppixel % data->lineheight)) / data->lineheight;
+        LONG i = (mousey - AslScaleValue(data->ld, BORDERLVSPACINGY) + (data->toppixel % data->lineheight)) / data->lineheight;
         LONG visible;
 
         visible = data->visiblepixels + data->lineheight - 1 + (data->toppixel % data->lineheight);
@@ -324,8 +327,12 @@ static WORD mouseitem(Class *cl, Object *o, WORD mousex, WORD mousey)
 static void notifyall(Class *cl, Object *o, struct GadgetInfo *gi, STACKULONG flags)
 {
     struct AslListViewData      *data = INST_DATA(cl, o);
+    struct AslPropUnits units = AslPropEncode(data->totalpixels, data->visiblepixels, data->toppixel);
     struct TagItem              tags[] =
     {
+        {ASLLV_PropTop, units.top},
+        {ASLLV_PropTotal, units.total},
+        {ASLLV_PropVisible, units.visible},
         {ASLLV_Top          , data->top             },
         {ASLLV_TopPixel     , data->toppixel        },
         {ASLLV_Total        , data->total           },
@@ -356,8 +363,12 @@ static void notifyall(Class *cl, Object *o, struct GadgetInfo *gi, STACKULONG fl
 static void notifytop(Class *cl, Object *o, struct GadgetInfo *gi, STACKULONG flags)
 {
     struct AslListViewData      *data = INST_DATA(cl, o);
+    struct AslPropUnits units = AslPropEncode(data->totalpixels, data->visiblepixels, data->toppixel);
     struct TagItem              tags[] =
     {
+        {ASLLV_PropTop, units.top},
+        {ASLLV_PropTotal, units.total},
+        {ASLLV_PropVisible, units.visible},
         {ASLLV_Top      , data->top     },
         {ASLLV_TopPixel , data->toppixel},
         {TAG_DONE                       }
@@ -393,13 +404,25 @@ IPTR AslListView__OM_SET(Class * cl, Object * o, struct opSet * msg)
 
         switch(tag->ti_Tag)
         {
+            case ASLLV_PropTop:
+                tidata = AslPropDecode(data->totalpixels, data->visiblepixels, data->toppixel, tidata);
+                goto set_top_pixel;
+
+            case ASLLV_ScrollPixels:
+            {
+                QUAD wanted = (QUAD)data->toppixel + (LONG)tidata;
+                tidata = wanted < 0 ? 0 : wanted > data->totalpixels ? data->totalpixels : (LONG)wanted;
+                goto set_top_pixel;
+            }
+
             case ASLLV_Top:
                 tidata *= data->lineheight;
                 /* fall through */
 
             case ASLLV_TopPixel:
+set_top_pixel:
                 newtop = tidata;
-                if (newtop + data->visiblepixels > data->totalpixels)
+                if (newtop > data->totalpixels - data->visiblepixels)
                 {
                     newtop = data->totalpixels - data->visiblepixels;
                 }
@@ -428,39 +451,31 @@ IPTR AslListView__OM_SET(Class * cl, Object * o, struct opSet * msg)
                     if (newtop < 0) newtop = 0;
                 }
 
-                /* No need to do anything if it is already visible */
-
+                /* Keep MakeVisible on the same exact-pixel clamping path,
+                 * including a viewport shorter than one row. */
                 if (newtop < data->toppixel)
                 {
-                    /* new_top already okay */
-
-                    data->scroll   = redraw ? 0 : newtop - data->toppixel;
-                    data->top      = newtop / data->lineheight;
-                    data->toppixel = newtop;
-                    notify_top     = TRUE;
-                    redraw         = TRUE;
+                    tidata = newtop;
+                    goto set_top_pixel;
                 }
                 else if (newtop > data->toppixel + data->visiblepixels - data->lineheight)
                 {
-                    newtop -= (data->visiblepixels - data->lineheight);
-                    data->scroll   = redraw ? 0 : newtop - data->toppixel;
-                    data->top      = newtop / data->lineheight;
-                    data->toppixel = newtop;
-                    notify_top     = TRUE;
-                    redraw         = TRUE;
+                    LONG inset = data->visiblepixels - data->lineheight;
+                    tidata = newtop - (inset > 0 ? inset : 0);
+                    goto set_top_pixel;
                 }
                 break;
 
             case ASLLV_Active:
                 {
                     struct Node *node;
-                    WORD        old_active = data->active;
+                    LONG        old_active = data->active;
 
-                    data->active = (WORD)tidata;
+                    data->active = (LONG)tidata;
 
                     if (data->domultiselect)
                     {
-                        WORD n = 0;
+                        LONG n = 0;
                         ForeachNode(data->labels, node)
                         {
                             if (IS_MULTISEL(node) && IS_SELECTED(node) && (n != data->active))
@@ -491,8 +506,14 @@ IPTR AslListView__OM_SET(Class * cl, Object * o, struct opSet * msg)
                 break;
 
             case ASLLV_Labels:
-                data->labels = tidata ? (struct List *)tidata : &data->emptylist;
-                data->total = CountNodes(data->labels, 0);
+            {
+                struct List *labels = tidata ? (struct List *)tidata : &data->emptylist;
+                LONG total = CountNodes(labels, 0);
+                /* Keep the previous list when its exact pixel extent cannot
+                 * be represented. Prop normalization never narrows pixels. */
+                if (total < 0 || data->lineheight <= 0 || total > 2147483647 / data->lineheight) break;
+                data->labels = labels;
+                data->total = total;
                 data->totalpixels = data->total * data->lineheight;
                 data->active = -1;
 
@@ -520,6 +541,7 @@ IPTR AslListView__OM_SET(Class * cl, Object * o, struct opSet * msg)
                 notify_all = TRUE;
                 redraw     = TRUE;
                 break;
+            }
 
             case ASLLV_DoMultiSelect:
                 data->domultiselect = tidata ? TRUE : FALSE;
@@ -587,12 +609,13 @@ IPTR AslListView__OM_NEW(Class * cl, Object * o, struct opSet * msg)
     if (g)
     {
         data = INST_DATA(cl, g);
+        data->ld = (struct LayoutData *)GetTagData(GA_UserData, 0, msg->ops_AttrList);
 
         /* We want to get a GM_LAYOUT message, no matter if gadget is GFLG_RELRIGHT/RELBOTTOM/
            RELWIDTH/RELHEIGHT or not */
         g->Flags |= GFLG_RELSPECIAL;
 
-        data->frame = NewObjectA(NULL, FRAMEICLASS, fitags);
+        data->frame = AslFrame((struct LayoutData *)GetTagData(GA_UserData, 0, msg->ops_AttrList), fitags, AslBase);
         data->ld = (struct LayoutData *)GetTagData(GA_UserData, 0, msg->ops_AttrList);
 
         if (!data->ld || !data->frame)
@@ -603,7 +626,7 @@ IPTR AslListView__OM_NEW(Class * cl, Object * o, struct opSet * msg)
         else
         {
            data->itemheight = GetTagData(ASLLV_ItemHeight, data->ld->ld_Font->tf_YSize, msg->ops_AttrList);
-           data->spacing    = GetTagData(ASLLV_Spacing, BORDERLVITEMSPACINGY * 2, msg->ops_AttrList);
+           data->spacing    = GetTagData(ASLLV_Spacing, AslScaleValue(data->ld, BORDERLVITEMSPACINGY) * 2, msg->ops_AttrList);
 
            data->lineheight = data->itemheight + data->spacing;
 
@@ -615,7 +638,7 @@ IPTR AslListView__OM_NEW(Class * cl, Object * o, struct opSet * msg)
            data->renderhook = (struct Hook *)GetTagData(ASLLV_CallBack, 0, msg->ops_AttrList);
            data->default_renderhook.h_Entry = (APTR) AROS_ASMSYMNAME(ASLLVRenderHook);
            data->default_renderhook.h_SubEntry = NULL;
-           data->default_renderhook.h_Data = (APTR)AslBase;
+           data->default_renderhook.h_Data = (APTR)data->ld;
            if (!data->renderhook) data->renderhook = &data->default_renderhook;
 
            AslListView__OM_SET(cl, (Object *)g, msg);
@@ -636,6 +659,10 @@ IPTR AslListView__OM_GET(Class * cl, Object * o, struct opGet *msg)
 
     switch(msg->opg_AttrID)
     {
+        case ASLLV_Labels:
+            *msg->opg_Storage = (IPTR)data->labels;
+            break;
+
         case ASLLV_Active:
             *msg->opg_Storage = data->active;
             break;
@@ -693,7 +720,7 @@ IPTR AslListView__OM_DISPOSE(Class * cl, Object * o, Msg msg)
 IPTR AslListView__GM_GOACTIVE(Class *cl, Object *o, struct gpInput *msg)
 {
     struct AslListViewData      *data;
-    WORD                        i;
+    LONG                        i;
     IPTR                        retval = GMR_NOREUSE;
 
     data = INST_DATA(cl, o);
@@ -723,7 +750,7 @@ IPTR AslListView__GM_GOACTIVE(Class *cl, Object *o, struct gpInput *msg)
                 if (data->domultiselect)
                 {
                     struct Node *node;
-                    WORD        n = 0;
+                    LONG        n = 0;
 
                     ForeachNode(data->labels, node)
                     {
@@ -804,7 +831,7 @@ IPTR AslListView__GM_HANDLEINPUT(Class *cl, Object *o, struct gpInput *msg)
 
                 case IECODE_NOBUTTON:
                 {
-                    WORD n = mouseitem(cl, o, msg->gpi_Mouse.X, msg->gpi_Mouse.Y);
+                    LONG n = mouseitem(cl, o, msg->gpi_Mouse.X, msg->gpi_Mouse.Y);
 
                     if ((n == -1) && (data->active > 0)) n = data->active - 1;
                     if ((n == -2) && (data->active < data->total - 1)) n = data->active + 1;
@@ -938,7 +965,7 @@ IPTR AslListView__GM_LAYOUT(Class *cl, struct Gadget *g, struct gpLayout *msg)
         data->maxx = data->minx + data->width  - 1;
         data->maxy = data->miny + data->height - 1;
 
-        newvisible = (data->height - BORDERLVSPACINGY * 2);
+        newvisible = (data->height - AslScaleValue(data->ld, BORDERLVSPACINGY) * 2);
         if (newtop + newvisible > data->totalpixels)
         {
             newtop = data->totalpixels - newvisible;
@@ -991,7 +1018,7 @@ IPTR AslListView__GM_RENDER(Class *cl, Object *o, struct gpRender *msg)
                        data->minx,
                        data->miny,
                        IDS_NORMAL,
-                       msg->gpr_GInfo->gi_DrInfo);
+                       data->ld->ld_Dri);
     #if AVOID_FLICKER
         {
             struct IBox ibox, fbox;
@@ -1001,17 +1028,17 @@ IPTR AslListView__GM_RENDER(Class *cl, Object *o, struct gpRender *msg)
             fbox.Width = data->maxx  - data->minx + 1;
             fbox.Height = data->maxy - data->miny + 1;
 
-            ibox.Left = data->minx + BORDERLVSPACINGX;
-            ibox.Top = data->miny  + BORDERLVSPACINGY;
-            ibox.Width = (data->maxx - data->minx + 1) - BORDERLVSPACINGX * 2;
-            ibox.Height = (data->maxy - data->miny + 1) - BORDERLVSPACINGY * 2;
+            ibox.Left = data->minx + AslScaleValue(data->ld, BORDERLVSPACINGX);
+            ibox.Top = data->miny  + AslScaleValue(data->ld, BORDERLVSPACINGY);
+            ibox.Width = (data->maxx - data->minx + 1) - AslScaleValue(data->ld, BORDERLVSPACINGX) * 2;
+            ibox.Height = (data->maxy - data->miny + 1) - AslScaleValue(data->ld, BORDERLVSPACINGY) * 2;
 
             PaintInnerFrame(msg->gpr_RPort,
-                            msg->gpr_GInfo->gi_DrInfo,
+                            data->ld->ld_Dri,
                             data->frame,
                             &fbox,
                             &ibox,
-                            msg->gpr_GInfo->gi_DrInfo->dri_Pens[data->dosavemode ? TEXTPEN : BACKGROUNDPEN],
+                            data->ld->ld_Dri->dri_Pens[data->dosavemode ? TEXTPEN : BACKGROUNDPEN],
                             AslBase);
 
         }
@@ -1020,10 +1047,10 @@ IPTR AslListView__GM_RENDER(Class *cl, Object *o, struct gpRender *msg)
 
     }
 
-    if ((clip = NewRectRegion(data->minx + BORDERLVSPACINGX,
-                              data->miny + BORDERLVSPACINGY,
-                              data->maxx - BORDERLVSPACINGX,
-                              data->maxy - BORDERLVSPACINGY)))
+    if ((clip = NewRectRegion(data->minx + AslScaleValue(data->ld, BORDERLVSPACINGX),
+                              data->miny + AslScaleValue(data->ld, BORDERLVSPACINGY),
+                              data->maxx - AslScaleValue(data->ld, BORDERLVSPACINGX),
+                              data->maxy - AslScaleValue(data->ld, BORDERLVSPACINGY))))
     {
         struct Layer *lay = msg->gpr_GInfo->gi_Layer;
 
@@ -1034,6 +1061,8 @@ IPTR AslListView__GM_RENDER(Class *cl, Object *o, struct gpRender *msg)
         if (updating) BeginUpdate(lay);
     }
 
+    if (!clip) return 0;
+
     if (msg->gpr_Redraw == GREDRAW_REDRAW)
     {
         renderallitems(cl, o, msg->gpr_RPort);
@@ -1043,7 +1072,7 @@ IPTR AslListView__GM_RENDER(Class *cl, Object *o, struct gpRender *msg)
     {
         if (data->rendersingleitem == -1)
         {
-            WORD abs_scroll = (data->scroll >= 0) ? data->scroll : -data->scroll;
+            LONG abs_scroll = (data->scroll >= 0) ? data->scroll : -data->scroll;
 
             if ((abs_scroll == 0) || (abs_scroll > data->visiblepixels / 2))
             {
@@ -1052,10 +1081,10 @@ IPTR AslListView__GM_RENDER(Class *cl, Object *o, struct gpRender *msg)
             else
             {
                 struct Rectangle rect;
-                WORD             scrollx1 = data->minx + BORDERLVSPACINGX;
-                WORD             scrolly1 = data->miny + BORDERLVSPACINGY;
-                WORD             scrollx2 = data->maxx - BORDERLVSPACINGX;
-                WORD             scrolly2 = data->maxy - BORDERLVSPACINGY;
+                WORD             scrollx1 = data->minx + AslScaleValue(data->ld, BORDERLVSPACINGX);
+                WORD             scrolly1 = data->miny + AslScaleValue(data->ld, BORDERLVSPACINGY);
+                WORD             scrollx2 = data->maxx - AslScaleValue(data->ld, BORDERLVSPACINGX);
+                WORD             scrolly2 = data->maxy - AslScaleValue(data->ld, BORDERLVSPACINGY);
                 BOOL             mustrefresh, update;
 
                 ScrollRaster(msg->gpr_RPort, 0, data->scroll,
@@ -1130,3 +1159,12 @@ IPTR AslListView__GM_RENDER(Class *cl, Object *o, struct gpRender *msg)
 }
 
 /***********************************************************************************/
+
+/* DoGadgetMethodA serializes this private publication with InputTask gadget
+ * input. Only exact OS-owned ASL objects/resources are admitted by the helper. */
+IPTR AslListView__ASLGM_INSTALLSCALE(Class *cl, Object *object, Msg message)
+{
+    struct AslInstallScale *install = (struct AslInstallScale *)message;
+    if (OCLASS(object) != cl || cl != AslBase->asllistviewclass) return FALSE;
+    return AslPublishScale(install->live, install->candidate, install->ginfo, AslBase);
+}

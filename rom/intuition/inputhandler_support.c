@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2017, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
 
     Support functions for InputHandler.
@@ -35,10 +36,13 @@
 #include "propgadgets.h"
 #include "strgadgets.h"
 #include "gadgets.h"
-#include "intuition_intern.h" /* EWFLG_xxx */
+#include "intuition_intern.h"
+#include "windowcomposition.h" /* EWFLG_xxx */
+#include "windowfit.h"
 #include "inputhandler_actions.h"
 #include "inputhandler_support.h"
 #include "menus.h"
+#include "menutask.h"
 
 #ifdef SKINS
 #   include "mosmisc.h"
@@ -122,10 +126,8 @@ struct IntuiMessage *alloc_intuimessage(struct Window *w,
         {
             if (w->IDCMPFlags & IDCMP_DELTAMOVE)
             {
-                struct IIHData *iihd = (struct IIHData *)GetPrivIBase(IntuitionBase)->InputHandler->is_Data;
-
-                imsg->MouseX = iihd->DeltaMouseX;
-                imsg->MouseY = iihd->DeltaMouseY;
+                imsg->MouseX = IW(w)->CompositionMouseDeltaX;
+                imsg->MouseY = IW(w)->CompositionMouseDeltaY;
             }
             else
             {
@@ -495,7 +497,7 @@ void PrepareGadgetInfo(struct GadgetInfo *gi, struct Screen *scr, struct Window 
     gi->gi_RastPort               = 0;
     gi->gi_Pens.DetailPen   = scr->DetailPen;
     gi->gi_Pens.BlockPen    = scr->BlockPen;
-    gi->gi_DrInfo                 = (APTR)&(((struct IntScreen *)gi->gi_Screen)->DInfo);
+    gi->gi_DrInfo                 = WindowDrawInfo(scr, win);
 }
 
 /****************************************************************************************/
@@ -757,6 +759,17 @@ struct Gadget *DoGPInput(struct GadgetInfo *gi, struct Gadget *gadget,
                          struct InputEvent *ie, STACKULONG methodid,
                          BOOL *reuse_event, struct IntuitionBase *IntuitionBase)
 {
+    /* Public-style fabricated events have only their supplied logical input. */
+    return DoGPInputAt(gi, gadget, ie, methodid, reuse_event, NULL, IntuitionBase);
+}
+
+struct Gadget *DoGPInputAt(struct GadgetInfo *gi, struct Gadget *gadget,
+                         struct InputEvent *ie, STACKULONG methodid,
+                         BOOL *reuse_event, const struct PropInputPosition *position,
+                         struct IntuitionBase *IntuitionBase)
+{
+    struct PropInputDispatch saved = GetPrivIBase(IntuitionBase)->prop_input;
+    struct PropInputDispatch *input = &GetPrivIBase(IntuitionBase)->prop_input;
     struct IIHData  *iihdata = (struct IIHData *)GetPrivIBase(IntuitionBase)->InputHandler->is_Data;
     struct gpInput   gpi;
     IPTR             retval;
@@ -771,7 +784,17 @@ struct Gadget *DoGPInput(struct GadgetInfo *gi, struct Gadget *gadget,
 
     SetGPIMouseCoords(&gpi, gadget);
 
+    input->message = NULL;
+    if (position && position->screen == gi->gi_Screen)
+    {
+        input->message = &gpi; input->event = ie; input->ginfo = gi;
+        input->window = gi->gi_Window; input->requester = gi->gi_Requester;
+        input->gadget = gadget;
+        input->localX = gpi.gpi_Mouse.X; input->localY = gpi.gpi_Mouse.Y;
+        input->position = *position;
+    }
     retval = Locked_DoMethodA (gi->gi_Window, gadget, (Msg)&gpi, IntuitionBase);
+    *input = saved;
 
     DEBUG_DOGPINPUT(dprintf("DoGPInput: Locked_DoMethod gadget %p method 0x%lx retval %ld termination 0x%lx\n",
                 gadget, methodid, retval, termination));
@@ -833,8 +856,11 @@ struct Gadget * FindGadget (struct Screen *scr, struct Window * window,
 
                 GetGadgetIBox(gadget, gi, &ibox);
 
-                xrel = x - gi->gi_Domain.Left;
-                yrel = y - gi->gi_Domain.Top;
+                LONG wx = x, wy = y;
+                if (window)
+                    WindowCompositionMouse(window, x, y, &wx, &wy);
+                xrel = wx - gi->gi_Domain.Left;
+                yrel = wy - gi->gi_Domain.Top;
 
                 /*if (req)
             {
@@ -842,11 +868,6 @@ struct Gadget * FindGadget (struct Screen *scr, struct Window * window,
                     yrel -= req->TopEdge + window->BorderTop;
             }*/
 
-                if (window)
-                {
-                    xrel -= window->LeftEdge;
-                    yrel -= window->TopEdge;
-                }
 
                 if ((xrel >= ibox.Left) &&
                     (yrel >= ibox.Top) &&
@@ -956,8 +977,18 @@ BOOL InsideGadget(struct Screen *scr, struct Window *win, struct Requester *req,
     struct IBox box;
     BOOL            rc = FALSE;
 
-    GetScrGadgetIBox(gad, scr, win, req, &box);
+    LONG wx = x, wy = y;
 
+    if (win)
+    {
+        WindowCompositionMouse(win, x, y, &wx, &wy);
+        GetWinGadgetIBox(gad, scr, win, req, &box);
+    }
+    else
+        GetScrGadgetIBox(gad, scr, win, req, &box);
+
+    x = wx;
+    y = wy;
     if ((x >= box.Left) &&
         (y >= box.Top)  &&
         (x < box.Left + box.Width) &&
@@ -1164,6 +1195,13 @@ void FixWindowCoords(struct Window *win, LONG *left, LONG *top, LONG *width, LON
 {
     struct Screen *scr = win->WScreen;
 
+    if (!WindowFitConstrain(win, left, top, width, height, IntuitionBase))
+    {
+        *left = win->LeftEdge; *top = win->TopEdge;
+        *width = win->Width; *height = win->Height;
+        return;
+    }
+
     if (*width < 1) *width = 1;
     if (*height < 1) *height = 1;
 
@@ -1200,7 +1238,7 @@ void FixWindowCoords(struct Window *win, LONG *left, LONG *top, LONG *width, LON
 
 /****************************************************************************************/
 
-void WindowNeedsRefresh(struct Window * w,
+void DrawWindowRefresh(struct Window * w,
                         struct IntuitionBase * IntuitionBase )
 {
     /* Supposed to send a message to this window, saying that it needs a
@@ -1325,6 +1363,12 @@ void WindowNeedsRefresh(struct Window * w,
 
     }
 
+
+}
+
+void WindowNeedsRefresh(struct Window *w, struct IntuitionBase *IntuitionBase)
+{
+    DrawWindowRefresh(w, IntuitionBase);
     if (IS_DOCAREREFRESH(w))
     {
         if (w->UserPort && (w->IDCMPFlags & IDCMP_REFRESHWINDOW))
@@ -1629,11 +1673,180 @@ void FreeGeneratedInputEvents(struct IIHData *iihdata)
 
 /****************************************************************************************/
 
+/* A menu handler that can never answer again. The kernel parks a crashed
+ * Task for good in TS_WAIT waiting for no signal (aarch64-apple
+ * task_crash.c), and a handler that failed its own start waits the same way.
+ * Wait() records a nonzero mask before it enters TS_WAIT, so no live waiter
+ * matches. */
+static BOOL MenuHandlerGone(struct MsgPort *port)
+{
+    struct Task *task = port ? port->mp_SigTask : NULL;
+
+    return task && task->tc_State == TS_WAIT && task->tc_SigWait == 0;
+}
+
+/* input.device only. The handler will never send IESUBCLASS_MENUSTOP: leave
+ * menu mode as that event would, with MENUNULL, and forget the handler. Its
+ * popup windows are closed by CloseOrphanMenuWindows() at the start of the
+ * next handler round, outside every event dispatch. */
+static void AbandonMenuHandler(struct IIHData *iihdata, struct IntuitionBase *IntuitionBase)
+{
+    struct IntIntuitionBase *ib = GetPrivIBase(IntuitionBase);
+    struct MsgPort *port = ib->MenuHandlerPort;
+    struct Window *window = iihdata->MenuWindow;
+    struct MenuMessage *msg;
+
+    ib->MenuHandlerPort = NULL;
+    iihdata->OrphanMenuTask = port->mp_SigTask;
+    while ((msg = (struct MenuMessage *)GetMsg(port)))
+        FreeMenuMessage(msg, IntuitionBase);
+    bug("[MENU-SCALE] result=RECOVERED reason=menu-task-suspended task=%p active=%d\n",
+        iihdata->OrphanMenuTask, (int)MENUS_ACTIVE);
+    if (MENUS_ACTIVE)
+    {
+        iihdata->MenuWindow = NULL;
+        MENUS_ACTIVE = FALSE;
+        ReleaseSemaphore(&ib->MenuLock);
+        if (window)
+        {
+            struct Window *eventwin = IW(window)->menulendwindow ?
+                IW(window)->menulendwindow : window;
+
+            ih_fire_intuimessage(eventwin, IDCMP_MENUPICK, MENUNULL, window, IntuitionBase);
+        }
+    }
+}
+
+/* Never blocks input.device on IBaseLock: a client may hold it. */
+static BOOL MenuHandlerReady(struct IIHData *iihdata, struct IntuitionBase *IntuitionBase)
+{
+    struct IntIntuitionBase *ib = GetPrivIBase(IntuitionBase);
+
+    if (MenuHandlerGone(ib->MenuHandlerPort))
+        AbandonMenuHandler(iihdata, IntuitionBase);
+    if (!ib->MenuHandlerPort && AttemptSemaphore(ib->IBaseLock))
+    {
+        if (!ib->MenuHandlerPort)
+            InitDefaultMenuHandler(IntuitionBase);
+        ReleaseSemaphore(ib->IBaseLock);
+    }
+    return ib->MenuHandlerPort != NULL;
+}
+
+/* Start a menu session for window, from input.device.
+ *
+ * MenuLock is held before the menu Task can see MMCODE_START, until
+ * IESUBCLASS_MENUSTOP: PrepareMenuScale() borrows window->MenuStrip, its
+ * nodes, strings and images, and CommitMenuScaleState() writes them back.
+ * The owner's ClearMenuStrip()/FreeMenus() must wait for that. (Zune frees
+ * and rebuilds a whole strip whenever one item's state changes, and the menu
+ * Task runs at once on another CPU.)
+ *
+ * No session starts while a system gadget is active: HandleIntuiActions()
+ * runs no action then, the menu Task's first OpenWindow() would wait for one,
+ * and the SELECTUP that ends the gadget would go to the waiting menu Task. */
+BOOL StartMenus(struct IIHData *iihdata, struct Window *win,
+                struct InputEvent *ie, struct IntuitionBase *IntuitionBase)
+{
+    struct IntIntuitionBase *ib = GetPrivIBase(IntuitionBase);
+
+    if (MENUS_ACTIVE || !win || iihdata->ActiveSysGadget ||
+        !MenuHandlerReady(iihdata, IntuitionBase))
+        return FALSE;
+
+    ObtainSemaphore(&ib->MenuLock);
+    if (!FireMenuMessage(MMCODE_START, win, ie, IntuitionBase))
+    {
+        ReleaseSemaphore(&ib->MenuLock);
+        return FALSE;
+    }
+    iihdata->MenuWindow = win;
+    MENUS_ACTIVE = TRUE;
+    return TRUE;
+}
+
+/* At the start of a handler round: close the popups an abandoned menu
+ * handler left open (their UserPort is its port), unless it died holding a
+ * lock that closing them needs. A window opened but not yet subscribed
+ * stays hidden. */
+void CloseOrphanMenuWindows(struct IIHData *iihdata, struct IntuitionBase *IntuitionBase)
+{
+    struct IntIntuitionBase *ib = GetPrivIBase(IntuitionBase);
+    struct Task *task = iihdata->OrphanMenuTask;
+    struct SignalSemaphore *locks[] = {
+        ib->IBaseLock, &ib->GadgetLock, &ib->WindowLock, &ib->IntuiActionLock,
+        &ib->ViewLordLock, &ib->PubScrListLock, &ib->ScreenNotificationListLock,
+        &ib->WinDecorSem, &ib->ScrDecorSem, &ib->MenuDecorSem };
+    struct Window *orphans[8];
+    struct Screen *screen;
+    struct Window *window;
+    ULONG count = 0, i, lock;
+
+    if (!task)
+        return;
+    iihdata->OrphanMenuTask = NULL;
+    for (i = 0; i < sizeof(locks) / sizeof(locks[0]); i++)
+    {
+        if (locks[i]->ss_Owner == task)
+        {
+            bug("[MENU-SCALE] orphan popups kept: handler holds an Intuition lock\n");
+            return;
+        }
+    }
+    lock = LockIBase(0);
+    for (screen = IntuitionBase->FirstScreen; screen && count < 8; screen = screen->NextScreen)
+    {
+        if (screen->LayerInfo.Lock.ss_Owner == task)
+            continue;
+        for (window = screen->FirstWindow; window && count < 8; window = window->NextWindow)
+        {
+            if (!window->UserPort || window->UserPort->mp_SigTask != task ||
+                (WLAYER(window) && WLAYER(window)->Lock.ss_Owner == task) ||
+                (BLAYER(window) && BLAYER(window)->Lock.ss_Owner == task) ||
+                WindowCompositionLayerInfo(window)->Lock.ss_Owner == task)
+                continue;
+            orphans[count++] = window;
+        }
+    }
+    UnlockIBase(lock);
+    for (i = 0; i < count; i++)
+    {
+        struct IntuiMessage *message, *next;
+        struct MsgPort *port;
+
+        if (!ResourceExisting(orphans[i], RESOURCE_WINDOW, IntuitionBase))
+            continue;
+        port = orphans[i]->UserPort;
+        Forbid();
+        for (message = (struct IntuiMessage *)port->mp_MsgList.lh_Head;
+             (next = (struct IntuiMessage *)message->ExecMessage.mn_Node.ln_Succ);
+             message = next)
+        {
+            if (message->IDCMPWindow == orphans[i])
+            {
+                Remove((struct Node *)message);
+                ReplyMsg((struct Message *)message);
+            }
+        }
+        orphans[i]->UserPort = NULL;
+        Permit();
+        ModifyIDCMP(orphans[i], 0);
+        CloseWindow(orphans[i]);
+    }
+}
+
 BOOL FireMenuMessage(WORD code, struct Window *win,
                      struct InputEvent *ie, struct IntuitionBase *IntuitionBase)
 {
+    struct IntIntuitionBase *ib = GetPrivIBase(IntuitionBase);
     struct MenuMessage *msg;
     BOOL                      result = FALSE;
+
+    /* An event for a session whose handler died ends that session. */
+    if (code != MMCODE_START && MenuHandlerGone(ib->MenuHandlerPort))
+        AbandonMenuHandler((struct IIHData *)ib->InputHandler->is_Data, IntuitionBase);
+    if (!ib->MenuHandlerPort)
+        return FALSE;
 
     if ((msg = AllocMenuMessage(IntuitionBase)))
     {

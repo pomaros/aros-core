@@ -8,7 +8,7 @@ USER_CPPFLAGS := \
 	       -D__GRAPHICS_NOLIBBASE__
 USER_LDFLAGS := -static
 
-FILES	  := basicfuncs createlayertaglist movelayerz
+FILES	  := basicfuncs createlayertaglist movelayerz preparedregions preparedclips preparedpixels
 
 FUNCS := \
 	beginupdate \
@@ -28,6 +28,7 @@ FUNCS := \
 	endupdate \
 	fattenlayerinfo \
 	getfirstfamilymember \
+	getlayerinfocompositionroot \
 	initlayers \
 	installclipregion \
 	installlayerhook \
@@ -43,6 +44,7 @@ FUNCS := \
 	newlayerinfo \
 	scalelayer \
 	scrolllayer \
+	setlayerinfocompositionroot \
 	sizelayer \
 	sortlayercr \
 	swapbitsrastportcliprect \
@@ -50,6 +52,7 @@ FUNCS := \
 	unlocklayer \
 	unlocklayerinfo \
 	unlocklayers \
+	preparedbatch \
 	upfrontlayer \
 	whichlayer
 

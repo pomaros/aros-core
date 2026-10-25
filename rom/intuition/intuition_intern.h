@@ -2,10 +2,14 @@
 #define INTUITION_INTERN_H
 
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
+    Licensed under the AROS Public License, version 1.1.
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
     Copyright (C) 2001-2013, The MorphOS Development Team. All Rights Reserved.
     $Id$
 */
+#include "awaregeometry.h"
+#include "firstwindowevidence.h"
 #include <aros/config.h>
 
 #ifndef AROS_LIBCALL_H
@@ -381,6 +385,7 @@ struct IScreenModePrefs
     UWORD smp_Height;
     UWORD smp_Depth;
     UWORD smp_Control;
+    UWORD smp_Scale;
 };
 
 struct IIControlPrefs
@@ -438,6 +443,42 @@ struct IntScreenNotify
     IPTR            userdata;
     char           *pubname;
     BYTE            sigbit;
+};
+
+/* Supplied only by the normalized native raw-mouse dispatch, never inferred
+ * from the public event class (SIZEVERIFY also fabricates raw mouse events). */
+struct PropInputPosition
+{
+    struct Screen *screen;
+    LONG x, y;
+};
+struct PropInputDispatch
+{
+    const struct gpInput *message;
+    const struct InputEvent *event;
+    const struct GadgetInfo *ginfo;
+    struct Window *window;
+    struct Requester *requester;
+    struct Gadget *gadget;
+    WORD localX, localY;
+    struct PropInputPosition position;
+};
+
+/* Private capture shared by classic and BOOPSI proportional gadgets. Track
+ * metadata belongs here: CalcKnobSize also updates PropInfo during rendering. */
+struct PropDragAxis
+{
+    LONG pointer, anchor, track, cell;
+    UWORD pot, body, anchorPot;
+};
+struct PropDragState
+{
+    struct Gadget *gadget;
+    struct Window *window;
+    struct Requester *requester;
+    struct PropDragAxis x, y;
+    UWORD factor, freedom;
+    LONG originX, originY;
 };
 
 /* IntuitionBase */
@@ -616,9 +657,12 @@ struct IntIntuitionBase
     LONG                    	 BeepingScreens;
 #endif
 
-    WORD            	    	 prop_clickoffset_x, prop_clickoffset_y;
+    struct PropDragState prop_drag;
+    struct PropInputDispatch prop_input;
 
     struct MinList            	 ResourceList[RESOURCELIST_HASHSIZE];
+    IPTR NextBoundWindowGeneration; /* IBase protected; refuse wrap. */
+    struct FirstWindowEvidence FirstWindowEvidence; /* zeroed once at library init */
 
     /* Menu Look Settings */
     int                          FrameSize;
@@ -652,8 +696,10 @@ struct IntIntuitionBase
 struct SharedPointer
 {
     struct ExtSprite   *sprite;
-    WORD    	    	xoffset, yoffset;
-    int     	    	ref_count;
+    LONG                xoffset, yoffset;
+    int                 ref_count;
+    BOOL                physicalPixels;
+    ULONG               builtinShape;
 };
 
 struct SharedPointer *CreateSharedPointer(struct ExtSprite *, int, int, struct IntuitionBase *);
@@ -719,13 +765,22 @@ struct GammaControl
     BOOL   Active;
 };
 
+struct LogicalScreenInfo;
+struct ScreenRenderGeneration;
+
 struct IntScreen
 {
     struct Screen            Screen;
 
     /* Private fields */
     struct HashNode          hashnode;
-    struct IntDrawInfo       DInfo;
+    UWORD                    FitBatch; /* Defer geometry notifications during scale transaction. */
+    UWORD                    Scale;         /* SA_Scale: percent, 100..400 */
+    struct TextFont         *ScaleBaseFont; /* owned unscaled font for repeatable reset */
+    BOOL                     ScaleSysFont;
+    struct IntDrawInfo       DInfo; /* physical render metadata */
+    struct LogicalScreenInfo *LogicalInfo;
+    struct ScreenRenderGeneration *RenderContext, *RenderGenerations;
     ULONG                    realdepth;
     struct TTextAttr         textattr;
     ULONG                    textattrtags[3];
@@ -926,6 +981,7 @@ struct IntWindow
     struct Image           *AmigaKey;
     struct Image           *Checkmark;
     struct Image           *SubMenuImage;
+    UBYTE                   FrameDefaultMenuImages; /* Checkmark1, AmigaKey2, Submenu4 */
     struct Window          *menulendwindow;
     
     struct HashNode         hashnode;
@@ -1007,11 +1063,33 @@ struct IntWindow
     struct HookData         hd;
 #endif
     struct Hook     	    DefaultWindowShapeHook;
+    BOOL                    ScaleAware;
+    const struct ScreenRenderContext *MenuRenderContext; /* installed Menu layout generation */
+    BOOL MenuRenderLogical; /* installed menu geometry/font domain */
+    BOOL                    ScaleGeometryEnabled;
+    struct AwareGeometry    ScaleGeometry;
+    const struct ScreenRenderContext *LayoutMinContext;
+    LONG LayoutMinWidth, LayoutMinHeight;
+    const struct ScreenRenderContext *ExpectedRenderContext; /* Client snapshot. */
+    IPTR BoundWindowGeneration; /* Close/reopen ABA protection for bound Show. */
+    LONG FitLeft, FitTop, FitWidth, FitHeight;
+    BOOL FitCanonicalValid;
+    UWORD FitAutomatic;
+    struct WindowComposition *Composition;
+    struct WindowScaleShapes *ScaleShapes;
+    WORD                    CompositionDeltaX, CompositionDeltaY;
+    WORD                    CompositionMouseDeltaX, CompositionMouseDeltaY;
+    UWORD                   CompositionDeltaFactor;
+    struct WindowFrameGeneration *FrameGeneration;
+    struct WindowFrameGeneration *FrameGenerations;
     BOOL                    CustomShape;
     struct Region          *OutlineShape;
     ULONG                   DecorUserBufferSize;
     IPTR                    DecorUserBuffer;
 };
+
+_Static_assert(__builtin_offsetof(struct IntWindow, window) == 0,
+    "IntWindow must retain its public Window prefix");
 
 #define SPFLAG_ICONIFIED    	1
 #define SPFLAG_NOICONIFY    	2
@@ -1094,7 +1172,7 @@ extern void PreparePointerSprite(struct ExtSprite *sprite, struct BitMap *bitmap
 extern BOOL SetDisplayPointerShape(OOP_Object *display,
     struct SharedPointer *pointer, struct BitMap *bitmap,
     struct IntuitionBase *IntuitionBase);
-Object* CreateStdSysImage(WORD which, WORD preferred_height, struct Screen *scr,
+Object* CreateStdSysImage(WORD which, WORD preferred_height, struct Window *window,
     	    	    	  struct DrawInfo *dri, struct IntuitionBase *IntuitionBase);
 extern void CheckRectFill(struct RastPort *rp, WORD x1, WORD y1, WORD x2, WORD y2, struct IntuitionBase * IntuitionBase);
 extern BOOL CreateWinSysGadgets(struct Window *w, struct IntuitionBase *IntuitionBase);
@@ -1119,6 +1197,14 @@ void FireScreenNotifyMessage(IPTR data, ULONG flag, struct IntuitionBase *Intuit
 void FireScreenNotifyMessageCode(IPTR data, ULONG flag, ULONG code, struct IntuitionBase *IntuitionBase);
 
 /* misc.c */
+struct LogicalScreenInfo *PrepareLogicalScreenInfo(struct IntScreen *, struct TextFont *, struct IntuitionBase *);
+void CommitLogicalScreenInfo(struct IntScreen *, struct LogicalScreenInfo *);
+void RestoreLogicalScreenInfo(struct IntScreen *, struct LogicalScreenInfo *);
+void ScreenFontTextAttr(struct TextFont *, struct TTextAttr *);
+void DisposeLogicalScreenInfo(struct LogicalScreenInfo *, struct IntuitionBase *);
+void FreeLogicalScreenInfo(struct IntScreen *, struct IntuitionBase *);
+struct DrawInfo *LogicalScreenDrawInfo(struct Screen *);
+struct DrawInfo *WindowDrawInfo(struct Screen *, struct Window *);
 extern void SetActiveMonPointerPos(struct IntuitionBase *IntuitionBase);
 extern BOOL ResetPointer(struct IntuitionBase *IntuitionBase);
 extern void ActivateMonitor(Object *newmonitor, WORD x, WORD y, struct IntuitionBase *IntuitionBase);
@@ -1127,8 +1213,11 @@ extern struct RastPort *MyCreateRastPort(struct IntuitionBase *IntuitionBase);
 extern struct RastPort *MyCloneRastPort(struct IntuitionBase *IntuitionBase, struct RastPort *rp);
 extern void MyFreeRastPort(struct IntuitionBase *IntuitionBase, struct RastPort *rp);
 struct TextFont *SafeReopenFont(struct IntuitionBase *, struct TextFont **);
+ULONG ClampScreenScale(ULONG scale);
+struct TextFont *OpenScaledScreenFont(struct IntuitionBase *, struct TextFont *, ULONG scale);
 extern Object *MakePointerFromPrefs(struct IntuitionBase *, struct Preferences *);
 extern Object *MakePointerFromData(struct IntuitionBase *, const UWORD *, int, int, int, int);
+Object *MakeBuiltinPointerFromData(struct IntuitionBase *, const UWORD *, int, int, int, int, ULONG);
 void InstallPointer(struct IntuitionBase *, UWORD, Object **, Object *);
 void SetPointerColors(struct IntuitionBase *IntuitionBase);
 struct IClass *InitITextIClass (struct IntuitionBase * IntuitionBase);
@@ -1187,6 +1276,10 @@ AROS_UFPA(ULONG , IDCMPFlags, D0),
 AROS_UFPA(APTR  , args      , A1));
 
 #define POINTERA_SharedPointer  0x80039010
+#define POINTERA_BuiltinShape   0x80039011
+#define POINTER_BUILTIN_NONE 0
+#define POINTER_BUILTIN_ARROW 1
+#define POINTER_BUILTIN_BUSY 2
 
 #ifndef __MORPHOS__
 #define dprintf kprintf
@@ -1328,6 +1421,10 @@ struct SysIData
 {
     struct DrawInfo *dri;
     struct Image    *frame;
+    const struct ScreenRenderContext *context;
+    Object *scaleProvider;
+    APTR prepared;
+    BOOL logical, vectorFallback, windowProvider, legacyMenuProvider;
     ULONG            type;
     UWORD            flags;
 };

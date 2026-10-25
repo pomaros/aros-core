@@ -232,3 +232,16 @@ void AROSAppleKernelScreenLogStop(void)
 {
     screen_state = -1;
 }
+
+/*
+ * A CPU is about to halt on an exception nothing recovers from: the log
+ * takes the panel back from the desktop, cleared, so the report that
+ * follows is what the screen shows instead of a frozen desktop. The
+ * loader's framebuffer is still the one scanned out: the graphics driver
+ * inherited it and draws into the same memory.
+ */
+void AROSAppleKernelScreenLogResume(void)
+{
+    if (screen_state < 0)
+        screen_state = 0;
+}

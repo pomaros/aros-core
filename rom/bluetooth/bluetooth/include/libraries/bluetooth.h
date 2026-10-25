@@ -559,7 +559,6 @@ struct BtGattCharDef
 #define IFFCHNK_POPUP      MAKE_ID('P','O','P','O')
 #define IFFCHNK_REGDEVICE  MAKE_ID('D','R','E','G') /* struct BtRegDevCfg */
 #define IFFCHNK_DEVNAME    MAKE_ID('D','N','A','M') /* name the device reported (NAME = custom name) */
-#define IFFCHNK_KEYS       MAKE_ID('K','E','Y','S') /* bond keys (opaque, versioned) */
 
 /* Public definitions to Private interfaces */
 #if !defined(_LIBRARIES_BLUETOOTH_H)

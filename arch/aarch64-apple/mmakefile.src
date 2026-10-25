@@ -13,19 +13,27 @@ APPLE_TARGET_PROBE_DEPS := $(addprefix $(APPLE_TARGET_PROBE_DIR)/, \
     $(addsuffix .d,$(APPLE_TARGET_PROBE_FILES)))
 
 AROS_EARLY_FDT_DIR := $(SRCDIR)/arch/aarch64-all/boot/fdt
+APPLE_NATIVE_SOURCE_DIR := $(SRCDIR)/arch/aarch64-apple/native
 APPLE_STAGE2_SOURCE_DIR := $(SRCDIR)/arch/aarch64-apple/bootstrap
 APPLE_STAGE2_BUILD_DIR := $(GENDIR)/arch/aarch64-apple/bootstrap
 APPLE_STAGE2_INSTALL_DIR := $(AROSDIR)/boot/apple/Boot
-# The VM runtime saves x18 as ordinary task state.
+# Native and VM payloads both use x18 as ordinary task state.
+# Physical Apple builds retain their platform-register ABI.
+ifeq ($(AROS_VM_GUEST),1)
 APPLE_STAGE2_X18_FLAGS := -DAROS_VM_GUEST=1
+else
+APPLE_STAGE2_X18_FLAGS := -DAROS_STAGE2_PLATFORM=NativeStage2Platform
+APPLE_STAGE2_NATIVE_OBJ := $(APPLE_STAGE2_BUILD_DIR)/stage2_native.o
+APPLE_STAGE2_NATIVE_SUPPORT_OBJS := $(APPLE_STAGE2_BUILD_DIR)/stage2_native_fdt.o $(APPLE_STAGE2_BUILD_DIR)/stage2_native_console.o
+endif
 APPLE_STAGE2_CFLAGS := --target=aarch64-none-elf -std=c11 -O2 \
     -Wall -Wextra -Werror -ffreestanding -fpie -fno-builtin \
     -fno-stack-protector $(APPLE_STAGE2_X18_FLAGS) -ffunction-sections -fdata-sections \
     -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
     -I$(SRCDIR)/arch/aarch64-apple/include \
-    -I$(APPLE_STAGE2_SOURCE_DIR) -I$(AROS_EARLY_FDT_DIR) \
+    -I$(APPLE_STAGE2_SOURCE_DIR) -I$(APPLE_NATIVE_SOURCE_DIR) -I$(AROS_EARLY_FDT_DIR) \
     -I$(AROS_EARLY_FDT_DIR)/libfdt -DAROS_FDT_FREESTANDING
-APPLE_STAGE2_PREPARE_OBJS := \
+APPLE_STAGE2_PREPARE_OBJS := $(APPLE_STAGE2_NATIVE_SUPPORT_OBJS) \
     $(APPLE_STAGE2_BUILD_DIR)/early_fdt.o \
     $(APPLE_STAGE2_BUILD_DIR)/pci_ecam.o \
     $(APPLE_STAGE2_BUILD_DIR)/libfdt_fdt.o \
@@ -34,6 +42,7 @@ APPLE_STAGE2_PREPARE_OBJS := \
     $(APPLE_STAGE2_BUILD_DIR)/bootinfo_validate.o \
     $(APPLE_STAGE2_BUILD_DIR)/boot_memory_map.o \
     $(APPLE_STAGE2_BUILD_DIR)/stage2_loader.o \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_module_map.o \
     $(APPLE_STAGE2_BUILD_DIR)/stage2_ownership.o \
     $(APPLE_STAGE2_BUILD_DIR)/memory_plan_contract.o \
     $(APPLE_STAGE2_BUILD_DIR)/stage2_memory_plan.o \
@@ -44,55 +53,227 @@ APPLE_STAGE2_PREPARE_OBJS := \
 APPLE_STAGE2_COMMON_OBJS := \
     $(APPLE_STAGE2_PREPARE_OBJS) \
     $(APPLE_STAGE2_BUILD_DIR)/stage2_probe.o \
-    $(APPLE_STAGE2_BUILD_DIR)/stage2_main.o
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_main.o $(APPLE_STAGE2_NATIVE_OBJ)
 APPLE_STAGE2_ENTRY_OBJ := $(APPLE_STAGE2_BUILD_DIR)/stage2_entry.o
 APPLE_STAGE2_TEST_ENTRY_OBJ := $(APPLE_STAGE2_BUILD_DIR)/stage2_entry_test.o
-APPLE_STAGE2_EXCEPTION_TEST_ENTRY_OBJ := $(APPLE_STAGE2_BUILD_DIR)/stage2_entry_exception_test.o
+APPLE_STAGE2_EXCEPTION_TEST_ENTRY_OBJ := \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_entry_exception_test.o
+APPLE_STAGE2_A4_ENTRY_OBJ := $(APPLE_STAGE2_BUILD_DIR)/stage2_entry_a4.o
+APPLE_STAGE2_A4_CACHE_TEST_ENTRY_OBJ := \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_entry_a4_cache_test.o
+APPLE_STAGE2_A4_GUARD_OBJ := $(APPLE_STAGE2_BUILD_DIR)/stage2_a4_guard.o
+APPLE_STAGE2_A4_MAIN_OBJ := $(APPLE_STAGE2_BUILD_DIR)/stage2_a4.o
+APPLE_STAGE2_A4_CACHE_MAIN_OBJ := \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_a4_cache_main.o
+APPLE_STAGE2_A4_CACHE_OPS_OBJ := \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_a4_cache.o
+APPLE_STAGE2_A4_CACHE_QEMU_OPS_OBJ := \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_a4_cache_qemu_ops.o
+APPLE_STAGE2_A4_CACHE_CALL_OBJ := \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_a4_cache_call.o
+APPLE_STAGE2_A4_CACHE_QEMU_OBJ := \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_a4_cache_qemu.o
+APPLE_STAGE2_A5_MAIN_OBJ := \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_main_a5.o
+APPLE_STAGE2_A5_EYES_MAIN_OBJ := \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_main_a5_eyes.o
+APPLE_STAGE2_A5_OBSERVER_OBJ := \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_a5.o
+APPLE_STAGE2_A5_COMPACT_OBSERVER_OBJ := \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_a5_compact.o
+APPLE_STAGE2_A5_TOPOLOGY_OBJ := \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_a5_topology.o
+APPLE_STAGE2_GRAPHICS_EYES_ENTRY_OBJ := \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_entry_graphics_eyes.o
+APPLE_STAGE2_GRAPHICS_EYES_MAIN_OBJ := \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_main_graphics_eyes.o
+APPLE_STAGE2_A5_EYES_ENTRY_OBJ := \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_entry_a5_eyes.o
+APPLE_STAGE2_A5_EYES_MARK_OBJ := \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_frame_eyes.o
+APPLE_STAGE2_SPI_EYES_OBJS := \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_spi_eyes.o \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_spi_fdt.o \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_spi_core.o \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_spi_hid.o \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_spi_gpio.o \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_spi_hid_device.o
 APPLE_STAGE2_ELF := $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2.elf
 APPLE_STAGE2_TEST_ELF := $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2-test.elf
-APPLE_STAGE2_EXCEPTION_TEST_ELF := $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2-exception-test.elf
-APPLE_STAGE2_BIN := $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2.bin
+APPLE_STAGE2_EXCEPTION_TEST_ELF := \
+    $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2-exception-test.elf
+APPLE_STAGE2_A4_ELF := \
+    $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2-a4-observer.elf
+APPLE_STAGE2_A4_CACHE_ELF := \
+    $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2-a4-cache-observer.elf
+APPLE_STAGE2_A4_CACHE_TEST_ELF := \
+    $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2-a4-cache-test.elf
+APPLE_STAGE2_A5_ELF := \
+    $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2-a5-observer.elf
+APPLE_STAGE2_GRAPHICS_EYES_ELF := \
+    $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2-graphics-eyes.elf
+APPLE_STAGE2_A5_EYES_ELF := \
+    $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2-a5-eyes.elf
+APPLE_STAGE2_BIN := $(APPLE_STAGE2_INSTALL_DIR)/aros-apple-stage2.bin
 APPLE_STAGE2_TEST_BIN := $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2-test.bin
-APPLE_STAGE2_EXCEPTION_TEST_BIN := $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2-exception-test.bin
+APPLE_STAGE2_EXCEPTION_TEST_BIN := \
+    $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2-exception-test.bin
+APPLE_STAGE2_A4_BIN := \
+    $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2-a4-observer.bin
+APPLE_STAGE2_A4_CACHE_BIN := \
+    $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2-a4-cache-observer.bin
+APPLE_STAGE2_A4_CACHE_TEST_BIN := \
+    $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2-a4-cache-test.bin
+APPLE_STAGE2_A5_BIN := \
+    $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2-a5-observer.bin
+APPLE_STAGE2_GRAPHICS_EYES_BIN := \
+    $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2-graphics-eyes.bin
+APPLE_STAGE2_A5_EYES_BIN := \
+    $(APPLE_STAGE2_BUILD_DIR)/aros-apple-stage2-a5-eyes.bin
 
-#MM apple-core-modules: apple-target-probe kernel-kernel kernel-exec kernel-expansion kernel-utility kernel-aros kernel-bootloader kernel-task kernel-filesystem kernel-timer kernel-partition workbench-libs-locale compiler-stdc compiler-stdcio compiler-posixc kernel-fs-fat kernel-devs-appleboot kernel-dos workbench-libs-iffparse kernel-openfirmware kernel-lddemon
+# This is intentionally independent of the kernel metatarget. It is the first
+# reproducible proof that apple-aarch64 selects the freestanding AROS AArch64
+# compiler; it does not claim that a bootable Apple kernel exists yet.
+
+#MM
+apple-target-probe: $(APPLE_TARGET_PROBE_OBJS)
+
+# The pre-hardware core cold-start boundary.  kernel.resource and exec.library
+# establish the single-task base; utility.library, task.resource and the
+# counter-backed timer.device form the dependency-complete resident layer now
+# exercised here.  The generic bootloader, expansion and partition services,
+# FileSystem.resource, the resident FAT handler, appleboot.device and the
+# dormant dos.library resident complete the pre-takeover set. Portable
+# compiler-rt emulated TLS uses AROS's real aros/iffparse/locale and
+# stdc/stdcio/posixc closure. All six are verified or retried after DOS exists;
+# none is replaced by an Apple-private shim. The dosboot.resource stays
+# separate until its non-returning takeover contract is executable.
+#MM apple-core-modules: apple-target-probe kernel-kernel kernel-exec kernel-expansion kernel-utility kernel-aros kernel-bootloader kernel-task kernel-filesystem kernel-timer kernel-partition workbench-libs-locale compiler-stdc compiler-stdcio compiler-posixc kernel-fs-fat kernel-devs-appleboot kernel-dos workbench-libs-iffparse
 #MM
 apple-core-modules:
 	$(Q)$(NOP)
 
+# Build the retained-FDT resource and diagnostic command independently while
+# native distribution startup and command packaging are being qualified.
+#MM apple-fdt-tools: kernel-openfirmware workbench-c-devicetree
+#MM
+apple-fdt-tools:
+	$(Q)$(NOP)
+
+
+
+
+
+
+
+
+
+# Keep the inherited-framebuffer candidate separate from the stable core
+# closure until physical G0/G1/G2 evidence exists.
 #MM apple-framebuffer-modules: apple-core-modules kernel-oop kernel-hidd kernel-hidd-gfx kernel-graphics kernel-hidd-efifbgfx
 #MM
 apple-framebuffer-modules:
 	$(Q)$(NOP)
 
+# Intuition's actual cold-start/open closure.  Keep this as a second candidate:
+# layers, keymap and input are real dependencies, not optional packaging added
+# merely to make a screen-shaped image appear.
 #MM apple-intuition-modules: apple-framebuffer-modules kernel-layers kernel-hidd-input kernel-hidd-kbd kernel-hidd-mouse kernel-keyboard kernel-gameport kernel-keymap kernel-input kernel-intuition
 #MM
 apple-intuition-modules:
 	$(Q)$(NOP)
 
-#MM apple-wanderer-modules: apple-intuition-modules kernel-console kernel-fs-con kernel-shell kernel-shellcommands workbench-libs-asl workbench-libs-commodities workbench-libs-rexxsyslib workbench-libs-gadtools workbench-libs-datatypes workbench-libs-diskfont workbench-libs-icon workbench-libs-cgfx workbench-libs-workbench workbench-libs-coolimages workbench-libs-muiscreen workbench-libs-muimaster workbench-system-wanderer-app kernel-lddemon kernel-fs-ram apple-keymaps
+# Wanderer is an ordinary AROS application, not an Apple-specific driver.  Its
+# separate pre-hardware candidate closes the libraries that muimaster opens at
+# runtime and builds the real program plus its four desktop classes.  Keep this
+# outside the installed product until G0-G3 pass on physical hardware.
+# These residents are required by the common coldstart table for every desktop,
+# not only by a diagnostic cell or a pre-populated SDK.
+#MM apple-wanderer-modules: apple-intuition-modules kernel-debug kernel-processor kernel-entropy kernel-console kernel-fs-con kernel-shell kernel-shellcommands workbench-libs-asl workbench-libs-commodities workbench-libs-rexxsyslib workbench-libs-gadtools workbench-libs-datatypes workbench-libs-diskfont workbench-libs-icon workbench-libs-cgfx workbench-libs-workbench workbench-libs-coolimages workbench-libs-muiscreen workbench-libs-muimaster workbench-system-wanderer-app kernel-lddemon kernel-fs-ram apple-keymaps
 #MM
 apple-wanderer-modules:
 	$(Q)$(NOP)
 
+# Direct target retained for focused device rebuilds.
 #MM apple-boot-volume-device: kernel-devs-appleboot
 #MM
 apple-boot-volume-device:
 	$(Q)$(NOP)
 
-#MM apple-boot-payloads: apple-core-modules apple-stage2
+# The target-side public trust primitive is deliberately separate from the
+# early boot payload.  It runs only after DOS is available and carries no
+# signing or key-generation entry point.
+#MM apple-recovery-verifier: apple-trust-verify apple-trust-transition-verify
+#MM
+apple-recovery-verifier:
+	$(Q)$(NOP)
+
+# The APL-owned position-independent second stage.  The production binary is
+# marker-free; the test binary differs only in its entry observer and executes
+# the same bounded ET_REL loader.
+#MM
+apple-stage2: $(APPLE_STAGE2_BIN) $(APPLE_STAGE2_TEST_BIN) \
+    $(APPLE_STAGE2_EXCEPTION_TEST_BIN)
+
+# Explicit physical diagnostic. It is not installed as the production stage
+# two and is built only by name after the conservative A0-A3 sequence.
+#MM
+apple-stage2-a4-observer: $(APPLE_STAGE2_A4_BIN)
+
+# Explicit owned-RAM W^X/cache/TLB diagnostic. It is separate from the
+# translation-only observer and is never installed as production.
+#MM
+apple-stage2-a4-cache-observer: $(APPLE_STAGE2_A4_CACHE_BIN)
+
+# Generic architectural execution of the same owned-page experiment. QEMU is
+# a regression layer only and this target never establishes Apple behavior.
+#MM
+apple-stage2-a4-cache-test: $(APPLE_STAGE2_A4_CACHE_TEST_BIN)
+
+# Physical-memory topology/import diagnostic. The direct m1n1 product reports
+# sandbox scope; only the installed UEFI producer can expose full-map scope.
+#MM
+apple-stage2-a5-observer: $(APPLE_STAGE2_A5_BIN)
+
+# Framebuffer-coded physical diagnostic for the real A5 stage-two. This is a
+# separate binary and cannot enter an installed production product implicitly.
+#MM
+apple-stage2-a5-eyes: $(APPLE_STAGE2_A5_EYES_BIN)
+
+# The G0/G1/G2 probe sequence built for a physical target: the same probes the
+# QEMU candidate runs, reporting over DockChannel instead of a semihost console
+# that no real machine provides.
+#MM
+apple-stage2-graphics-eyes: $(APPLE_STAGE2_GRAPHICS_EYES_BIN)
+
+#MM apple-boot-payloads: apple-core-modules apple-boot-volume-device apple-stage2 kernel-openfirmware kernel-lddemon
 #MM
 apple-boot-payloads:
 	$(Q)$(NOP)
 
-#MM apple-wanderer-payloads: apple-boot-payloads apple-wanderer-modules
+
+
+
+
+
+# One named MetaMake request for the complete, separate G0/G1/G2 candidate. This
+# avoids running two full dependency scans from the integration harness.
+#MM apple-framebuffer-payloads: apple-boot-payloads apple-framebuffer-modules
 #MM
-apple-wanderer-payloads:
+apple-framebuffer-payloads:
 	$(Q)$(NOP)
 
+# One named request for the separate G3 screen/window candidate.
+#MM apple-intuition-payloads: apple-boot-payloads apple-intuition-modules
 #MM
-apple-stage2: $(APPLE_STAGE2_BIN) $(APPLE_STAGE2_TEST_BIN) $(APPLE_STAGE2_EXCEPTION_TEST_BIN)
+apple-intuition-payloads:
+	$(Q)$(NOP)
 
+# Native ELF keymaps. The generic build makes 68k hunk keymaps, which the
+# hunk loader must place below 4 GiB; this SoC has no memory there, so the
+# same C keymaps are built as ordinary AArch64 modules with the KeyMapNode
+# first in the first segment, the shape kms.library reads for a non-hunk
+# segment.
 APPLE_KEYMAP_SRC := $(SRCDIR)/workbench/devs/keymaps/old_c
 APPLE_KEYMAP_DIR := $(AROS_DEVS)/Keymaps-elf
 APPLE_KEYMAP_OBJDIR := $(GENDIR)/$(CURDIR)/keymaps
@@ -111,6 +292,20 @@ $(APPLE_KEYMAP_OBJDIR)/%.o : $(APPLE_KEYMAP_SRC)/%.c $(APPLE_KEYMAP_SRC)/common.
 #MM apple-keymaps-setup
 %rule_makedirs dirs="$(APPLE_KEYMAP_DIR) $(APPLE_KEYMAP_OBJDIR)" setuptarget=apple-keymaps-setup
 
+# One named request for the separate G4 desktop candidate.
+#MM apple-wanderer-payloads: apple-boot-payloads apple-wanderer-modules
+#MM
+apple-wanderer-payloads:
+	$(Q)$(NOP)
+
+# A desktop qualification cell also loads commands, keymaps and Clock from
+# its RAM disk. Request the full dependency closure once; *-quick targets
+# assume a pre-existing SDK and are insufficient for an isolated SMP build.
+#MM apple-wanderer-cell-payloads: apple-wanderer-payloads workbench-c \
+#MM     workbench-libs-kms workbench-classes-zune-clock workbench-utilities-clock
+apple-wanderer-cell-payloads:
+	$(Q)$(NOP)
+
 $(APPLE_STAGE2_BUILD_DIR)/bootinfo_validate.o: \
     $(SRCDIR)/arch/aarch64-apple/bootinfo_validate.c \
     $(SRCDIR)/arch/aarch64-apple/bootinfo_validate.h \
@@ -125,9 +320,21 @@ $(APPLE_STAGE2_BUILD_DIR)/boot_memory_map.o: \
 
 $(APPLE_STAGE2_BUILD_DIR)/stage2_loader.o: \
     $(APPLE_STAGE2_SOURCE_DIR)/stage2_loader.c \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/page_arena.h \
     $(APPLE_STAGE2_SOURCE_DIR)/stage2_loader.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_elf.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_module_map.h \
     $(APPLE_STAGE2_SOURCE_DIR)/boot_memory_map.h \
     $(SRCDIR)/arch/aarch64-apple/bootinfo_validate.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+$(APPLE_STAGE2_BUILD_DIR)/stage2_module_map.o: \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_module_map.c \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_module_map.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_elf.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_loader.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/modulemap.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/bootinfo.h
 	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
 
 $(APPLE_STAGE2_BUILD_DIR)/stage2_ownership.o: \
@@ -195,6 +402,7 @@ $(APPLE_STAGE2_BUILD_DIR)/stage2_probe.o: \
 
 $(APPLE_STAGE2_BUILD_DIR)/stage2_main.o: \
     $(APPLE_STAGE2_SOURCE_DIR)/stage2_main.c \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_platform.h \
     $(SRCDIR)/arch/aarch64-apple/mmakefile.src \
     $(APPLE_STAGE2_SOURCE_DIR)/stage2_exception.h \
     $(APPLE_STAGE2_SOURCE_DIR)/stage2_fdt_map.h \
@@ -205,10 +413,142 @@ $(APPLE_STAGE2_BUILD_DIR)/stage2_main.o: \
     $(SRCDIR)/arch/aarch64-apple/include/aros/apple/startup.h
 	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
 
+$(APPLE_STAGE2_A5_MAIN_OBJ): \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_main.c \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_platform.h \
+    $(SRCDIR)/arch/aarch64-apple/mmakefile.src \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a5.h \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a5_topology.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_exception.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_fdt_map.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_loader.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_prepare.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_probe.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/runtime.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/startup.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) \
+	    -DAROS_APPLE_STAGE2_A5_OBSERVER=1 -c $< -o $@
+
+$(APPLE_STAGE2_A5_EYES_MAIN_OBJ): \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_main.c \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_platform.h \
+    $(SRCDIR)/arch/aarch64-apple/mmakefile.src \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a5.h \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a5_topology.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_exception.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_fdt_map.h \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_frame_eyes.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_loader.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_prepare.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_probe.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/runtime.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/startup.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) \
+	    -DAROS_APPLE_STAGE2_A5_OBSERVER=1 \
+	    -DAROS_APPLE_STAGE2_FRAME_EYES=1 -c $< -o $@
+
+$(APPLE_STAGE2_A5_TOPOLOGY_OBJ): \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a5_topology.c \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a5_topology.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/boot_memory_map.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/bootinfo.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/startup.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+$(APPLE_STAGE2_A5_OBSERVER_OBJ): \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a5.c \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a5.h \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a5_topology.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_fdt_map.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_loader.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/startup.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+$(APPLE_STAGE2_A5_COMPACT_OBSERVER_OBJ): \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a5.c \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a5.h \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a5_topology.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_fdt_map.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_loader.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/startup.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) \
+	    -DAROS_APPLE_STAGE2_A5_COMPACT=1 -c $< -o $@
+
+$(APPLE_STAGE2_GRAPHICS_EYES_MAIN_OBJ): \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_main.c \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_platform.h \
+    $(SRCDIR)/arch/aarch64-apple/mmakefile.src \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_exception.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_fdt_map.h \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_frame_eyes.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_loader.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_prepare.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_probe.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/runtime.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/startup.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) \
+	    -DAROS_APPLE_STAGE2_FRAME_EYES=1 -c $< -o $@
+
+$(APPLE_STAGE2_A5_EYES_MARK_OBJ): \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_frame_eyes.c \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_frame_eyes.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/bootinfo.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) \
+	    -DAROS_APPLE_STAGE2_FRAME_EYES_PRIVILEGED=1 -c $< -o $@
+
+$(APPLE_STAGE2_BUILD_DIR)/stage2_spi_eyes.o: \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_spi_eyes.c \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_spi_eyes.h \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_frame_eyes.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/spihid.h \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/bootinfo.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+$(APPLE_STAGE2_BUILD_DIR)/stage2_spi_fdt.o: \
+    $(SRCDIR)/arch/aarch64-apple/spi/spi_fdt.c \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/spihid.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+$(APPLE_STAGE2_BUILD_DIR)/stage2_spi_core.o: \
+    $(SRCDIR)/arch/aarch64-apple/spi/spi_core.c \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/spihid.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+$(APPLE_STAGE2_BUILD_DIR)/stage2_spi_hid.o: \
+    $(SRCDIR)/arch/aarch64-apple/spi/spi_hid.c \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/spihid.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+$(APPLE_STAGE2_BUILD_DIR)/stage2_spi_gpio.o: \
+    $(SRCDIR)/arch/aarch64-apple/spi/spi_gpio.c \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/spihid.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+$(APPLE_STAGE2_BUILD_DIR)/stage2_spi_hid_device.o: \
+    $(SRCDIR)/arch/aarch64-apple/spi/spi_hid_device.c \
+    $(SRCDIR)/arch/aarch64-apple/include/aros/apple/spihid.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
 $(APPLE_STAGE2_ENTRY_OBJ): $(APPLE_STAGE2_SOURCE_DIR)/stage2_entry.S \
     $(APPLE_STAGE2_SOURCE_DIR)/stage2_exception.h
 	$(Q)$(TARGET_CC) --target=aarch64-none-elf -ffreestanding -fpie \
 	    -mgeneral-regs-only -c $< -o $@
+
+$(APPLE_STAGE2_A5_EYES_ENTRY_OBJ): \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_entry.S \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_exception.h \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_frame_eyes.h
+	$(Q)$(TARGET_CC) --target=aarch64-none-elf -ffreestanding -fpie \
+	    -mgeneral-regs-only -I$(APPLE_NATIVE_SOURCE_DIR) -DAROS_APPLE_STAGE2_FRAME_EYES=1 -c $< -o $@
+
+$(APPLE_STAGE2_GRAPHICS_EYES_ENTRY_OBJ): \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_entry.S \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_exception.h \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_frame_eyes.h
+	$(Q)$(TARGET_CC) --target=aarch64-none-elf -ffreestanding -fpie \
+	    -mgeneral-regs-only -I$(APPLE_NATIVE_SOURCE_DIR) $(APPLE_STAGE2_X18_FLAGS) -DAROS_APPLE_STAGE2_QEMU_TEST=1 \
+	    -DAROS_APPLE_STAGE2_PHYSICAL_CONSOLE=1 \
+	    -DAROS_APPLE_STAGE2_FRAME_EYES=1 -c $< -o $@
 
 $(APPLE_STAGE2_TEST_ENTRY_OBJ): $(APPLE_STAGE2_SOURCE_DIR)/stage2_entry.S \
     $(APPLE_STAGE2_SOURCE_DIR)/stage2_exception.h
@@ -221,6 +561,69 @@ $(APPLE_STAGE2_EXCEPTION_TEST_ENTRY_OBJ): \
 	$(Q)$(TARGET_CC) --target=aarch64-none-elf -ffreestanding -fpie \
 	    -mgeneral-regs-only $(APPLE_STAGE2_X18_FLAGS) -DAROS_APPLE_STAGE2_QEMU_TEST=1 \
 	    -DAROS_APPLE_STAGE2_EXCEPTION_TEST=1 -c $< -o $@
+
+$(APPLE_STAGE2_A4_ENTRY_OBJ): $(APPLE_STAGE2_SOURCE_DIR)/stage2_entry.S \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_exception.h
+	$(Q)$(TARGET_CC) --target=aarch64-none-elf -ffreestanding -fpie \
+	    -mgeneral-regs-only -DAROS_APPLE_STAGE2_A4_OBSERVER=1 -c $< -o $@
+
+$(APPLE_STAGE2_A4_CACHE_TEST_ENTRY_OBJ): \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_entry.S \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_exception.h
+	$(Q)$(TARGET_CC) --target=aarch64-none-elf -ffreestanding -fpie \
+	    -mgeneral-regs-only $(APPLE_STAGE2_X18_FLAGS) -DAROS_APPLE_STAGE2_QEMU_TEST=1 \
+	    -DAROS_APPLE_STAGE2_A4_CACHE_QEMU_TEST=1 -c $< -o $@
+
+$(APPLE_STAGE2_A4_GUARD_OBJ): \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a4_guard.S
+	$(Q)$(TARGET_CC) --target=aarch64-none-elf -ffreestanding -fpie \
+	    -mgeneral-regs-only -c $< -o $@
+
+$(APPLE_STAGE2_A4_MAIN_OBJ): $(APPLE_NATIVE_SOURCE_DIR)/stage2_a4.c \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a4.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_exception.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_fdt_map.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_mmu.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_prepare.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_sha256.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+$(APPLE_STAGE2_A4_CACHE_MAIN_OBJ): \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a4.c \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a4.h \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a4_cache.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_exception.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_fdt_map.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_mmu.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_prepare.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_sha256.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) \
+	    -DAROS_APPLE_STAGE2_A4_CACHE_OBSERVER=1 -c $< -o $@
+
+$(APPLE_STAGE2_A4_CACHE_OPS_OBJ): \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a4_cache.c \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a4_cache.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_mmu.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+$(APPLE_STAGE2_A4_CACHE_QEMU_OPS_OBJ): \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a4_cache.c \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a4_cache.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_mmu.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) \
+	    -DAROS_APPLE_STAGE2_A4_CACHE_QEMU_TEST=1 -c $< -o $@
+
+$(APPLE_STAGE2_A4_CACHE_CALL_OBJ): \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a4_cache_call.S
+	$(Q)$(TARGET_CC) --target=aarch64-none-elf -ffreestanding -fpie \
+	    -mgeneral-regs-only -c $< -o $@
+
+$(APPLE_STAGE2_A4_CACHE_QEMU_OBJ): \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a4_cache_qemu.c \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a4_cache.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_mmu.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_prepare.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
 
 $(APPLE_STAGE2_ELF): $(APPLE_STAGE2_ENTRY_OBJ) $(APPLE_STAGE2_COMMON_OBJS) \
     $(APPLE_STAGE2_SOURCE_DIR)/stage2.ld
@@ -241,6 +644,79 @@ $(APPLE_STAGE2_EXCEPTION_TEST_ELF): \
 	    --gc-sections -o $@ $(APPLE_STAGE2_EXCEPTION_TEST_ENTRY_OBJ) \
 	    $(APPLE_STAGE2_COMMON_OBJS)
 
+$(APPLE_STAGE2_A4_ELF): $(APPLE_STAGE2_A4_ENTRY_OBJ) \
+    $(APPLE_STAGE2_A4_GUARD_OBJ) $(APPLE_STAGE2_A4_MAIN_OBJ) \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_sha256.o \
+    $(APPLE_STAGE2_PREPARE_OBJS) $(APPLE_STAGE2_SOURCE_DIR)/stage2.ld
+	$(Q)$(KERNEL_LD) -T $(APPLE_STAGE2_SOURCE_DIR)/stage2.ld \
+	    --gc-sections -o $@ $(APPLE_STAGE2_A4_ENTRY_OBJ) \
+	    $(APPLE_STAGE2_A4_GUARD_OBJ) $(APPLE_STAGE2_A4_MAIN_OBJ) \
+	    $(APPLE_STAGE2_BUILD_DIR)/stage2_sha256.o \
+	    $(APPLE_STAGE2_PREPARE_OBJS)
+
+$(APPLE_STAGE2_A4_CACHE_ELF): $(APPLE_STAGE2_A4_ENTRY_OBJ) \
+    $(APPLE_STAGE2_A4_GUARD_OBJ) $(APPLE_STAGE2_A4_CACHE_MAIN_OBJ) \
+    $(APPLE_STAGE2_A4_CACHE_OPS_OBJ) $(APPLE_STAGE2_A4_CACHE_CALL_OBJ) \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_sha256.o \
+    $(APPLE_STAGE2_PREPARE_OBJS) $(APPLE_STAGE2_SOURCE_DIR)/stage2.ld
+	$(Q)$(KERNEL_LD) -T $(APPLE_STAGE2_SOURCE_DIR)/stage2.ld \
+	    --gc-sections -o $@ $(APPLE_STAGE2_A4_ENTRY_OBJ) \
+	    $(APPLE_STAGE2_A4_GUARD_OBJ) $(APPLE_STAGE2_A4_CACHE_MAIN_OBJ) \
+	    $(APPLE_STAGE2_A4_CACHE_OPS_OBJ) $(APPLE_STAGE2_A4_CACHE_CALL_OBJ) \
+	    $(APPLE_STAGE2_BUILD_DIR)/stage2_sha256.o \
+	    $(APPLE_STAGE2_PREPARE_OBJS)
+
+$(APPLE_STAGE2_A4_CACHE_TEST_ELF): \
+    $(APPLE_STAGE2_A4_CACHE_TEST_ENTRY_OBJ) \
+    $(APPLE_STAGE2_COMMON_OBJS) $(APPLE_STAGE2_A4_CACHE_QEMU_OPS_OBJ) \
+    $(APPLE_STAGE2_A4_CACHE_CALL_OBJ) $(APPLE_STAGE2_A4_CACHE_QEMU_OBJ) \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2.ld
+	$(Q)$(KERNEL_LD) -T $(APPLE_STAGE2_SOURCE_DIR)/stage2.ld \
+	    --gc-sections -o $@ $(APPLE_STAGE2_A4_CACHE_TEST_ENTRY_OBJ) \
+	    $(APPLE_STAGE2_COMMON_OBJS) $(APPLE_STAGE2_A4_CACHE_QEMU_OPS_OBJ) \
+	    $(APPLE_STAGE2_A4_CACHE_CALL_OBJ) $(APPLE_STAGE2_A4_CACHE_QEMU_OBJ)
+
+$(APPLE_STAGE2_A5_ELF): $(APPLE_STAGE2_ENTRY_OBJ) \
+    $(APPLE_STAGE2_PREPARE_OBJS) $(APPLE_STAGE2_BUILD_DIR)/stage2_probe.o \
+    $(APPLE_STAGE2_A5_MAIN_OBJ) $(APPLE_STAGE2_BUILD_DIR)/stage2_native_a5.o $(APPLE_STAGE2_A5_OBSERVER_OBJ) \
+    $(APPLE_STAGE2_A5_TOPOLOGY_OBJ) $(APPLE_STAGE2_SOURCE_DIR)/stage2.ld
+	$(Q)$(KERNEL_LD) -T $(APPLE_STAGE2_SOURCE_DIR)/stage2.ld \
+	    --gc-sections -o $@ $(APPLE_STAGE2_ENTRY_OBJ) \
+	    $(APPLE_STAGE2_PREPARE_OBJS) \
+	    $(APPLE_STAGE2_BUILD_DIR)/stage2_probe.o \
+	    $(APPLE_STAGE2_A5_MAIN_OBJ) $(APPLE_STAGE2_BUILD_DIR)/stage2_native_a5.o $(APPLE_STAGE2_A5_OBSERVER_OBJ) \
+	    $(APPLE_STAGE2_A5_TOPOLOGY_OBJ)
+
+$(APPLE_STAGE2_A5_EYES_ELF): $(APPLE_STAGE2_A5_EYES_ENTRY_OBJ) \
+    $(APPLE_STAGE2_PREPARE_OBJS) $(APPLE_STAGE2_BUILD_DIR)/stage2_probe.o \
+    $(APPLE_STAGE2_A5_EYES_MAIN_OBJ) $(APPLE_STAGE2_BUILD_DIR)/stage2_native_a5_eyes.o \
+    $(APPLE_STAGE2_A5_COMPACT_OBSERVER_OBJ) \
+    $(APPLE_STAGE2_A5_TOPOLOGY_OBJ) $(APPLE_STAGE2_A5_EYES_MARK_OBJ) \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2.ld
+	$(Q)$(KERNEL_LD) -T $(APPLE_STAGE2_SOURCE_DIR)/stage2.ld \
+	    --gc-sections -o $@ $(APPLE_STAGE2_A5_EYES_ENTRY_OBJ) \
+	    $(APPLE_STAGE2_PREPARE_OBJS) \
+	    $(APPLE_STAGE2_BUILD_DIR)/stage2_probe.o \
+	    $(APPLE_STAGE2_A5_EYES_MAIN_OBJ) $(APPLE_STAGE2_BUILD_DIR)/stage2_native_a5_eyes.o \
+	    $(APPLE_STAGE2_A5_COMPACT_OBSERVER_OBJ) \
+	    $(APPLE_STAGE2_A5_TOPOLOGY_OBJ) $(APPLE_STAGE2_A5_EYES_MARK_OBJ)
+
+$(APPLE_STAGE2_GRAPHICS_EYES_ELF): \
+    $(APPLE_STAGE2_GRAPHICS_EYES_ENTRY_OBJ) \
+    $(APPLE_STAGE2_PREPARE_OBJS) $(APPLE_STAGE2_BUILD_DIR)/stage2_probe.o \
+    $(APPLE_STAGE2_GRAPHICS_EYES_MAIN_OBJ) $(APPLE_STAGE2_BUILD_DIR)/stage2_native_graphics_eyes.o \
+    $(APPLE_STAGE2_A5_EYES_MARK_OBJ) $(APPLE_STAGE2_SPI_EYES_OBJS) \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2.ld
+	$(Q)$(KERNEL_LD) -T $(APPLE_STAGE2_SOURCE_DIR)/stage2.ld \
+	    --gc-sections -o $@ $(APPLE_STAGE2_GRAPHICS_EYES_ENTRY_OBJ) \
+	    $(APPLE_STAGE2_PREPARE_OBJS) \
+	    $(APPLE_STAGE2_BUILD_DIR)/stage2_probe.o \
+	    $(APPLE_STAGE2_GRAPHICS_EYES_MAIN_OBJ) $(APPLE_STAGE2_BUILD_DIR)/stage2_native_graphics_eyes.o \
+	    $(APPLE_STAGE2_A5_EYES_MARK_OBJ) $(APPLE_STAGE2_SPI_EYES_OBJS)
+
+$(APPLE_STAGE2_GRAPHICS_EYES_BIN): $(APPLE_STAGE2_GRAPHICS_EYES_ELF)
+	$(Q)$(OBJCOPY) -O binary $< $@
+
 $(APPLE_STAGE2_BIN): $(APPLE_STAGE2_ELF)
 	$(Q)$(OBJCOPY) -O binary $< $@
 
@@ -250,6 +726,58 @@ $(APPLE_STAGE2_TEST_BIN): $(APPLE_STAGE2_TEST_ELF)
 $(APPLE_STAGE2_EXCEPTION_TEST_BIN): $(APPLE_STAGE2_EXCEPTION_TEST_ELF)
 	$(Q)$(OBJCOPY) -O binary $< $@
 
+$(APPLE_STAGE2_A4_BIN): $(APPLE_STAGE2_A4_ELF)
+	$(Q)$(OBJCOPY) -O binary $< $@
+
+$(APPLE_STAGE2_A4_CACHE_BIN): $(APPLE_STAGE2_A4_CACHE_ELF)
+	$(Q)$(OBJCOPY) -O binary $< $@
+
+$(APPLE_STAGE2_A4_CACHE_TEST_BIN): $(APPLE_STAGE2_A4_CACHE_TEST_ELF)
+	$(Q)$(OBJCOPY) -O binary $< $@
+
+$(APPLE_STAGE2_A5_BIN): $(APPLE_STAGE2_A5_ELF)
+	$(Q)$(OBJCOPY) -O binary $< $@
+
+$(APPLE_STAGE2_A5_EYES_BIN): $(APPLE_STAGE2_A5_EYES_ELF)
+	$(Q)$(OBJCOPY) -O binary $< $@
+
+%rule_makedirs dirs="$(APPLE_TARGET_PROBE_DIR)" \
+    setuptarget="$(APPLE_TARGET_PROBE_OBJS) $(APPLE_TARGET_PROBE_DEPS)"
+
+%rule_makedirs dirs="$(APPLE_STAGE2_BUILD_DIR) $(APPLE_STAGE2_INSTALL_DIR)" \
+    setuptarget="$(APPLE_STAGE2_COMMON_OBJS) $(APPLE_STAGE2_ENTRY_OBJ) \
+    $(APPLE_STAGE2_TEST_ENTRY_OBJ) $(APPLE_STAGE2_EXCEPTION_TEST_ENTRY_OBJ) \
+    $(APPLE_STAGE2_A4_ENTRY_OBJ) $(APPLE_STAGE2_A4_CACHE_TEST_ENTRY_OBJ) \
+    $(APPLE_STAGE2_A4_GUARD_OBJ) \
+    $(APPLE_STAGE2_A4_MAIN_OBJ) $(APPLE_STAGE2_A4_CACHE_MAIN_OBJ) \
+    $(APPLE_STAGE2_A4_CACHE_OPS_OBJ) $(APPLE_STAGE2_A4_CACHE_QEMU_OPS_OBJ) \
+    $(APPLE_STAGE2_A4_CACHE_CALL_OBJ) \
+    $(APPLE_STAGE2_A4_CACHE_QEMU_OBJ) \
+    $(APPLE_STAGE2_A5_MAIN_OBJ) $(APPLE_STAGE2_BUILD_DIR)/stage2_native_a5.o $(APPLE_STAGE2_A5_OBSERVER_OBJ) \
+    $(APPLE_STAGE2_A5_COMPACT_OBSERVER_OBJ) \
+    $(APPLE_STAGE2_A5_TOPOLOGY_OBJ) $(APPLE_STAGE2_A5_EYES_MAIN_OBJ) $(APPLE_STAGE2_BUILD_DIR)/stage2_native_a5_eyes.o \
+    $(APPLE_STAGE2_A5_EYES_ENTRY_OBJ) $(APPLE_STAGE2_A5_EYES_MARK_OBJ) \
+    $(APPLE_STAGE2_GRAPHICS_EYES_ENTRY_OBJ) \
+    $(APPLE_STAGE2_GRAPHICS_EYES_MAIN_OBJ) $(APPLE_STAGE2_BUILD_DIR)/stage2_native_graphics_eyes.o \
+    $(APPLE_STAGE2_BUILD_DIR)/stage2_sha256.o \
+    $(APPLE_STAGE2_ELF) $(APPLE_STAGE2_TEST_ELF) \
+    $(APPLE_STAGE2_EXCEPTION_TEST_ELF) $(APPLE_STAGE2_A4_ELF) \
+    $(APPLE_STAGE2_A4_CACHE_ELF) $(APPLE_STAGE2_A4_CACHE_TEST_ELF) \
+    $(APPLE_STAGE2_A5_ELF) $(APPLE_STAGE2_A5_EYES_ELF) \
+    $(APPLE_STAGE2_GRAPHICS_EYES_ELF) $(APPLE_STAGE2_GRAPHICS_EYES_BIN) \
+    $(APPLE_STAGE2_BIN) $(APPLE_STAGE2_TEST_BIN) \
+    $(APPLE_STAGE2_EXCEPTION_TEST_BIN) $(APPLE_STAGE2_A4_BIN) \
+    $(APPLE_STAGE2_A4_CACHE_BIN) $(APPLE_STAGE2_A4_CACHE_TEST_BIN) \
+    $(APPLE_STAGE2_A5_BIN) $(APPLE_STAGE2_A5_EYES_BIN)"
+
+%rule_compile_multi mmake=apple-target-probe \
+    basenames="$(APPLE_TARGET_PROBE_FILES)" \
+    targetdir=$(APPLE_TARGET_PROBE_DIR) compiler=kernel
+
+%include_deps depstargets=apple-target-probe deps=$(APPLE_TARGET_PROBE_DEPS)
+
+%common
+
 $(APPLE_STAGE2_BUILD_DIR)/early_fdt.o: $(AROS_EARLY_FDT_DIR)/early_fdt.c $(AROS_EARLY_FDT_DIR)/early_fdt.h $(AROS_EARLY_FDT_DIR)/freestanding.h | $(APPLE_STAGE2_BUILD_DIR)
 	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
 $(APPLE_STAGE2_BUILD_DIR)/libfdt_%.o: $(AROS_EARLY_FDT_DIR)/libfdt/%.c $(AROS_EARLY_FDT_DIR)/libfdt/libfdt.h $(AROS_EARLY_FDT_DIR)/libfdt/libfdt_env.h $(AROS_EARLY_FDT_DIR)/freestanding.h | $(APPLE_STAGE2_BUILD_DIR)
@@ -258,9 +786,36 @@ $(APPLE_STAGE2_BUILD_DIR)/libfdt_%.o: $(AROS_EARLY_FDT_DIR)/libfdt/%.c $(AROS_EA
 $(APPLE_STAGE2_BUILD_DIR)/pci_ecam.o: $(AROS_EARLY_FDT_DIR)/pci_ecam.c $(AROS_EARLY_FDT_DIR)/pci_ecam.h $(AROS_EARLY_FDT_DIR)/early_fdt.h | $(APPLE_STAGE2_BUILD_DIR)
 	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
 
+$(APPLE_STAGE2_BUILD_DIR)/stage2_native.o: $(APPLE_NATIVE_SOURCE_DIR)/stage2_native.c \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_platform.h \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a5.h \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_frame_eyes.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS)  -c $< -o $@
 
-%rule_makedirs dirs="$(APPLE_TARGET_PROBE_DIR)" setuptarget="$(APPLE_TARGET_PROBE_OBJS) $(APPLE_TARGET_PROBE_DEPS)"
-%rule_makedirs dirs="$(APPLE_STAGE2_BUILD_DIR) $(APPLE_STAGE2_INSTALL_DIR)" setuptarget="$(APPLE_STAGE2_COMMON_OBJS) $(APPLE_STAGE2_ENTRY_OBJ) $(APPLE_STAGE2_TEST_ENTRY_OBJ) $(APPLE_STAGE2_EXCEPTION_TEST_ENTRY_OBJ) $(APPLE_STAGE2_ELF) $(APPLE_STAGE2_TEST_ELF) $(APPLE_STAGE2_EXCEPTION_TEST_ELF) $(APPLE_STAGE2_BIN) $(APPLE_STAGE2_TEST_BIN) $(APPLE_STAGE2_EXCEPTION_TEST_BIN)"
-%rule_compile_multi mmake=apple-target-probe basenames="$(APPLE_TARGET_PROBE_FILES)" targetdir=$(APPLE_TARGET_PROBE_DIR) compiler=kernel
-%include_deps depstargets=apple-target-probe deps=$(APPLE_TARGET_PROBE_DEPS)
-%common
+$(APPLE_STAGE2_BUILD_DIR)/stage2_native_a5.o: $(APPLE_NATIVE_SOURCE_DIR)/stage2_native.c \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_platform.h \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a5.h \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_frame_eyes.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -DAROS_APPLE_STAGE2_A5_OBSERVER=1 -c $< -o $@
+
+$(APPLE_STAGE2_BUILD_DIR)/stage2_native_a5_eyes.o: $(APPLE_NATIVE_SOURCE_DIR)/stage2_native.c \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_platform.h \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a5.h \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_frame_eyes.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -DAROS_APPLE_STAGE2_A5_OBSERVER=1 -DAROS_APPLE_STAGE2_FRAME_EYES=1 -c $< -o $@
+
+$(APPLE_STAGE2_BUILD_DIR)/stage2_native_graphics_eyes.o: $(APPLE_NATIVE_SOURCE_DIR)/stage2_native.c \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_platform.h \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_a5.h \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_frame_eyes.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -DAROS_APPLE_STAGE2_FRAME_EYES=1 -c $< -o $@
+
+$(APPLE_STAGE2_BUILD_DIR)/stage2_native_fdt.o: \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_native_fdt.c \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_native_fdt.h \
+    $(APPLE_STAGE2_SOURCE_DIR)/stage2_fdt_internal.h
+	$(Q)$(TARGET_CC) $(APPLE_STAGE2_CFLAGS) -c $< -o $@
+
+$(APPLE_STAGE2_BUILD_DIR)/stage2_native_console.o: \
+    $(APPLE_NATIVE_SOURCE_DIR)/stage2_native_console.S
+	$(Q)$(TARGET_CC) --target=aarch64-none-elf -ffreestanding -fpie -mgeneral-regs-only -c $< -o $@

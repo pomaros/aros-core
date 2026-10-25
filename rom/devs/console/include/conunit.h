@@ -33,6 +33,9 @@
 
 #define CONFLAG_DEFAULT			0
 #define CONFLAG_NODRAW_ON_NEWSIZE	1
+/* The owner supplies a WA_ScaleAware window and forwards scale changes with
+ * CMD_UPDATE. The console renders its system content font at SA_Scale. */
+#define CONFLAG_SCALEAWARE              2
 
 #define PMB_ASM		(M_LNM + 1)
 #define PMB_AWM		(PMB_ASM + 1)

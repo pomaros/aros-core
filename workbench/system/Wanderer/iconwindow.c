@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
   Copyright (C) 2004-2020, The AROS Development Team. All rights reserved.
 */
 
@@ -52,6 +53,7 @@
 #include "iconwindow.h"
 #include "iconwindow_attributes.h"
 #include "iconwindow_iconlist.h"
+#include "wandererscale.h"
 #include "iconwindowbackfill.h"
 
 #include "version.h"
@@ -161,10 +163,14 @@ STATIC VOID IconWindow_StoreSettings(Object * iconwindow)
 
         if (drawericon->do_DrawerData != NULL)
         {
-        drawericon->do_DrawerData->dd_NewWindow.TopEdge = XGET(iconwindow, MUIA_Window_TopEdge);
-        drawericon->do_DrawerData->dd_NewWindow.LeftEdge = XGET(iconwindow, MUIA_Window_LeftEdge);
-        drawericon->do_DrawerData->dd_NewWindow.Width = XGET(iconwindow, MUIA_Window_Width);
-        drawericon->do_DrawerData->dd_NewWindow.Height = XGET(iconwindow, MUIA_Window_Height);
+        drawericon->do_DrawerData->dd_NewWindow.TopEdge = WandererUnscalePoint(
+            XGET(iconwindow, MUIA_Window_TopEdge), XGET(iconList, MUIA_RenderScale));
+        drawericon->do_DrawerData->dd_NewWindow.LeftEdge = WandererUnscalePoint(
+            XGET(iconwindow, MUIA_Window_LeftEdge), XGET(iconList, MUIA_RenderScale));
+        drawericon->do_DrawerData->dd_NewWindow.Width = WandererUnscalePoint(
+            XGET(iconwindow, MUIA_Window_Width), XGET(iconList, MUIA_RenderScale));
+        drawericon->do_DrawerData->dd_NewWindow.Height = WandererUnscalePoint(
+            XGET(iconwindow, MUIA_Window_Height), XGET(iconList, MUIA_RenderScale));
 
         GET(iconList, MUIA_IconList_DisplayFlags, &display_bits);
         if (display_bits & ICONLIST_DISP_SHOWINFO)
@@ -381,6 +387,71 @@ D(bug("[Wanderer:IconWindow]: %s()\n", __PRETTY_FUNCTION__));
 ///
 
 ///OM_NEW()
+/* Keep requested drawer geometry in points. Observed native dimensions only
+ * update that request when the user/client changes a field after opening;
+ * automatic clamping on a small viewport never overwrites saved preferences. */
+static void IconWindow_ObserveGeometry(Object *self, struct IconWindow_DATA *data)
+{
+    data->iwd_ObservedLeft = XGET(self, MUIA_Window_LeftEdge);
+    data->iwd_ObservedTop = XGET(self, MUIA_Window_TopEdge);
+    data->iwd_ObservedWidth = XGET(self, MUIA_Window_Width);
+    data->iwd_ObservedHeight = XGET(self, MUIA_Window_Height);
+    data->iwd_ObservedGeometry = TRUE;
+}
+static void IconWindow_RememberGeometry(Object *self, struct IconWindow_DATA *data)
+{
+    LONG left, top, width, height;
+    if (!data->iwd_ObservedGeometry || (data->iwd_Flags & IWDFLAG_ISROOT)) return;
+    left = XGET(self, MUIA_Window_LeftEdge);
+    top = XGET(self, MUIA_Window_TopEdge);
+    width = XGET(self, MUIA_Window_Width);
+    height = XGET(self, MUIA_Window_Height);
+    if (left != data->iwd_ObservedLeft)
+        data->iwd_PointLeft = WandererUnscalePoint(left, data->iwd_GeometryScale);
+    if (top != data->iwd_ObservedTop)
+        data->iwd_PointTop = WandererUnscalePoint(top, data->iwd_GeometryScale);
+    if (width != data->iwd_ObservedWidth)
+        data->iwd_PointWidth = WandererUnscalePoint(width, data->iwd_GeometryScale);
+    if (height != data->iwd_ObservedHeight)
+        data->iwd_PointHeight = WandererUnscalePoint(height, data->iwd_GeometryScale);
+    data->iwd_ObservedGeometry = FALSE;
+}
+static BOOL IconWindow_ApplyPointGeometry(Object *self, struct IconWindow_DATA *data)
+{
+    const struct ScreenRenderContext *context = NULL;
+    ULONG scale = XGET(self, MUIA_RenderScale);
+    GetAttr(MUIA_RenderContext, self, (IPTR *)&context);
+    if (!context) return FALSE;
+    data->iwd_GeometryScale = scale;
+    if (data->iwd_Flags & IWDFLAG_ISROOT)
+    {
+        LONG factor = 1, top;
+        if (scale == 100)
+        {
+            /* Use the same immutable generation selected by Window Setup. */
+            factor = context->src_LegacyScaleFactor;
+            if (factor < 1 || factor > 4) return FALSE;
+        }
+        top = (context->src_PhysicalBarHeight + factor - 1) / factor;
+        SetAttrs(self, MUIA_Window_LeftEdge, 0, MUIA_Window_TopEdge, top,
+            MUIA_Window_Width, data->iwd_Screen->Width / factor,
+            MUIA_Window_Height, data->iwd_Screen->Height / factor - top,
+            TAG_DONE);
+    }
+    else
+    {
+        SetAttrs(self,
+            MUIA_Window_LeftEdge, data->iwd_PointLeft < 0 ? data->iwd_PointLeft :
+                WandererScalePoint(data->iwd_PointLeft, scale),
+            MUIA_Window_TopEdge, data->iwd_PointTop < 0 ? data->iwd_PointTop :
+                WandererScalePoint(data->iwd_PointTop, scale),
+            MUIA_Window_Width, WandererScalePoint(data->iwd_PointWidth, scale),
+            MUIA_Window_Height, WandererScalePoint(data->iwd_PointHeight, scale),
+            TAG_DONE);
+    }
+    return TRUE;
+}
+
 Object *IconWindow__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
 {
     struct iconWindow_Extension *iw_Extension = NULL;
@@ -725,6 +796,11 @@ D(bug("]\n"));
 
         data->iwd_VolViewMode                           = _newIconWin__VOLVIEWMODE;
 
+        data->iwd_PointLeft = _newIconWin__WindowLeft;
+        data->iwd_PointTop = _newIconWin__WindowTop;
+        data->iwd_PointWidth = _newIconWin__WindowWidth;
+        data->iwd_PointHeight = _newIconWin__WindowHeight;
+        data->iwd_GeometryScale = 100;
         data->iwd_Screen                                = _newIconWin__Screen;
         data->iwd_Title                                 = _newIconWin__Title;
 
@@ -895,35 +971,9 @@ IPTR IconWindow__OM_SET(Class *CLASS, Object *self, struct opSet *message)
                 }
                 if (((data->iwd_Flags & IWDFLAG_ISROOT)) && ((data->iwd_Flags & IWDFLAG_ISBACKDROP)))
                 {
-                    IPTR                            _IconWin__NewWindowWidth = 0;
-                    IPTR                            _IconWin__NewWindowHeight = 0;
-#if 0 /* unused */
-                    IPTR                            _IconWin__NewWindowLeft = 0;
-#endif
-                    IPTR                            _IconWin__NewWindowTop = 0;
-
-                    D(bug("[Wanderer:IconWindow] %s: Updating Backdrop Window Dimensions\n", __PRETTY_FUNCTION__));
-
-                    _IconWin__NewWindowWidth = GetBitMapAttr(__Wanderer__Screen->RastPort.BitMap, BMA_WIDTH);
-                    _IconWin__NewWindowHeight = GetBitMapAttr(__Wanderer__Screen->RastPort.BitMap, BMA_HEIGHT);
-                    D(bug("[Wanderer:IconWindow] %s: Screen dimensions ..  %d x %d\n", __PRETTY_FUNCTION__, _IconWin__NewWindowWidth, _IconWin__NewWindowHeight));
-
-                    _IconWin__NewWindowTop = __Wanderer__Screen->BarHeight + 1;
-#if 0 /* unused */
-                    _IconWin__NewWindowLeft = 0;
-#endif
-
-                    _IconWin__NewWindowHeight -= _IconWin__NewWindowTop;
-
-                    D(bug("[Wanderer:IconWindow] %s: New Window dimensions ..  %d x %d @ %d, %d\n", __PRETTY_FUNCTION__, _IconWin__NewWindowWidth, _IconWin__NewWindowHeight, 0, _IconWin__NewWindowTop));
-
-                    /* A changed screen font also moves the bottom of the
-                     * title bar. Updating only the size leaves the backdrop
-                     * at its old Y coordinate and short of the screen edge. */
-                    SET(self, MUIA_Window_LeftEdge, 0);
-                    SET(self, MUIA_Window_TopEdge, _IconWin__NewWindowTop);
-                    SET(self, MUIA_Window_Width, _IconWin__NewWindowWidth);
-                    SET(self, MUIA_Window_Height, _IconWin__NewWindowHeight);
+                    /* Closed windows obtain their render snapshot in Setup. */
+                    if (XGET(self, MUIA_Window_Open) &&
+                        !IconWindow_ApplyPointGeometry(self, data)) return FALSE;
                 }
             }
             break;
@@ -936,9 +986,11 @@ IPTR IconWindow__OM_SET(Class *CLASS, Object *self, struct opSet *message)
             D(bug("[Wanderer:IconWindow] %s: MUIA_Window_Open [%ld]\n", __PRETTY_FUNCTION__, tag->ti_Data));
             if (tag->ti_Data)
             {
-                DoMethod(data->iwd_IconListObj, MUIM_IconList_Clear);
+                /* Retain entries during native-window/font/context rebuild.
+                 * Update reconciles disk changes while reusing matching nodes. */
 
                 rv = DoSuperMethodA(CLASS, self, (Msg) message);
+                if (XGET(self, MUIA_Window_Open)) IconWindow_ObserveGeometry(self, data);
 #if defined(ICONWINDOW_BUFFERLIST)
                 if (!((data->iwd_Flags & IWDFLAG_ISROOT)))
                 {
@@ -967,9 +1019,6 @@ IPTR IconWindow__OM_SET(Class *CLASS, Object *self, struct opSet *message)
         case MUIA_IconWindow_Font:
             data->iwd_WindowFont = (struct TextFont  *)tag->ti_Data;
             D(bug("[Wanderer:IconWindow] %s: MUIA_IconWindow_Font [font @ 0x%p]\n", __PRETTY_FUNCTION__, data->iwd_WindowFont));
-
-            if (!data->iwd_WindowFont)
-                SetFont(_rp(self), data->iwd_WindowFont);
 
             if (data->iwd_IconListObj)
                 SET(data->iwd_IconListObj, MUIA_Font, data->iwd_WindowFont);
@@ -1108,6 +1157,12 @@ IPTR IconWindow__MUIM_Window_Setup
 
     if (!DoSuperMethodA(CLASS, self, message)) return FALSE;
 
+    if (!IconWindow_ApplyPointGeometry(self, data))
+    {
+        DoSuperMethod(CLASS, self, MUIM_Window_Cleanup);
+        return FALSE;
+    }
+
     if (iconwindow_BackFill_Active)
     {
         data->iwd_BackFillInfo =(struct BackFillInfo *) DoMethod(self, MUIM_IconWindow_BackFill_Setup);
@@ -1115,6 +1170,12 @@ IPTR IconWindow__MUIM_Window_Setup
     }
 
     GET(_app(self), MUIA_Wanderer_Prefs, &prefs);
+    /* Closed drawers miss font notifications; refresh their owned base before
+     * WindowOpen performs the child tree's display-dependent Setup. */
+    if (prefs)
+        SET(self, MUIA_IconWindow_Font, DoMethod(prefs,
+            MUIM_WandererPrefs_ViewSettings_GetAttribute,
+            data->iwd_ViewSettings_Attrib, MUIA_IconWindow_Font));
 
     D(bug("[Wanderer:IconWindow] %s: App PrefsObj @ 0x%p\n", __PRETTY_FUNCTION__, prefs));
 
@@ -1186,6 +1247,8 @@ IPTR IconWindow__MUIM_Window_Cleanup
     SETUP_ICONWINDOW_INST_DATA;
 
     D(bug("[Wanderer:IconWindow]: %s()\n", __PRETTY_FUNCTION__));
+
+    IconWindow_RememberGeometry(self, data);
 
     if (data->iwd_BackFillInfo)
     {
@@ -1575,6 +1638,13 @@ IPTR IconWindow__MUIM_IconWindow_BackFill_ProcessBackground
     retVal = FALSE;
   }
 
+  /* Opening/relayout can draw before the image provider has rebuilt its
+   * buffer. Repaint the entire canvas after processing, including empty
+   * desktop areas that an icon-only update would leave untouched.
+   * MUI_Redraw skips areas that are hidden or not set up. */
+  if (data->iwd_IconListObj)
+    MUI_Redraw(data->iwd_IconListObj, MADF_DRAWOBJECT);
+
   return retVal;
 }
 ///
@@ -1648,8 +1718,8 @@ IPTR IconWindow__MUIM_IconWindow_Snapshot
                             icon_entry->ile_IconEntry->ie_IconNode.ln_Name, icon_entry, node));
                     if (node->ie_DiskObj)
                     {
-                        node->ie_DiskObj->do_CurrentX = node->ie_IconX;
-                        node->ie_DiskObj->do_CurrentY = node->ie_IconY;
+                        node->ie_DiskObj->do_CurrentX = WandererUnscalePoint(node->ie_IconX, XGET(iconList, MUIA_RenderScale));
+                        node->ie_DiskObj->do_CurrentY = WandererUnscalePoint(node->ie_IconY, XGET(iconList, MUIA_RenderScale));
                         PutIconTagList(icon_entry->ile_IconEntry->ie_IconNode.ln_Name, node->ie_DiskObj, icon_tags);
                     }
                     else

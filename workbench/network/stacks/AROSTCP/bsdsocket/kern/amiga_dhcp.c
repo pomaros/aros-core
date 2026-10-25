@@ -7,6 +7,10 @@
 #include <net/if.h>
 #include <net/if_sana.h>
 #include <net/sana2arp.h>   /* for autoip_start() */
+#include <api/netservice_api.h>
+#include <sys/syslog.h>
+#include <sys/systm.h>
+#include <proto/exec.h>
 
 extern struct ifnet *ifnet;
 
@@ -25,7 +29,29 @@ extern struct ifnet *ifnet;
  * are undisturbed; autoip (IPv4LL) stays in the stack.
  */
 
-void run_dhclient(struct ifnet *ifp)        { (void)ifp; }
+/*
+ * A new association (sana_connect) means a new network and a new lease: the
+ * DHCP daemon's client must start over, and only the daemon knows it. Ask it
+ * through its reconfigure-end signal, which stops its clients and launches
+ * them again for the current interface set. Without this, a link lost and
+ * regained (a dropped association, a laptop sleep) left the interface with
+ * no address while dhclient went on believing in a lease the stack had
+ * deleted. Before the daemon registers (the boot configuration) there is
+ * nobody to tell, and the daemon's own first launch covers it.
+ */
+void run_dhclient(struct ifnet *ifp)
+{
+    struct NetService *svc;
+
+    (void)ifp;
+    svc = netservice_find((CONST_STRPTR)"dhcp");
+    if(svc != NULL && (svc->ns_Flags & NSF_EXTERNAL) && svc->ns_Task != NULL &&
+            svc->ns_SigEnd != 0) {
+        __log(LOG_NOTICE, "%s%d: new association, DHCP restarted.",
+              ifp->if_name, ifp->if_unit);
+        Signal(svc->ns_Task, svc->ns_SigEnd);
+    }
+}
 void kill_dhclient(struct ifnet *ifp)       { (void)ifp; }
 #if INET6 && DHCP6
 void run_dhclient6(struct ifnet *ifp)       { (void)ifp; }

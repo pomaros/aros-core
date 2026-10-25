@@ -195,8 +195,9 @@ typedef struct MinList __pthread_exec_minlist_t;
 // POSIX pthread types
 //
 
-typedef unsigned int pthread_t;
-typedef unsigned int pthread_key_t;
+/* Defined in <aros/types/pthread_types.h>, which <sys/types.h> includes too. */
+#include <aros/types/pthread_types.h>
+
 
 //
 // POSIX thread attribute values
@@ -233,20 +234,6 @@ typedef unsigned int pthread_key_t;
 // Threads
 //
 
-struct pthread_attr
-{
-    void *stackaddr;
-    size_t stacksize;
-#ifdef __MORPHOS__
-    size_t stacksize68k;
-#endif
-    int detachstate;
-    struct sched_param param;
-    int inheritsched;
-    int contentionscope;
-};
-
-typedef struct pthread_attr pthread_attr_t;
 
 #define PTHREAD_CANCELED              ((void *)-1)
 
@@ -254,14 +241,6 @@ typedef struct pthread_attr pthread_attr_t;
 // Once key
 //
 
-struct pthread_once
-{
-    volatile int done;
-    int started;
-    int lock;
-};
-
-typedef struct pthread_once pthread_once_t;
 
 #define PTHREAD_ONCE_INIT       {0, -1, 0}
 
@@ -274,22 +253,6 @@ typedef struct pthread_once pthread_once_t;
 #define PTHREAD_MUTEX_ERRORCHECK 2
 #define PTHREAD_MUTEX_DEFAULT    PTHREAD_MUTEX_NORMAL
 
-struct pthread_mutexattr
-{
-    int pshared;
-    int kind;
-};
-
-typedef struct pthread_mutexattr pthread_mutexattr_t;
-
-struct pthread_mutex
-{
-    int kind;
-    __pthread_exec_sigsem_t semaphore;
-    int incond;
-};
-
-typedef struct pthread_mutex pthread_mutex_t;
 
 #ifndef __AROS__
 #define NULL_MINLIST {0, 0, 0}
@@ -309,37 +272,6 @@ typedef struct pthread_mutex pthread_mutex_t;
 // Condition variables
 //
 
-struct pthread_condattr
-{
-    int pshared;
-    /* Clock an absolute pthread_cond_timedwait() deadline is read against
-     * (CLOCK_REALTIME default per POSIX; CLOCK_MONOTONIC for Mesa's
-     * u_cnd_monotonic_*). Set with pthread_condattr_setclock(); always set
-     * by pthread_condattr_init(). A manually-zeroed attr reads 0, which is
-     * CLOCK_MONOTONIC on AROS - use pthread_condattr_init(). */
-    clockid_t cond_clock;
-};
-
-typedef struct pthread_condattr pthread_condattr_t;
-
-struct pthread_cond
-{
-    /* Copied from the attr by pthread_cond_init(); REALTIME when the cond
-     * was created with a NULL attr, a static initializer, or lazy init.
-     * Lives in the slot that was the unused `int pad1` so that
-     * sizeof(pthread_cond_t) is UNCHANGED: std::condition_variable embeds
-     * this struct, and libc++.a (toolchain, prebuilt) plus every object
-     * compiled before the field appeared lay out std::__assoc_sub_state
-     * (mutex, condition_variable, __state_) from that size. Appending a
-     * member instead moved __state_ for newly compiled code only, and
-     * std::future::get() (libc++.a's __sub_wait) then waited forever on a
-     * ready future - the LLVM MCJIT resolveExternalSymbols() stall. */
-    clockid_t cond_clock;
-    __pthread_exec_sigsem_t semaphore;
-    __pthread_exec_minlist_t waiters;
-};
-
-typedef struct pthread_cond pthread_cond_t;
 
 #ifdef CLOCK_REALTIME
 #define PTHREAD_COND_INITIALIZER {CLOCK_REALTIME, NULL_SEMAPHORE, NULL_MINLIST}
@@ -353,40 +285,11 @@ typedef struct pthread_cond pthread_cond_t;
 
 #define PTHREAD_BARRIER_SERIAL_THREAD 1
 
-struct pthread_barrierattr
-{
-    int pshared;
-};
-
-typedef struct pthread_barrierattr pthread_barrierattr_t;
-
-struct pthread_barrier
-{
-    unsigned int curr_height;
-    unsigned int total_height;
-    pthread_cond_t breeched;
-    pthread_mutex_t lock;
-};
-
-typedef struct pthread_barrier pthread_barrier_t;
 
 //
 // Read-write locks
 //
 
-struct pthread_rwlockattr
-{
-    int pshared;
-};
-
-typedef struct pthread_rwlockattr pthread_rwlockattr_t;
-
-struct pthread_rwlock
-{
-    __pthread_exec_sigsem_t semaphore;
-};
-
-typedef struct pthread_rwlock pthread_rwlock_t;
 
 #define PTHREAD_RWLOCK_INITIALIZER {NULL_SEMAPHORE}
 
@@ -394,7 +297,6 @@ typedef struct pthread_rwlock pthread_rwlock_t;
 // Spinlocks
 //
 
-typedef int pthread_spinlock_t;
 
 #define PTHREAD_SPINLOCK_INITIALIZER 0
 
@@ -565,6 +467,7 @@ int pthread_setname_np(pthread_t thread, const char *name);
 int pthread_getname_np(pthread_t thread, char *name, size_t len);
 int pthread_cond_timedwait_relative_np(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *reltime);
 int pthread_getattr_np(pthread_t thread, pthread_attr_t *attr);
+int pthread_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(void));
 
 //
 // Cancellation cleanup

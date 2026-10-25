@@ -43,6 +43,8 @@ struct GalliumBase
 
     char                        *fallback;
     struct Library              *fallbackmodule;
+    /* softpipe, when the ENV:SYS/Gallium.default driver cannot be had */
+    struct Library              *softpipemodule;
 
     OOP_Class                   *basegallium;
     OOP_AttrBase                gfxAttrBase;
@@ -53,6 +55,7 @@ struct GalliumBase
     OOP_MethodID                galliumMId_UpdateRect;
     OOP_MethodID                galliumMId_DisplayResource;
     OOP_MethodID                galliumMId_DisplayResourceRP;
+    OOP_MethodID                galliumMId_ReleaseRastPort;
 };
 
 #define GB(lb)  ((struct GalliumBase *)lb)

@@ -15,6 +15,9 @@
 #include <proto/exec.h>
 #include "kernel_base.h"
 #include "page_allocator.h"
+#include <aros/apple/jit.h>
+#include "jit_protect.h"
+#include "code_window.h"
 #include "../../aarch64-all/kernel/protection.h"
 
 
@@ -121,9 +124,27 @@ int AROSApplePageProtect(void *address, uint32_t length, uint32_t flags)
     if (flags & MAP_Executable) permissions |= AARCH64_PROTECT_EXEC;
     if (!(flags & MAP_Supervisor)) {
         permissions |= AARCH64_PROTECT_USER;
-        /* Native AROS library text is shared by EL0 callers and EL1 callbacks. */
-        if (flags & MAP_Executable) permissions |= AARCH64_PROTECT_EXEC_BOTH;
+        if ((flags & (MAP_Writable | MAP_Executable)) ==
+                (MAP_Writable | MAP_Executable)) {
+            /* A JIT's pages: see <aros/apple/jit.h>. Refused without a
+             * JIT mode; the generic engine refuses W+X anyway. */
+            if (AROSAppleJitMode() == AROS_APPLE_JIT_NONE)
+                return 0;
+            permissions |= AARCH64_PROTECT_JIT;
+        } else if (flags & MAP_Executable) {
+            /* Native AROS library text is shared by EL0 callers and EL1 callbacks. */
+            permissions |= AARCH64_PROTECT_EXEC_BOTH;
+        }
     }
+    /* A reservation's pages: granting access commits them, removing all
+     * access gives them back (MEMF_RESERVE, code_window.c). */
+    if ((flags & (MAP_Readable | MAP_Writable | MAP_Executable)) == 0) {
+        if (AROSAppleCodeWindowDecommit(&AROSAppleCodeWindowKernelOps,
+                address, length))
+            return 1;
+    } else if (AROSAppleCodeWindowCommit(&AROSAppleCodeWindowKernelOps,
+            address, length) == 0)
+        return 0;
     start = (uintptr_t)address & ~(AROS_APPLE_PAGE_SIZE - 1);
     end = ((uintptr_t)address + length + AROS_APPLE_PAGE_SIZE - 1) &
         ~(AROS_APPLE_PAGE_SIZE - 1);

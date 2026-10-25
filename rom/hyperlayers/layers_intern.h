@@ -1,6 +1,8 @@
 /*
     Copyright (C) 1995-2011, The AROS Development Team. All rights reserved.
 
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
+
     Desc: Internal information for layers.library.
 */
 #ifndef _LAYERS_INTERN_H_
@@ -82,6 +84,10 @@ struct LayerInfo_extra
 #endif
     struct MinList lie_ResourceList;
     UBYTE          lie_pad[4];
+    /* Immutable after the first layer is created. Borrowed physical screen
+     * root; NULL means an ordinary independent stack. Public structs retain
+     * their existing sizes, including Layer_Info embedded in Screen. */
+    struct Layer_Info *lie_CompositionRoot;
 };
 
 /*

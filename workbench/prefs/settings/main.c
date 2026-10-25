@@ -4,6 +4,9 @@
 
     Settings: every settings editor in one window. Usage:
         Settings [PAGE <class>] [PUBSCREEN <name>] [SEARCH <text>] [LEVEL <name>] [CHECK]
+                 [SEARCHCHECK]
+    CHECK opens every page and checks the index, the levels and SEARCH;
+    SEARCHCHECK checks search itself ([SET9]) before any page is open.
     The groups and rows come from SYS:Prefs/Index/Groups and
     SYS:Prefs/Index/Rows; a page is a PrefsEditor created by class name.
 */
@@ -86,6 +89,19 @@ AROS_UFH3(static IPTR, port_level,
     AROS_USERFUNC_EXIT
 }
 
+/* SHOW PAGE <page>: an indicator's "Settings..." entry, a script. */
+AROS_UFH3(static IPTR, port_show,
+    AROS_UFHA(struct Hook *, hook, A0),
+    AROS_UFHA(Object *, app, A2),
+    AROS_UFHA(IPTR *, args, A1))
+{
+    AROS_USERFUNC_INIT
+    DoMethod(settings_window, MUIM_SettingsWindow_ShowPage, args[0]);
+    return RETURN_OK;
+    AROS_USERFUNC_EXIT
+}
+
+static struct Hook show_hook = { { NULL, NULL }, (HOOKFUNC)port_show, NULL, NULL };
 static struct Hook level_hook = { { NULL, NULL }, (HOOKFUNC)port_level, NULL, NULL };
 static struct Hook get_hook = { { NULL, NULL }, (HOOKFUNC)port_get, NULL, NULL };
 static struct Hook set_hook = { { NULL, NULL }, (HOOKFUNC)port_set, NULL, NULL };
@@ -97,6 +113,7 @@ static struct MUI_Command commands[] =
     { "SET",  "KEY/A,VALUE/A/F", 2, &set_hook, {0} },
     { "FIND", "TEXT/A/F",      1, &find_hook, {0} },
     { "LEVEL", "LEVEL/A",      1, &level_hook, {0} },
+    { "SHOW", "PAGE/K/A",      1, &show_hook, {0} },
     { NULL,   NULL,            0, NULL,       {0} }
 };
 
@@ -155,7 +172,11 @@ static void load_dir(CONST_STRPTR dir, BOOL rows)
                 {
                     if (catalogue.row_count < CAT_ROWS &&
                         cat_parse_row(text, length, &catalogue.rows[catalogue.row_count]) == 0)
+                    {
+                        strlcpy(catalogue.rows[catalogue.row_count].id,
+                            (const char *)fib->fib_FileName, CAT_ID);
                         catalogue.row_count++;
+                    }
                     else
                         Printf("Settings: row file %s is not valid\n", (IPTR)path);
                 }
@@ -176,8 +197,9 @@ static void load_dir(CONST_STRPTR dir, BOOL rows)
 
 int main(void)
 {
-    IPTR args[5] = { 0, 0, 0, 0, 0 };
-    struct RDArgs *rda = ReadArgs((CONST_STRPTR)"PAGE/K,PUBSCREEN/K,SEARCH/K,LEVEL/K,CHECK/S", args, NULL);
+    IPTR args[6] = { 0, 0, 0, 0, 0, 0 };
+    struct RDArgs *rda = ReadArgs((CONST_STRPTR)"PAGE/K,PUBSCREEN/K,SEARCH/K,LEVEL/K,CHECK/S,SEARCHCHECK/S",
+        args, NULL);
     struct Screen *screen = NULL;
     Object *application, *window;
     IPTR check_failures = 0;
@@ -213,8 +235,11 @@ int main(void)
         SET(window, MUIA_Window_Open, TRUE);
         if (args[3] && !DoMethod(window, MUIM_SettingsWindow_SetLevel, args[3]))
             Printf("Settings: unknown level %s\n", args[3]);
+        /* The search check first: no page may be open before it. */
+        if (args[5])
+            check_failures += DoMethod(window, MUIM_SettingsWindow_SearchCheck);
         if (args[4])
-            check_failures = DoMethod(window, MUIM_SettingsWindow_Check, args[2]);
+            check_failures += DoMethod(window, MUIM_SettingsWindow_Check, args[2]);
         else if (args[2])
             DoMethod(window, MUIM_SettingsWindow_SetSearch, args[2]);
         DoMethod(application, MUIM_Application_Execute);

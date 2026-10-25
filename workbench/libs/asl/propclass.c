@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2011, The AROS Development Team. All rights reserved.
 */
 
@@ -50,6 +51,7 @@ IPTR AslProp__OM_NEW(Class * cl, Object * o, struct opSet * msg)
     if (eg)
     {
         data = INST_DATA(cl, eg);
+        data->ld = (struct LayoutData *)GetTagData(GA_UserData, 0, msg->ops_AttrList);
 
         eg->BoundsLeftEdge = eg->LeftEdge;
         eg->BoundsTopEdge  = eg->TopEdge;
@@ -57,13 +59,13 @@ IPTR AslProp__OM_NEW(Class * cl, Object * o, struct opSet * msg)
         eg->BoundsHeight   = eg->Height;
         eg->MoreFlags |= GMORE_BOUNDS;
 
-        eg->LeftEdge += BORDERPROPSPACINGX;
-        eg->TopEdge  += BORDERPROPSPACINGY;
-        eg->Width    -= BORDERPROPSPACINGX * 2;
-        eg->Height   -= BORDERPROPSPACINGY * 2;
+        eg->LeftEdge += AslScaleValue(data->ld, BORDERPROPSPACINGX);
+        eg->TopEdge  += AslScaleValue(data->ld, BORDERPROPSPACINGY);
+        eg->Width    -= AslScaleValue(data->ld, BORDERPROPSPACINGX) * 2;
+        eg->Height   -= AslScaleValue(data->ld, BORDERPROPSPACINGY) * 2;
 
         data->deltafactor = 1;
-        data->frame = NewObjectA(NULL, FRAMEICLASS, fitags);
+        data->frame = AslFrame((struct LayoutData *)GetTagData(GA_UserData, 0, msg->ops_AttrList), fitags, AslBase);
         if (!data->frame)
         {
             CoerceMethod(cl, (Object *)eg, OM_DISPOSE);
@@ -105,6 +107,10 @@ IPTR AslProp__OM_SET(Class * cl, Object * o, struct opSet * msg)
     {
         switch(ti->ti_Tag)
         {
+            case ASLSC_ListView:
+                data->listview = (Object *)ti->ti_Data;
+                break;
+
             case ASLSC_DeltaFactor:
                 data->deltafactor = (LONG)ti->ti_Data;
                 break;
@@ -116,6 +122,16 @@ IPTR AslProp__OM_SET(Class * cl, Object * o, struct opSet * msg)
                 {
                     IPTR top, total, visible, newtop;
 
+                    if (data->listview)
+                    {
+                        /* Arrow buttons move exact logical rows, independent
+                         * of the native knob's bounded representation. */
+                        struct TagItem tags[] = {{ASLLV_ScrollPixels,
+                            ti->ti_Data == ID_ARROWDEC ? -data->deltafactor : data->deltafactor}, {TAG_DONE, 0}};
+                        struct opSet set = {OM_SET, tags, msg->ops_GInfo};
+                        DoMethodA(data->listview, (Msg)&set);
+                        break;
+                    }
                     GetAttr(PGA_Top,     o, &top);
                     GetAttr(PGA_Total,   o, &total);
                     GetAttr(PGA_Visible, o, &visible);
@@ -188,6 +204,45 @@ IPTR AslProp__OM_SET(Class * cl, Object * o, struct opSet * msg)
 
 /***********************************************************************************/
 
+/* Only verified native input completion carries fresh endpoint intent.
+ * Ordinary PGA setters and notification echoes must retain the list's exact
+ * pixel position even when it shares a quantized endpoint bin. */
+static void SnapInputEndpoint(Class *cl, Object *o, struct GadgetInfo *gi)
+{
+    struct AslPropData *data = INST_DATA(cl, o);
+    IPTR top, total, visible, pixels, viewport;
+    LONG endpoint;
+    if (!data->listview) return;
+    GetAttr(PGA_Top, o, &top);
+    GetAttr(PGA_Total, o, &total);
+    GetAttr(PGA_Visible, o, &visible);
+    if (top != 0 && (total <= visible || top != total - visible)) return;
+    GetAttr(ASLLV_TotalPixels, data->listview, &pixels);
+    GetAttr(ASLLV_VisiblePixels, data->listview, &viewport);
+    endpoint = top == 0 || pixels <= viewport ? 0 : pixels - viewport;
+    {
+        struct TagItem tags[] = {{ASLLV_TopPixel, endpoint}, {TAG_DONE, 0}};
+        struct opSet set = {OM_SET, tags, gi};
+        DoMethodA(data->listview, (Msg)&set);
+    }
+}
+
+IPTR AslProp__GM_GOACTIVE(Class *cl, Object *o, struct gpInput *msg)
+{
+    IPTR result = DoSuperMethodA(cl, o, (Msg)msg);
+    if (result & GMR_VERIFY) SnapInputEndpoint(cl, o, msg->gpi_GInfo);
+    return result;
+}
+
+IPTR AslProp__GM_HANDLEINPUT(Class *cl, Object *o, struct gpInput *msg)
+{
+    IPTR result = DoSuperMethodA(cl, o, (Msg)msg);
+    if (result & GMR_VERIFY) SnapInputEndpoint(cl, o, msg->gpi_GInfo);
+    return result;
+}
+
+/***********************************************************************************/
+
 IPTR AslProp__GM_RENDER(Class *cl, struct Gadget *g, struct gpRender *msg)
 {
     struct AslPropData *data;
@@ -207,10 +262,10 @@ IPTR AslProp__GM_RENDER(Class *cl, struct Gadget *g, struct gpRender *msg)
 
         getgadgetcoords(g, msg->gpr_GInfo, &x, &y, &w, &h);
 
-        x -= BORDERPROPSPACINGX;
-        y -= BORDERPROPSPACINGY;
-        w += BORDERPROPSPACINGX * 2;
-        h += BORDERPROPSPACINGY * 2;
+        x -= AslScaleValue(data->ld, BORDERPROPSPACINGX);
+        y -= AslScaleValue(data->ld, BORDERPROPSPACINGY);
+        w += AslScaleValue(data->ld, BORDERPROPSPACINGX) * 2;
+        h += AslScaleValue(data->ld, BORDERPROPSPACINGY) * 2;
 
         im_tags[0].ti_Data = w;
         im_tags[1].ti_Data = h;
@@ -222,7 +277,7 @@ IPTR AslProp__GM_RENDER(Class *cl, struct Gadget *g, struct gpRender *msg)
                        x,
                        y,
                        IDS_NORMAL,
-                       msg->gpr_GInfo->gi_DrInfo);
+                       ((struct LayoutData *)g->UserData)->ld_Dri);
 
     #if AVOID_FLICKER
         {
@@ -233,17 +288,17 @@ IPTR AslProp__GM_RENDER(Class *cl, struct Gadget *g, struct gpRender *msg)
             fbox.Width = w;
             fbox.Height = h;
 
-            ibox.Left   = x + BORDERPROPSPACINGX;
-            ibox.Top    = y + BORDERPROPSPACINGY;
-            ibox.Width  = w - BORDERPROPSPACINGX * 2;
-            ibox.Height = h - BORDERPROPSPACINGY * 2;
+            ibox.Left   = x + AslScaleValue(data->ld, BORDERPROPSPACINGX);
+            ibox.Top    = y + AslScaleValue(data->ld, BORDERPROPSPACINGY);
+            ibox.Width  = w - AslScaleValue(data->ld, BORDERPROPSPACINGX) * 2;
+            ibox.Height = h - AslScaleValue(data->ld, BORDERPROPSPACINGY) * 2;
 
             PaintInnerFrame(msg->gpr_RPort,
-                            msg->gpr_GInfo->gi_DrInfo,
+                            ((struct LayoutData *)g->UserData)->ld_Dri,
                             data->frame,
                             &fbox,
                             &ibox,
-                            msg->gpr_GInfo->gi_DrInfo->dri_Pens[BACKGROUNDPEN],
+                            ((struct LayoutData *)g->UserData)->ld_Dri->dri_Pens[BACKGROUNDPEN],
                             AslBase);
 
         }

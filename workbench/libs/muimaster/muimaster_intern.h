@@ -1,4 +1,6 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
+    Licensed under the AROS Public License, version 1.1.
     Copyright (C) 2002-2025, The AROS Development Team. All rights reserved.
 */
 
@@ -84,6 +86,7 @@ struct MUIMasterBase_intern
 
     struct MinList              BuiltinClasses;
     struct MinList              Applications;
+    IPTR NextNativeWindowGeneration; /* ZuneSemaphore, never reused/wrapped. */
     struct MUI_PenSpec          *defaultPens;
 };
 

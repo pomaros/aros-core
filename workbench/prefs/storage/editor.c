@@ -12,10 +12,103 @@
 #include <proto/dos.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "editor.h"
+#include "report.h"
+#include <filesystems/afsplus_ext_packet.h>
+#include <filesystems/afsplus_aros.h>
 #include LC_LIBDEFS_FILE
 #include <dos/dosextens.h>
 #include <exec/memory.h>
+
+static int32_t storage_send(void *context, struct AfsplusExtRequest *request)
+{
+    if (DoPkt((struct MsgPort *)context, ACTION_AFSPLUS_EXT, (SIPTR)request, 0, 0, 0, 0)) return 0;
+    return IoErr() ? IoErr() : ERROR_UNKNOWN;
+}
+
+static void snapshot_entry(void *context, uint64_t id, uint64_t generation, uint64_t tx)
+{
+    Object *list = context;
+    char text[128];
+    snprintf(text, sizeof(text), "%llu  (checkpoint %llu, transaction %llu)",
+        (unsigned long long)id, (unsigned long long)generation, (unsigned long long)tx);
+    DoMethod(list, MUIM_List_InsertSingle, (IPTR)text, MUIV_List_Insert_Bottom);
+}
+
+IPTR StorageEditor__MUIM_StorageEditor_Snapshots(Class *CLASS, Object *self, Msg message)
+{
+    struct StorageEditor_DATA *data = INST_DATA(CLASS, self);
+    STRPTR volume = NULL;
+    BPTR lock;
+    uint32_t total = 0;
+    int incomplete = 0;
+    LONG error = 0;
+    char text[160];
+    DoMethod(data->snapshots, MUIM_List_Clear);
+    DoMethod(data->volumes, MUIM_List_GetEntry, MUIV_List_GetEntry_Active, (IPTR)&volume);
+    if (!volume || !(lock = Lock(volume, ACCESS_READ)))
+    {
+        SET(data->snapshot_status, MUIA_Text_Contents, (IPTR)"Select an available volume to list snapshots");
+        return FALSE;
+    }
+    error = storage_snapshots(((struct FileLock *)BADDR(lock))->fl_Task, storage_send,
+        snapshot_entry, data->snapshots, &total, &incomplete);
+    if (error == -1) error = ERROR_BAD_NUMBER;
+    UnLock(lock);
+    if (error)
+    {
+        DoMethod(data->snapshots, MUIM_List_Clear);
+        snprintf(text, sizeof(text), "Snapshots unavailable (DOS error %ld); the volume must support snapshots and authorize access", (long)error);
+    }
+    else snprintf(text, sizeof(text), "%lu snapshot(s)%s", (unsigned long)total,
+        incomplete ? "; list limit reached, use AFSPlusSnapshot for the complete inventory" : "");
+    SET(data->snapshot_status, MUIA_Text_Contents, (IPTR)text);
+    return error == 0;
+}
+
+IPTR StorageEditor__MUIM_StorageEditor_DeleteSnapshot(Class *CLASS, Object *self, Msg message)
+{
+    struct StorageEditor_DATA *data = INST_DATA(CLASS, self);
+    STRPTR volume = NULL, entry = NULL;
+    uint64_t id;
+    BPTR lock;
+    LONG error;
+    char text[384], volume_name[258];
+    IPTR requester_args[1];
+    DoMethod(data->volumes, MUIM_List_GetEntry, MUIV_List_GetEntry_Active, (IPTR)&volume);
+    DoMethod(data->snapshots, MUIM_List_GetEntry, MUIV_List_GetEntry_Active, (IPTR)&entry);
+    if (!volume || !entry) return FALSE;
+    id = strtoull((const char *)entry, NULL, 10);
+    snprintf(volume_name, sizeof(volume_name), "%s", volume);
+    snprintf(text, sizeof(text), "Delete snapshot %llu from %s?", (unsigned long long)id, volume);
+    lock = Lock((CONST_STRPTR)volume_name, ACCESS_READ);
+    if (!lock)
+    {
+        snprintf(text, sizeof(text), "Volume unavailable (DOS error %ld)", (long)IoErr());
+        SET(data->snapshot_status, MUIA_Text_Contents, (IPTR)text);
+        return FALSE;
+    }
+    /* Bind the confirmation to this mounted volume, even if another process
+       changes a volume label while the requester is open. */
+    requester_args[0] = (IPTR)text;
+    if (MUI_RequestA(_app(self), _win(self), 0, "Delete snapshot", "_Delete|_Cancel", "%s", requester_args) != 1)
+    {
+        UnLock(lock);
+        return FALSE;
+    }
+    error = storage_snapshot_delete(((struct FileLock *)BADDR(lock))->fl_Task, storage_send, id);
+    if (error == -1) error = ERROR_BAD_NUMBER;
+    UnLock(lock);
+    if (error)
+    {
+        snprintf(text, sizeof(text), "Snapshot deletion failed (DOS error %ld)%s", (long)error,
+            error == ERROR_OBJECT_IN_USE ? "; close its open readers before deleting" : "");
+        SET(data->snapshot_status, MUIA_Text_Contents, (IPTR)text);
+        return FALSE;
+    }
+    return DoMethod(self, MUIM_StorageEditor_Snapshots);
+}
 
 IPTR StorageEditor__MUIM_StorageEditor_Refresh(Class *CLASS, Object *self, Msg message)
 {
@@ -23,7 +116,8 @@ IPTR StorageEditor__MUIM_StorageEditor_Refresh(Class *CLASS, Object *self, Msg m
     struct InfoData info;
     STRPTR volume = NULL;
     BPTR lock;
-    char text[512];
+    char text[1024], diagnostics[768];
+    DoMethod(data->snapshots, MUIM_List_Clear);
     DoMethod(data->volumes, MUIM_List_GetEntry, MUIV_List_GetEntry_Active, (IPTR)&volume);
     if (!volume)
     {
@@ -56,8 +150,13 @@ IPTR StorageEditor__MUIM_StorageEditor_Refresh(Class *CLASS, Object *self, Msg m
     }
     else
         snprintf(text, sizeof(text), "%s\nSpace information unavailable", volume);
+    storage_report(((struct FileLock *)BADDR(lock))->fl_Task, storage_send,
+        diagnostics, sizeof(diagnostics));
+    strncat(text, "\n", sizeof(text) - strlen(text) - 1);
+    strncat(text, diagnostics, sizeof(text) - strlen(text) - 1);
     UnLock(lock);
     SET(data->status, MUIA_Text_Contents, (IPTR)text);
+    DoMethod(self, MUIM_StorageEditor_Snapshots);
     return 0;
 }
 
@@ -103,7 +202,7 @@ IPTR StorageEditor__MUIM_StorageEditor_Rescan(Class *CLASS, Object *self, Msg me
 
 IPTR StorageEditor__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
 {
-    Object *status, *volumes, *refresh, *rescan;
+    Object *status, *volumes, *refresh, *rescan, *snapshots, *snapshot_status, *delete_snapshot;
     self = (Object *)DoSuperNewTags(CLASS, self, NULL,
         MUIA_PrefsEditor_Name, (IPTR)"Storage",
         MUIA_PrefsEditor_CanSave, FALSE,
@@ -120,21 +219,40 @@ IPTR StorageEditor__OM_NEW(Class *CLASS, Object *self, struct opSet *message)
         End,
         Child, (IPTR)(status = TextObject,
             MUIA_ObjectID, MAKE_ID('S','T','S','P'),
-            MUIA_ShortHelp, (IPTR)"Capacity and available space in mebibytes",
+            MUIA_ShortHelp, (IPTR)"Capacity, health and volume identity",
             MUIA_Text_Contents, (IPTR)"Select a mounted volume to read its space",
         End),
         Child, (IPTR)HGroup,
-            Child, (IPTR)(refresh = SimpleButton("Refresh space")),
+            Child, (IPTR)(refresh = SimpleButton("Refresh storage")),
             Child, (IPTR)(rescan = SimpleButton("Rescan volumes")),
         End,
+        Child, (IPTR)ListviewObject,
+            MUIA_ObjectID, MAKE_ID('S','T','S','L'),
+            MUIA_ShortHelp, (IPTR)"Snapshots of the selected volume; select a snapshot to delete it",
+            MUIA_Listview_List, (IPTR)(snapshots = ListObject,
+                InputListFrame,
+                MUIA_List_ConstructHook, MUIV_List_ConstructHook_String,
+                MUIA_List_DestructHook, MUIV_List_DestructHook_String,
+            End),
+        End,
+        Child, (IPTR)(snapshot_status = TextObject,
+            MUIA_ObjectID, MAKE_ID('S','T','S','T'),
+            MUIA_Text_Contents, (IPTR)"Select a volume to list snapshots",
+        End),
+        Child, (IPTR)(delete_snapshot = SimpleButton("Delete selected snapshot")),
         TAG_MORE, (IPTR)message->ops_AttrList);
     if (self)
     {
         struct StorageEditor_DATA *data = INST_DATA(CLASS, self);
         data->status = status;
         data->volumes = volumes;
+        data->snapshots = snapshots;
+        data->snapshot_status = snapshot_status;
+        SET(delete_snapshot, MUIA_ObjectID, MAKE_ID('S','T','S','D'));
+        SET(delete_snapshot, MUIA_ShortHelp, (IPTR)"Confirm deletion of the selected snapshot; open readers prevent deletion");
+        DoMethod(delete_snapshot, MUIM_Notify, MUIA_Pressed, FALSE, (IPTR)self, 1, MUIM_StorageEditor_DeleteSnapshot);
         SET(refresh, MUIA_ObjectID, MAKE_ID('S','T','R','F'));
-        SET(refresh, MUIA_ShortHelp, (IPTR)"Read space information from the selected volume");
+        SET(refresh, MUIA_ShortHelp, (IPTR)"Read capacity and health from the selected volume");
         SET(rescan, MUIA_ObjectID, MAKE_ID('S','T','R','S'));
         SET(rescan, MUIA_ShortHelp, (IPTR)"Reload the list of mounted volumes");
         DoMethod(refresh, MUIM_Notify, MUIA_Pressed, FALSE, (IPTR)self, 1, MUIM_StorageEditor_Refresh);

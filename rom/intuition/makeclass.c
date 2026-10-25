@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * Licensed under the AROS Public License (APL) Version 1.1. */
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
@@ -139,7 +141,7 @@
                 iclass->cl_ID         = classID;
                 iclass->cl_InstOffset = CLASS_ALIGN_UP(superClassPtr->cl_InstOffset + superClassPtr->cl_InstSize, AROS_WORSTALIGN);
                 iclass->cl_InstSize   = instanceSize;
-                iclass->cl_Flags      = flags;
+                iclass->cl_Flags      = flags & ~(CLF_SCALE_AWARE | CLF_SCALE_DECLARED);
                 iclass->cl_ObjectSize = iclass->cl_InstOffset
                                       + iclass->cl_InstSize
                                       + sizeof(struct _Object);

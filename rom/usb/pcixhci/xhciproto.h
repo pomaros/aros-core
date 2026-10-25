@@ -236,8 +236,8 @@ LONG xhciCmdNoOp(struct PCIController *hc, ULONG slot, APTR dmaaddr,
      do { \
         struct XhciHCPrivate *xhcic = xhciGetHCPrivate(hc); \
         XHCI_MMIO_BARRIER(); \
-         ((volatile struct xhci_dbr *)((IPTR)xhcic->xhc_XHCIDB))[(slot)].db = AROS_LONG2LE(value); \
-         (void)((volatile struct xhci_dbr *)((IPTR)xhcic->xhc_XHCIDB))[(slot)].db; \
+         XHCI_WR32(((volatile struct xhci_dbr *)((IPTR)xhcic->xhc_XHCIDB))[(slot)].db, value); \
+         (void)XHCI_RD32(((volatile struct xhci_dbr *)((IPTR)xhcic->xhc_XHCIDB))[(slot)].db); \
      } while (0)
 #define xhciCmdSlotDisable(hc,slot,timerreq) \
     xhciCmdSubmit(hc, NULL, (slot << 24) | TRBF_FLAG_CRTYPE_DISABLE_SLOT, NULL, timerreq)
@@ -392,9 +392,9 @@ void xhciDumpCC(UBYTE completioncode);
  */
 #define xhciSetPointerMMIO(x,y,z) \
     do { \
-        y.addr_lo = AROS_LONG2LE((ULONG)((UQUAD)(IPTR)(z) & 0xFFFFFFFF)); \
-        y.addr_hi = ((x)->hc_Flags & HCF_ADDR64) ? \
-            AROS_LONG2LE((ULONG)((UQUAD)(IPTR)(z) >> 32)) : 0; \
+        XHCI_WR32(y.addr_lo, (ULONG)((UQUAD)(IPTR)(z) & 0xFFFFFFFF)); \
+        XHCI_WR32(y.addr_hi, ((x)->hc_Flags & HCF_ADDR64) ? \
+            (ULONG)((UQUAD)(IPTR)(z) >> 32) : 0); \
     } while (0)
 
 static inline struct xhci_trb *

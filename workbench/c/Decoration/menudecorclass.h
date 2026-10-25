@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright  2011-2026, The AROS Development Team.
 */
 
@@ -14,6 +15,10 @@
 struct MenuData
 {
     struct DecorImage *di;
+    struct DecorImage *highlight;
+    struct DecorImage *scaled_menu;
+    const struct ScreenRenderContext *context;
+    BOOL logical;
     struct BitMap   *map;
 
     struct DecorImage *img_menu;

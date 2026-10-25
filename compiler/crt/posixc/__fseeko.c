@@ -28,10 +28,7 @@ int __fseeko64 (
         off64_t  offset,
         int    whence)
 {
-    QUAD cnt = 0;
-    QUAD finalseekposition = 0;
-    QUAD eofposition = 0;
-    BPTR fh = BNULL;
+    LONG mode;
     fdesc *fdesc = __getfdesc(stream->fd);
 
     if (!fdesc)
@@ -39,97 +36,37 @@ int __fseeko64 (
         errno = EBADF;
         return -1;
     }
-
     if (fdesc->fcb->privflags & _FCB_ISDIR)
     {
         errno = EISDIR;
         return -1;
     }
-
-    fh = fdesc->fcb->handle;
-
-    /* This is buffered IO, flush the buffer before any Seek */
-    Flush (fh);
-
-    /* Handling for fseeko specific behaviour (not all cases handled) */
-    /* Get current position */
-    cnt = __dos64_getpos (fdesc->fcb);
-    if (cnt == -1)
+    switch (whence)
     {
-        errno = __stdc_ioerr2errno (IoErr ());
-        return -1;
-    }
-
-    /* Get file size */
-    eofposition = __dos64_getsize (fdesc->fcb);
-    if (eofposition == -1)
-    {
-        /* Does not happen on sfs/affs */
-        errno = EBADF;
-        return -1;
-    }
-
-    switch(whence)
-    {
-        case SEEK_SET: finalseekposition = offset; break;
-        case SEEK_CUR: finalseekposition = cnt + offset; break;
-        case SEEK_END: finalseekposition = eofposition + offset; break;
+        case SEEK_SET: mode = OFFSET_BEGINNING; break;
+        case SEEK_CUR: mode = OFFSET_CURRENT; break;
+        case SEEK_END: mode = OFFSET_END; break;
         default:
             errno = EINVAL;
             return -1;
     }
 
-    /* Check conditions */
-    /* Seek before beginning of file */
-    if (finalseekposition < 0)
+    /* Flush and seek share the handle with descriptor I/O. The filesystem
+       owns logical positions and zero-filling on writes; seeking itself
+       must never change file contents or size. Pass relative offsets to
+       the handler rather than adding signed positions in the CRT. */
+    __fcb_lock(fdesc->fcb);
+    if (!Flush(fdesc->fcb->handle) ||
+        __dos64_seek(fdesc->fcb, offset, mode) == -1)
     {
-        errno = EINVAL;
-        return -1;
-    }
-
-    /* Seek beyond end of file and in write mode */
-    if (finalseekposition > eofposition)
-    {
-        if (fdesc->fcb->flags & O_WRITE)
-        {
-            /* Write '0' to fill up to requested size
-             * compatible fseeko does not write but allows write */
-            QUAD bytestowrite = finalseekposition - eofposition;
-            QUAD chunkcount = bytestowrite / 128;
-            LONG remainder = bytestowrite - (chunkcount * 128);
-            char zeroarray[128] = {0};
-
-            __dos64_seek (fdesc->fcb, 0, OFFSET_END);
-            /* Serialise the raw FWrite/Flush burst on the shared handle. */
-            __fcb_lock(fdesc->fcb);
-            while (chunkcount > 0)
-            {
-                LONG n = (chunkcount > 0x100000) ? 0x100000 : (LONG)chunkcount;
-                FWrite (fh, zeroarray, 128, n);
-                chunkcount -= n;
-            }
-            if (remainder > 0)
-                FWrite (fh, zeroarray, remainder, 1);
-            Flush (fh);
-            __fcb_unlock(fdesc->fcb);
-        }
-    }
-
-    cnt = __dos64_seek (fdesc->fcb, finalseekposition, OFFSET_BEGINNING);
-
-    if (cnt == -1)
-    {
-        LONG ioerr = IoErr ();
+        LONG ioerr = IoErr();
+        __fcb_unlock(fdesc->fcb);
         errno = (ioerr == ERROR_OBJECT_TOO_LARGE)
-            ? EOVERFLOW : __stdc_ioerr2errno (ioerr);
+            ? EOVERFLOW : __stdc_ioerr2errno(ioerr);
         return -1;
     }
-
-    /* It's specified that upon success fseeko should clear EOF flag
-       so here we go.
-    */
     stream->flags &= ~(__POSIXC_STDIO_EOF);
-
+    __fcb_unlock(fdesc->fcb);
     return 0;
 } /* __fseeko64 */
 

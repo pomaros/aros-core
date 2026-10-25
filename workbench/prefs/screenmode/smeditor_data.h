@@ -31,10 +31,18 @@
 #include "smproperties.h"
 #include "smattributes.h"
 #endif
+#include "../../include/scaleresult.h"
 
 struct SMEditor_DATA
 {
-    Object *selector, *properties, *attributes;
+    Object *selector, *properties, *attributes, *scale;
+    struct Hook scale_hook, raster_hook, gesture_hook;
+    struct ScaleAttempt pending_attempt;
+    struct ScreenModePrefs imported_prefs;
+    BOOL raster_changed, importing;
+    IPTR initial_live_scale;
+    BOOL setup_complete, initial_live_captured;
+    BOOL gesture_held, pending_failure;
 };
 
 #endif

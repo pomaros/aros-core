@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2013, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
     
     Classes for window decor stuff, like dragbar, close etc.
@@ -25,6 +26,8 @@
 #include "gadgets.h"
 
 #include "intuition_intern.h"
+#include "windowcomposition.h"
+#include "windowfit.h"
 #include "inputhandler.h"
 #include "inputhandler_support.h"
 #include "inputhandler_actions.h"
@@ -64,6 +67,19 @@ on screen.
 //#define DELAYEDSIZE
 
 /***********************************************************************************/
+
+/* Screen mouse coordinates remain physical. Decoration geometry and clients
+   operate in the composed window's logical coordinate space. */
+static LONG windowmouse(struct Window *w, LONG value)
+{
+    LONG factor = WindowCompositionFactor(w);
+    return value >= 0 ? value / factor : -((-value + factor - 1) / factor);
+}
+
+static LONG windowextent(struct Window *w, LONG value)
+{
+    return value / WindowCompositionFactor(w);
+}
 
 #define WSIG_MOVE SIGF_INTUITION
 #define WSIG_DIE  SIGF_ABORT
@@ -146,8 +162,14 @@ void MoveTask(struct dragbar_data *data,struct Window *w,struct Screen *screen,s
                             }
                         }
 
+                        ULONG fitAxes = (data->curleft != w->LeftEdge ? WINDOWFIT_X : 0) |
+                            (data->curtop != w->TopEdge ? WINDOWFIT_Y : 0);
+                        w->RelLeftEdge += data->curleft - w->LeftEdge;
+                        w->RelTopEdge += data->curtop - w->TopEdge;
                         w->LeftEdge = data->curleft;
                         w->TopEdge = data->curtop;
+                        WindowFitRecordChange(w, fitAxes);
+                        WindowCompositionSync(w, IntuitionBase);
                         UpdateMouseCoords(w);
 
                     }
@@ -202,10 +224,18 @@ static void cliprectfill(struct Screen *scr, struct RastPort *rp,
 
 /***********************************************************************************/
 
-static void drawwindowframe(struct Screen *scr, struct RastPort *rp,
+static void drawwindowframe(struct Window *w, struct RastPort *rp,
                             WORD x1, WORD y1, WORD x2, WORD y2,
                             struct IntuitionBase *IntuitionBase)
 {
+    struct Screen *scr = w->WScreen;
+    LONG factor = WindowCompositionFactor(w);
+    /* Inclusive logical rectangle becomes an inclusive physical rectangle. */
+    x1 *= factor;
+    y1 *= factor;
+    x2 = (x2 + 1) * factor - 1;
+    y2 = (y2 + 1) * factor - 1;
+
     /* this checks should not be necessary, but just to be sure */
 
     if (x2 < x1)
@@ -373,8 +403,8 @@ IPTR DragBarClass__GM_GOACTIVE(Class *cl, struct Gadget *g, struct gpInput *msg)
         data->startleft = w->LeftEdge;
         data->starttop = w->TopEdge;
 
-        data->mousex = w->WScreen->MouseX - data->curleft;
-        data->mousey = w->WScreen->MouseY - data->curtop;
+        data->mousex = windowmouse(w, w->WScreen->MouseX) - data->curleft;
+        data->mousey = windowmouse(w, w->WScreen->MouseY) - data->curtop;
 
         data->drag_refreshed = TRUE;
 
@@ -431,7 +461,7 @@ IPTR DragBarClass__GM_GOACTIVE(Class *cl, struct Gadget *g, struct gpInput *msg)
 
         #ifndef DELAYEDDRAG
             if (!(GetPrivIBase(IntuitionBase)->IControlPrefs.ic_Flags & ICF_OPAQUEMOVE))
-                drawwindowframe(w->WScreen
+                drawwindowframe(w
                         , data->rp
                         , data->curleft
                         , data->curtop
@@ -459,10 +489,10 @@ IPTR DragBarClass__GM_GOACTIVE(Class *cl, struct Gadget *g, struct gpInput *msg)
             if (!(GetPrivIBase(IntuitionBase)->IControlPrefs.ic_Flags & ICF_OFFSCREENLAYERS)) {
                 struct IIHData *iihd = (struct IIHData *)GetPrivIBase(IntuitionBase)->InputHandler->is_Data;
                 iihd->MouseBoundsActiveFlag = TRUE;
-                iihd->MouseBoundsLeft = data->mousex;
-                iihd->MouseBoundsRight = w->WScreen->Width - (w->Width - data->mousex);
-                iihd->MouseBoundsTop = data->mousey;
-                iihd->MouseBoundsBottom = w->WScreen->Height - (w->Height - data->mousey);
+                iihd->MouseBoundsLeft = (data->mousex) * WindowCompositionFactor(w);
+                iihd->MouseBoundsRight = (windowextent(w, w->WScreen->Width) - (w->Width - data->mousex)) * WindowCompositionFactor(w);
+                iihd->MouseBoundsTop = (data->mousey) * WindowCompositionFactor(w);
+                iihd->MouseBoundsBottom = (windowextent(w, w->WScreen->Height) - (w->Height - data->mousey)) * WindowCompositionFactor(w);
             }
 
             return GMR_MEACTIVE;
@@ -519,33 +549,33 @@ IPTR DragBarClass__GM_MOVETEST(Class *cl, struct Gadget *g, struct gpInput *msg)
     myie.ie_Code = 0x68; //mouse_leftpress
 
     /* Can we move to the new position, or is window at edge of display ? */
-    new_left = msg->gpi_Mouse.X - data->mousex;
-    new_top  = msg->gpi_Mouse.Y - data->mousey;
+    new_left = windowmouse(w, msg->gpi_Mouse.X) - data->mousex;
+    new_top  = windowmouse(w, msg->gpi_Mouse.Y) - data->mousey;
 
     if ((!((GetPrivIBase(IntuitionBase)->IControlPrefs.ic_Flags & ICF_OFFSCREENLAYERS) && (w->WScreen->LayerInfo.Flags & LIFLG_SUPPORTS_OFFSCREEN_LAYERS))) ||
         MatchHotkey(&myie,IA_TOGGLEOFFSCREEN,IntuitionBase))
     {
         if (new_left < 0)
         {
-            msg->gpi_Mouse.X -= new_left;
+            msg->gpi_Mouse.X -= new_left * WindowCompositionFactor(w);
             retval = MOVETEST_ADJUSTPOS;
         }
 
         if (new_top < 0)
         {
-            msg->gpi_Mouse.Y -= new_top;
+            msg->gpi_Mouse.Y -= new_top * WindowCompositionFactor(w);
             retval = MOVETEST_ADJUSTPOS;
         }
 
-        if (new_left + w->Width > w->WScreen->Width)
+        if (new_left + w->Width > windowextent(w, w->WScreen->Width))
         {
-            msg->gpi_Mouse.X -= new_left - (w->WScreen->Width - w->Width);
+            msg->gpi_Mouse.X -= (new_left - (windowextent(w, w->WScreen->Width) - w->Width)) * WindowCompositionFactor(w);
             retval = MOVETEST_ADJUSTPOS;
         }
 
-        if (new_top + w->Height > w->WScreen->Height)
+        if (new_top + w->Height > windowextent(w, w->WScreen->Height))
         {
-            msg->gpi_Mouse.Y -= new_top - (w->WScreen->Height - w->Height);
+            msg->gpi_Mouse.Y -= (new_top - (windowextent(w, w->WScreen->Height) - w->Height)) * WindowCompositionFactor(w);
             retval =  MOVETEST_ADJUSTPOS;
         }
     }
@@ -594,8 +624,8 @@ IPTR DragBarClass__GM_HANDLEINPUT(Class *cl, struct Gadget *g, struct gpInput *m
                     LONG                 new_top;
 
                     /* Can we move to the new position, or is window at edge of display ? */
-                    new_left = scr->MouseX - data->mousex;
-                    new_top  = scr->MouseY - data->mousey;
+                    new_left = windowmouse(w, scr->MouseX) - data->mousex;
+                    new_top  = windowmouse(w, scr->MouseY) - data->mousey;
 
                     CopyMem(ie,&myie,sizeof (struct InputEvent));
                     myie.ie_Code = SELECTDOWN; //mouse_leftpress
@@ -619,21 +649,31 @@ IPTR DragBarClass__GM_HANDLEINPUT(Class *cl, struct Gadget *g, struct gpInput *m
                             new_top = 0;
                         }
 
-                        if (new_left + w->Width > scr->Width)
+                        if (new_left + w->Width > windowextent(w, scr->Width))
                         {
                             LONG correct_left;
-                            correct_left = scr->Width - w->Width; /* align to screen border */
+                            correct_left = windowextent(w, scr->Width) - w->Width; /* align to screen border */
                             data->mousex += new_left - correct_left;
                             new_left = correct_left;
                         }
                         
-                        if (new_top + w->Height > scr->Height)
+                        if (new_top + w->Height > windowextent(w, scr->Height))
                         {
                             LONG correct_top;
-                            correct_top = scr->Height - w->Height; /* align to screen border */
+                            correct_top = windowextent(w, scr->Height) - w->Height; /* align to screen border */
                             data->mousey += new_top - correct_top;
                             new_top = correct_top;
                         }
+                    }
+
+                    {
+                        LONG fitWidth = w->Width, fitHeight = w->Height;
+                        LONG requestedLeft = new_left, requestedTop = new_top;
+                        if (!WindowFitConstrain(w, &new_left, &new_top,
+                                &fitWidth, &fitHeight, IntuitionBase))
+                        { new_left = w->LeftEdge; new_top = w->TopEdge; }
+                        data->mousex += requestedLeft - new_left;
+                        data->mousey += requestedTop - new_top;
                     }
 
                     if (data->curleft != new_left || data->curtop != new_top)
@@ -643,7 +683,7 @@ IPTR DragBarClass__GM_HANDLEINPUT(Class *cl, struct Gadget *g, struct gpInput *m
                         if ((data->isrendered) && (!(GetPrivIBase(IntuitionBase)->IControlPrefs.ic_Flags & ICF_OPAQUEMOVE)))
                         {
                             /* Erase old frame */
-                            drawwindowframe(w->WScreen
+                            drawwindowframe(w
                                             , data->rp
                                             , data->curleft
                                             , data->curtop
@@ -684,16 +724,21 @@ IPTR DragBarClass__GM_HANDLEINPUT(Class *cl, struct Gadget *g, struct gpInput *m
                                     Signal(data->movetask,WSIG_MOVE);
                                     Permit();
                                     
+                                    WindowCompositionSync(w, IntuitionBase);
                                     CheckLayers(w->WScreen, IntuitionBase);
                                 }
                                 else
                                 {
                                     struct Requester *req;
+                                    ULONG fitAxes = (data->curleft != w->LeftEdge ? WINDOWFIT_X : 0) |
+                                        (data->curtop != w->TopEdge ? WINDOWFIT_Y : 0);
 
                                     LockLayers(&w->WScreen->LayerInfo);
 
                                     w->LeftEdge    += newx;
                                     w->TopEdge     += newy;
+                                    w->RelLeftEdge += newx;
+                                    w->RelTopEdge += newy;
 
                                     if (BLAYER(w))
                                     {
@@ -737,6 +782,8 @@ IPTR DragBarClass__GM_HANDLEINPUT(Class *cl, struct Gadget *g, struct gpInput *m
                                         }
                                     }
                                     
+                                    WindowFitRecordChange(w, fitAxes);
+                                    WindowCompositionSync(w, IntuitionBase);
                                     CheckLayers(w->WScreen, IntuitionBase);
 
                                     UnlockLayers(&w->WScreen->LayerInfo);
@@ -753,7 +800,7 @@ IPTR DragBarClass__GM_HANDLEINPUT(Class *cl, struct Gadget *g, struct gpInput *m
                             }
                             #endif
                                 /* Rerender the window frame */
-                            drawwindowframe(w->WScreen
+                            drawwindowframe(w
                                             , data->rp
                                             , data->curleft
                                             , data->curtop
@@ -793,7 +840,7 @@ IPTR DragBarClass__GM_HANDLEINPUT(Class *cl, struct Gadget *g, struct gpInput *m
                     LockLayers(&w->WScreen->LayerInfo);
                     data->drag_layerlock = TRUE;
 
-                    drawwindowframe(w->WScreen
+                    drawwindowframe(w
                         , data->rp
                         , data->curleft
                         , data->curtop
@@ -857,7 +904,7 @@ IPTR DragBarClass__GM_GOINACTIVE(Class *cl, struct Gadget *g, struct gpGoInactiv
         SetDrMd(data->rp, COMPLEMENT);
 
         /* Erase old frame */
-        drawwindowframe(w->WScreen
+        drawwindowframe(w
                 , data->rp
                 , data->curleft
                 , data->curtop
@@ -1005,6 +1052,10 @@ void smartresize(struct Window *w,struct sizebutton_data *data,Class *cl)
     struct LayersBase *LayersBase = GetPrivIBase(IntuitionBase)->LayersBase;
     struct IIHData  *iihdata = (struct IIHData *)GetPrivIBase(IntuitionBase)->InputHandler->is_Data;
 
+    ULONG fitAxes = (data->left != w->LeftEdge ? WINDOWFIT_X : 0) |
+        (data->top != w->TopEdge ? WINDOWFIT_Y : 0) |
+        (data->width != w->Width ? WINDOWFIT_WIDTH : 0) |
+        (data->height != w->Height ? WINDOWFIT_HEIGHT : 0);
     LockLayers(&w->WScreen->LayerInfo);
     
     if (BLAYER(w))
@@ -1029,10 +1080,13 @@ void smartresize(struct Window *w,struct sizebutton_data *data,Class *cl)
         WLAYER(w)->BackFill = backfill;
     }
 
+    w->RelLeftEdge += data->left - w->LeftEdge;
+    w->RelTopEdge += data->top - w->TopEdge;
     w->TopEdge = data->top;
     w->LeftEdge = data->left;
     w->Width = data->width;
     w->Height = data->height;
+    WindowFitRecordChange(w, fitAxes);
 
     IW(w)->specialflags |= SPFLAG_LAYERRESIZED;
 
@@ -1054,6 +1108,7 @@ void smartresize(struct Window *w,struct sizebutton_data *data,Class *cl)
                      w,
                      IntuitionBase);
 
+    WindowCompositionSync(w, IntuitionBase);
     CheckLayers(w->WScreen, IntuitionBase);
 
     UnlockLayers(&w->WScreen->LayerInfo);
@@ -1098,8 +1153,8 @@ IPTR SizeButtonClass__GM_GOACTIVE(Class *cl, struct Gadget *g, struct gpInput *m
         data->left = data->LeftEdge = w->LeftEdge;
         data->top = data->TopEdge = w->TopEdge;
 
-        data->mouseoffsetx = w->WScreen->MouseX;
-        data->mouseoffsety = w->WScreen->MouseY;
+        data->mouseoffsetx = windowmouse(w, w->WScreen->MouseX);
+        data->mouseoffsety = windowmouse(w, w->WScreen->MouseY);
 
         data->drag_refreshed = TRUE;
         data->drag_ticks = 2;
@@ -1166,7 +1221,7 @@ IPTR SizeButtonClass__GM_GOACTIVE(Class *cl, struct Gadget *g, struct gpInput *m
 
         #ifndef DELAYEDSIZE
             if(!OPAQUESIZE)
-                drawwindowframe(w->WScreen
+                drawwindowframe(w
                                 , data->rp
                                 , data->left
                                 , data->top
@@ -1196,10 +1251,10 @@ IPTR SizeButtonClass__GM_GOACTIVE(Class *cl, struct Gadget *g, struct gpInput *m
                 LONG mousey = data->mouseoffsety - data->TopEdge;
 
                 iihd->MouseBoundsActiveFlag = TRUE;
-                iihd->MouseBoundsLeft = 0;
-                iihd->MouseBoundsRight = w->WScreen->Width - (w->Width - mousex);
-                iihd->MouseBoundsTop = 0;
-                iihd->MouseBoundsBottom = w->WScreen->Height - (w->Height - mousey);
+                iihd->MouseBoundsLeft = (0) * WindowCompositionFactor(w);
+                iihd->MouseBoundsRight = (windowextent(w, w->WScreen->Width) - (w->Width - mousex)) * WindowCompositionFactor(w);
+                iihd->MouseBoundsTop = (0) * WindowCompositionFactor(w);
+                iihd->MouseBoundsBottom = (windowextent(w, w->WScreen->Height) - (w->Height - mousey)) * WindowCompositionFactor(w);
             }
 
             return GMR_MEACTIVE;
@@ -1279,48 +1334,48 @@ IPTR SizeButtonClass__GM_HANDLEINPUT(Class *cl, struct Gadget *g, struct gpInput
                     switch(data->drag_type)
                     {
                         case SIZETYPE_BOTTOM:
-                            new_height  = data->Height + scr->MouseY - data->mouseoffsety;
+                            new_height  = data->Height + windowmouse(w, scr->MouseY) - data->mouseoffsety;
                             new_width   = data->Width;
                             break;
 
                         case SIZETYPE_TOP:
-                            new_height  = data->Height + data->mouseoffsety - scr->MouseY;
+                            new_height  = data->Height + data->mouseoffsety - windowmouse(w, scr->MouseY);
                             new_width = data->Width;
                             break;
 
                         case SIZETYPE_RIGHTBOTTOM:
-                            new_width   = data->Width + scr->MouseX - data->mouseoffsetx;
-                            new_height  = data->Height + scr->MouseY - data->mouseoffsety;
+                            new_width   = data->Width + windowmouse(w, scr->MouseX) - data->mouseoffsetx;
+                            new_height  = data->Height + windowmouse(w, scr->MouseY) - data->mouseoffsety;
                             break;
 
                         case SIZETYPE_LEFTTOP:
-                            new_width   = data->Width + data->mouseoffsetx - scr->MouseX;
-                            new_height  = data->Height + data->mouseoffsety - scr->MouseY;
+                            new_width   = data->Width + data->mouseoffsetx - windowmouse(w, scr->MouseX);
+                            new_height  = data->Height + data->mouseoffsety - windowmouse(w, scr->MouseY);
                             break;
 
                         case SIZETYPE_RIGHTTOP:
-                            new_width   = data->Width + scr->MouseX - data->mouseoffsetx;
-                            new_height  = data->Height + data->mouseoffsety - scr->MouseY;
+                            new_width   = data->Width + windowmouse(w, scr->MouseX) - data->mouseoffsetx;
+                            new_height  = data->Height + data->mouseoffsety - windowmouse(w, scr->MouseY);
                             break;
 
                         case SIZETYPE_LEFTBOTTOM:
-                            new_width   = data->Width + data->mouseoffsetx - scr->MouseX;
-                            new_height  = data->Height + scr->MouseY - data->mouseoffsety;
+                            new_width   = data->Width + data->mouseoffsetx - windowmouse(w, scr->MouseX);
+                            new_height  = data->Height + windowmouse(w, scr->MouseY) - data->mouseoffsety;
                             break;
 
                         case SIZETYPE_LEFT:
-                            new_width   = data->Width + data->mouseoffsetx - scr->MouseX;
+                            new_width   = data->Width + data->mouseoffsetx - windowmouse(w, scr->MouseX);
                             new_height = data->Height;
                             break;
 
                         case SIZETYPE_RIGHT:
-                            new_width   = data->Width + scr->MouseX - data->mouseoffsetx;
+                            new_width   = data->Width + windowmouse(w, scr->MouseX) - data->mouseoffsetx;
                             new_height = data->Height;
                             break;
                     }
                 #else
-                    new_width   = data->Width + scr->MouseX - data->mouseoffsetx;
-                    new_height  = data->Height + scr->MouseY - data->mouseoffsety;
+                    new_width   = data->Width + windowmouse(w, scr->MouseX) - data->mouseoffsetx;
+                    new_height  = data->Height + windowmouse(w, scr->MouseY) - data->mouseoffsety;
                 #endif
                     if (new_width < 0)
                         new_width = 1;
@@ -1350,8 +1405,8 @@ IPTR SizeButtonClass__GM_HANDLEINPUT(Class *cl, struct Gadget *g, struct gpInput
                             case SIZETYPE_RIGHT:
                             case SIZETYPE_RIGHTTOP:
                             case SIZETYPE_RIGHTBOTTOM:
-                                if (data->left + new_width > scr->Width)
-                                    new_width = scr->Width - data->left;
+                                if (data->left + new_width > windowextent(w, scr->Width))
+                                    new_width = windowextent(w, scr->Width) - data->left;
                                 break;
 
                             case SIZETYPE_LEFT:
@@ -1367,8 +1422,8 @@ IPTR SizeButtonClass__GM_HANDLEINPUT(Class *cl, struct Gadget *g, struct gpInput
                             case SIZETYPE_LEFTBOTTOM:
                             case SIZETYPE_BOTTOM:
                             case SIZETYPE_RIGHTBOTTOM:
-                                if (data->top + new_height > scr->Height)
-                                    new_height = scr->Height - data->top;
+                                if (data->top + new_height > windowextent(w, scr->Height))
+                                    new_height = windowextent(w, scr->Height) - data->top;
                                 break;
 
                             case SIZETYPE_TOP:
@@ -1388,7 +1443,7 @@ IPTR SizeButtonClass__GM_HANDLEINPUT(Class *cl, struct Gadget *g, struct gpInput
                         if (data->isrendered && !OPAQUESIZE)
                         {
                             /* Erase old frame */
-                            drawwindowframe(w->WScreen
+                            drawwindowframe(w
                                             , data->rp
                                             , data->left
                                             , data->top
@@ -1428,6 +1483,22 @@ IPTR SizeButtonClass__GM_HANDLEINPUT(Class *cl, struct Gadget *g, struct gpInput
                         data->width   = new_width;
                         data->height  = new_height;
 
+                        {
+                            LONG fitLeft = data->left, fitTop = data->top;
+                            LONG fitWidth = data->width, fitHeight = data->height;
+                            if (WindowFitConstrain(w, &fitLeft, &fitTop,
+                                    &fitWidth, &fitHeight, IntuitionBase))
+                            {
+                                data->left = fitLeft; data->top = fitTop;
+                                data->width = fitWidth; data->height = fitHeight;
+                            }
+                            else
+                            {
+                                data->left = w->LeftEdge; data->top = w->TopEdge;
+                                data->width = w->Width; data->height = w->Height;
+                            }
+                        }
+
                         /* Rerender the window frame */
 
                         #ifdef DELAYEDSIZE
@@ -1442,7 +1513,7 @@ IPTR SizeButtonClass__GM_HANDLEINPUT(Class *cl, struct Gadget *g, struct gpInput
                         data->drag_ticks = 2;
 
                         if (!OPAQUESIZE)
-                            drawwindowframe(w->WScreen
+                            drawwindowframe(w
                                             , data->rp
                                             , data->left
                                             , data->top
@@ -1484,7 +1555,7 @@ IPTR SizeButtonClass__GM_HANDLEINPUT(Class *cl, struct Gadget *g, struct gpInput
                     LockLayers(&w->WScreen->LayerInfo);
                     data->drag_layerlock = TRUE;
 
-                    drawwindowframe(w->WScreen
+                    drawwindowframe(w
                                     , data->rp
                                     , data->left
                                     , data->top
@@ -1553,7 +1624,7 @@ IPTR SizeButtonClass__GM_GOINACTIVE(Class *cl, struct Gadget *g, struct gpGoInac
 
         /* Erase old frame */
         if (!OPAQUESIZE)
-            drawwindowframe(w->WScreen
+            drawwindowframe(w
                             , data->rp
                             , data->left
                             , data->top

@@ -1,10 +1,12 @@
 /*
     Copyright (C) 1995-2013, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Copyright (C) 2001-2003, The MorphOS Development Team. All Rights Reserved.
 */
 
 #include <proto/layers.h>
 #include "intuition_intern.h"
+#include "windowcomposition.h"
 #include "inputhandler_actions.h"
 
 struct RequestActionMsg
@@ -141,8 +143,8 @@ static VOID int_request(struct RequestActionMsg *msg,
     if ((right >= left) && (bottom >= top))
     {
         requester->ReqLayer = CreateUpfrontHookLayer(
-                              &window->WScreen->LayerInfo
-                              , window->WScreen->RastPort.BitMap
+                              WindowCompositionLayerInfo(window)
+                              , WindowCompositionBitMap(window)
                               , left
                               , top
                               , right

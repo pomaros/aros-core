@@ -9,6 +9,7 @@
 struct BatteryEditor_DATA
 {
     Object *status;
+    Object *consumers;
     struct Library *power;
     struct MsgPort *port;
     APTR subscription;

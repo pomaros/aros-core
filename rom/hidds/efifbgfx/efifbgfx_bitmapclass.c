@@ -216,3 +216,90 @@ VOID MNAME_BM(UpdateRect)(OOP_Class *cl, OOP_Object *o, struct pHidd_BitMap_Upda
         UNLOCK_FRAMEBUFFER(XSD(cl));
     }
 }
+
+static BOOL efifb_refuse(struct HIDD_PixelMap *m, ULONG cause, LONG v0, LONG v1)
+{
+    m->refusal = cause;
+    m->refusalValue[0] = v0; m->refusalValue[1] = v1;
+    m->refusalClass = CLID_Hidd_BitMap_EFIFB;
+    return FALSE;
+}
+
+/* The first way the shown bitmap differs from the native scanout, or 0. */
+static ULONG efifb_scanout(const struct EFIFBGfxBitMapData *data,
+    const struct HWData *hw, const struct HIDD_PixelMap *m, LONG *value)
+{
+    *value = 0;
+    if (!hw->framebuffer) return HIDD_SCANOUT_NO_FRAMEBUFFER;
+    if (hw->present) return HIDD_SCANOUT_CALLBACK;
+    if (!hw->owned) return HIDD_SCANOUT_NOT_OWNED;
+    if (data->xoffset || data->yoffset)
+    { *value = data->xoffset ? (LONG)data->xoffset : (LONG)data->yoffset; return HIDD_SCANOUT_PANNED; }
+    if (m->width != hw->width) { *value = hw->width; return HIDD_SCANOUT_WIDTH; }
+    if (m->height != hw->height) { *value = hw->height; return HIDD_SCANOUT_HEIGHT; }
+    if (hw->bytesperpixel != 4) { *value = hw->bytesperpixel; return HIDD_SCANOUT_DEPTH; }
+    if (m->red != hw->redmask || m->green != hw->greenmask || m->blue != hw->bluemask)
+    { *value = (LONG)hw->redmask; return HIDD_SCANOUT_MASKS; }
+    if (!hw->bytesperline || hw->bytesperline > (~(ULONG)0) / hw->height ||
+        hw->fbsize < hw->bytesperline * hw->height)
+    { *value = hw->bytesperline; return HIDD_SCANOUT_PITCH; }
+    return 0;
+}
+
+/* Freeze the audited RAM shadow and direct native scanout together. Callback
+ * presentation and panned/partial screens need another backend and refuse. */
+BOOL MNAME_BM(PreparePixels)(OOP_Class *cl, OOP_Object *o,
+    struct pHidd_BitMap_PreparePixels *msg)
+{
+    struct EFIFBGfxBitMapData *data = OOP_INST_DATA(cl, o);
+    struct EFIFBGfx_staticdata *xsd = XSD(cl);
+    struct HWData *hw = &xsd->data;
+    struct HIDD_PixelMap *m = msg->map;
+    IPTR v;
+    if (!m) return FALSE;
+    if (OOP_OCLASS(o) != cl) return efifb_refuse(m, HIDD_PIXELS_REFUSE_SUBCLASS, 0, 0);
+    if (!data->VideoData || data->bytesperpix != 4)
+        return efifb_refuse(m, HIDD_PIXELS_REFUSE_STORAGE, data->bytesperpix, data->VideoData != NULL);
+    OOP_GetAttr(data->pixfmtobj, aHidd_PixFmt_ColorModel, &v);
+    if (v != vHidd_ColorModel_TrueColor)
+        return efifb_refuse(m, HIDD_PIXELS_REFUSE_COLORMODEL, (LONG)v, 0);
+    OOP_GetAttr(data->pixfmtobj, aHidd_PixFmt_SwapPixelBytes, &v);
+    if (v) return efifb_refuse(m, HIDD_PIXELS_REFUSE_SWAPPED, 0, 0);
+    m->width = data->width; m->height = data->height;
+    m->stride = data->bytesperline;
+    if (!m->height || m->stride > (~(ULONG)0) / m->height)
+        return efifb_refuse(m, HIDD_PIXELS_REFUSE_GEOMETRY, (LONG)m->stride, (LONG)m->height);
+    m->size = m->stride * m->height;
+    OOP_GetAttr(o, aHidd_ChunkyBM_StorageSize, &v);
+    if (v < m->size) return efifb_refuse(m, HIDD_PIXELS_REFUSE_STORAGE_SIZE, (LONG)v, (LONG)m->size);
+    OOP_GetAttr(data->pixfmtobj, aHidd_PixFmt_RedMask, &v); m->red = v;
+    OOP_GetAttr(data->pixfmtobj, aHidd_PixFmt_GreenMask, &v); m->green = v;
+    OOP_GetAttr(data->pixfmtobj, aHidd_PixFmt_BlueMask, &v); m->blue = v;
+    OOP_GetAttr(data->pixfmtobj, aHidd_PixFmt_AlphaMask, &v); m->alpha = v;
+    LOCK_FRAMEBUFFER(xsd);
+    if (data->disp)
+    {
+        LONG value;
+        ULONG scanout = efifb_scanout(data, hw, m, &value);
+        if (scanout)
+        {
+            UNLOCK_FRAMEBUFFER(xsd);
+            return efifb_refuse(m, HIDD_PIXELS_REFUSE_SCANOUT, (LONG)scanout, value);
+        }
+        m->presentation = hw->framebuffer;
+        m->presentationStride = hw->bytesperline;
+        m->presentationSize = hw->fbsize;
+    }
+    m->pixels = data->VideoData;
+    m->driverCookie = o;
+    return TRUE;
+}
+VOID MNAME_BM(ReleasePixels)(OOP_Class *cl, OOP_Object *o,
+    struct pHidd_BitMap_ReleasePixels *msg)
+{
+    if (msg->map->driverCookie == o)
+    {
+        msg->map->driverCookie = NULL;
+        UNLOCK_FRAMEBUFFER(XSD(cl));
+    }
+}

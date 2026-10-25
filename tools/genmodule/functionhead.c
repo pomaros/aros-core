@@ -467,9 +467,9 @@ void parsetypeandname(struct functionarg *funcarg)
         return;
     }
 
-    /* Regular argument */
+    /* Regular argument; test begin == end before reading the byte before end */
     endname = end;
-    while (!isspace(*(end-1)) && *(end-1)!='*')
+    while ((begin == end) || (!isspace(*(end-1)) && *(end-1)!='*'))
     {
         if (begin == end)
         {

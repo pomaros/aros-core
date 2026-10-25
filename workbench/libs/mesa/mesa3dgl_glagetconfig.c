@@ -47,6 +47,8 @@
 
     D(bug("[MESA3DGL] %s()\n", __func__));
 
+    if (!_ctx || !params)
+        return;
     switch(_ctx->stvis.depth_stencil_format)
     {
         case(PIPE_FORMAT_S8_UINT_Z24_UNORM): depthbits = 24; stencilbits = 8; break;

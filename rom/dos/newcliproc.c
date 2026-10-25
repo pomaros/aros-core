@@ -266,7 +266,13 @@ ULONG internal_CliInitAny(struct DosPacket *dp, APTR DOSBase)
         D(bug("%s: Using old CLI %p\n", __func__, oldcli));
         SetPrompt(AROS_BSTR_ADDR(oldcli->cli_Prompt));
         SetCurrentDirName(AROS_BSTR_ADDR(oldcli->cli_SetName));
-        cli->cli_CommandDir = internal_CopyPath(oldcli->cli_CommandDir, DOSBase);
+        /* CreateNewProc(NP_Cli) already copied a command path for an
+         * asynchronous shell. Release that owned list before replacing it. */
+        if (cli != oldcli)
+        {
+            internal_FreePath(cli->cli_CommandDir, DOSBase);
+            cli->cli_CommandDir = internal_CopyPath(oldcli->cli_CommandDir, DOSBase);
+        }
     } else {
         D(bug("%s: Initializing CLI\n", __func__));
         SetPrompt("%N> ");

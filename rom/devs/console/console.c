@@ -50,6 +50,7 @@
 static const UWORD SupportedCommands[] = {
     CMD_READ,
     CMD_WRITE,
+    CMD_UPDATE,
     NSCMD_DEVICEQUERY,
     0
 };
@@ -147,8 +148,6 @@ static int GM_UNIQUENAME(Open)
 {
     BOOL success = FALSE;
 
-    /* Keep compiler happy */
-    flags = 0;
 
     EnterFunc(bug("OpenConsole()\n"));
 
@@ -178,6 +177,7 @@ static int GM_UNIQUENAME(Open)
 #endif
         struct TagItem conunit_tags[] = {
             {A_Console_Window, 0},
+            {A_Console_ScaleAware, !!(flags & CONFLAG_SCALEAWARE)},
             {TAG_DONE, 0}
         };
 
@@ -327,12 +327,29 @@ ADD2OPENDEV(GM_UNIQUENAME(Open), 0) ADD2CLOSEDEV(GM_UNIQUENAME(Close), 0)
                 towrite = ioreq->io_Length;
             }
 
+            /* Serialize output with scale/resize redraw and input selection. */
+            ObtainSemaphore(&ConsoleDevice->consoleTaskLock);
             ioreq->io_Actual =
                 writeToConsole((struct ConUnit *)ioreq->io_Unit,
                 ioreq->io_Data, towrite, ConsoleDevice);
+            ReleaseSemaphore(&ConsoleDevice->consoleTaskLock);
 
             break;
         }
+
+    case CMD_UPDATE:
+        if (ioreq->io_Unit == (struct Unit *)CONU_LIBRARY)
+            error = IOERR_NOCMD;
+        else
+        {
+            ObtainSemaphore(&ConsoleDevice->consoleTaskLock);
+            STACKULONG method = M_Console_UpdateScale;
+            if (!DoMethodA((Object *)ioreq->io_Unit, (Msg)&method))
+                error = IOERR_OPENFAIL;
+            ReleaseSemaphore(&ConsoleDevice->consoleTaskLock);
+            ioreq->io_Actual = 0;
+        }
+        break;
 
     case CMD_READ:
         D(bug("CMD_READ %p,%d\n", ioreq->io_Data, ioreq->io_Length));

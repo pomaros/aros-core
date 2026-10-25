@@ -134,7 +134,6 @@ main(int argc, char *argv[])
     D(bug("[AROSTCP](amiga_main.c) main()\n"));
 #endif
 
-    bug("[AROSTCP] executable entered\n");
     TestSocketBase = OpenLibrary("bsdsocket.library", 0);
     if(TestSocketBase) {
         CloseLibrary(TestSocketBase);
@@ -245,7 +244,6 @@ main(int argc, char *argv[])
     /* Save pointer to this tasks old name */
     oldname = AROSTCP_Task->tc_Node.ln_Name;
 
-    bug("[AROSTCP] config=%s netdb=%s\n", config_path, netdb_path);
     if(init_all()) {
 #if defined(__AROS__)
         D(bug("[AROSTCP](amiga_main.c) main: preparing AROSTCP_Task\n"));
@@ -445,7 +443,6 @@ init_all(void)
     /*
      * Read command line arguments and configuration file
      */
-    bug("[AROSTCP] init readconfig()\n");
     if(!readconfig())
         return FALSE;
     D(Printf("readconfig() complete\n");)
@@ -453,7 +450,6 @@ init_all(void)
     /*
      * initialize logging system
      */
-    bug("[AROSTCP] init log_init()\n");
     if(!log_init())
         return FALSE;
     D(Printf("log_init() complete\n");)
@@ -461,7 +457,6 @@ init_all(void)
     /*
      * initialize the mbuf subsystem
      */
-    bug("[AROSTCP] init mbinit()\n");
     if(!mbinit())
         return FALSE;
     D(Printf("mbinit() complete\n");)
@@ -476,7 +471,6 @@ init_all(void)
     /*
      * initialize API
      */
-    bug("[AROSTCP] init api_init()\n");
     if(!api_init())
         return FALSE;
     D(Printf("api_init() complete\n");)
@@ -506,7 +500,6 @@ init_all(void)
     /*
      * Initialize NetDataBase
      */
-    bug("[AROSTCP] init netdb\n");
     if(init_netdb() != 0)
         return FALSE;
     D(Printf("init_netdb() complete\n");)
@@ -514,7 +507,6 @@ init_all(void)
     /*
      * Make API visible
      */
-    bug("[AROSTCP] publish API\n");
     /* No fallible initialization after public admission opens: an error
        cleanup must not tear resources down under newly admitted clients. */
     if(!Nettrace_Task || api_show() == FALSE)

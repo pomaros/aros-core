@@ -472,13 +472,13 @@ APTR pciAllocAligned(struct PCIController *hc, struct MemEntry *alloc, ULONG Siz
     alloc->me_Length = align + Size;
     alloc->me_Un.meu_Addr = ALLOCPCIMEM(hc, hc->hc_PCIDriverObject, alloc->me_Length);
     if(alloc->me_Un.meu_Addr) {
-        IPTR addrAligned = (((IPTR)alloc->me_Un.meu_Addr + (align - 1)) & ~(align - 1));
+        IPTR addrAligned = (((IPTR)alloc->me_Un.meu_Addr + (align - 1)) & ~((IPTR)align - 1));
         if((addrAligned & (bounds - 1)) != ((addrAligned + Size - 1) & (bounds - 1))) {
             pciusbDebug("PCI", "Re-allocating using bounds\n");
             FREEPCIMEM(hc, hc->hc_PCIDriverObject, alloc->me_Un.meu_Addr);
             alloc->me_Length = bounds + Size;
             alloc->me_Un.meu_Addr = ALLOCPCIMEM(hc, hc->hc_PCIDriverObject, alloc->me_Length);
-            addrAligned = (((IPTR)alloc->me_Un.meu_Addr + (bounds - 1)) & ~(bounds - 1));
+            addrAligned = (((IPTR)alloc->me_Un.meu_Addr + (bounds - 1)) & ~((IPTR)bounds - 1));
         }
         if(alloc->me_Un.meu_Addr) {
             pciusbDebug("PCI", "Allocated @ %p <0x%p, %u>\n", addrAligned, alloc->me_Un.meu_Addr, alloc->me_Length);

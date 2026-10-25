@@ -13,10 +13,17 @@
 #include <exec/interrupts.h>
 #include <aros/apple/runtime.h>
 
+#if defined(__AROSEXEC_SMP__)
+#include "../exec/tls.h"
+static inline int GetCPUNumber(void) { return (int)TLS_GET(CPUNumber); }
+#define TASKUSAGE_WINDOW 1000000
+int cpu_SoftIntAllowed(void);
+#define CPU_SOFTINT_ALLOWED() cpu_SoftIntAllowed()
+#endif
 
 #define EXCEPTIONS_COUNT AROS_APPLE_RUNTIME_VECTOR_COUNT
 
-/* KrnCreateContext stores the public AArch64 ExceptionContext verbatim. */
+/* Public prefix of the owned context; private task TLS lives in task_tls.h. */
 #define AROSCPUContext ExceptionContext
 
 /* The live scheduler frame is the runtime vector frame. */
@@ -50,6 +57,9 @@ _Static_assert(sizeof(struct AROSAppleSIMDContext) ==
             : "memory", "cc");                                           \
     } while (0)
 
+struct Task;
+/* Copy the frame into the task's saved context; 0 when it has none. */
+int cpu_SaveContext(regs_t *regs, struct Task *task);
 uint64_t cpu_RequiredCurrentTaskMasks(void);
 void cpu_ApplyTaskMasks(uint64_t *spsr, int nesting);
 void cpu_ApplyCurrentTaskMasks(uint64_t *spsr);

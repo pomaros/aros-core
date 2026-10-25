@@ -1,4 +1,6 @@
 /*
+    Copyright (C) 2026, John KNIPPER <code@jkn.me>.
+    Licensed under the AROS Public License, version 1.1.
     Copyright (C)  2011-2026, The AROS Development Team.
 */
 
@@ -514,6 +516,12 @@ static IPTR scrdecor_draw_sysimage(Class *cl, Object *obj, struct sdpDrawSysImag
     return TRUE;
 }
 
+static IPTR scrdecor_querycapabilities(Class *cl, Object *obj, Msg msg)
+{
+    (void)msg;
+    return OCLASS(obj) == cl ? SDM_CAP_PREPARESCALE : 0;
+}
+
 static IPTR scrdecor_layoutscrgadgets(Class *cl, Object *obj, struct sdpLayoutScreenGadgets *msg)
 {
     struct Gadget          *gadget = msg->sdp_Gadgets;
@@ -545,6 +553,84 @@ static IPTR scrdecor_layoutscrgadgets(Class *cl, Object *obj, struct sdpLayoutSc
         }
     }
 
+    /* This method runs after the scale transaction. Child callbacks remain
+     * deferred until the ordinary postcommit screen-bar draw. */
+    if (data->FirstChild) data->ChildLayoutPending = TRUE;
+    return TRUE;
+}
+
+/* The installed theme instance is shared with live windows. Scaling only
+ * recomputes metrics: it must not reinitialize pens/images/theme/child state. */
+/* A theme's configured lengths and the public WBor fields use points.
+ * Raster font height and the screen bar's extent use physical pixels. */
+static BOOL scrdecor_scale_metrics(const struct DecorConfig *config,
+    ULONG basefontheight, ULONG fontheight, ULONG scale,
+    struct ScreenScaleMetrics *metrics)
+{
+    LONG themedbar, minimum;
+    if (!basefontheight || basefontheight > 65535 || !fontheight ||
+        fontheight > 65535 || scale < 100 || scale > 400 ||
+        scale % 25 || config->BarHeight < 1 || config->BarHeight > 128 ||
+        config->SBarHeight < 1 || config->SBarHeight > 128 ||
+        config->LeftBorder < 0 || config->LeftBorder > 127 ||
+        config->RightBorder < 0 || config->RightBorder > 127 ||
+        config->BottomBorder < 0 || config->BottomBorder > 127 ||
+        config->SBarGadPost_s < -32768 || config->SBarGadPost_s > 32767 ||
+        !metrics || metrics->BarVBorder < 0 || metrics->BarVBorder > 127)
+        return FALSE;
+    metrics->WBorTop = basefontheight + 2 > (ULONG)config->BarHeight ? 1 :
+        config->BarHeight - 1 - basefontheight;
+    themedbar = (config->SBarHeight * (LONG)scale + 50) / 100 - 1;
+    metrics->BarHeight = (LONG)fontheight > themedbar ? (LONG)fontheight : themedbar;
+    /* BarHeight is inclusive. Its physical extent must also contain the
+     * retained font and both already-scaled vertical padding edges. */
+    minimum = (LONG)fontheight + 2 * metrics->BarVBorder - 1;
+    if (metrics->BarHeight < minimum) metrics->BarHeight = minimum;
+    /* Validate the final extent before it reaches public signed-byte fields. */
+    if (metrics->BarHeight < 0 || metrics->BarHeight > 127) return FALSE;
+    metrics->BarHBorder = (scale + 50) / 100;
+    metrics->WBorLeft = config->LeftBorder;
+    metrics->WBorRight = config->RightBorder;
+    metrics->WBorBottom = config->BottomBorder;
+    themedbar = config->SBarGadPost_s * (LONG)scale;
+    metrics->DepthRightInset = (themedbar + (themedbar < 0 ? -50 : 50)) / 100;
+    metrics->DepthTop = 0;
+    return metrics->DepthRightInset >= -32768 && metrics->DepthRightInset <= 32767;
+}
+
+static IPTR scrdecor_preparescale(Class *cl, Object *obj,
+    struct sdpPrepareScale *msg)
+{
+    struct scrdecor_data *data = INST_DATA(cl, obj);
+    const struct ScreenData *sd = (const struct ScreenData *)msg->sdp_UserBuffer;
+    struct ScreenScaleMetrics *metrics = msg->sdp_Metrics;
+    if (OCLASS(obj) != cl || !msg->sdp_Font || !msg->sdp_BaseFont ||
+        !metrics || !sd || !sd->dts) return FALSE;
+    return scrdecor_scale_metrics(data->dc, msg->sdp_BaseFont->tf_YSize,
+        msg->sdp_Font->tf_YSize, msg->sdp_Scale, metrics);
+}
+
+/* OpenScreen and a scale transaction must publish the same metrics for the
+ * same font and scale. Both start from Intuition's proposal: here the
+ * InitScreen message, already in physical bar/menu padding. */
+static BOOL scrdecor_initscreen_metrics(const struct DecorConfig *config,
+    struct sdpInitScreen *msg)
+{
+    struct ScreenScaleMetrics metrics =
+    {
+        (LONG)msg->sdp_BarHeight, (LONG)msg->sdp_BarVBorder,
+        (LONG)msg->sdp_BarHBorder, (LONG)msg->sdp_MenuVBorder,
+        (LONG)msg->spd_MenuHBorder, msg->sdp_WBorTop, msg->sdp_WBorLeft,
+        msg->sdp_WBorRight, msg->sdp_WBorBottom, -1, 0
+    };
+    if (!scrdecor_scale_metrics(config, msg->sdp_BaseFontHeight,
+        msg->sdp_FontHeight, msg->sdp_Scale, &metrics)) return FALSE;
+    msg->sdp_WBorTop = metrics.WBorTop;
+    msg->sdp_BarHeight = metrics.BarHeight;
+    msg->sdp_BarHBorder = metrics.BarHBorder;
+    msg->sdp_WBorLeft = metrics.WBorLeft;
+    msg->sdp_WBorRight = metrics.WBorRight;
+    msg->sdp_WBorBottom = metrics.WBorBottom;
     return TRUE;
 }
 
@@ -558,22 +644,7 @@ static IPTR scrdecor_initscreen(Class *cl, Object *obj, struct sdpInitScreen *ms
 
     BOOL truecolor = sd->truecolor;
 
-    /*
-     * This depends on openwindow.c adding font height to w->BorderTop.
-     * It allows the window title bar to grow when font is bigger than decoration defined height
-     */
-    if ((msg->sdp_FontHeight + 2) > data->dc->BarHeight)
-        msg->sdp_WBorTop = 1;
-    else
-        msg->sdp_WBorTop = data->dc->BarHeight - 1 - msg->sdp_FontHeight;
-
-    /* Allow scaling title bar above decoration defined height */
-    msg->sdp_BarHeight = msg->sdp_FontHeight > (data->dc->SBarHeight - 1) ? msg->sdp_FontHeight : (data->dc->SBarHeight - 1);
-
-    msg->sdp_BarHBorder = 1;
-    msg->sdp_WBorLeft = data->dc->LeftBorder;
-    msg->sdp_WBorRight = data->dc->RightBorder;
-    msg->sdp_WBorBottom = data->dc->BottomBorder;
+    if (!scrdecor_initscreen_metrics(data->dc, msg)) return FALSE;
 
     sd->ActivePen = -1;
     sd->DeactivePen = -1;
@@ -587,7 +658,11 @@ static IPTR scrdecor_initscreen(Class *cl, Object *obj, struct sdpInitScreen *ms
     /* Instantiate the theme for this screen - creates image copies
        matching the screen's depth/attributes and element descriptors
        over them */
-    sd->dts = DTObtainScreenTheme(data->theme, screen, truecolor);
+    /* Windows borrow this instance in WDM_INITWINDOW. Retain it when
+       Intuition recomputes screen metrics after a scale change; replacing
+       it would either leak it or invalidate those windows' image pointers. */
+    if (!sd->dts)
+        sd->dts = DTObtainScreenTheme(data->theme, screen, truecolor);
     if (!sd->dts)
         return FALSE;
 
@@ -670,6 +745,13 @@ static IPTR scrdecor_dispatcher(struct IClass *cl, Object *obj, Msg msg)
 
         case SDM_LAYOUT_SCREENGADGETS:
             retval = scrdecor_layoutscrgadgets(cl, obj, (struct sdpLayoutScreenGadgets *)msg);
+            break;
+
+        case SDM_QUERYCAPABILITIES:
+            return scrdecor_querycapabilities(cl, obj, msg);
+
+        case SDM_PREPARESCALE:
+            retval = scrdecor_preparescale(cl, obj, (struct sdpPrepareScale *)msg);
             break;
 
         case SDM_INITSCREEN:

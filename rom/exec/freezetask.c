@@ -15,6 +15,7 @@
 
 #include "exec_intern.h"
 #include "etask.h"
+#include "freeze_smp.h"
 
 /*****************************************************************************
 
@@ -38,8 +39,8 @@
 
     RESULT
         TRUE when the task is frozen after the call (it was already, or it
-        was ready or waiting); FALSE for the caller, a removed task, or on
-        an SMP build, where nothing is touched.
+        was ready or waiting, or running on another CPU and parked by the
+        scheduler); FALSE for the caller or a removed task.
 
     SEE ALSO
         ThawTask(), FreezeTasks()
@@ -49,7 +50,7 @@
     AROS_LIBFUNC_INIT
 
 #if defined(__AROSEXEC_SMP__)
-    return FALSE;
+    return exec_FreezeOneSMP(task);
 #else
     struct IntETask *iet;
     BOOL frozen = FALSE;
