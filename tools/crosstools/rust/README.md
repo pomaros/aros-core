@@ -69,7 +69,13 @@ the two owned files inside the shared crate directory, while the default check
 verifies the complete standard-library component. Edit the owning Rust SDK
 sources and export a reviewed revision instead of editing either snapshot.
 
-The shared native crate store is `$(PORTSDIR)/rust-crates-native`. Its libc
+The shared native crate store is
+`$(PORTSDIR)/rust-crates-native-$(RUST_NATIVE_LIBC_KEY)`, where the key is the
+admitted patch SHA-256. Rust configuration refuses a failed admission, and the
+libc target checks again before its fetch recipe, including parallel and cached
+invocations. The toolchain origin binds the application patch and origin hashes;
+changing both application files cannot satisfy the pinned binding. A different
+patch selects a different store, isolating filename-based applied markers. Its libc
 0.2.190 patch uses the same AROS declarations and native adapter aliases as
 std's locked libc 0.2.189, with the macro spelling required by each release.
 Both libc versions contain FFI declarations for unavailable calls, rather than

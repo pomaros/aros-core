@@ -1,6 +1,10 @@
 {
+  "application_libc": {
+    "origin_sha256": "d81cc43165c9f9af4aa3730b2e852fc85d4a9695a331228bf4dc68f0887a8884",
+    "patch_sha256": "7b569b5677e4d75ee10b9446ce37159a69cfb84a776ca54e30bc194285cec6e9"
+  },
   "core_native_header": "workbench/network/common/include/bsdsocket/native.h",
-  "exporter_sha256": "26df85ac42d0258731c6d6ec1003eeb5908bffa1092e13977f3174a0b7d1f654",
+  "exporter_sha256": "d8e0c6ca03147c7170cc9d153ae6ad28377b562df0b07776ac162468f5a1501f",
   "files": {
     ".gitattributes": {
       "export_sha256": "1472d6e62ac2aa5757b5a5cfa4e032e422d54c6f1424c4abac88c1b3c9523ac2",
@@ -177,11 +181,15 @@
     "sys/unavailable.c": {
       "export_sha256": "c33c4e42e2949d37e41c1773212b3e469b04a650536941a480ca75a0d03a13dc",
       "source_sha256": "2acbe117500b0d39c1e0bbea8482b813e64f8c7f288623583216657a89cdc314"
+    },
+    "verify-application-libc.py": {
+      "export_sha256": "754effab3fffe7b1c5531433236a11cef88d33a2d91c8d692658b897a052ee2f",
+      "source_sha256": "154760bc226a3bf73e9ff5c5b653a3b01819d3899072cad8ded0a42fa55393ef"
     }
   },
   "schema": 1,
   "source_directory": "toolchain",
   "source_repository": "https://github.com/pomaros/rust-aros.git",
-  "source_revision": "ab1ab6314864097268e49f936dc5dd034e13e2b7",
+  "source_revision": "9c65cd860095e03f7102a28aef3cc28a3f9c43f2",
   "transformations": "APL notices for owned integration files; authoritative core socket header paths; core command paths in documentation"
 }

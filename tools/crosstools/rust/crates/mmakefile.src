@@ -29,6 +29,18 @@ rust-crates :
 
 ## Patched for AROS ###
 
+# GNU make prerequisites complete before the fetch recipe, including under -j.
+# Run on every native invocation: a cached crate must not hide edited inputs.
+ifeq ($(RUST_OFFICIAL),yes)
+.PHONY: rust-crates-libc-source-check
+rust-crates-libc-source-check:
+	$(Q)$(PYTHON) "$(SRCDIR)/tools/crosstools/rust/unmodified/verify-application-libc.py" \
+	    --toolchain "$(SRCDIR)/tools/crosstools/rust/unmodified" \
+	    --crates "$(RUST_SYS_CRATESDIR)"
+
+rust-crates-libc : rust-crates-libc-source-check
+endif
+
 %rust_crate mmake=rust-crates-libc crate=libc version=$(RUST_LIBC_VERSION) \
     patch=$(RUST_LIBC_PATCH)
 %rust_crate mmake=rust-crates-getrandom02 crate=getrandom version=$(RUST_GETRANDOM02_VERSION) \
