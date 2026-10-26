@@ -1,6 +1,8 @@
 /*
     Copyright (C) 1995-2020, The AROS Development Team. All rights reserved.
 
+    Copyright (C) 2026 John KNIPPER.
+
     C99 function rename().
 */
 #include <proto/dos.h>
@@ -43,45 +45,20 @@
 
 ******************************************************************************/
 {
-    BPTR oldlock, newlock;
+    LONG error;
 
-    /* try to delete newpath first */
-    Forbid();
-
-    newlock = Lock(newpath, SHARED_LOCK);
-    if (newlock)
+    if (Rename((CONST_STRPTR)oldpath, (CONST_STRPTR)newpath))
+        return 0;
+    error = IoErr();
+    if (error == ERROR_OBJECT_EXISTS)
     {
-        UnLock(newlock);
-
-        oldlock = Lock(oldpath, EXCLUSIVE_LOCK);
-        if (oldlock)
-        {
-            UnLock(oldlock);
-
-            /* DeleteFile returns an error if directory is non-empty */
-            if (!DeleteFile(newpath))
-            {
-                LONG ioerr = IoErr();
-                errno = __stdc_ioerr2errno(ioerr);
-                D(bug("[%s] %s: '%s' -> '%s', delete errno=%d, IoErr=%d\n", STDCNAME, __func__,
-                        oldpath, newpath, errno, ioerr));
-                Permit();
-                return -1;
-            }
-        }
+        /* Replacement is one filesystem operation. Never delete the old
+         * destination to emulate an unsupported handler operation. */
+        if (ReplaceObject((CONST_STRPTR)oldpath, (CONST_STRPTR)newpath))
+            return 0;
+        error = IoErr();
     }
-
-    if (!Rename (oldpath, newpath))
-    {
-        LONG ioerr = IoErr();
-        errno = __stdc_ioerr2errno(ioerr);
-        D(bug("[%s] %s: '%s' -> '%s' errno=%d, IoErr=%d\n", STDCNAME, __func__,
-                oldpath, newpath, errno, ioerr));
-        Permit();
-        return -1;
-    }
-
-    Permit();
-    return 0;
-
+    errno = error == 0 ? EIO : __stdc_ioerr2errno(error);
+    SetIoErr(error);
+    return -1;
 } /* rename */

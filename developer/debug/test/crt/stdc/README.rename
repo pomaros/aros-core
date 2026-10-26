@@ -1,0 +1,15 @@
+CRT rename replacement regression
+=================================
+
+Run: python3 developer/debug/test/crt/stdc/rename_atomic_host.py
+
+The test compiles the production rename body under ASan/UBSan with DOS
+operation fixtures. It checks normal rename, successful native replacement,
+unsupported replacement, replacement failure, zero-error fallback and preserved
+native errors. Both file values survive every failed operation. The fixture
+intentionally provides no DeleteFile or scheduler exclusion API.
+
+Also run developer/debug/test/dos/rename_replace_paths_host.py to cover the
+actual DOS Rename/ReplaceObject bodies with rooted assigns, balanced ownership
+and classic/fast BSTR failure paths. Host fixtures do not qualify a filesystem's
+atomic replacement implementation or persistence after reset.

@@ -61,6 +61,7 @@
 #define ENOTBLK         15              /* Not a Block device */
 #define	EBUSY		16		/* Device busy */
 #define	EEXIST		17		/* File exists */
+#define	EIO		5		/* Input/output error */
 #define	EINTR		4		/* Interrupted system call */
 #define	ENOBUFS		55		/* No buffer space available */
 #define	ENOENT		2		/* No such file or directory */
