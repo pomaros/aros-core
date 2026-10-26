@@ -7,6 +7,10 @@ Native geometry, capture, class input and notifications come from the current
 checkout; superclass notification delivery and raster are explicit adapters.
 The inline ASL adapter is included unchanged from production. Separate stable
 ASL generation fixture exercises whole-adoption deferral and Process retry.
+
+Run with --out NEW_DIRECTORY --generated-include /selected/sdk/gen/include.
+Generated AArch64 OS headers are an explicit read-only input for the list
+fixture; host raster, dispatch and locking remain modeled.
 """
 from pathlib import Path
 import re,json,subprocess,hashlib,argparse
@@ -129,7 +133,13 @@ int main(void){
 '''
 
 def main():
- ap=argparse.ArgumentParser();ap.add_argument('--out',type=Path,required=True);args=ap.parse_args();out=args.out;out.mkdir(parents=True,exist_ok=True)
+ ap=argparse.ArgumentParser();ap.add_argument('--out',type=Path,required=True)
+ ap.add_argument('--generated-include',type=Path,required=True,
+     help='generated include directory of an explicitly selected AArch64 SDK')
+ args=ap.parse_args();generated=args.generated_include.resolve()
+ for name in ['aros/system.h','aros/cpu.h']:
+  if not (generated/name).is_file():ap.error('missing generated header: '+str(generated/name))
+ out=args.out;out.mkdir(parents=True,exist_ok=False)
  native,sources=native_fixture()
  native+='\n#define callbacks notifications\n#include "propunits.h"\n'+EVENT_HELPER+driver
  (out/'native.c').write_text(native)
@@ -150,8 +160,7 @@ def main():
   listsource+=extracted+'\n'
  listsource+=body('AslProp__OM_SET',(ROOT/'workbench/libs/asl/propclass.c').read_text())+'\n'+LIST_DRIVER
  (out/'list.c').write_text(listsource)
- sdk=ROOT.parent/'Build/display-composition-native'
- listcmd=['clang','-std=gnu11','-g','-O1','-fsanitize=address,undefined,unsigned-integer-overflow','-Wno-incompatible-pointer-types','-I',str(ROOT/'workbench/libs/asl'),'-I',str(ROOT/'compiler/include'),'-I',str(sdk/'bin/apple-aarch64/gen/include'),str(out/'list.c'),'-o',str(out/'list')]
+ listcmd=['clang','-std=gnu11','-g','-O1','-fsanitize=address,undefined,unsigned-integer-overflow','-Wno-incompatible-pointer-types','-I',str(ROOT/'workbench/libs/asl'),'-I',str(ROOT/'compiler/include'),'-I',str(generated),str(out/'list.c'),'-o',str(out/'list')]
  p=subprocess.run(listcmd,capture_output=True,text=True);(out/'list-compile.log').write_text(p.stdout+p.stderr);assert not p.returncode,p.stderr
  p=subprocess.run([listcmd[-1]],capture_output=True,text=True);(out/'list-run.log').write_text(p.stdout+p.stderr);assert not p.returncode,p.stdout+p.stderr
  print(p.stdout,end='')
@@ -184,6 +193,6 @@ def main():
   p=subprocess.run([command[-1]],capture_output=True,text=True);(out/(name+'.log')).write_text(p.stdout+p.stderr);assert p.returncode,'surviving '+name
   rejected.append(name)
  print('Rejected actual-source mutations:',','.join(rejected))
- result={'status':'PASS','scope':__doc__,'command':cmd,'list_command':listcmd,'rejected_mutations':rejected,'native_sources':sources,'sources':{str(f.relative_to(ROOT)):hashlib.sha256(f.read_bytes()).hexdigest() for f in [ROOT/'rom/intuition/propgclass.c',ROOT/'rom/intuition/propgadgets.c',ROOT/'workbench/libs/asl/propunits.h',ROOT/'workbench/libs/asl/listviewclass.c',ROOT/'workbench/libs/asl/propclass.c',ROOT/'workbench/libs/asl/basicfuncs.c',ROOT/'workbench/libs/asl/gadgets.c',Path(__file__).resolve()]}}
+ result={'status':'PASS','generated_include':str(generated),'generated_sha256':{name:hashlib.sha256((generated/name).read_bytes()).hexdigest() for name in ['aros/system.h','aros/cpu.h']},'scope':__doc__,'command':cmd,'list_command':listcmd,'rejected_mutations':rejected,'native_sources':sources,'sources':{str(f.relative_to(ROOT)):hashlib.sha256(f.read_bytes()).hexdigest() for f in [ROOT/'rom/intuition/propgclass.c',ROOT/'rom/intuition/propgadgets.c',ROOT/'workbench/libs/asl/propunits.h',ROOT/'workbench/libs/asl/listviewclass.c',ROOT/'workbench/libs/asl/propclass.c',ROOT/'workbench/libs/asl/basicfuncs.c',ROOT/'workbench/libs/asl/gadgets.c',Path(__file__).resolve()]}}
  (out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
 if __name__=='__main__':main()
