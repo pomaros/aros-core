@@ -1,5 +1,6 @@
 /*
     Copyright (C) 2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
 
     Desc: Give pthread worker Tasks a per-task C runtime base.
 
@@ -39,6 +40,7 @@
 #include <aros/symbolsets.h>
 
 #include "__posixc_intbase.h"
+#include "../stdc/__exec_list.h"
 
 #define CRT_THREADHOOKS_SEMNAME "crt.thread-hooks.v1"
 
@@ -99,14 +101,18 @@ static void posixc_thread_leave(void)
 static struct CRTThreadHooks *__get_threadhooks(BOOL create)
 {
     struct CRTThreadHooks *reg, *newreg;
+    struct __crt_list_guard guard;
 
-    Forbid();
-    reg = (struct CRTThreadHooks *)FindSemaphore((STRPTR)CRT_THREADHOOKS_SEMNAME);
-    Permit();
+    if (!__crt_list_enter(&guard, &SysBase->SemaphoreList, SPINLOCK_MODE_READ))
+        return NULL;
+    reg = (struct CRTThreadHooks *)FindName(&SysBase->SemaphoreList,
+                                          (CONST_STRPTR)CRT_THREADHOOKS_SEMNAME);
+    __crt_list_leave(&guard);
     if (reg || !create)
         return reg;
 
-    /* Not present yet - allocate outside Forbid, then add if we still win. */
+    /* Construct before publication. The registry lives until shutdown; users
+     * may therefore keep its address after releasing the namespace lock. */
     newreg = AllocMem(sizeof(*newreg), MEMF_PUBLIC | MEMF_CLEAR);
     if (!newreg)
         return NULL;
@@ -114,15 +120,22 @@ static struct CRTThreadHooks *__get_threadhooks(BOOL create)
     newreg->th_Sem.ss_Link.ln_Name = (char *)CRT_THREADHOOKS_SEMNAME;
     NEWLIST(&newreg->th_Hooks);
 
-    Forbid();
-    reg = (struct CRTThreadHooks *)FindSemaphore((STRPTR)CRT_THREADHOOKS_SEMNAME);
+    if (!__crt_list_enter(&guard, &SysBase->SemaphoreList, SPINLOCK_MODE_WRITE))
+    {
+        FreeMem(newreg, sizeof(*newreg));
+        return NULL;
+    }
+    reg = (struct CRTThreadHooks *)FindName(&SysBase->SemaphoreList,
+                                          (CONST_STRPTR)CRT_THREADHOOKS_SEMNAME);
     if (!reg)
     {
-        AddSemaphore(&newreg->th_Sem);
+        /* AddSemaphore takes this same namespace lock and reinitializes the
+         * object. Publish the already initialized node directly instead. */
+        Enqueue(&SysBase->SemaphoreList, &newreg->th_Sem.ss_Link);
         reg = newreg;
         newreg = NULL;
     }
-    Permit();
+    __crt_list_leave(&guard);
 
     if (newreg)
         FreeMem(newreg, sizeof(*newreg));
@@ -133,14 +146,20 @@ static int __posixc_threadhook_init(struct PosixCIntBase *PosixCBase)
 {
     struct CRTThreadHooks *reg = __get_threadhooks(TRUE);
 
+    (void)PosixCBase;
     if (!reg)
-        return TRUE;  /* Non-fatal: workers simply won't get a CRT base. */
+        return FALSE;
 
     ObtainSemaphore(&reg->th_Sem);
     /* posixc.library is a single system-wide library; register exactly once
        even if this init runs again. */
     if (__posixc_threadbase_slot <= 0)
         __posixc_threadbase_slot = AllocTaskStorageSlot();
+    if (__posixc_threadbase_slot <= 0)
+    {
+        ReleaseSemaphore(&reg->th_Sem);
+        return FALSE;
+    }
 
     if (!__posixc_threadhook.th_Node.mln_Succ)
     {

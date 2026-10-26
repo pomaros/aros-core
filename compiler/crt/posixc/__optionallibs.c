@@ -1,5 +1,6 @@
 /*
     Copyright (C) 2025-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
 */
 
 #include <proto/exec.h>
@@ -18,20 +19,6 @@
    program's exit list, which stdc's __callexitfuncs drains at exit. */
 #include "__stdc_intbase.h"
 #include "__exitfunc.h"
-
-/* Internal function __libfindandopen will only open a library when it is
-   already in the list of open libraries
-*/
-static struct Library *__libfindandopen(const char *libname, int version)
-{
-    struct Node *found;
-
-    Forbid();
-    found = FindName(&SysBase->LibList, libname);
-    Permit();
-
-    return (found != NULL) ? OpenLibrary(libname, version) : NULL;
-}
 
 /*
  * usergroup.library holds a reference on this posixc base (it declares

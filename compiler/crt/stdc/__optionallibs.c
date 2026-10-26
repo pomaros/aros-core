@@ -1,5 +1,6 @@
 /*
     Copyright (C) 2013-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
 */
 
 #include <proto/exec.h>
@@ -13,19 +14,22 @@
 
 #include "__stdc_intbase.h"
 #include "__optionallibs.h"
+#include "__exec_list.h"
 
 /* Internal function __libfindandopen will only open a library when it is
    already in the list of open libraries
 */
 static struct Library *__libfindandopen(const char *libname, int version)
 {
-    struct Node *found;
+    BOOL found;
+    struct __crt_list_guard guard;
 
-    Forbid();
-    found = FindName(&SysBase->LibList, libname);
-    Permit();
+    if (!__crt_list_enter(&guard, &SysBase->LibList, SPINLOCK_MODE_READ))
+        return NULL;
+    found = FindName(&SysBase->LibList, (CONST_STRPTR)libname) != NULL;
+    __crt_list_leave(&guard);
 
-    return (found != NULL) ? OpenLibrary(libname, version) : NULL;
+    return found ? OpenLibrary((CONST_STRPTR)libname, version) : NULL;
 }
 
 int __locale_available(struct StdCIntBase *StdCBase)
