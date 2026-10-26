@@ -2,7 +2,7 @@
 # Copyright (C) 2026 John KNIPPER <code@jkn.me>
 # Licensed under the AROS Public License (APL) Version 1.1
 
-"""Compare native SDK networking ABI with the libc in a qualified std build.
+"""Compare native SDK networking/metadata ABI with a qualified std build.
 
 No target execution is involved. Compile constant records in both languages,
 extract their ELF sections, and compare every record. The resolver's addrinfo
@@ -23,6 +23,7 @@ import sys
 
 
 LAYOUTS = {
+    "stat": "st_dev st_ino st_mode st_nlink st_uid st_gid st_rdev st_size st_atime st_atime_nsec st_mtime st_mtime_nsec st_ctime st_ctime_nsec st_blksize st_blocks st_flags st_gen",
     "pthread_condattr_t": "pshared cond_clock",
     "pollfd": "fd events revents",
     "sockaddr": "sa_len sa_family sa_data",
@@ -48,7 +49,11 @@ FIONBIO FIONREAD FIOCLEX FIONCLEX EAI_SYSTEM CLOCK_REALTIME CLOCK_MONOTONIC
 POLLIN POLLPRI POLLOUT POLLERR POLLHUP POLLNVAL
 ENOSYS EINVAL EBADF EAFNOSUPPORT EOPNOTSUPP EWOULDBLOCK ECONNREFUSED
 """.split()
-TYPES = "c_int c_short c_long size_t socklen_t sa_family_t pid_t nfds_t clockid_t".split()
+TYPES = "c_int c_short c_long size_t socklen_t sa_family_t pid_t nfds_t clockid_t ino_t dev_t off_t time_t blkcnt_t blksize_t".split()
+# C uses nested timespec fields; Rust exposes the public record flattened.
+C_FIELDS = {("stat", "st_atime_nsec"): "st_atim.tv_nsec",
+            ("stat", "st_mtime_nsec"): "st_mtim.tv_nsec",
+            ("stat", "st_ctime_nsec"): "st_ctim.tv_nsec"}
 HEADER = "// Copyright (C) 2026 John KNIPPER <code@jkn.me>\n// Licensed under the AROS Public License (APL) Version 1.1\n"
 
 
@@ -83,12 +88,16 @@ def records():
                        (group, name + ".align", f"_Alignof({ctype})",
                         f"align_of::<libc::{name}>()")])
         for field in fields.split():
+            cfield = C_FIELDS.get((name, field), field)
             values.append((group, name + "." + field + ".offset",
-                           f"__builtin_offsetof({ctype}, {field})",
+                           f"__builtin_offsetof({ctype}, {cfield})",
                            f"offset_of!(libc::{name}, {field})"))
             values.append((group, name + "." + field + ".size",
-                           f"sizeof((({ctype} *)0)->{field})",
+                           f"sizeof((({ctype} *)0)->{cfield})",
                            f"field_size!(libc::{name}, {field})"))
+    # std also exposes a raw stat declaration independently of libc.
+    values += [(group, "std."+name, c, r.replace("libc::stat", "std::os::aros::raw::stat"))
+               for group, name, c, r in list(values) if name.startswith("stat.")]
     for name in CONSTANTS:
         values.append(("direct", name, name, f"libc::{name}"))
     for name in TYPES:
@@ -103,6 +112,10 @@ def main():
     for name in ("sdk", "crosstools", "std-build", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--application-libc-rlib", type=Path)
+    parser.add_argument("--posix-headers", type=Path,
+                        help="explicit source POSIX header directory ahead of SDK headers for object-only admission")
+    parser.add_argument("--c-file-offset-bits", type=int, choices=(32, 64),
+                        help="select a C metadata profile for ABI diagnostics; Rust declarations stay as compiled")
     parser.add_argument("--extended-c-api", action="store_true",
                         help="select the SDK GNU/POSIX.1-2008 plus BSD declaration profile")
     parser.add_argument("--native-header", type=Path,
@@ -112,7 +125,10 @@ def main():
                                   for n in ("sdk", "crosstools", "std_build", "output"))
     if output.exists() or args.output.is_symlink():
         parser.error("output must be a new directory")
-    for protected in (sdk, tools, build):
+    posix_headers = args.posix_headers.resolve() if args.posix_headers else None
+    if posix_headers and not (posix_headers / "sys/stat.h").is_file():
+        parser.error("posix-headers must contain sys/stat.h")
+    for protected in [sdk, tools, build] + ([posix_headers] if posix_headers else []):
         if output == protected or protected in output.parents:
             parser.error("output must be outside all input trees")
     qualified = json.loads((build / "result.json").read_text())
@@ -120,10 +136,11 @@ def main():
         parser.error("std-build result.json must record std_compile PASS")
     deps = build / "sysroot/lib/rustlib/aarch64-unknown-aros/lib"
     core = one_rlib(deps, "core")
+    std = one_rlib(deps, "std")
     libc = args.application_libc_rlib.resolve() if args.application_libc_rlib else one_rlib(deps, "libc")
     wrapper, target = build / "rustc", build / "aarch64-unknown-aros.json"
     output.mkdir(parents=True)
-    inputs = {str(p): digest(p) for p in (core, libc, wrapper, target, build / "result.json")}
+    inputs = {str(p): digest(p) for p in (core, std, libc, wrapper, target, build / "result.json")}
     native_header = args.native_header.resolve()
     inputs[str(native_header)] = digest(native_header)
     private_include = output / "include/bsdsocket"
@@ -132,7 +149,7 @@ def main():
     entries = records()
     c = HEADER + "\n".join("#include <" + name + ">" for name in (
         "errno.h", "sys/types.h", "sys/socket.h", "sys/uio.h", "sys/time.h", "sys/ioctl.h",
-        "netinet/in.h", "netinet/tcp.h", "netdb.h", "bsdsocket/native.h", "pthread.h", "time.h"))
+        "netinet/in.h", "netinet/tcp.h", "netdb.h", "bsdsocket/native.h", "pthread.h", "time.h", "sys/stat.h"))
     for name in ("IN", "PRI", "OUT", "ERR", "HUP", "NVAL"):
         c += "\n#define POLL" + name + " AROS_POLL_" + name
     c += '\n__attribute__((used,section(".aros_abi")))\nconst unsigned long ABI[] = {\n'
@@ -143,9 +160,12 @@ def main():
         else:
             c += f"(unsigned long)({entry[2]}),\n"
     c += "};\n"
+    c += "int ABI_METADATA_CALL(int fd, const char *path, struct stat *buf, int flags) { return fstatat(fd, path, buf, flags); }\n"
     rust = HEADER + '''#![no_std]
 #![feature(rustc_private)]
+#![allow(deprecated)]
 extern crate libc;
+extern crate std;
 use core::mem::{size_of, align_of, offset_of, MaybeUninit};
 macro_rules! field_size {
     ($ty:ty, $field:ident) => {{
@@ -161,6 +181,7 @@ macro_rules! field_size {
 '''
     rust += f"pub static ABI: [u64; {len(entries)}] = [\n"
     rust += ",\n".join(f"({entry[3]}) as u64" for entry in entries) + "\n];\n"
+    rust += "#[no_mangle]\npub unsafe extern \"C\" fn ABI_METADATA_CALL(fd: libc::c_int, path: *const libc::c_char, buf: *mut libc::stat, flags: libc::c_int) -> libc::c_int { unsafe { libc::fstatat(fd, path, buf, flags) } }\n"
     (output / "native.c").write_text(c)
     (output / "rust.rs").write_text(rust)
     env = os.environ.copy()
@@ -169,6 +190,7 @@ macro_rules! field_size {
     rustflags = [str(wrapper), "--edition=2021", "--crate-type=lib", "--emit=obj",
                  "-Zunstable-options", "--target", str(target),
                  "--extern", "core=" + str(core), "--extern", "libc=" + str(libc),
+                 "--extern", "std=" + str(std),
                  "-Ldependency=" + str(deps), "-Ldependency=" + str(libc.parent)]
     # Probe optional capability by compilation against the actual rlib. A missing
     # Rust constant and a missing native constant means unsupported on both sides.
@@ -188,17 +210,30 @@ macro_rules! field_size {
     cflags = [str(tools / "bin/clang"), "--target=aarch64-unknown-aros", "-std=c11",
               "-D_BSD_SOURCE=1", "-I" + str(output / "include"), "-I" + str(sdk / "include/aros/posixc"),
               "-I" + str(sdk / "include/aros/stdc"), "-I" + str(sdk / "include")]
+    if posix_headers:
+        cflags.insert(4, "-I"+str(posix_headers))
     if args.extended_c_api:
         cflags.append("-D_GNU_SOURCE=1")
+    if args.c_file_offset_bits:
+        cflags.append("-D_FILE_OFFSET_BITS="+str(args.c_file_offset_bits))
     deptext = command(cflags + ["-M", str(output / "native.c")], output, "dependencies")
     headers = shlex.split(deptext.replace("\\\n", " ").split(":", 1)[1])
     inputs.update({str(Path(p).resolve()): digest(Path(p)) for p in headers})
-    for tool in (tools / "bin/clang", tools / "bin/llvm-objcopy"):
+    for tool in (tools / "bin/clang", tools / "bin/llvm-objcopy", tools / "bin/llvm-nm"):
         inputs[str(tool)] = digest(tool)
     command(cflags + ["-c", str(output / "native.c"), "-o", str(output / "native.o")],
             output, "native")
     command(rustflags + [str(output / "rust.rs"), "-o", str(output / "rust.o")],
             output, "rust", env)
+    metadata_symbols = {}
+    for language in ("native", "rust"):
+        symbols = command([str(tools / "bin/llvm-nm"), "-u", str(output / (language+".o"))],
+                          output, language+"-symbols")
+        selected = [line.split()[-1] for line in symbols.splitlines()
+                    if line.split() and "fstatat" in line.split()[-1]]
+        metadata_symbols[language] = selected
+    metadata_match = (metadata_symbols["native"] in (["fstatat"], ["fstatat64"])
+                      and metadata_symbols["rust"] == metadata_symbols["native"])
     values = {}
     for language in ("native", "rust"):
         obj = output / (language + ".o")
@@ -226,10 +261,19 @@ macro_rules! field_size {
     bridge = [r for r in rows if r["group"] == "resolver_bridge" and not r["equal"]]
     if any(digest(Path(p)) != sha for p, sha in inputs.items()):
         raise RuntimeError("qualified std inputs changed during qualification")
+    if not metadata_match:
+        direct.append({"name": "metadata.entry_symbol", "native": metadata_symbols["native"],
+                       "rust": metadata_symbols["rust"], "equal": False})
+    metadata_mismatches = [r for r in rows if r["name"].startswith(("stat.", "std.stat.")) and not r["equal"]]
+    metadata_match = metadata_match and not metadata_mismatches
     report = {"verdict": "FAIL" if direct else "DIRECT_ABI_MATCH_BRIDGE_UNQUALIFIED",
               "direct_abi": "FAIL" if direct else "PASS", "direct_mismatches": direct,
               "resolver_bridge": {"verdict": "CONVERSION_REQUIRED" if bridge else "LAYOUT_MATCH",
                                   "mismatches": bridge, "conversion_execution": "UNTESTED"},
+              "metadata_abi": "PASS" if metadata_match else "FAIL",
+              "metadata_mismatches": metadata_mismatches,
+              "metadata_profile": "native default stat" if not args.c_file_offset_bits else "C FILE_OFFSET_BITS="+str(args.c_file_offset_bits),
+              "metadata_entry_symbols": metadata_symbols,
               "native_runtime": "UNTESTED", "inputs": inputs,
               "source_sha256": digest(Path(__file__)), "records": rows}
     (output / "result.json").write_text(json.dumps(report, indent=2) + "\n")

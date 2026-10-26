@@ -1,6 +1,6 @@
 {
   "application_libc": {
-    "origin_sha256": "d81cc43165c9f9af4aa3730b2e852fc85d4a9695a331228bf4dc68f0887a8884",
+    "origin_sha256": "e38f4b0bb60c6e0a543f6fecdc446dc71c1e0edf3e58cd6ee2220b4ed330a89c",
     "patch_sha256": "7b569b5677e4d75ee10b9446ce37159a69cfb84a776ca54e30bc194285cec6e9"
   },
   "core_native_header": "workbench/network/common/include/bsdsocket/native.h",
@@ -19,12 +19,12 @@
       "source_sha256": "d6610c48c06533e4fa2a352b7248254e3b78abd548e85b867624515cfcdfdfdd"
     },
     "ABI/network-abi.py": {
-      "export_sha256": "485e4c000213158369157905317a9a1c2fa5fc95841a42daf478fff5a5aca0e5",
-      "source_sha256": "6ee7b19f9ce9d3a6e175456a0b7bccbe290c6b71bce1f9396c37a10755583c60"
+      "export_sha256": "78042f9319624f4281ed53fc46ee55d276b8506067b9e1e78fc5f47dc009789a",
+      "source_sha256": "bfea8c07d1f2f08fe878e7c5af9565bd738d06ce606f657490f44cff23a625d6"
     },
     "README.md": {
-      "export_sha256": "67d76dbe4fffeb6f19275b2db655a2bbe69afc88eb0ab0e5e65dc0d416e1c736",
-      "source_sha256": "033dd0672e382ccea177d7863fa865cf9117333e94b95b58ce58128f3957fb10"
+      "export_sha256": "ff68e44187e26a5df1cb4117aea3d0b4d37d3206733a66ac4f449b6168fcb7c2",
+      "source_sha256": "43f96fd2ac76c924a5347f3fb201f2ac43cedc05596ab16f8a60659264e43f25"
     },
     "aarch64-unknown-aros.json": {
       "export_sha256": "e37308bd1cc1cec089bab2965e27aeb6e4cc3d430816eb8dc0c5f9920350065f",
@@ -190,6 +190,6 @@
   "schema": 1,
   "source_directory": "toolchain",
   "source_repository": "https://github.com/pomaros/rust-aros.git",
-  "source_revision": "9c65cd860095e03f7102a28aef3cc28a3f9c43f2",
+  "source_revision": "17bc8a6f93877d7d7927ff189d5ab2aabaff8a70",
   "transformations": "APL notices for owned integration files; authoritative core socket header paths; core command paths in documentation"
 }

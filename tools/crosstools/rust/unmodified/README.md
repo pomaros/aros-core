@@ -107,7 +107,16 @@ unsupported implementation. `FD_CLOEXEC` is stored metadata; an execution backen
 must consume it before inheritance can be qualified. Native `dup2` replacement
 and enabled `SO_LINGER` are outside the owned socket contract.
 
-The ABI gate in `ABI/` compares the actual SDK and produced Rust libc objects.
+The `ABI/network-abi.py` gate compares the actual SDK and produced Rust libc
+objects, including `stat`, std's independent raw `stat` declaration, metadata
+scalar widths and the referenced `fstatat` symbol. Rust uses the default native
+C metadata profile; selecting `_FILE_OFFSET_BITS=64` in C changes the inode
+layout and symbol and requires matching Rust declarations. The gate's
+`--c-file-offset-bits` option diagnoses that mismatch. `--posix-headers` selects
+an explicit source header directory ahead of SDK headers for object-only checks;
+the report hashes the headers actually consumed. Neither option qualifies a
+linked library. Metadata has its own verdict; unrelated direct ABI mismatches
+continue to fail the complete gate.
 `net/tests/` exercises the resolver conversion and `net/tests/socket/` exercises
 the actual socket bridge and vector adapter under host sanitizers. The core's
 native-socket fixture separately exercises descriptor retirement and per-call
