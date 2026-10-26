@@ -119,7 +119,9 @@ with tempfile.TemporaryDirectory(prefix='settings-search-') as directory:
 window = (root / 'workbench/prefs/settings/settingswindow.c').read_text()
 record = window[window.index('struct index_record\n'):window.index('/* A page is')]
 header = window[window.index('struct index_header\n'):window.index('static ULONG index_hash')]
-reader = window[window.index('static BOOL cache_read('):window.index('static void cache_write(')]
+reader_start = window.index('static BOOL cache_read(')
+# Extract the reader independently of the following writer's return type.
+reader = window[reader_start:window.index('\nstatic ', reader_start + 1)]
 cache_fixture = r'''
 #include <stdint.h>
 #include <stdlib.h>
