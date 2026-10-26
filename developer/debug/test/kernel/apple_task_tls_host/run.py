@@ -21,7 +21,11 @@ def check_source():
  crash=(ROOT/'arch/aarch64-apple/kernel/task_crash.c').read_text();assert 'cpu_SaveContext(frame, task)' in crash and 'cpu_Dispatch(frame)' in crash
  vectors=(ROOT/'arch/aarch64-apple/kernel/runtime_vectors.S').read_text().lower();assert 'tpidr_el0' not in vectors
  bootstrap=(ROOT/'arch/aarch64-apple/kernel/startup_prepare.c').read_text();assert bootstrap.index('msr tpidr_el0')<bootstrap.index('initialize_state(state)')
- secondary=(ROOT/'arch/aarch64-apple/kernel/smp_entry.S').read_text();assert secondary.count('msr tpidr_el0,xzr')==2
+ secondary=(ROOT/'arch/aarch64-apple/kernel/smp_entry.S').read_text()
+ # The shared backend has one PSCI entry, not the former two hardware entries.
+ entry=secondary.split('AROSAppleSMPEntry:',1)[1].split('.Lfault:',1)[0]
+ assert entry.count('msr tpidr_el0,xzr')==1
+ assert entry.index('msr tpidr_el0,xzr')<entry.index('bl AROSAppleSMPMain')
 
 def main():
  p=argparse.ArgumentParser();p.add_argument('--out',type=Path,required=True);p.add_argument('--cc',default='clang');p.add_argument('--aarch64-cc',default='/opt/homebrew/opt/llvm/bin/clang');p.add_argument('--objdump',default='/opt/homebrew/opt/llvm/bin/llvm-objdump');a=p.parse_args();a.out.mkdir(parents=True,exist_ok=False)
@@ -29,6 +33,8 @@ def main():
  def run(name,cmd):
   r=subprocess.run([str(v) for v in cmd],capture_output=True,text=True,timeout=30);(a.out/(name+'.log')).write_text(r.stdout+r.stderr);records.append(dict(name=name,command=[str(v) for v in cmd],rc=r.returncode));r.check_returncode();return r.stdout
  include=a.out/'include/aros/aarch64';include.mkdir(parents=True)
+ types=a.out/'include/exec';types.mkdir()
+ (types/'types.h').write_text('#include <stdint.h>\ntypedef uint64_t UQUAD;typedef uint32_t ULONG;typedef void *APTR;\n')
  (include/'cpucontext.h').symlink_to(ROOT/'arch/aarch64-all/include/aros/cpucontext.h')
  (include/'native_tls.h').write_text('#include <stdint.h>\nextern uint64_t host_cpu_tp[2];extern unsigned host_cpu;\nstatic inline uint64_t AROSAArch64ReadTaskPointer(void){return host_cpu_tp[host_cpu];}\nstatic inline void AROSAArch64WriteTaskPointer(uint64_t v){host_cpu_tp[host_cpu]=v;}\n')
  apple=a.out/'include/aros/apple';apple.mkdir(parents=True)
@@ -39,6 +45,8 @@ def main():
  # Compile the actual private wrapper and public context on AArch64 too.
  # Only scalar typedefs replace SDK headers; native register helpers are real.
  native=a.out/'native-include/aros/aarch64';native.mkdir(parents=True)
+ native_types=a.out/'native-include/exec';native_types.mkdir()
+ (native_types/'types.h').write_text((types/'types.h').read_text())
  (native/'cpucontext.h').symlink_to(ROOT/'arch/aarch64-all/include/aros/cpucontext.h')
  (native/'native_tls.h').symlink_to(ROOT/'arch/aarch64-all/include/aros/native_tls.h')
  native_apple=a.out/'native-include/aros/apple';native_apple.mkdir(parents=True)
@@ -48,6 +56,6 @@ def main():
  run('aarch64-compile',[a.aarch64_cc,'--target=aarch64-none-elf','-ffreestanding','-std=c11','-O1','-Wall','-Wextra','-Werror','-I',a.out/'native-include','-I',ROOT/'arch/aarch64-apple/kernel','-c',fixture,'-o',a.out/'register-access.o'])
  assembly=run('aarch64-disassembly',[a.objdump,'-d',a.out/'register-access.o']).lower();assert re.search(r'msr\s+tpidr_el0',assembly) and not re.search(r'mrs\s+\w+, tpidr_el0',assembly) and re.search(r'add\s+x\d+, x0, #0x118',assembly) and 'isb' in assembly
  run('secondary-assemble',[a.aarch64_cc,'--target=aarch64-none-elf','-x','assembler-with-cpp','-c',ROOT/'arch/aarch64-apple/kernel/smp_entry.S','-o',a.out/'smp-entry.o'])
- secondary=run('secondary-disassembly',[a.objdump,'-d',a.out/'smp-entry.o']).lower();assert len(re.findall(r'msr\s+tpidr_el0, xzr',secondary))==2
+ secondary=run('secondary-disassembly',[a.objdump,'-d',a.out/'smp-entry.o']).lower();assert len(re.findall(r'msr\s+tpidr_el0, xzr',secondary))==1
  (a.out/'result.json').write_text(json.dumps(dict(result='PASS_HOST_AND_AARCH64_ASSEMBLY_ONLY',public_context_bytes=280,private_prefix_bytes=288,simd_offset=288,allocation_bytes=816,records=records,native_execution='NOT_RUN',sdk_mutation=False),indent=2)+'\n')
 if __name__=='__main__':main()
