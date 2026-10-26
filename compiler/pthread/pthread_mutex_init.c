@@ -20,8 +20,22 @@
   3. This notice may not be removed or altered from any source distribution.
 */
 
+/* Altered (2026 John KNIPPER): publish static initialization through Exec. */
 #include "pthread_intern.h"
 #include "debug.h"
+
+/* Altered for AROS: Exec supplies one initialization domain across linklibs. */
+int _pthread_mutex_ensure_init(pthread_mutex_t *mutex, BOOL nonblocking)
+{
+    if (mutex == NULL)
+        return EINVAL;
+    if (__atomic_load_n(&mutex->initialized, __ATOMIC_ACQUIRE) == 1)
+        return 0;
+    if (!InitSemaphoreOnce(&mutex->semaphore, &mutex->initialized,
+                           nonblocking ? SSINITF_TRY : 0))
+        return nonblocking ? EBUSY : EINVAL;
+    return 0;
+}
 
 int _pthread_mutex_init(pthread_mutex_t *mutex, const pthread_mutexattr_t *attr, BOOL staticinit)
 {
@@ -36,6 +50,7 @@ int _pthread_mutex_init(pthread_mutex_t *mutex, const pthread_mutexattr_t *attr,
         mutex->kind = PTHREAD_MUTEX_DEFAULT;
     InitSemaphore(&mutex->semaphore);
     mutex->incond = 0;
+    __atomic_store_n(&mutex->initialized, 1, __ATOMIC_RELEASE);
 
     return 0;
 }
@@ -68,8 +83,8 @@ int _pthread_mutex_init(pthread_mutex_t *mutex, const pthread_mutexattr_t *attr,
 
     BUGS
         The supplied kind is not validated here. Process-sharing attributes are
-        ignored. Lazy initialization of static mutexes is not serialized, so
-        explicit initialization before concurrent use avoids that race.
+        ignored. Concurrent explicit initialization or destruction remains
+        invalid. Static first use is serialized separately.
 
     SEE ALSO
         pthread_mutex_lock(),

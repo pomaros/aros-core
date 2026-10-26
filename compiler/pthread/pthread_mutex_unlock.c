@@ -20,6 +20,7 @@
   3. This notice may not be removed or altered from any source distribution.
 */
 
+/* Altered (2026 John KNIPPER): publish static initialization through Exec. */
 #include "pthread_intern.h"
 #include "debug.h"
 
@@ -67,9 +68,10 @@
     if (mutex == NULL)
         return EINVAL;
 
-    // initialize static mutexes
-    if (SemaphoreIsInvalid(&mutex->semaphore))
-        _pthread_mutex_init(mutex, NULL, TRUE);
+    /* Publish initialization before any semaphore fields are inspected. */
+    int error = _pthread_mutex_ensure_init(mutex, FALSE);
+    if (error)
+        return error;
 
     if (mutex->kind != PTHREAD_MUTEX_NORMAL && !SemaphoreIsMine(&mutex->semaphore))
         return EPERM;

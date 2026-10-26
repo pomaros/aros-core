@@ -20,6 +20,7 @@
   3. This notice may not be removed or altered from any source distribution.
 */
 
+/* Altered (2026 John KNIPPER): publish static initialization through Exec. */
 #include "pthread_intern.h"
 #include "debug.h"
 
@@ -48,8 +49,7 @@
         Include <pthread.h>; link with pthread. Call from task context. This
         function does not enqueue a wait or check cancellation. A successful
         call must be paired with pthread_mutex_unlock(); failure grants no
-        ownership. Explicit initialization before sharing avoids the
-        unsynchronized lazy-initialization path.
+        ownership. Static first use is serialized before acquisition.
 
     BUGS
         Owner reacquisition of an ERRORCHECK mutex returns EBUSY here, whereas
@@ -70,9 +70,10 @@
     if (mutex == NULL)
         return EINVAL;
 
-    // initialize static mutexes
-    if (SemaphoreIsInvalid(&mutex->semaphore))
-        _pthread_mutex_init(mutex, NULL, TRUE);
+    /* Publish initialization before any semaphore fields are inspected. */
+    int error = _pthread_mutex_ensure_init(mutex, TRUE);
+    if (error)
+        return error;
 
     if (mutex->kind != PTHREAD_MUTEX_RECURSIVE && SemaphoreIsMine(&mutex->semaphore))
         return EBUSY;

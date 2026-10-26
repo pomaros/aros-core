@@ -312,6 +312,7 @@ struct ExecBase *PrepareExecBase(struct MemHeader *mh, struct TagItem *msg)
     InitSemaphore(&PrivExecBase(SysBase)->MemListSem);
 #endif
     InitSemaphore(&PrivExecBase(SysBase)->LowMemSem);
+    InitSemaphore(&PrivExecBase(SysBase)->SemaphoreInitSem);
 
     SysBase->SoftVer        = VERSION_NUMBER;
 #if !defined(__AROSEXEC_SMP__)

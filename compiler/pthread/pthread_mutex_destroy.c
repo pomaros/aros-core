@@ -22,6 +22,7 @@
 
 #include <string.h>
 
+/* Altered (2026 John KNIPPER): publish static initialization through Exec. */
 #include "pthread_intern.h"
 #include "debug.h"
 
@@ -70,7 +71,7 @@
         return EINVAL;
 
     // probably a statically allocated mutex
-    if (SemaphoreIsInvalid(&mutex->semaphore))
+    if (!__atomic_load_n(&mutex->initialized, __ATOMIC_ACQUIRE))
         return 0;
 
     if (/*mutex->incond ||*/ AttemptSemaphore(&mutex->semaphore) == FALSE)

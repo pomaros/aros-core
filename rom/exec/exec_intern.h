@@ -126,6 +126,7 @@ struct IntExecBase
     spinlock_t                  TaskReadySpinLock;
     spinlock_t                  TaskWaitSpinLock;
 #endif
+    struct SignalSemaphore      SemaphoreInitSem;               /* One initialization domain across tasks and linklibs          */
 };
 
 #define PrivExecBase(base)      ((struct IntExecBase *)(base))

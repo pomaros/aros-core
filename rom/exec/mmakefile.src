@@ -21,7 +21,7 @@ ALL_FUNCTIONS := \
 	enable enqueue exception exitintr \
 	findname findport findresident findsemaphore findtask findtaskbypid \
 	forbid freeentry freemem freepooled freesignal freetrap freevec getcc \
-	getmsg initcode initresident initsemaphore initstruct insert \
+	getmsg initcode initresident initsemaphore initsemaphoreonce initstruct insert \
 	makefunctions makelibrary obtainquickvector obtainsemaphore \
 	obtainsemaphorelist obtainsemaphoreshared oldopenlibrary opendevice \
 	openlibrary openresource permit preparecontext procure putmsg rawdofmt \

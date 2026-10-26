@@ -157,6 +157,8 @@ struct pthread_mutex
     int kind;
     __pthread_sigsem_member_t semaphore;
     int incond;
+    /* Zero in static initializers; release/acquire publication by Exec. */
+    unsigned int initialized;
 };
 typedef struct pthread_mutex pthread_mutex_t;
 

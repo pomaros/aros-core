@@ -224,6 +224,7 @@ void exec_main(struct TagItem *msg, void *entry)
 
     InitSemaphore(&PrivExecBase(SysBase)->MemListSem);
     InitSemaphore(&PrivExecBase(SysBase)->LowMemSem);
+    InitSemaphore(&PrivExecBase(SysBase)->SemaphoreInitSem);
 
     PrivExecBase(SysBase)->TaskStorageSize = TASKSTORAGEPUDDLE;
     NEWLIST(&PrivExecBase(SysBase)->TaskStorageSlots);

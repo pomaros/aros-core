@@ -144,6 +144,7 @@ extern int _pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex,
 extern int _pthread_cond_broadcast(pthread_cond_t *cond, BOOL onlyfirst);
 
 /* .c */
+extern int _pthread_mutex_ensure_init(pthread_mutex_t *mutex, BOOL nonblocking);
 extern int _pthread_mutex_init(pthread_mutex_t *mutex, const pthread_mutexattr_t *attr, BOOL staticinit);
 
 /* .c */

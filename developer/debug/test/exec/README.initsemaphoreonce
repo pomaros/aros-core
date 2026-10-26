@@ -1,0 +1,16 @@
+Shared semaphore publication regression
+======================================
+
+Run: python3 developer/debug/test/exec/initsemaphoreonce_host.py
+
+The actual InitSemaphoreOnce body executes under ASan/UBSan with sixteen host
+clients racing one shared publication word and an Exec gate represented by a
+host mutex. All 1,600 successful calls observe a completely initialized object,
+with exactly one initializer invocation. Invalid arguments/state and a busy
+nonwaiting gate must be refused. A published word bypasses the gate.
+
+This checks publication protocol and control flow; host pthread scheduling is
+not AROS scheduling. Rebuild Exec, pthread, headers, consumers and SDK artifacts
+coherently, and qualify native first use before claiming runtime acceptance.
+The publication word belongs to pthread_types.h, the common C-only public
+layout; a new Exec function and private gate require matching Exec imports.

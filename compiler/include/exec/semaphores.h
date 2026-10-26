@@ -64,6 +64,9 @@ struct SemaphoreMessage
     struct SignalSemaphore      *ssm_Semaphore;
 };
 
+/* InitSemaphoreOnce(): do not wait for the initialization gate. */
+#define SSINITF_TRY (1UL << 0)
+
 #define SM_EXCLUSIVE (0L)
 #define SM_SHARED    (1L)
 

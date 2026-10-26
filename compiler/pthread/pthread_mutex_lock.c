@@ -20,6 +20,7 @@
   3. This notice may not be removed or altered from any source distribution.
 */
 
+/* Altered (2026 John KNIPPER): publish static initialization through Exec. */
 #include "pthread_intern.h"
 #include "debug.h"
 
@@ -48,8 +49,7 @@
         Include <pthread.h>; link with pthread. Call from task context where
         waiting is permitted. There is no timeout or cancellation check.
         Pair every successful acquisition with pthread_mutex_unlock().
-        Explicitly initialize before concurrent use; the lazy path is not
-        protected against simultaneous first use.
+        Static first use is serialized and published before acquisition.
 
     BUGS
         NORMAL uses the recursive Exec semaphore path without rejecting an
@@ -73,9 +73,10 @@
 
     sem = &mutex->semaphore;
 
-    // initialize static mutexes
-    if (SemaphoreIsInvalid(sem))
-        _pthread_mutex_init(mutex, NULL, TRUE);
+    /* Publish initialization before any semaphore fields are inspected. */
+    int error = _pthread_mutex_ensure_init(mutex, FALSE);
+    if (error)
+        return error;
 
     // normal mutexes would simply deadlock here
     if (mutex->kind == PTHREAD_MUTEX_ERRORCHECK && SemaphoreIsMine(sem))
