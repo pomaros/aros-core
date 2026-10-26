@@ -87,8 +87,9 @@ _EGLProc _mesa_glapi_get_proc_address(const char *name)
  * its pixels whichever context draws to it. Each EGL context owns a GLA
  * context on the same screen (GLA_ShareScreen of the anchor, or
  * GLA_ShareContext of its share context). eglMakeCurrent binds the task's
- * native context to the draw and read drawables first and changes the
- * logical binding only once that succeeded; without a surface
+ * native context to the draw and read drawables after Mesa admits ownership
+ * and config compatibility, restoring the logical binding on native refusal;
+ * without a surface
  * (EGL_KHR_surfaceless_context) the context has no drawable at all.
  */
 
