@@ -139,7 +139,7 @@ MAIN=r'''int main(void) {
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--output',type=Path)
-    parser.add_argument('--consumer',type=Path,default=ROOT.parent/'aros-core-display-scale-diagnostics/workbench/include/scaleresult.h')
+    parser.add_argument('--consumer',type=Path,default=ROOT/'workbench/include/scaleresult.h')
     args=parser.parse_args()
     consumer=args.consumer.read_text()
     attempt=consumer[consumer.index('struct ScaleAttempt\n'):consumer.index('static inline BOOL ScaleAttemptSucceeded')]
