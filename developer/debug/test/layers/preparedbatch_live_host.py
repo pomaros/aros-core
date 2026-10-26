@@ -14,6 +14,7 @@ ns={'__name__':'batch_dependencies','__file__':str(test)}
 saved=sys.argv;sys.argv=[str(test),'--source',str(root)]
 exec(test.read_text().split('mutants =')[0],ns);sys.argv=saved
 source=ns['source'].replace('ULONG width,height,stride,Depth;UBYTE *data,*scanout;', 'ULONG width,height,stride,Depth,pen0;UBYTE *data,*scanout;')
+source=source.replace('#define LAYERREFRESH 128', '#define LAYERREFRESH 128\n#define LAYERPROTECTED (1U<<11)\n#define LAYERINPUTTRANSPARENT (1U<<12) /* controls107; opaque flag retention here */')
 source=source.replace('#define HIDD_BM_COLMAP(b) ((OOP_Object*)NULL)','#define HIDD_BM_COLMAP(b) ((OOP_Object*)(b))')
 source=source.replace('if(m->id==2){assert(maps);maps--;return 0;}','if(m->id==4)return b->pen0;\n if(m->id==2){assert(maps);maps--;return 0;}')
 # Construct live lists with the actual ordinary Layers constructor helpers,
@@ -60,7 +61,7 @@ static void init(BOOL windows,BOOL noback,BOOL smart,BOOL ten){
   struct Layer*l=&ls[i];l->LayerInfo=&li;l->rp=&ports[i];ports[i].BitMap=screenbm;ports[i].Layer=l;
   l->bounds=i==0?(struct Rectangle){0,0,15,11}:i==1?(struct Rectangle){2,2,9,7}:(struct Rectangle){4,2,5,7};
   l->Width=l->bounds.MaxX-l->bounds.MinX+1;l->Height=l->bounds.MaxY-l->bounds.MinY+1;l->visible=i!=0;
-  l->Flags=i==1&&!smart?LAYERSUPER:LAYERSMART;if(smart&&i==2)l->Flags|=(1U<<11)|(1U<<12); /* protected,input-transparent overlay remains an occluder */l->parent=i?&ls[0]:NULL;l->BackFill=noback?LAYERS_NOBACKFILL:LAYERS_BACKFILL;
+  l->Flags=i==1&&!smart?LAYERSUPER:LAYERSMART;if(smart&&i==2)l->Flags|=LAYERPROTECTED|LAYERINPUTTRANSPARENT; /* protected,input-transparent overlay remains an occluder */l->parent=i?&ls[0]:NULL;l->BackFill=noback?LAYERS_NOBACKFILL:LAYERS_BACKFILL;
   l->shape=region(l->bounds.MinX,l->bounds.MinY,l->Width,l->Height);l->visibleshape=region(l->bounds.MinX,l->bounds.MinY,l->Width,l->Height);
   l->VisibleRegion=NewRegion();l->DamageList=NewRegion();assert(l->VisibleRegion&&l->DamageList);
  }
@@ -102,8 +103,9 @@ static void verify(BOOL windows,BOOL noback,BOOL finished,BOOL custom){
  for(int y=0;y<12;y++)for(int x=0;x<16;x++){
   ULONG expected=oldscreen(x,y,windows);BOOL exposed=FALSE;
   if(windows){
-   if(y>=3&&y<=8&&x>=2&&x<=7){int sx=x-2,sy=y-3;expected=(sx==2||sx==3)?back(sx,sy):fresh(sx,sy);}
-   else if(y>=2&&y<=7&&x>=12&&x<=15){int sx=x-12,sy=y-2;expected=sx<2?front(sx,sy):noback?oldscreen(x,y,TRUE):screenbm->pen0;}
+   int frontleft=IS_SMARTREFRESH(&ls[1])?4:12;
+   if(y>=2&&y<=7&&x>=frontleft&&x<frontleft+4){int sx=x-frontleft,sy=y-2;expected=sx<2?front(sx,sy):noback?oldscreen(x,y,TRUE):screenbm->pen0;}
+   else if(y>=3&&y<=8&&x>=2&&x<=7){int sx=x-2,sy=y-3;expected=(sx==2||sx==3)?back(sx,sy):fresh(sx,sy);}
    else {exposed=y>=2&&y<=7&&x>=2&&x<=9;if(exposed&&!noback)expected=finished&&custom?0x8a6c2e:screenbm->pen0;}
   }
   ULONG got=get(screenbm,x,y);if(got!=expected){fprintf(stderr,"live oracle %d,%d got%06x expected%06x noback%d finished%d custom%d\n",x,y,got,expected,noback,finished,custom);abort();}
@@ -113,19 +115,20 @@ static void verify(BOOL windows,BOOL noback,BOOL finished,BOOL custom){
   if(sy>=0&&sy<6&&sx>=0&&sx<8)expected=(sx==2||sx==3)?back(sx,sy):fresh(sx,sy);
   assert(get(superbm,x,y)==(expected&0xffffff));
  }
- if(windows&&IS_SMARTREFRESH(&ls[1]))assert((ls[2].Flags&((1U<<11)|(1U<<12)))==((1U<<11)|(1U<<12)));
+ if(windows&&IS_SMARTREFRESH(&ls[1]))assert((ls[2].Flags&(LAYERPROTECTED|LAYERINPUTTRANSPARENT))==(LAYERPROTECTED|LAYERINPUTTRANSPARENT));
  assert(!(ls[0].Flags&LAYERREFRESH)&&!ls[0].DamageList->RegionRectangle);
 }
 static struct LayerGeometryBatch*candidate(BOOL windows){struct LayerGeometryRequest r[]={
  {&ls[1],{2,3,7,8},NULL,0,NULL},{&ls[2],{12,2,15,7},NULL,0,NULL}};
+ if(windows&&IS_SMARTREFRESH(&ls[1]))r[1].bounds=(struct Rectangle){4,2,7,7};
  struct LayerGeometryBatch*t=PrepareLayerGeometryBatch(&li,windows?r:NULL,windows?2:0,&refusal,&base);
  if(t&&!SealLayerGeometryBatch(t,&base)){ReleaseLayerGeometryBatch(t,&base);return NULL;}return t;}
 static void dispose(BOOL windows){for(int i=0;i<(windows?3:1);i++){free_clips(ls[i].ClipRect,&ls[i],&base);free_clips(ls[i]._cliprects,&ls[i],&base);DisposeRegion(ls[i].shape);DisposeRegion(ls[i].visibleshape);DisposeRegion(ls[i].VisibleRegion);DisposeRegion(ls[i].DamageList);if(ls[i].ClipRegion)DisposeRegion(ls[i].ClipRegion);}if(superbm)FreeBitMap(superbm);FreeBitMap(screenbm);assert(!live&&!bitmap_count&&!maps&&!opens&&!llocks&&!lilocks&&!GetHead(&gfx.ChunkPoolList));}
 static ULONG small_expected(int bx,int by,int scrollx,int scrolly){int x=bx-scrollx,y=by-scrolly;return x>=0&&x<8&&y>=0&&y<6&&(x<2||x>=4)?fresh(x,y):0x123456;}
 static void small_backing(void){
  unsigned faults=0;
- const int scrolls[4][2]={{1,2},{-2,-1},{20,20},{-20,-20}};
- for(unsigned mode=0;mode<4;mode++)for(unsigned occupancy=0;occupancy<20;occupancy++){
+ const int scrolls[8][2]={{1,2},{-2,-1},{20,20},{-20,-20},{5,0},{-6,0},{0,4},{0,-6}};
+ for(unsigned mode=0;mode<8;mode++)for(unsigned occupancy=0;occupancy<20;occupancy++){
   failat=0;init(TRUE,FALSE,FALSE,FALSE);FreeBitMap(superbm);superbm=AllocBitMap(5,4,32,0,NULL);assert(superbm);ls[1].SuperBitMap=superbm;ls[1].Scroll_X=scrolls[mode][0];ls[1].Scroll_Y=scrolls[mode][1];
   for(int y=0;y<4;y++)for(int x=0;x<5;x++)put(superbm,x,y,0x123456);
   struct RegionRectangleExtChunk*ballast[20];for(unsigned b=0;b<occupancy;b++){ballast[b]=__NewRegionRectangleExtChunk(GfxBase);assert(ballast[b]);}
@@ -142,6 +145,32 @@ static void small_backing(void){
   hardtrap=1;RollbackLayerGeometryBatch(t,&base);hardtrap=0;ReleaseLayerGeometryBatch(t,&base);unchanged(&before);for(unsigned b=0;b<occupancy;b++)__DisposeRegionRectangleExtChunk(ballast[b],GfxBase);dispose(TRUE);
  }
  printf("PASS actual oversized SUPER viewport and override:5x4 backing,6x6/8x6 views; positive,negative,fully outside scroll; clip/seed/override/bitexact rollback;%u forced faults across20 pooloccupancies\n",faults);
+}
+static void shared_backing(void){
+ unsigned faults=0,cuts_total=0;
+ for(unsigned occupancy=0;occupancy<20;occupancy++){
+  failat=0;init(TRUE,FALSE,FALSE,FALSE);
+  /* A is the first (frontmost) batch layer, B comes after A. Both map the
+   * same backing coordinates but have DIFFERENT current visible pixels. */
+  ls[2].Flags=LAYERSUPER;ls[2].SuperBitMap=superbm;ls[2].Scroll_X=ls[2].Scroll_Y=0;
+  ls[1].Scroll_X=ls[1].Scroll_Y=0;
+  for(int y=0;y<10;y++)for(int x=0;x<12;x++)put(superbm,x,y,0x123456);
+  struct RegionRectangleExtChunk*ballast[20];for(unsigned b=0;b<occupancy;b++){ballast[b]=__NewRegionRectangleExtChunk(GfxBase);assert(ballast[b]);}
+  struct Snapshot before;capture(&before);ordinal=0;struct LayerGeometryBatch*t=candidate(TRUE);assert(t&&maps==2);unsigned attempts=ordinal;
+  hardtrap=1;cutting=1;cut_at=~0U;cut_counter=0;assert(!setjmp(cut_jump));CommitLayerGeometryBatch(t,&base);unsigned cuts=cut_counter;cuts_total+=cuts;cutting=0;hardtrap=0;
+  for(int y=0;y<6;y++)for(int x=0;x<4;x++)assert(get(screenbm,x+12,y+2)==(x<2?front(x,y):0x123456));
+  for(int y=0;y<6;y++)for(int x=0;x<6;x++)assert(get(screenbm,x+2,y+3)==((x<2||x>=4)?fresh(x,y):0x123456));
+  for(int y=0;y<10;y++)for(int x=0;x<12;x++)assert(get(superbm,x,y)==(y<6&&x<8&&(x<2||x>=4)?fresh(x,y):0x123456));
+  hardtrap=1;RollbackLayerGeometryBatch(t,&base);hardtrap=0;ReleaseLayerGeometryBatch(t,&base);unchanged(&before);
+  for(unsigned cut=1;cut<=cuts;cut++){
+   t=candidate(TRUE);assert(t&&maps==2);cut_at=cut;cut_counter=0;cutting=1;hardtrap=1;
+   if(!setjmp(cut_jump)){CommitLayerGeometryBatch(t,&base);assert(!"unreached shared cut");}
+   cutting=0;RollbackLayerGeometryBatch(t,&base);hardtrap=0;ReleaseLayerGeometryBatch(t,&base);unchanged(&before);
+  }
+  for(unsigned f=1;f<=attempts;f++){ordinal=denied=0;failat=f;t=candidate(TRUE);failat=0;assert(!t&&denied==1);unchanged(&before);faults++;}
+  for(unsigned b=0;b<occupancy;b++)__DisposeRegionRectangleExtChunk(ballast[b],GfxBase);dispose(TRUE);
+ }
+ printf("PASS actual shared SUPER A+B overlap: distinct visible images retained, backing B-after-A synchronization, one mapped owner; %u allocation faults/%u install cuts across20occupancies\n",faults,cuts_total);
 }
 int main(void){unsigned failures=0,cuts_total=0;
  for(unsigned mode=0;mode<10;mode++)for(unsigned occupancy=0;occupancy<20;occupancy++){
@@ -168,13 +197,14 @@ int main(void){unsigned failures=0,cuts_total=0;
    for(unsigned b=0;b<occupancy;b++)__DisposeRegionRectangleExtChunk(ballast[b],GfxBase);dispose(windows);if(f==attempts)break;
   }
  }
- small_backing();
+ small_backing();shared_backing();
  printf("PASS independently built live SUPER/defaultpen/NOBACKFILL/zero-window/custom background: %u allocation faults, %u install cuts; stale visible overlay + shrink-hidden writeback and backing rollback\n",failures,cuts_total);return 0;}
 '''
 mutants={
  'stale-super-visible':batch.replace('if (!prepare_super_pixels(batch, LayersBase)) goto fail;','if (!prepare_super_pixels(batch, LayersBase)) goto fail;'),
  'black-instead-of-pen0':batch.replace('entry->content[pixel] = seed;', 'entry->content[pixel] = (struct PreparedPixel){0,0,0,0xffff};'),
  'nobackfill-clobber':batch.replace('if (!root && layer->BackFill == LAYERS_NOBACKFILL)', 'if (FALSE)'),
+ 'unclamped-super-width':batch.replace('if (right > limit) right = limit;', '(void)limit;'),
  'unclamped-super-copy':batch.replace('if (bottom > limit) bottom = limit;', '(void)limit;'),
  'unclamped-super-override':batch.replace('(LONG)y+layer->Scroll_Y, width, height,\n                        (const struct PreparedPixel *)', '(LONG)y+layer->Scroll_Y, entry->next.width, entry->next.height,\n                        (const struct PreparedPixel *)'),
  'missing-super-visible-overlay':batch.replace('if (!read_clips(batch, entry, entry->old.regular, LayersBase) ||\n            !read_clips(batch, entry, entry->old.clips, LayersBase)) return FALSE;', '(void)0;'),
@@ -183,6 +213,8 @@ mutants={
 }
 # Disable ONLY old visible synchronization; retain a valid super mapping.
 mutants['stale-super-visible']=batch.replace('if (clip->lobs) continue;\n                left =','if (TRUE) continue;\n                left =')
+for name, body in mutants.items():
+ assert body != batch, 'mutation did not change current source: '+name
 with tempfile.TemporaryDirectory(prefix='layers-live-') as td:
  for name,body in [('production',batch),*mutants.items()]:
   c=Path(td)/(name+'.c');exe=Path(td)/name;c.write_text(source+body+main)
