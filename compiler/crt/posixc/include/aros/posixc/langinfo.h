@@ -25,6 +25,7 @@ typedef int nl_item;
 #define D_T_FMT    0x20026  /* Date & time format string */
 #define D_FMT      0x20027  /* Date format string */
 #define T_FMT      0x20028  /* Time format string */
+#define T_FMT_AMPM 0x20029  /* 12-hour time format string */
 #define CODESET    0x2002B  /* Character encoding (e.g., UTF-8) */
 #define CRNCYSTR   0x2002C  /* Currency symbol formatting */
 #define RADIXCHAR  0x2002D  /* Decimal point string */

@@ -1,44 +1,22 @@
 /*
-    Copyright (C) 2025, The AROS Development Team. All rights reserved.
-*/
-
-#include <proto/exec.h>
-
-#include <langinfo.h>  // for nl_item, CODESET, ABDAY_1, D_FMT, etc.
-#include <locale.h>    // for setlocale, localeconv
-#include <string.h>    // for strchr
-#include <time.h>      // for strftime, struct tm, time
-#include <stdlib.h>    // for NULL
+ * Copyright (C) 2025 The AROS Development Team. All rights reserved.
+ * Copyright (C) 2026 John KNIPPER <code@jkn.me>
+ * Distributed under the AROS Public License 1.1.
+ */
+#include <errno.h>
 #include <langinfo.h>
-
+#include <locale.h>
 #include <aros/types/locale_s.h>
+#include "__langinfo.h"
 
-char *nl_langinfo_l(nl_item item, locale_t loc) {
-    const char *original;
-    char *saved_locale = NULL;
-
-    Forbid();
-    original = setlocale(LC_ALL, NULL);
-    if (original) {
-        // Duplicate current locale string to restore later
-        saved_locale = strdup(original);
-        if (!saved_locale) {
-            Permit();
-            return "";  // Allocation failed
-        }
+char *nl_langinfo_l(nl_item item, locale_t loc)
+{
+    if (!loc)
+        return nl_langinfo(item);
+    if (loc == LC_GLOBAL_LOCALE)
+    {
+        errno = EINVAL;
+        return "";
     }
-
-    if (loc) {
-        setlocale(LC_ALL, loc->__lc_name);  // Temporarily switch to requested locale
-    }
-
-    char *result = nl_langinfo(item);
-
-    if (saved_locale) {
-        setlocale(LC_ALL, saved_locale);  // Restore previous locale
-        free(saved_locale);
-    }
-    Permit();
-
-    return result;
+    return __posixc_langinfo(item, loc->__lc_name);
 }
