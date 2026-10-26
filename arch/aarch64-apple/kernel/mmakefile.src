@@ -36,7 +36,7 @@ USER_CFLAGS := $(CFLAGS_GENERAL_REGS_ONLY) -Werror=implicit-function-declaration
 
 ifeq ($(AROS_TARGET_VARIANT),smp)
 SMP_ASM := smp_entry
-SMP_FILES := kernel_scheduler kernel_ipi spininit spinislocked spintrylock spinlock spinunlock alloccpumask freecpumask clearcpumask cpuinmask getcpumask getcpucount getcpunumber schedulecpu smp smp_proof
+SMP_FILES := kernel_scheduler kernel_ipi spininit spinislocked spintrylock spinlock spinunlock alloccpumask freecpumask clearcpumask cpuinmask getcpumask getcpucount getcpunumber schedulecpu smp self_exit smp_proof
 ifeq ($(AROS_VM_GUEST),1)
 SMP_FILES += vm_platform_smp
 else

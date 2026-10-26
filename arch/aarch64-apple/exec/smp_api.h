@@ -22,14 +22,20 @@ struct AROSAppleExecSMPAPI {
     void (*cancel)(APTR, IPTR);
     struct CallIPIEntry *(*try_claim)(int);
     spinlock_t *(*spin_trylock)(spinlock_t *, ULONG);
+    int (*self_exit_queue)(void *, void *, void (*)(void *, void *));
 };
 extern const struct AROSAppleExecSMPAPI AROSAppleExecSMPAPI;
+static inline int AROSAppleExecSMPAPIValid(const struct AROSAppleExecSMPAPI *table)
+{
+    return table && table->version==4 && table->bytes==sizeof(*table) &&
+        table->spin_trylock && table->self_exit_queue;
+}
 static inline const struct AROSAppleExecSMPAPI *AROSAppleExecSMPAPIGet(void)
 {
     struct AROSAppleRuntimeLocal *local;
     __asm__ volatile("mrs %0,tpidrro_el0":"=r"(local));
     const struct AROSAppleExecSMPAPI *table=local ? local->exec_smp_api : NULL;
-    if(!table || table->version!=3 || table->bytes!=sizeof(*table)) __builtin_trap();
+    if(!AROSAppleExecSMPAPIValid(table)) __builtin_trap();
     return table;
 }
 #endif

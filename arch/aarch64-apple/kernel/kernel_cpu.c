@@ -214,6 +214,9 @@ static void enter_idle(regs_t *regs)
 
     /* Idle is not the last sleeping task and must not retain its TCB. */
     AROSAArch64WriteTaskPointer(0);
+    /* No task owns an idle core's EL0 JIT write permission. A task that
+     * yielded inside its write scope regains it only on its own dispatch. */
+    AROSAppleJitRestore(NULL);
     for (index = 0; index < 31; ++index)
         regs->x[index] = 0;
     /* EL1h returns keep SP_EL1 as it is after the frame pops: the kernel
@@ -328,17 +331,44 @@ int cpu_IdleInterrupted(regs_t *regs)
     return refused ? 0 : 1;
 }
 
+#if defined(__AROSEXEC_SMP__)
+#include "self_exit.h"
+extern int AROSAppleSelfExitDetached(void *);
+#endif
+
 void cpu_Dispatch(regs_t *regs)
 {
     struct ExceptionContext *context;
     struct Task *task;
     uint32_t index;
+#if defined(__AROSEXEC_SMP__)
+    void *departing = TLS_GET(ThisTask);
+    unsigned self_exit_rescanned = 0;
+#endif
 
     if (regs == NULL)
         dispatch_contract_halt();
+#if defined(__AROSEXEC_SMP__)
+dispatch_after_self_exit:
+#endif
     task = core_Dispatch();
     if (task == NULL) {
         enter_idle(regs);
+#if defined(__AROSEXEC_SMP__)
+        int detached = AROSAppleSelfExitDetached(departing);
+        if (detached == APPLE_EXIT_REFUSED)
+            dispatch_contract_halt();
+        if (detached == APPLE_EXIT_PUBLISHED) {
+            /* Signal with no ThisTask only enqueues a local service task.
+             * Inspect readiness once, without relying on a timer/IPI wake.
+             * enter_idle has removed every outgoing Task/TLS reference. */
+            if (self_exit_rescanned)
+                dispatch_contract_halt();
+            self_exit_rescanned = 1;
+            departing = NULL;
+            goto dispatch_after_self_exit;
+        }
+#endif
         return;
     }
     AROSAppleRuntimeLocal()->idle_active = 0;
@@ -378,4 +408,8 @@ void cpu_Dispatch(regs_t *regs)
     /* core_Dispatch has selected this task on this CPU: its TLS anchor's
      * address, the same on every CPU for the task's whole life. */
     AROSAppleTaskTLSRestore(context);
+#if defined(__AROSEXEC_SMP__)
+    if (!AROSAppleSelfExitDetached(departing))
+        dispatch_contract_halt();
+#endif
 }

@@ -27,6 +27,7 @@ static const char boot_memory_name[] = "Apple boot memory";
 #include "cpu_monitor.h"
 #if defined(__AROSEXEC_SMP__)
 #include "../exec/tls.h"
+#include "../exec/smp_api.h"
 #endif
 
 static uintptr_t retained_boot_image_start;
@@ -355,7 +356,7 @@ enum AROSAppleKernelStartupStatus AROSAppleKernelPrepareMemory(
         return fail(state, AROS_APPLE_KERNEL_STARTUP_CPU_BIND, 0);
 #if defined(__AROSEXEC_SMP__)
     if (AROSCPUCurrentIndex() >= 32 ||
-        AROSAppleRuntimeLocal()->exec_smp_api == NULL)
+        !AROSAppleExecSMPAPIValid(AROSAppleRuntimeLocal()->exec_smp_api))
         return fail(state, AROS_APPLE_KERNEL_STARTUP_CPU_BIND, 1);
 #endif
     retained_boot_image_start = (uintptr_t)boot_image_start;

@@ -1,6 +1,8 @@
 /* Copyright (C) 2026 John KNIPPER <code@jkn.me>
  * Licensed under the AROS Public License (APL) Version 1.1. */
 #include "smp.h"
+#include "self_exit.h"
+#include <exec/tasks.h>
 #include "platform_smp.h"
 #include "page_allocator.h"
 #include "memory_rendezvous.h"
@@ -22,13 +24,29 @@ static spinlock_t *api_spin_lock(spinlock_t *lock,struct Hook *hook,ULONG mode)
 static void api_spin_unlock(spinlock_t *lock) { Kernel_53_KrnSpinUnLock(lock,NULL); }
 static spinlock_t *api_spin_trylock(spinlock_t *lock,ULONG mode)
 { return Kernel_51_KrnSpinTryLock(lock,mode,NULL); }
+static struct AppleSelfExit self_exit[AROS_APPLE_SMP_MAX_CPUS];
+static int api_self_exit_queue(void *task, void *base, AppleExitPublish publish)
+{
+ unsigned cpu=AROSCPUCurrentIndex();
+ if(cpu>=AROS_APPLE_SMP_MAX_CPUS || !task ||
+    task!=(void *)TLS_GET(ThisTask) || TLS_GET(IDNestCnt)<0 ||
+    ((struct Task *)task)->tc_State!=TS_INVALID) return 0;
+ return AppleSelfExitQueue(&self_exit[cpu],cpu,task,base,publish);
+}
+int AROSAppleSelfExitDetached(void *departing)
+{
+ unsigned cpu=AROSCPUCurrentIndex();
+ return cpu<AROS_APPLE_SMP_MAX_CPUS &&
+     AppleSelfExitDetached(&self_exit[cpu],cpu,departing);
+}
 const struct AROSAppleExecSMPAPI AROSAppleExecSMPAPI = {
- 3,sizeof(struct AROSAppleExecSMPAPI),
+ 4,sizeof(struct AROSAppleExecSMPAPI),
  AROSAppleRuntimeIRQSave,AROSAppleRuntimeIRQRestore,
  api_spin_init,api_spin_lock,api_spin_unlock,
  core_ClaimCallIPI,core_CommitCallIPI,core_AbortCallIPI,core_CancelCallIPIs,
  core_TryClaimCallIPI,
- api_spin_trylock
+ api_spin_trylock,
+ api_self_exit_queue
 };
 struct AROSSMPSharedState AROSSMPState;
 uint64_t AROSAppleSMPBootTicks(void)

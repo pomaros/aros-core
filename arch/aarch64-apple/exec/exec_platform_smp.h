@@ -31,4 +31,7 @@
 struct MsgPort;
 void AROSAppleExecPortLock(struct MsgPort *port);
 #define EXEC_PORT_LOCK(port) AROSAppleExecPortLock(port)
+/* RemTask retains ownership until cpu_Dispatch has abandoned its EL0 stack. */
+#define EXEC_DEFER_SELF_EXIT(task, base, publish) \
+    AROSAppleExecSMPAPIGet()->self_exit_queue((task), (base), (publish))
 #endif

@@ -16,6 +16,17 @@
 #include "exec_util.h"
 #include "exec_debug.h"
 
+#if defined(EXEC_DEFER_SELF_EXIT)
+/* Called on the kernel stack after the dispatch destination is installed.
+ * InternalPutMsg may transfer ownership immediately: never read task after it. */
+static void publish_self_exit(void *task, void *base)
+{
+    struct ExecBase *SysBase = base;
+    InternalPutMsg(PrivExecBase(SysBase)->ServicePort,
+        (struct Message *)task, SysBase);
+}
+#endif
+
 /*****************************************************************************
 
     NAME */
@@ -142,8 +153,10 @@
              * InternalPutMsg() because it won't change ln_Type. Just in case...
              */
             DREMTASK("Sending to Exec service task");
+#if !defined(EXEC_DEFER_SELF_EXIT)
             InternalPutMsg(PrivExecBase(SysBase)->ServicePort,
                 (struct Message *)task, SysBase);
+#endif
 
             DREMTASK("Disabling interrupts");
             /* Changing the task lists always needs a Disable(). */
@@ -165,6 +178,10 @@
             DREMTASK("Switching away..");
             /* It is  no longer a valid task.. */
             task->tc_State = TS_INVALID;
+#if defined(EXEC_DEFER_SELF_EXIT)
+            if (!EXEC_DEFER_SELF_EXIT(task, SysBase, publish_self_exit))
+                __builtin_trap();
+#endif
             KrnDispatch();
         }
         else
