@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
 */
 
 #include <dos/dos.h>
@@ -226,10 +227,19 @@ int __stat64(BPTR lock, struct stat64 *sb, BOOL filehandle)
     return 0;
 }
 
-int __stat_from_path(const char *path, struct stat *sb)
+static void __fill_stat_pathbuffer(void *sb, char *path,
+    struct FileInfoBlock64 *fib, int fallback, BPTR lock, BOOL wide)
+{
+    if (wide)
+        __fill_stat64buffer(sb, path, fib, fallback, lock);
+    else
+        __fill_statbuffer(sb, path, fib, fallback, lock);
+}
+
+static int __stat_from_path_common(const char *path, void *sb, BOOL wide)
 {
     int                  len;
-    char                 *mypath;
+    char                 *mypath = NULL;
     int                  cwdsize = FILENAME_MAX;
     char                 *cwd = NULL;
     char                 *abspath = NULL;
@@ -290,11 +300,19 @@ int __stat_from_path(const char *path, struct stat *sb)
         }
 
         strcpy(abspath, cwd);
-        AddPart(abspath, mypath, len);
+        if (!AddPart(abspath, mypath, len))
+        {
+            errno = __stdc_ioerr2errno(IoErr());
+            goto out;
+        }
         FreeVec(mypath);
+        mypath = NULL;
     }
     else
+    {
         abspath = mypath;
+        mypath = NULL;
+    }
 
     /* split into path part and file part */
     split = FilePart(abspath);
@@ -307,8 +325,14 @@ int __stat_from_path(const char *path, struct stat *sb)
     strcpy(filepart, split);
     *split = '\0';
 
-    if (   !(fib = AllocVec(sizeof(struct FileInfoBlock64), MEMF_PUBLIC | MEMF_CLEAR))
-        || !(lock = Lock(abspath, SHARED_LOCK)))
+    fib = AllocVec(sizeof(struct FileInfoBlock64), MEMF_PUBLIC | MEMF_CLEAR);
+    if (!fib)
+    {
+        errno = ENOMEM;
+        goto out;
+    }
+    lock = Lock(abspath, SHARED_LOCK);
+    if (!lock)
     {
         errno = __stdc_ioerr2errno(IoErr());
         goto out;
@@ -328,7 +352,10 @@ int __stat_from_path(const char *path, struct stat *sb)
     }
 
     if (*filepart == '\0' || fallback_to_defaults)
-        __fill_statbuffer(sb, abspath, fib, fallback_to_defaults, lock);
+    {
+        __fill_stat_pathbuffer(sb, abspath, fib, fallback_to_defaults, lock, wide);
+        res = 0;
+    }
     else
         /* examine entries of parent directory until we find the object to stat */
         do
@@ -339,7 +366,7 @@ int __stat_from_path(const char *path, struct stat *sb)
             {
                 if (stricmp(fib->fib_FileName, filepart) == 0)
                 {
-                    __fill_statbuffer(sb, abspath, fib, 0, lock);
+                    __fill_stat_pathbuffer(sb, abspath, fib, 0, lock, wide);
                     res = 0;
                     break;
                 }
@@ -356,6 +383,7 @@ int __stat_from_path(const char *path, struct stat *sb)
         while (loop);
 
 out:
+    FreeVec(mypath);
     if (lock)
         UnLock(lock);
 
@@ -370,153 +398,18 @@ out:
         FreeVec(fib);
 
     return res;
+}
+
+int __stat_from_path(const char *path, struct stat *sb)
+{
+    return __stat_from_path_common(path, sb, FALSE);
 }
 
 int __stat64_from_path(const char *path, struct stat64 *sb)
 {
-    int                  len;
-    char                 *mypath;
-    int                  cwdsize = FILENAME_MAX;
-    char                 *cwd = NULL;
-    char                 *abspath = NULL;
-    char                 *filepart = NULL;
-    char                 *split;
-    struct FileInfoBlock64 *fib = NULL;
-    BPTR                 lock = BNULL;
-    BPTR                 cwdlock;
-    int                  fallback_to_defaults = 0;
-    BOOL                 loop;
-    int                  res = -1;
-
-    /* copy path and strip trailing slash */
-    len = strlen(path);
-    if (!(mypath = AllocVec(len + 1, MEMF_ANY)))
-    {
-        errno = ENOMEM;
-        goto out;
-    }
-    strcpy(mypath, path);
-    if (len && mypath[len-1] == '/')
-        mypath[len-1] = '\0';
-
-    /* do we have an absolute path */
-    if (!strchr(mypath, ':'))
-    {
-        /* no, then create one */
-        cwdlock = CurrentDir(BNULL);
-        CurrentDir(cwdlock);
-        do
-        {
-            if (!(cwd = AllocVec(cwdsize, MEMF_ANY)))
-            {
-                errno = ENOMEM;
-                goto out;
-            }
-
-            if (NameFromLock(cwdlock, cwd, cwdsize))
-                break;
-            else if (IoErr() != ERROR_LINE_TOO_LONG)
-            {
-                errno = __stdc_ioerr2errno(IoErr());
-                goto out;
-            }
-
-            FreeVec(cwd);
-            cwdsize *= 2;
-        }
-        while (TRUE);
-
-        /* get memory for current dir + '/' + input path + zero byte */
-        len = strlen(cwd) + 1 + len + 1;
-        abspath = AllocVec(len, MEMF_ANY);
-        if (!abspath)
-        {
-            errno = ENOMEM;
-            goto out;
-        }
-
-        strcpy(abspath, cwd);
-        AddPart(abspath, mypath, len);
-        FreeVec(mypath);
-    }
-    else
-        abspath = mypath;
-
-    /* split into path part and file part */
-    split = FilePart(abspath);
-    filepart = AllocVec(strlen(split) + 1, MEMF_ANY);
-    if (!filepart)
-    {
-        errno = ENOMEM;
-        goto out;
-    }
-    strcpy(filepart, split);
-    *split = '\0';
-
-    if (   !(fib = AllocVec(sizeof(struct FileInfoBlock64), MEMF_PUBLIC | MEMF_CLEAR))
-        || !(lock = Lock(abspath, SHARED_LOCK)))
-    {
-        errno = __stdc_ioerr2errno(IoErr());
-        goto out;
-    }
-
-    /* examine parent directory of object to stat */
-    if (!__dos64_examine(lock, fib, __DOS64_EXAMINE))
-    {
-        if (IoErr() == ERROR_NOT_IMPLEMENTED ||
-            IoErr() == ERROR_ACTION_NOT_KNOWN)
-            fallback_to_defaults = 1;
-        else
-        {
-            errno = __stdc_ioerr2errno(IoErr());
-            goto out;
-        }
-    }
-
-    if (*filepart == '\0' || fallback_to_defaults)
-        __fill_stat64buffer(sb, abspath, fib, fallback_to_defaults, lock);
-    else
-        /* examine entries of parent directory until we find the object to stat */
-        do
-        {
-            loop = __dos64_examine(lock, fib, __DOS64_EXAMINE_NEXT);
-
-            if (loop)
-            {
-                if (stricmp(fib->fib_FileName, filepart) == 0)
-                {
-                    __fill_stat64buffer(sb, abspath, fib, 0, lock);
-                    res = 0;
-                    break;
-                }
-
-                continue;
-            }
-
-            if (IoErr() != ERROR_NO_MORE_ENTRIES)
-                errno = __stdc_ioerr2errno(IoErr());
-            else
-                /* nothing found to stat */
-                errno = ENOENT;
-        }
-        while (loop);
-
-out:
-    if (lock)
-        UnLock(lock);
-
-    FreeVec(cwd);
-
-    /* if we had absolute path as input, mypath is free'd here */
-    FreeVec(abspath);
-
-    FreeVec(filepart);
-
-    if (fib)
-        FreeVec(fib);
-
-    return res;
+    return __stat_from_path_common(path, sb, TRUE);
 }
+
 
 static mode_t __prot_a2u(ULONG protect)
 {
@@ -914,7 +807,7 @@ static void __fill_stat64buffer(
     sb->st_dev     = (dev_t) (lock ? ((struct FileLock *)BADDR(lock))->fl_Volume : BNULL);
     sb->st_ino     = hash;    /* hash value will be truncated if st_ino size is
                                  smaller than uint64_t, but it's ok */
-    sb->st_size    = (off_t)fib->fib_Size;
+    sb->st_size    = (__off64_t)fib->fib_Size;
     sb->st_atime   =
     sb->st_ctime   =
     sb->st_mtime   = (fib->fib_Date.ds_Days * 24*60 + fib->fib_Date.ds_Minute + __stdc_gmtoffset()) * 60 +
