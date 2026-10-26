@@ -1,0 +1,15 @@
+{
+  "component": "application-libc",
+  "exporter_sha256": "26df85ac42d0258731c6d6ec1003eeb5908bffa1092e13977f3174a0b7d1f654",
+  "files": {
+    "libc-0.2.190-aros-native.diff": {
+      "export_sha256": "7b569b5677e4d75ee10b9446ce37159a69cfb84a776ca54e30bc194285cec6e9",
+      "source_sha256": "7b569b5677e4d75ee10b9446ce37159a69cfb84a776ca54e30bc194285cec6e9"
+    }
+  },
+  "schema": 1,
+  "source_file": "crates/libc-0.2.190-aros.diff",
+  "source_repository": "https://github.com/pomaros/rust-aros.git",
+  "source_revision": "ab1ab6314864097268e49f936dc5dd034e13e2b7",
+  "transformations": "none"
+}

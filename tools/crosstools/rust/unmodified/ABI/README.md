@@ -40,6 +40,10 @@ Pass `--application-libc-rlib /path/to/liblibc-<hash>.rlib` to compare the actua
 application store crate (for example libc 0.2.190) instead of std's internal
 libc. The wrapper, core and target identity still come from `--std-build`; the
 selected application rlib and its dependency path are fingerprinted separately.
+Use `--extended-c-api` for application bindings that expose POSIX.1-2008 and
+BSD extensions together. It selects the SDK's `_GNU_SOURCE` profile in the
+recorded C command; that profile enables POSIX.1-2008, XSI 700 and BSD names. A hidden C declaration is not an absent SDK capability;
+qualify the feature profile exposed by the application bindings.
 
 `libc-exports.py --std-build BUILD --application-libc-rlib RLIB
 --crosstools TOOLS --output OUTPUT` extracts all ELF members of both libc

@@ -103,6 +103,8 @@ def main():
     for name in ("sdk", "crosstools", "std-build", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--application-libc-rlib", type=Path)
+    parser.add_argument("--extended-c-api", action="store_true",
+                        help="select the SDK GNU/POSIX.1-2008 plus BSD declaration profile")
     parser.add_argument("--native-header", type=Path,
         default=Path(__file__).resolve().parents[5] / "workbench/network/common/include/bsdsocket/native.h")
     args = parser.parse_args()
@@ -186,6 +188,8 @@ macro_rules! field_size {
     cflags = [str(tools / "bin/clang"), "--target=aarch64-unknown-aros", "-std=c11",
               "-D_BSD_SOURCE=1", "-I" + str(output / "include"), "-I" + str(sdk / "include/aros/posixc"),
               "-I" + str(sdk / "include/aros/stdc"), "-I" + str(sdk / "include")]
+    if args.extended_c_api:
+        cflags.append("-D_GNU_SOURCE=1")
     deptext = command(cflags + ["-M", str(output / "native.c")], output, "dependencies")
     headers = shlex.split(deptext.replace("\\\n", " ").split(":", 1)[1])
     inputs.update({str(Path(p).resolve()): digest(Path(p)) for p in headers})

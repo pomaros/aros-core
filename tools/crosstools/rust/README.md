@@ -60,6 +60,15 @@ Loading the installed Cargo config selects AROS for all Cargo commands that
 load it. Run host tests without that config, or override `--target` with the
 host triple; host build scripts/proc macros are still compiled for the host.
 
+The native application libc patch is an immutable generated snapshot from
+`pomaros/rust-aros`, recorded by `crates/NATIVE-LIBC-ORIGIN.json`. The standard
+library component has its separate `unmodified/SOURCE-ORIGIN.json`. Both are
+exported from one selected Rust SDK commit using its
+`tools/export-core-toolchain.py`; `--component application-libc --check` verifies
+the two owned files inside the shared crate directory, while the default check
+verifies the complete standard-library component. Edit the owning Rust SDK
+sources and export a reviewed revision instead of editing either snapshot.
+
 The shared native crate store is `$(PORTSDIR)/rust-crates-native`. Its libc
 0.2.190 patch uses the same AROS declarations and native adapter aliases as
 std's locked libc 0.2.189, with the macro spelling required by each release.

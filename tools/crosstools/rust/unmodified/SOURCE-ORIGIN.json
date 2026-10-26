@@ -1,22 +1,22 @@
 {
   "core_native_header": "workbench/network/common/include/bsdsocket/native.h",
-  "exporter_sha256": "0a2001ac67445f708a8f3e5cbf91a1791500e8a2b1b6ee506060ac98643654a0",
+  "exporter_sha256": "26df85ac42d0258731c6d6ec1003eeb5908bffa1092e13977f3174a0b7d1f654",
   "files": {
     ".gitattributes": {
       "export_sha256": "1472d6e62ac2aa5757b5a5cfa4e032e422d54c6f1424c4abac88c1b3c9523ac2",
       "source_sha256": "1472d6e62ac2aa5757b5a5cfa4e032e422d54c6f1424c4abac88c1b3c9523ac2"
     },
     "ABI/README.md": {
-      "export_sha256": "edef4614c993b8ce5e3a53bbde3b4a986d7d7d878ca8b08adf4b1e66c2dda2de",
-      "source_sha256": "edef4614c993b8ce5e3a53bbde3b4a986d7d7d878ca8b08adf4b1e66c2dda2de"
+      "export_sha256": "35086f0b395fbc3634d90baea1278fb5b0466849cef5401dd7244ed625eab4e8",
+      "source_sha256": "35086f0b395fbc3634d90baea1278fb5b0466849cef5401dd7244ed625eab4e8"
     },
     "ABI/libc-exports.py": {
       "export_sha256": "d46143d336a62ef6250c7616e99fd8d3fca85cd831a05f7573d357b0362e17bd",
       "source_sha256": "d6610c48c06533e4fa2a352b7248254e3b78abd548e85b867624515cfcdfdfdd"
     },
     "ABI/network-abi.py": {
-      "export_sha256": "cbc6d54fbd2417592baa8261bcbdf1e1794b2f7988f4e43229e7d05b9f1691f6",
-      "source_sha256": "b20c67b6afe7a9839fe14fe5320f45699260b328ca7a38d1f2b936cee17bfbc3"
+      "export_sha256": "485e4c000213158369157905317a9a1c2fa5fc95841a42daf478fff5a5aca0e5",
+      "source_sha256": "6ee7b19f9ce9d3a6e175456a0b7bccbe290c6b71bce1f9396c37a10755583c60"
     },
     "README.md": {
       "export_sha256": "67d76dbe4fffeb6f19275b2db655a2bbe69afc88eb0ab0e5e65dc0d416e1c736",
@@ -182,6 +182,6 @@
   "schema": 1,
   "source_directory": "toolchain",
   "source_repository": "https://github.com/pomaros/rust-aros.git",
-  "source_revision": "7eb97255e5df4c962d791685b0f4c44e0a7a4a78",
+  "source_revision": "ab1ab6314864097268e49f936dc5dd034e13e2b7",
   "transformations": "APL notices for owned integration files; authoritative core socket header paths; core command paths in documentation"
 }
