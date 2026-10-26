@@ -1038,7 +1038,7 @@ esac
 #-----------------------------------------------------------------------------
 
 AC_ARG_ENABLE(vm-guest,AS_HELP_STRING([--enable-vm-guest],
-    [Build the single-CPU Apple-derived AArch64 VM guest (default=no)]),
+    [Build the AArch64 VM guest (default=no)]),
     [aros_vm_guest="$enableval"], [aros_vm_guest=no])
 case "$aros_vm_guest" in
     yes) AROS_VM_GUEST=1 ;;
@@ -1861,6 +1861,27 @@ case "$target_os" in
                 kernel_tool_prefix="arm-apple-darwin10-"
                 export PATH="$aros_xcode_path/Platforms/$aros_ios_platform.platform/Developer/usr/bin:$PATH"
                 llvm_target_cpu="ARM"
+                ;;
+            *aarch64*|*arm64*)
+                PLATFORM_EXECSMP="#define __AROSPLATFORM_SMP__"
+                aros_target_cpu="aarch64"
+                aros_object_format="aarch64elf_aros"
+                aros_target_mkdep="$aros_target_mkdep -D__GNUC__ -Daarch64"
+                aros_macosx_version="11.0"
+                aros_config_cflags="$aros_config_cflags $""(CFLAGS_NO_OMIT_FP)"
+                aros_config_cxxflags="$aros_config_cxxflags $""(CFLAGS_NO_OMIT_FP)"
+                aros_kernel_isa_flags="-arch arm64"
+                aros_kernel_ldflags="-arch arm64"
+                aros_nominal_depth=8
+                aros_kernel_rs="$toolchain_ar"
+                aros_kernel_ar_flags="-cr"
+                aros_kernel_ld="$toolchain_ld -arch arm64"
+                aros_kernel_as="$toolchain_as -arch arm64"
+                aros_kernel_ranlib="ranlib"
+                aros_kernel_nm="nm"
+                aros_kernel_strip="strip"
+                kernel_tool_prefix=""
+                llvm_target_cpu="AArch64"
                 ;;
             *)
                 AC_MSG_ERROR("Unsupported target CPU for darwin hosted flavour -- $target_cpu")
@@ -4295,12 +4316,20 @@ aros_kernel_cflags="$aros_kernel_cflags $aros_kernel_export_cflags"
 if test "$aros_target_variant" = ""; then
     aros_target_platform="$aros_target_arch-$aros_target_cpu"
 else
-    case "$target_os" in
-        pc | apple)
+    case "$aros_target_variant" in
+        smp)
+            # SMP selects a build flavour, not a different platform directory.
             aros_target_platform="$aros_target_arch-$aros_target_cpu"
             ;;
         *)
-            aros_target_platform="$aros_target_variant-$aros_target_cpu"
+            case "$target_os" in
+                pc | apple)
+                    aros_target_platform="$aros_target_arch-$aros_target_cpu"
+                    ;;
+                *)
+                    aros_target_platform="$aros_target_variant-$aros_target_cpu"
+                    ;;
+            esac
             ;;
     esac
 fi

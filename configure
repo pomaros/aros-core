@@ -641,10 +641,10 @@ KERNEL_DBUS_INCLUDES
 KERNEL_DBUS_KOBJ
 DBUS_LIBFLAGS
 DBUS_CFLAGS
-jpegxl_toolchainsupport
 nouveau_toolchainsupport
-aros_enable_rust
+jpegxl_toolchainsupport
 target_rust_version
+aros_enable_rust
 java_target
 objc_target
 llvm_target_cpu
@@ -1026,10 +1026,10 @@ with_aros_toolchain_install
 with_binutils_version
 with_gcc_version
 with_llvm_version
-with_rust_version
 enable_objc
 enable_java
 enable_rust
+with_rust_version
 with_cpu
 with_fpu
 with_float
@@ -1710,8 +1710,7 @@ Optional Features:
                           compiler supports it (default=no)
   --enable-wchar32=yes|no Enable uint32 WCHAR support in the compiler/AROS
                           (default=no)
-  --enable-vm-guest       Build the single-CPU Apple-derived AArch64 VM guest
-                          (default=no)
+  --enable-vm-guest       Build the AArch64 VM guest (default=no)
   --enable-build-type=TYPE
                           Select the build type. Available types are:
                           personal, nightly, snapshot, milestone, release. Do
@@ -1826,7 +1825,8 @@ Optional Packages:
   --with-llvm-version=VERSION
                           Compile llvm-VERSION for AROS
   --with-rust-version=VERSION
-                          Rust version (AArch64 LLVM: nightly-2026-08-04; other targets: 1.98.1)
+                          Rust version (AArch64 LLVM: nightly-2026-08-04;
+                          other targets: 1.98.1)
   --with-cpu=<spec>       Specify minumum CPU (default=$gcc_default_cpu).
   --with-fpu=<spec>       Specify minumum FPU (default=$gcc_float_fpu).
   --with-float=<spec>     Specify floating point ABI
@@ -11320,7 +11320,7 @@ printf '%s\n' "$darwin_sdk_path" >&6; }
                 target_cpu="aarch64"
                 aros_object_format="aarch64elf_aros"
                 aros_isa_flags="$""(ISA_AARCH64_FLAGS)"
-                                aros_config_cflags="$aros_config_cflags $""(CFLAGS_NO_STRICT_ALIASING) $""(CFLAGS_NO_ASYNCHRONOUS_UNWIND_TABLES)"
+                                                                aros_config_cflags="$aros_config_cflags $""(CFLAGS_NO_STRICT_ALIASING) $""(CFLAGS_NO_ASYNCHRONOUS_UNWIND_TABLES)"
                 aros_config_cxxflags="$aros_config_cxxflags $""(CFLAGS_NO_STRICT_ALIASING) $""(CFLAGS_NO_ASYNCHRONOUS_UNWIND_TABLES)"
                 aros_config_aflags="$aros_config_aflags $""(CFLAGS_NO_ASYNCHRONOUS_UNWIND_TABLES)"
                 llvm_target_cpu="AArch64"
@@ -19968,12 +19968,20 @@ aros_kernel_cflags="$aros_kernel_cflags $aros_kernel_export_cflags"
 if test "$aros_target_variant" = ""; then
     aros_target_platform="$aros_target_arch-$aros_target_cpu"
 else
-    case "$target_os" in
-        pc | apple)
+    case "$aros_target_variant" in
+        smp)
+            # SMP selects a build flavour, not a different platform directory.
             aros_target_platform="$aros_target_arch-$aros_target_cpu"
             ;;
         *)
-            aros_target_platform="$aros_target_variant-$aros_target_cpu"
+            case "$target_os" in
+                pc | apple)
+                    aros_target_platform="$aros_target_arch-$aros_target_cpu"
+                    ;;
+                *)
+                    aros_target_platform="$aros_target_variant-$aros_target_cpu"
+                    ;;
+            esac
             ;;
     esac
 fi
@@ -20287,7 +20295,9 @@ host_has_libelf=$have_libelf
 #Rust related
 
 
+
 # jpegxl.datatype toolchain support (libjxl requires gcc >= 8)
+
 
 
 # DBUS related
