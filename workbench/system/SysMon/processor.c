@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2020, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER.
 */
 
 #define DEBUG 0
@@ -97,6 +98,7 @@ VOID UpdateProcessorInformation(struct SysMonData * smdata)
     for (i = 0; i < processorcount; i++)
     {
         UQUAD frequency = 0;
+        BOOL frequency_available = TRUE;
 #if SIMULATE_USAGE_FREQ
         struct DateStamp ds;
         DateStamp(&ds);
@@ -110,9 +112,12 @@ VOID UpdateProcessorInformation(struct SysMonData * smdata)
 
         GetCoreInfo(i, tags);
 
+        frequency_available = frequency != 0;
         frequency /= 1000000;
 #endif
-        if (frequency > 1000)
+        if (!frequency_available)
+            __sprintf(buffer, "--");
+        else if (frequency > 1000)
         {
             ULONG ghz = frequency / 1000;
             ULONG mhz = frequency - (ghz * 1000);
