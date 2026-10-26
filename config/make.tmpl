@@ -1468,7 +1468,11 @@ ifneq ($(%(mmake)_TARGETDIRS),)
 $(%(mmake)_TARGETS) : | $(%(mmake)_TARGETDIRS)
 endif
 
+# The generator updates these files through the flag prerequisite. Give
+# each output a recipe so GNU make refreshes its cached timestamp before
+# evaluating dependent copies or compilations.
 $(%(mmake)_TARGETS) : $(%(mmake)_DEPS) $(%(mmake)_GENFILEFLAG)
+	$(Q)$(NOP)
 
 $(%(mmake)_GENFILEFLAG) : OPTS := $(%(mmake)_OPTS)
 $(%(mmake)_GENFILEFLAG) : MODNAME := %(modname)
@@ -1538,7 +1542,11 @@ else
     %(mmake)_GENINCFLAG=$(GENDIR)/$(CURDIR)/.%(modname).%(modtype)-includes
 endif
 
+# The generator updates these files through the flag prerequisite. Give
+# each output a recipe so GNU make refreshes its cached timestamp before
+# evaluating dependent copies or compilations.
 $(%(mmake)_TARGETS) : $(%(mmake)_DEPS) $(%(mmake)_GENINCFLAG)
+	$(Q)$(NOP)
 
 $(%(mmake)_GENINCFLAG) : OPTS := $(%(mmake)_OPTS)
 $(%(mmake)_GENINCFLAG) : MODNAME := %(modname)
