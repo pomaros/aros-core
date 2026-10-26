@@ -1,11 +1,12 @@
 /*
     Copyright (C) 2003-2013, The AROS Development Team. All rights reserved.
 
+    Copyright (C) 2026 John KNIPPER.
+
     POSIX.1-2008 function rmdir().
 */
 
 #include <stdio.h>
-#include "__upath.h"
 
 /*****************************************************************************
 
@@ -40,5 +41,5 @@
 ******************************************************************************/
 {
     /* FIXME: Shouldn't we check if pathname is actually a directory ? */
-    return remove(__path_u2a(pathname));
+    return remove(pathname);
 } /* rmdir() */

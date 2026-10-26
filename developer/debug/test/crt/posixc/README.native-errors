@@ -1,0 +1,20 @@
+Copyright (C) 2026 John KNIPPER.
+Licensed under the AROS Public License (APL), version 1.1.
+
+POSIX delegated errors and pathname conversion
+
+Run python3 -B developer/debug/test/crt/posixc/native_errors_host.py.
+
+The gate executes the actual rename, remove and rmdir bodies plus their DOS
+error mapper under ASan/UBSan. The fallback executes stdc's actual mapper with
+the actual DOS error constants. The modeled delegate has separate error state;
+cleanup deliberately clobbers errno and IoErr. Checks cover mapping, conversion
+failure, allocation failure and preserved source names across shared-buffer
+reuse. rmdir must perform exactly one pathname conversion through remove,
+including success and delegated failure. POSIXC maps a full volume, a protected
+volume/object, a nonempty directory and a link nesting failure to its own POSIX
+codes. Unknown native errors retain stdc's encoded fallback.
+
+This does not qualify filesystem handlers, concurrent namespace mutation,
+directory-only deletion or final-link semantics. In particular, rmdir's
+directory-type restriction requires separate implementation and runtime proof.
