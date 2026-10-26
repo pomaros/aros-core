@@ -12,8 +12,8 @@ share holds it next to the minimum column. 2560x1600 at 100 % is the design
 arrangement. The placement record keeps an automatic widget automatic, takes
 a user move or size as the user's geometry and returns it unchanged through
 100 -> 200 -> 100. Mutants of the layout and of the record are rejected.
-No window system: Intuition's fit of the slot is qualified by
-nativewidgets_host.py and magnifierscale_host.py.
+No window system: this fixture checks layout and saved geometry only.
+Window construction and command content require their product-owned fixtures.
 """
 from pathlib import Path
 import argparse, hashlib, json, subprocess, tempfile
