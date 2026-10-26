@@ -30,3 +30,15 @@ following:
    your path (like /usr/local/bin), but this will prevent multiple crosstoolchains from
    coexisting (i386-aros and ppc-aros for example).
 7. Patch, configure, build and install gcc. That's all.
+
+ Debug stripping regression (AArch64 LLVM cross tools):
+
+ python3 tools/collect-aros/tests/debug-strip.py \
+   --collect-aros /path/to/configured/collect-aros \
+   --clang /path/to/cross/clang --output /path/to/new/test-directory
+
+ The test links an ELF object containing embedded bitcode and debug information.
+ Both --strip-debug and -S must remove final debug sections while retaining
+ allocated data, symbols and relocations. An unstripped control retains debug
+ information; an incremental link also exercises debug stripping. This is a
+ host cross-link test, not target runtime qualification.

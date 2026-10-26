@@ -225,6 +225,7 @@ int main(int argc, char *argv[])
        incremental = 2 -> don't do final linking AND STILL produce symbol sets.  */
     int incremental = 0, ignore_undefined_symbols = 0;
     int strip_all   = 0;
+    int strip_debug = 0;
     int cnt, i, libcnt = 0, relcnt = 0;
     char *linkAddress = NULL;
 
@@ -282,6 +283,14 @@ int main(int argc, char *argv[])
                 ignore_undefined_symbols = 1;
                 argv[cnt][1] = 'r';  /* Just some non-harming option... */
                 argv[cnt][2] = '\0';
+            }
+            else
+            /* Apply debug stripping after all link stages: LTO and extra
+               archive members can supply debug sections during linking. */
+            if (strcmp(argv[cnt], "--strip-debug") == 0 ||
+                strcmp(argv[cnt], "-S") == 0)
+            {
+                strip_debug = 1;
             }
             else
             /* Complete stripping is requested, but we do it our own way */
@@ -385,7 +394,11 @@ int main(int argc, char *argv[])
     docommand_ld(ld_name, ldargs);
 
     if (incremental == 1)
+    {
+        if (strip_debug)
+            docommandlp(strip_name, strip_name, "--strip-debug", output, NULL);
         return set_os_and_abi(output) ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
 
     /*
        * initalize the backend and process the 
@@ -770,7 +783,11 @@ int main(int argc, char *argv[])
 #endif
 
     if (incremental != 0)
+    {
+        if (strip_debug)
+            docommandlp(strip_name, strip_name, "--strip-debug", output, NULL);
         return set_os_and_abi(output) ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
         
     if (!ignore_undefined_symbols && check_and_print_undefined_symbols(output))
     {
@@ -783,6 +800,10 @@ int main(int argc, char *argv[])
     if (strip_all)
     {
         docommandlp(strip_name, strip_name, "--strip-unneeded", output, NULL);
+    }
+    else if (strip_debug)
+    {
+        docommandlp(strip_name, strip_name, "--strip-debug", output, NULL);
     }
 
     if (!set_os_and_abi(output))
