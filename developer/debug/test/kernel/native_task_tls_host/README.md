@@ -6,10 +6,11 @@ freestanding AArch64 objects. The script does not build or mutate an SDK.
 
 The fixture compiles the actual production STORE_TASKSTATE and
 RESTORE_TASKSTATE macros from `arch/aarch64-native/kernel/task_context.h`.
-Only Task/ETask field adapters and HOST register reads/writes are substituted.
-It checks distinct full-width pointers, first-use zero, foreign non-pthread
-tasks, simulated CPU migration, live lazy updates, GPR/SP/SIMD preservation,
-and refusal to copy the vector frame's unused padding as a TP snapshot.
+Only scalar Exec types, Task/ETask field adapters and HOST register reads/writes
+are substituted. It checks zero-initialized anchor contents, distinct task-owned
+anchor addresses, foreign non-pthread tasks, simulated CPU migration, preserved
+anchor contents, SP/PC/SIMD copying, retained FPU storage pointers, and refusal to
+copy the vector frame's unused padding into the anchor.
 The same actual macros and private wrapper compile into an AArch64 object
 with genuine MRS/MSR TPIDR_EL0. The complete `vectors.S`, and exact assembly
 string tokens from the primary entry and SMP trampoline, assemble too.
@@ -18,18 +19,20 @@ string tokens from the primary entry and SMP trampoline, assemble too.
 
 The native Raspberry Pi backend has its own scheduler, context allocator,
 PrepareContext and CPU entry paths. Its task-owned context retains the public
-280-byte prefix, with private TP at 280, SIMD at 288 and an 816-byte total.
+280-byte prefix, with a runtime-owned TLS anchor at 280, SIMD at 288 and an
+816-byte total. TPIDR_EL0 points to that anchor for the task's entire lifetime;
+the anchor contents are not a register snapshot and are not copied on switch.
 Static assertions tie the owned allocation to the vector/SIMD constants.
 AllocMem aligns to MEMCHUNK_TOTAL (at least AROS_WORSTALIGN, 16 on AArch64);
 the creator asserts that contract before using a fixed SIMD offset.
-KrnCreateContext explicitly initializes TP to zero; normal Exec tasks and SMP
+KrnCreateContext explicitly initializes the anchor contents to zero; normal Exec tasks and SMP
 bootstrap tasks both allocate through it. The kernel CPU anchor remains
 TPIDR_EL1, independent of application TPIDR_EL0. Primary and secondary entry
 clear the application register before C; an empty dispatcher clears it before
 waiting for work. Real per-CPU idle tasks use ordinary zero-initialized task
 contexts. Save occurs before Wait's lock release and ready-list publication,
-so existing task ownership locks publish TP along with other saved registers.
-Restore occurs with the incoming frame, before the CPU dispatcher's incoming
+so existing task ownership locks publish saved registers. The incoming anchor
+address is installed with the frame, before the CPU dispatcher's incoming
 callbacks. No-switch vectors leave the live value untouched.
 
 Native TLS is valid only in task execution context. The runtime contract

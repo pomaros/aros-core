@@ -47,6 +47,10 @@ def main():
         (a.out/(name+'.log')).write_text(r.stdout+r.stderr);records.append(dict(name=name,command=cmd,rc=r.returncode));r.check_returncode();return r.stdout
     for flavor in ['host','native']:
         include=a.out/(flavor+'-include')/'aros/aarch64';include.mkdir(parents=True)
+        # Only scalar OS types are adapted. Keep the actual shared context
+        # header, its layout and the production copy macros in the fixture.
+        types=include.parents[1]/'exec';types.mkdir()
+        (types/'types.h').write_text('#include <stdint.h>\ntypedef uint64_t UQUAD;\ntypedef uint32_t ULONG;\ntypedef void *APTR;\n')
         (include/'cpucontext.h').symlink_to(ROOT/'arch/aarch64-all/include/aros/cpucontext.h')
         if flavor=='host':
             (include/'native_tls.h').write_text('#include <stdint.h>\nextern uint64_t host_cpu_tp[2];extern unsigned host_cpu;\nstatic inline uint64_t AROSAArch64ReadTaskPointer(void){return host_cpu_tp[host_cpu];}\nstatic inline void AROSAArch64WriteTaskPointer(uint64_t v){host_cpu_tp[host_cpu]=v;}\n')
