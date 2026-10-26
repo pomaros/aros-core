@@ -62,13 +62,15 @@
                 st_api_destroy_drawable(&_ctx->own.framebuffer->base);
             st_destroy_context(_ctx->st);
             MESA3DGLFreeFrameBuffer(_ctx->own.framebuffer);
-            /* The pipe screen goes with the last context sharing it */
+            /* Release any presentation target before dropping the provider
+             * that owns it. Independent drawables retain their own refs. */
+            MESA3DGLFreeTarget(&_ctx->own);
+            /* The pipe screen goes with the last context or drawable. */
             if (_ctx->shared && __atomic_sub_fetch(&_ctx->shared->refs, 1, __ATOMIC_ACQ_REL) == 0)
             {
                 MESA3DGLFreeStManager(_ctx->driver, _ctx->stmanager);
                 FreeVec(_ctx->shared);
             }
-            MESA3DGLFreeTarget(&_ctx->own);
             MESA3DGLFreeContext(_ctx);
         }
     }

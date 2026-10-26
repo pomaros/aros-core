@@ -318,6 +318,10 @@ static inline const void *gallium_core_get_api(void) { return (const void *)0; }
     return (GLAContext)ctx;
 
 error_out:
+    /* The tracker and framebuffer borrow the provider; unwind them first. */
+    if (ctx->st) st_destroy_context(ctx->st);
+    if (ctx->own.framebuffer) MESA3DGLFreeFrameBuffer(ctx->own.framebuffer);
+    MESA3DGLFreeTarget(&ctx->own);
     if (ctx->shared && __atomic_sub_fetch(&ctx->shared->refs, 1, __ATOMIC_ACQ_REL) == 0)
     {
         MESA3DGLFreeStManager(ctx->driver, ctx->stmanager);
@@ -325,7 +329,6 @@ error_out:
     }
     else if (!ctx->shared && ctx->stmanager)
         MESA3DGLFreeStManager(ctx->driver, ctx->stmanager);
-    MESA3DGLFreeTarget(&ctx->own);
-    if (ctx) MESA3DGLFreeContext(ctx);
+    MESA3DGLFreeContext(ctx);
     return (GLAContext)NULL;
 }

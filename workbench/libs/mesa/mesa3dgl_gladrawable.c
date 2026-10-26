@@ -68,6 +68,8 @@
         return NULL;
     }
     d->driver = _ctx->driver;
+    d->shared = _ctx->shared;
+    __atomic_add_fetch(&d->shared->refs, 1, __ATOMIC_ACQ_REL);
     MESA3DGLCheckAndUpdateBufferSize(d);
     D(bug("[MESA3DGL] %s: drawable %p %lux%lu\n", __func__, d,
         (unsigned long)d->framebuffer->width, (unsigned long)d->framebuffer->height));
@@ -96,6 +98,11 @@
     st_api_destroy_drawable(&d->framebuffer->base);
     MESA3DGLFreeFrameBuffer(d->framebuffer);
     MESA3DGLFreeTarget(d);
+    if (d->shared && __atomic_sub_fetch(&d->shared->refs, 1, __ATOMIC_ACQ_REL) == 0)
+    {
+        MESA3DGLFreeStManager(d->shared->driver, d->shared->stmanager);
+        FreeVec(d->shared);
+    }
     FreeVec(d);
 }
 
@@ -133,6 +140,21 @@
     }
     if ((d == NULL) != (r == NULL))
         return FALSE;
+    if (d)
+    {
+        struct mesa3dgl_drawable *targets[2] = { d, r };
+        for (unsigned i = 0; i < 2; i++)
+        {
+            const struct mesa3dgl_framebuffer *fb = targets[i]->framebuffer;
+            if (!targets[i]->shared || targets[i]->shared != _ctx->shared || !fb ||
+                fb->stvis.buffer_mask != _ctx->stvis.buffer_mask ||
+                fb->stvis.color_format != _ctx->stvis.color_format ||
+                fb->stvis.depth_stencil_format != _ctx->stvis.depth_stencil_format ||
+                fb->stvis.accum_format != _ctx->stvis.accum_format ||
+                fb->stvis.samples != _ctx->stvis.samples)
+                return FALSE;
+        }
+    }
     /* A window may have been resized since the drawable last drew. */
     if (d)
         MESA3DGLCheckAndUpdateBufferSize(d);

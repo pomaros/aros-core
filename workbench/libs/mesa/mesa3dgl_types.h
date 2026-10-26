@@ -29,7 +29,7 @@ struct mesa3dgl_framebuffer
 };
 
 /* The pipe screen and state tracker manager that contexts sharing objects
- * or a screen have in common; the last context to go frees them. */
+ * or a screen have in common; contexts and independent drawables retain them. */
 struct mesa3dgl_screen
 {
     APTR                        driver;
@@ -43,6 +43,9 @@ struct mesa3dgl_screen
  * EGL surface owns another through glACreateDrawable. */
 struct mesa3dgl_drawable
 {
+    /* Independent drawables hold one provider reference. A context's own
+     * target borrows its context's reference and leaves this NULL. */
+    struct mesa3dgl_screen      *shared;
     APTR                        driver;         /* the pipe driver that presents it */
     struct mesa3dgl_framebuffer *framebuffer;
     struct Window               *window;

@@ -195,12 +195,14 @@ VOID MESA3DGLSelectRastPort(struct mesa3dgl_drawable * d, struct TagItem * tagLi
              * GLA_Height (1 by 1 by default), a friend of the default public
              * screen's so the same pipe driver serves it, on a layer of its
              * own so that the rastport code below finds its bounds. */
-            LONG width = GetTagData(GLA_Width, 1, tagList);
-            LONG height = GetTagData(GLA_Height, 1, tagList);
-            struct Screen *screen = LockPubScreen(NULL);
+            IPTR width = GetTagData(GLA_Width, 1, tagList);
+            IPTR height = GetTagData(GLA_Height, 1, tagList);
+            struct Screen *screen;
 
-            if (width < 1) width = 1;
-            if (height < 1) height = 1;
+            /* Validate pointer-sized tags before narrowing for graphics APIs. */
+            if (!width || !height || width > 0x7fffffffUL || height > 0x7fffffffUL)
+                return;
+            screen = LockPubScreen(NULL);
             if (screen)
             {
                 d->offscreen_bm = AllocBitMap(width, height,
@@ -268,6 +270,77 @@ BOOL MESA3DGLStandardInit(struct mesa3dgl_drawable * d, struct TagItem *tagList)
 
     D(bug("[MESA3DGL] %s: Using RastPort @ 0x%p\n", __func__, d->visible_rp));
 
+    /* We assume left and top are given or if there is a window, set to border left/top
+       or if there is no window set to 0 */
+    {
+        IPTR left = GetTagData(GLA_Left, defaultleft, tagList);
+        IPTR top = GetTagData(GLA_Top, defaulttop, tagList);
+        IPTR right = GetTagData(GLA_Right, (IPTR)-1, tagList);
+        IPTR bottom = GetTagData(GLA_Bottom, (IPTR)-1, tagList);
+        IPTR width = GetTagData(GLA_Width, (IPTR)-1, tagList);
+        IPTR height = GetTagData(GLA_Height, (IPTR)-1, tagList);
+
+        if (left > 0x7fffffffUL || top > 0x7fffffffUL ||
+            (right != (IPTR)-1 && right > 0x7fffffffUL) ||
+            (bottom != (IPTR)-1 && bottom > 0x7fffffffUL) ||
+            (width != (IPTR)-1 && (!width || width > 0x7fffffffUL)) ||
+            (height != (IPTR)-1 && (!height || height > 0x7fffffffUL)) ||
+            !d->visible_rp || !d->visible_rp->Layer ||
+            d->visible_rp->Layer->bounds.MaxX < d->visible_rp->Layer->bounds.MinX ||
+            d->visible_rp->Layer->bounds.MaxY < d->visible_rp->Layer->bounds.MinY)
+            return FALSE;
+        d->left = left;
+        d->top = top;
+        requestedright = right == (IPTR)-1 ? -1 : (LONG)right;
+        requestedbottom = bottom == (IPTR)-1 ? -1 : (LONG)bottom;
+        requestedwidth = width == (IPTR)-1 ? -1 : (LONG)width;
+        requestedheight = height == (IPTR)-1 ? -1 : (LONG)height;
+    }
+
+    /* Calculate rastport dimensions */
+    d->visible_rp_width =
+        d->visible_rp->Layer->bounds.MaxX - d->visible_rp->Layer->bounds.MinX + 1;
+
+    d->visible_rp_height =
+        d->visible_rp->Layer->bounds.MaxY - d->visible_rp->Layer->bounds.MinY + 1;
+
+    if (d->left >= d->visible_rp_width || d->top >= d->visible_rp_height)
+        return FALSE;
+
+    /* right will be either passed or calculated from width or 0 */
+    d->right = 0;
+    if (requestedright < 0)
+    {
+        if (requestedwidth >= 0)
+        {
+            requestedright = (LONG)(d->visible_rp_width - d->left) - requestedwidth;
+            if (requestedright < 0) requestedright = 0;
+        }
+        else
+            requestedright = defaultright; /* Set the default here, not in GetDataData */
+    }
+    d->right = requestedright;
+
+    /* bottom will be either passed or calculated from height or 0 */
+    d->bottom = 0;
+    if (requestedbottom < 0)
+    {
+        if (requestedheight >= 0)
+        {
+            requestedbottom = (LONG)(d->visible_rp_height - d->top) - requestedheight;
+            if (requestedbottom < 0) requestedbottom = 0;
+        }
+        else
+            requestedbottom = defaultbottom; /* Set the default here, not in GetDataData */
+    }
+    d->bottom = requestedbottom;
+
+    if (d->right >= d->visible_rp_width - d->left ||
+        d->bottom >= d->visible_rp_height - d->top)
+        return FALSE;
+
+    /* Keep the borrowed rastport until validation succeeds. The caller clears
+     * it on failure and releases only the offscreen resources it owns. */
     {
         struct RastPort *clone = CloneRastPort(d->visible_rp);
 
@@ -283,51 +356,6 @@ BOOL MESA3DGLStandardInit(struct mesa3dgl_drawable * d, struct TagItem *tagList)
     }
 
     D(bug("[MESA3DGL] %s: Cloned RastPort @ 0x%p\n", __func__, d->visible_rp));
-
-    /* We assume left and top are given or if there is a window, set to border left/top
-       or if there is no window set to 0 */
-    d->left = GetTagData(GLA_Left, defaultleft, tagList);
-    d->top = GetTagData(GLA_Top, defaulttop, tagList);
-
-    requestedright = GetTagData(GLA_Right, -1, tagList);
-    requestedbottom = GetTagData(GLA_Bottom, -1, tagList);
-    requestedwidth = GetTagData(GLA_Width, -1 , tagList);
-    requestedheight = GetTagData(GLA_Height, -1 , tagList);
-
-    /* Calculate rastport dimensions */
-    d->visible_rp_width =
-        d->visible_rp->Layer->bounds.MaxX - d->visible_rp->Layer->bounds.MinX + 1;
-
-    d->visible_rp_height =
-        d->visible_rp->Layer->bounds.MaxY - d->visible_rp->Layer->bounds.MinY + 1;
-
-    /* right will be either passed or calculated from width or 0 */
-    d->right = 0;
-    if (requestedright < 0)
-    {
-        if (requestedwidth >= 0)
-        {
-            requestedright = d->visible_rp_width - d->left - requestedwidth;
-            if (requestedright < 0) requestedright = 0;
-        }
-        else
-            requestedright = defaultright; /* Set the default here, not in GetDataData */
-    }
-    d->right = requestedright;
-
-    /* bottom will be either passed or calculated from height or 0 */
-    d->bottom = 0;
-    if (requestedbottom < 0)
-    {
-        if (requestedheight >= 0)
-        {
-            requestedbottom = d->visible_rp_height - d->top - requestedheight;
-            if (requestedbottom < 0) requestedbottom = 0;
-        }
-        else
-            requestedbottom = defaultbottom; /* Set the default here, not in GetDataData */
-    }
-    d->bottom = requestedbottom;
 
     /* Init screen information */
     if (d->Screen)
@@ -482,11 +510,13 @@ VOID MESA3DGLCommitTarget(struct mesa3dgl_drawable * d, struct mesa3dgl_drawable
 {
     struct mesa3dgl_framebuffer *framebuffer = d->framebuffer;
     APTR driver = d->driver;
+    struct mesa3dgl_screen *shared = d->shared;
 
     MESA3DGLFreeTarget(d);
     *d = *staged;
     d->framebuffer = framebuffer;
     d->driver = driver;
+    d->shared = shared;
 }
 
 /* Whether a target of BPP bits per pixel fits a visual: the framebuffer's

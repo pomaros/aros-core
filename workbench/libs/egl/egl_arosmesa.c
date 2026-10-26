@@ -20,6 +20,7 @@
 #include "egldriver.h"
 #include "egllog.h"
 
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -212,27 +213,39 @@ static EGLBoolean
 egl_arosmesa_makecurrent(_EGLDisplay *disp, _EGLSurface *dsurf,
         _EGLSurface *rsurf, _EGLContext *ctx)
 {
-    _EGLContext *before = _eglGetCurrentContext();
     _EGLContext *old_ctx;
     _EGLSurface *old_dsurf, *old_rsurf;
     GLAContext native = ctx ? egl_arosmesa_context(ctx)->amesactx : NULL;
+    EGLBoolean bound;
 
     (void)disp;
-    /* The native binding first: on failure nothing has changed. */
     if (ctx && !native)
         return _eglError(EGL_BAD_CONTEXT, "eglMakeCurrent");
-    if (!glAMakeCurrentDrawables(native, drawable_of(dsurf), drawable_of(rsurf)))
-        return _eglError(EGL_BAD_MATCH, "eglMakeCurrent");
 
+    /* Mesa checks ownership and config compatibility before the driver sees
+     * another task's resources. Keep the previous binding's references alive
+     * until the native transaction has committed or the logical one rolls back. */
     if (!_eglBindContext(ctx, dsurf, rsurf, &old_ctx, &old_dsurf, &old_rsurf))
-    {
-        /* The logical binding refused: the task goes back to what it had. */
-        if (before)
-            glAMakeCurrentDrawables(egl_arosmesa_context(before)->amesactx,
-                drawable_of(before->DrawSurface), drawable_of(before->ReadSurface));
-        else
-            glAMakeCurrentDrawables(NULL, NULL, NULL);
         return EGL_FALSE;
+
+    bound = glAMakeCurrentDrawables(native, drawable_of(dsurf), drawable_of(rsurf));
+    if (!bound)
+    {
+        _EGLContext *failed_ctx;
+        _EGLSurface *failed_dsurf, *failed_rsurf;
+        EGLBoolean restored = _eglBindContext(old_ctx, old_dsurf, old_rsurf,
+            &failed_ctx, &failed_dsurf, &failed_rsurf);
+
+        /* Native refusal leaves its binding unchanged. Restore only Mesa's
+         * logical binding and release the failed binding's references. */
+        assert(restored);
+        (void)restored;
+        if (failed_dsurf && _eglPutSurface(failed_dsurf))
+            free_surface(failed_dsurf);
+        if (failed_rsurf && _eglPutSurface(failed_rsurf))
+            free_surface(failed_rsurf);
+        if (failed_ctx && _eglPutContext(failed_ctx))
+            free_context(failed_ctx);
     }
 
     /* The references the old binding held; an object destroyed while
@@ -243,7 +256,7 @@ egl_arosmesa_makecurrent(_EGLDisplay *disp, _EGLSurface *dsurf,
         free_surface(old_rsurf);
     if (old_ctx && _eglPutContext(old_ctx))
         free_context(old_ctx);
-    return EGL_TRUE;
+    return bound ? EGL_TRUE : _eglError(EGL_BAD_MATCH, "eglMakeCurrent");
 }
 
 static _EGLSurface *
