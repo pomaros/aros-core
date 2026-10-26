@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (C) 2026 John KNIPPER <code@jkn.me>
-# Licensed under the AROS Public License (APL), Version 1.1
+# Licensed under the AROS Public License (APL) Version 1.1
 """Build a normal Cargo binary against the precompiled AROS std, without build-std."""
 import argparse
 from collections import Counter
@@ -57,7 +57,7 @@ def main():
     else:
         compiler = Path(run(['rustup', 'which', '--toolchain', TOOLCHAIN, 'rustc']).strip())
     official_root = Path(run([str(compiler), '--print', 'sysroot']).strip()).resolve()
-    protected = [build, official_root, HERE.parents[3]]
+    protected = [build, official_root, HERE.parent]
     if installation:
         protected.append(prefix)
     if args.application_libc:

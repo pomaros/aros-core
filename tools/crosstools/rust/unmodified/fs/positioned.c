@@ -1,6 +1,6 @@
 /*
     Copyright (C) 2026 John KNIPPER <code@jkn.me>.
-    Licensed under the AROS Public License (APL), Version 1.1.
+    Licensed under the AROS Public License (APL) Version 1.1
 
     Rust positioned I/O uses the native POSIX library's shared-fcb lock.
     Revision 0.41 introduces that contract and the pwrite exports. No

@@ -6,8 +6,8 @@ Run from any working directory with a fresh artifact directory:
 python3 tools/crosstools/rust/unmodified/net/tests/socket/run.py --output /tmp/aros-socket-host
 ```
 
-The runner locates the native socket request contract in the current core tree
-or the sibling `aros-core-rust-native-handles` worktree. `--native-header PATH`
+The runner reads the native socket request contract from
+`toolchain/include/bsdsocket/native.h`. `--native-header PATH`
 selects another real `bsdsocket/native.h`. The exact header is hashed and copied
 into the artifact before compilation. Both actual production sources,
 `net/socket.c` and `net/socket_aros.c`, compile in separate executables.

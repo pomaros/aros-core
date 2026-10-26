@@ -37,6 +37,22 @@ def run(command, *, cwd=None, env=None, log=None):
     return result.stdout
 
 
+MIN_BUILD_FREE = 6 * 1024**3
+
+
+def std_build_command(cargo, sources, manifest, target, jobs):
+    """Construct the bounded offline build; do not inherit ambient Cargo jobs."""
+    if jobs < 1:
+        raise ValueError("jobs must be positive")
+    return [cargo, "--config", 'source.crates-io.replace-with="aros-std-vendor"',
+            "--config", "source.aros-std-vendor.directory=" +
+            json.dumps(str(sources / "library/vendor")),
+            "build", "--offline", "--manifest-path", str(manifest),
+            "--target", str(target), "-Zjson-target-spec",
+            "-Zbuild-std=std,panic_abort", "--release",
+            "--message-format=json-render-diagnostics", "--jobs", str(jobs)]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rustc", type=Path, help="official compiler binary; paired with --cargo")
@@ -54,7 +70,11 @@ def main():
                         help="private import archive generated from the matching POSIX library")
     parser.add_argument("--probe", choices=("link", "network"), default="link",
                         help="compile/link coverage or executable IPv4 loopback diagnostic")
+    parser.add_argument("--jobs", type=int, default=1,
+                        help="positive Cargo worker bound (default: 1)")
     args = parser.parse_args()
+    if args.jobs < 1:
+        parser.error("--jobs must be positive")
     if any((args.sdk, args.crosstools, args.collect_aros)) and not all(
             (args.sdk, args.crosstools, args.collect_aros)):
         parser.error("linking requires --sdk, --crosstools and --collect-aros together")
@@ -96,8 +116,8 @@ def main():
             if config.exists():
                 parser.error(f"ambient Cargo configuration: {config}; choose an isolated output")
     ancestor = next(p for p in output.parents if p.is_dir())
-    if shutil.disk_usage(ancestor).free < 5 * 1024**3:
-        parser.error("at least 5 GiB free disk space is required")
+    if shutil.disk_usage(ancestor).free < MIN_BUILD_FREE:
+        parser.error("at least 6 GiB free disk space is required")
     output.mkdir(parents=True)
     (output / "rustc-version.txt").write_text(version)
     overlay = output / "sysroot"
@@ -142,12 +162,7 @@ def main():
         '[profile.release]\npanic="abort"\n')
     probe_source = HERE / ("network-probe.rs" if args.probe == "network" else "probe.rs")
     shutil.copyfile(probe_source, probe / "src/lib.rs")
-    command = [cargo, "--config", 'source.crates-io.replace-with="aros-std-vendor"',
-               "--config", "source.aros-std-vendor.directory=" +
-               json.dumps(str(sources / "library/vendor")),
-               "build", "--offline", "--manifest-path", str(probe / "Cargo.toml"),
-               "--target", str(target), "-Zjson-target-spec",
-               "-Zbuild-std=std,panic_abort", "--release", "--message-format=json-render-diagnostics"]
+    command = std_build_command(cargo, sources, probe / "Cargo.toml", target, args.jobs)
     (output / "build-command.json").write_text(json.dumps(command, indent=2) + "\n")
     build_messages = run(command, cwd=output, env=environment, log=output / "build.log")
     # Cargo's artifact layout is not an SDK interface. Consume its declared
@@ -186,7 +201,7 @@ def main():
         shutil.copy2(library, target_library / library.name)
     archive = output / "std-probe.a"
     shutil.copyfile(archives[0], archive)
-    result = {"probe": args.probe, "probe_sha256": digest(probe_source),
+    result = {"build_jobs": args.jobs, "probe": args.probe, "probe_sha256": digest(probe_source),
               "precompiled_std": {p.name: digest(p) for p in std_rlibs},
               "compiler_commit": COMMIT, "compiler_sha256": compiler_sha256,
               "target_sha256": digest(target), "std_patch_sha256": digest(HERE / "rust-src-aros.diff"),
@@ -217,7 +232,7 @@ def main():
             shutil.copyfile(args.posix_stubs.resolve(), imported)
             positional_archives.append(str(imported))
         adapters = []
-        for name in ("resolver", "resolver_aros", "socket", "socket_aros", "positioned", "unavailable"):
+        for name in ("resolver", "resolver_aros", "socket", "socket_aros", "positioned", "unavailable", "stack"):
             obj = output / (name + ".o")
             command = [str(tools / "clang"), "--target=aarch64-unknown-aros", "-fno-pic",
                        "-mcmodel=large", "-fno-builtin", "-O2", "-Wall", "-Wextra", "-Werror",
@@ -225,7 +240,7 @@ def main():
                        "-I" + str(private_include), "-I" + str(HERE / "net"),
                        "-I" + str(sdk / "include/aros/posixc"),
                        "-I" + str(sdk / "include/aros/stdc"), "-I" + str(sdk / "include"),
-                       "-c", str(HERE / ({"positioned": "fs", "unavailable": "sys"}.get(name, "net")) / (name + ".c")), "-o", str(obj)]
+                       "-c", str(HERE / ({"positioned": "fs", "unavailable": "sys", "stack": "sys"}.get(name, "net")) / (name + ".c")), "-o", str(obj)]
             (output / (name + "-command.json")).write_text(json.dumps(command, indent=2) + "\n")
             run(command, log=output / (name + "-compile.log"))
             adapters.append(str(obj))
@@ -271,6 +286,7 @@ def main():
                       native_adapter_archive_sha256=digest(native_archive),
                       positioned_adapter_sha256=digest(HERE / "fs/positioned.c"),
                       unavailable_adapter_sha256=digest(HERE / "sys/unavailable.c"),
+                      stack_adapter_sha256=digest(HERE / "sys/stack.c"),
                       positional_import_archives={Path(p).name: digest(Path(p)) for p in positional_archives},
                       cargo_config="cargo-config.toml",
                       native_socket_header_sha256=digest(native_header),

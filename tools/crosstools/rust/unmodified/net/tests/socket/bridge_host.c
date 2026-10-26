@@ -1,6 +1,6 @@
 /*
     Copyright (C) 2026, John KNIPPER <code@jkn.me>.
-    Licensed under the AROS Public License (APL) Version 1.1.
+    Licensed under the AROS Public License (APL) Version 1.1
 */
 #include "socket_native.h"
 #include <sys/types.h>
@@ -8,12 +8,15 @@
 #include <netinet/in.h>
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stddef.h>
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
 
 int aros_rs_socket(int, int, int);
+int aros_rs_poll(struct aros_socket_pollfd *, unsigned int, int);
+_Static_assert(sizeof(struct aros_socket_pollfd)==8 && offsetof(struct aros_socket_pollfd,events)==4 && offsetof(struct aros_socket_pollfd,revents)==6, "pollfd C/libc ABI");
 int aros_rs_bind(int, const struct sockaddr *, uint32_t);
 int aros_rs_connect(int, const struct sockaddr *, uint32_t);
 int aros_rs_listen(int, int);
@@ -41,6 +44,12 @@ _Static_assert(offsetof(struct aros_socket_request, result) == 24, "native resul
 _Static_assert(offsetof(struct aros_socket_request, address_length) == 56, "native addrlen pointer offset");
 static struct aros_socket_request expected;
 static int calls, error_response, cases;
+static int fcntl_response=-1, fcntl_error=EBADF;
+int aros_fixture_fcntl(int fd,int command,...) {
+    assert(fd>=0 && fd<=2 && command==F_GETFD);
+    if(fcntl_response<0)errno=fcntl_error;
+    return fcntl_response;
+}
 static ssize_t return_value;
 static int address_copy;
 static const void *original_address;
@@ -48,12 +57,27 @@ static unsigned char address_bytes[128];
 static uint32_t address_size;
 static IPTR return_length;
 static int write_length, receive_data;
+static int poll_copy;
 
 int aros_socket_native_call(struct aros_socket_request *r) {
     calls++;
     assert(r->version == AROS_SOCKET_ABI && r->operation == expected.operation);
     assert(r->fd == expected.fd && r->arg0 == expected.arg0 && r->arg1 == expected.arg1 && r->arg2 == expected.arg2);
-    assert(r->result == 0 && r->buffer == expected.buffer && r->length == expected.length);
+    assert(r->result == 0 && r->length == expected.length);
+    if (poll_copy) {
+        /* Band events reach the stack as a translated copy of the set. */
+        struct aros_socket_pollfd *n = r->buffer;
+        assert(n && r->buffer != expected.buffer);
+        assert(n[0].fd == 41 && n[0].events == AROS_POLL_IN);
+        assert(n[1].fd == 42 && n[1].events == AROS_POLL_OUT);
+        assert(n[2].fd == 43 && n[2].events == AROS_POLL_PRI);
+        assert(!n[0].revents && !n[1].revents && !n[2].revents);
+        if (!error_response) {
+            n[0].revents = AROS_POLL_IN;
+            n[1].revents = AROS_POLL_OUT | AROS_POLL_HUP;
+            n[2].revents = 0;
+        }
+    } else assert(r->buffer == expected.buffer);
     if (address_copy) {
         assert(r->address && r->address != original_address && r->address_length);
         assert(*r->address_length == address_size);
@@ -77,7 +101,7 @@ int aros_socket_native_call(struct aros_socket_request *r) {
 }
 static void reset(ULONG operation) {
     memset(&expected, 0, sizeof(expected)); expected.operation = operation;
-    expected.fd = 41; calls = error_response = address_copy = write_length = receive_data = 0;
+    expected.fd = 41; calls = error_response = address_copy = write_length = receive_data = poll_copy = 0;
     original_address = NULL; address_size = 0; return_length = 0; return_value = 0;
     errno = EINTR;
 }
@@ -246,6 +270,34 @@ int main(void) {
     assert(!memcmp(control, "control", sizeof(control)));
     reset(0); invalid(aros_rs_sendmsg(41, NULL, 0), EOPNOTSUPP);
     reset(0); invalid(aros_rs_recvmsg(41, NULL, 0), EOPNOTSUPP);
+    struct aros_socket_pollfd pollfds[2]={{41,AROS_POLL_IN,0},{42,AROS_POLL_OUT,0}};
+    reset(AROS_SOCKET_POLL_BATCH); expected.fd=0; expected.buffer=pollfds; expected.length=2;
+    expected.arg1=23; return_value=2; result(aros_rs_poll(pollfds,2,23));
+    reset(AROS_SOCKET_POLL_BATCH); expected.fd=0; expected.arg1=0; return_value=0;
+    result(aros_rs_poll(NULL,0,0));
+    reset(AROS_SOCKET_POLL_BATCH); expected.fd=0; expected.buffer=pollfds; expected.length=2;
+    expected.arg1=-1; error_response=EINTR; result(aros_rs_poll(pollfds,2,-1));
+    reset(0); invalid(aros_rs_poll(NULL,1,0),EFAULT);
+    reset(0); invalid(aros_rs_poll(NULL,0,-2),EINVAL);
+    struct aros_socket_pollfd local={0,AROS_POLL_IN,AROS_POLL_NVAL};
+    reset(AROS_SOCKET_POLL_BATCH); expected.fd=0; expected.buffer=&local; expected.length=1;return_value=1;
+    fcntl_response=0;assert(aros_rs_poll(&local,1,0)==-1 && errno==EOPNOTSUPP && calls==1);cases++;
+    reset(AROS_SOCKET_POLL_BATCH); expected.fd=0; expected.buffer=&local; expected.length=1;return_value=1;
+    fcntl_response=-1;fcntl_error=EBADF;result(aros_rs_poll(&local,1,0));
+    reset(AROS_SOCKET_POLL_BATCH); expected.fd=0; expected.buffer=&local; expected.length=1;return_value=1;
+    fcntl_error=ENOMEM;assert(aros_rs_poll(&local,1,0)==-1 && errno==ENOMEM && calls==1);cases++;
+    /* POLLRDNORM 0x40, POLLRDBAND 0x80, POLLWRBAND 0x100: translated to the
+       stack's IN, PRI and OUT kinds; events untouched, revents as asked. */
+    struct aros_socket_pollfd bands[3]={{41,0x40,0x777},{42,AROS_POLL_OUT|0x100,0x777},{43,0x80,0x777}};
+    reset(AROS_SOCKET_POLL_BATCH); expected.fd=0; expected.buffer=bands; expected.length=3;
+    expected.arg1=5; return_value=2; poll_copy=1; result(aros_rs_poll(bands,3,5));
+    assert(bands[0].events==0x40 && bands[1].events==(AROS_POLL_OUT|0x100) && bands[2].events==0x80);
+    assert(bands[0].revents==0x40 && bands[1].revents==(AROS_POLL_OUT|AROS_POLL_HUP) && bands[2].revents==0);
+    reset(AROS_SOCKET_POLL_BATCH); expected.fd=0; expected.buffer=bands; expected.length=3;
+    expected.arg1=5; error_response=EINTR; poll_copy=1;
+    bands[0].revents=bands[1].revents=bands[2].revents=0x777;
+    result(aros_rs_poll(bands,3,5));
+    assert(bands[0].revents==0x777 && bands[1].revents==0x777 && bands[2].revents==0x777);
     printf("PASS %d socket bridge cases, exact dispatch records, AROS IPv4/IPv6, synchronous address copies\n", cases);
     return 0;
 }

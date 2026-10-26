@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (C) 2026 John KNIPPER <code@jkn.me>.
-# Licensed under the AROS Public License (APL), Version 1.1.
+# Licensed under the AROS Public License (APL) Version 1.1
 """Force all ELF members of std/application libc into one object; reject duplicate C providers."""
 import argparse
 import hashlib
@@ -17,7 +17,7 @@ p.add_argument('--binary', type=Path)
 a = p.parse_args()
 build, app, tools, out = (getattr(a, n).resolve() for n in
                          ('std_build', 'application_libc_rlib', 'crosstools', 'output'))
-if out.exists() or a.output.is_symlink() or any(out == root or root in out.parents for root in (build, app.parent, tools, HERE.parents[4])):
+if out.exists() or a.output.is_symlink() or any(out == root or root in out.parents for root in (build, app.parent, tools, HERE.parents[1])):
     p.error('output must be new and outside the input trees')
 stdlib = list((build / 'sysroot/lib/rustlib/aarch64-unknown-aros/lib').glob('liblibc-*.rlib'))
 if len(stdlib) != 1:
@@ -54,9 +54,13 @@ if a.binary:
     r = subprocess.run([str(tools / 'bin/llvm-nm'), '--defined-only', str(a.binary.resolve())],
                        text=True, stdout=subprocess.PIPE, check=True)
     symbols = [line.split()[-1] for line in r.stdout.splitlines() if line.split()]
-    for name in ('poll', 'if_nametoindex', 'mkdtemp'):
+    for name in ('poll', 'if_nametoindex'):
         if symbols.count('aros_rs_' + name) != 1:
             problems.append('native provider count: ' + name)
+    # The C library provides these; no refusing adapter may stand in for it.
+    for name in ('mkdtemp', 'getrusage'):
+        if 'aros_rs_' + name in symbols or name not in symbols:
+            problems.append('C library provider: ' + name)
 if any(digest(Path(name)) != expected for name, expected in before.items()):
     raise RuntimeError('libc inputs changed during export qualification')
 report = {'verdict': 'FAIL' if code or problems else 'PASS',

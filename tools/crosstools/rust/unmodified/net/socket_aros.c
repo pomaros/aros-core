@@ -1,6 +1,6 @@
 /*
     Copyright (C) 2026, John KNIPPER <code@jkn.me>.
-    Licensed under the AROS Public License (APL) Version 1.1.
+    Licensed under the AROS Public License (APL) Version 1.1
 */
 #include "socket_native.h"
 #include <exec/libraries.h>

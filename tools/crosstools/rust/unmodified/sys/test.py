@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (C) 2026 John KNIPPER <code@jkn.me>.
-# Licensed under the AROS Public License (APL), Version 1.1.
+# Licensed under the AROS Public License (APL) Version 1.1
 """Check typed failure sentinels and thread-local errno in the actual refusal provider."""
 import argparse
 import hashlib
@@ -16,7 +16,7 @@ p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--output', type=Path, required=True)
 a = p.parse_args()
 out = a.output.resolve()
-if out.exists() or a.output.is_symlink() or HERE.parents[4] in out.parents:
+if out.exists() or a.output.is_symlink() or HERE.parents[1] in out.parents:
     p.error('output must be a new directory outside the core source tree')
 digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
 inputs = {str(path): digest(path) for path in (HERE / 'unavailable.c', HERE / 'test-host.c')}

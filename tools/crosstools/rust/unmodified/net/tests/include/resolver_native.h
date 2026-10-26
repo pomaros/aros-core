@@ -1,6 +1,6 @@
 /*
     Copyright (C) 2026, John KNIPPER <code@jkn.me>.
-    Licensed under the AROS Public License (APL) Version 1.1.
+    Licensed under the AROS Public License (APL) Version 1.1
 */
 #ifndef TEST_RESOLVER_NATIVE_H
 #define TEST_RESOLVER_NATIVE_H

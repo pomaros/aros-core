@@ -1,21 +1,26 @@
 <!-- Copyright (C) 2026 John KNIPPER <code@jkn.me> -->
 <!-- Licensed under the AROS Public License (APL) Version 1.1 -->
 
-# Unmodified Rust compiler qualification
+# The toolchain
 
-This build separates the AROS standard-library changes from compiler target
-declarations. The core Rust recipe selects it for the official AArch64 profile. It uses the official `nightly-2026-08-04`
-compiler, an external native AArch64 target JSON, and a private source/sysroot
-overlay. `integrate.py` prepares and installs this profile for
-`tools-crosstools-rust` in a dedicated prefix.
+The official `nightly-2026-08-04` compiler (Rust 1.99), an external native
+AArch64 target JSON and a library-only patch to its stock `rust-src`.
+`build.py` builds the patched std and a probe archive in a new output
+directory; `integrate.py` fetches the pinned official components and installs
+an SDK prefix around such a build. Nothing in the compiler, bootstrap or
+rustdoc is patched.
 
-The compiler pin is official nightly 1.99. Other CPU profiles retain the
-source-bootstrap 1.98.1 recipe. See the [core recipe](../README.md) for selection,
-installation paths and runtime requirements.
+On Darwin hosts, installed Rust/Cargo/rustdoc wrappers supply the official host
+`lib` directory as `DYLD_FALLBACK_LIBRARY_PATH` for their process tree. This
+allows rust-objcopy to load the LLVM library shipped by the same compiler
+component. No binary, install name or system-wide loader setting is changed.
+The component installation belongs to the SDK work directory unless an explicit
+read-only `--host-root` is selected; keep that directory while the SDK references
+it. Application builds must verify the installed manifest before using it.
 
 ## Inputs and provenance
 
-- `aarch64-unknown-aros.json` expresses the integrated Rust 1.98.1 AROS target
+- `aarch64-unknown-aros.json` expresses the official nightly Rust 1.99 AROS target
   parameters, including Unix-family std selection, large code model, static
   relocation, inline stack probes, aborting panics and native x18 use.
   Automatic GDB script emission is disabled: its weak reference produces GOT
@@ -24,7 +29,7 @@ installation paths and runtime requirements.
   adjacent `rustc-1.98.1-src-aros.diff`, rebased onto the pinned nightly's
   rust-src. Its libc paths refer to `library/vendor` in the rust-src component.
   It contains no `compiler/`, `src/bootstrap/` or `src/librustdoc/` changes.
-- `source-files.json` checks the preimages of the 31 affected files, including
+- `source-files.json` checks the preimages of the affected library files, including
   absence of added files. It detects use of the already-patched shared
   `rust-aros` source. It does not authenticate the complete source distribution.
 - `probe.rs` retains std filesystem, thread, socket and process paths in the
@@ -81,14 +86,23 @@ LP64-to-Rust addrinfo conversion, and native owned sockets through vector 139.
 `build.py` compiles these adapters and copies the new native header into its
 private output; it never installs a header or library into the SDK. Runtime
 requires a matching AROSTCP provider and POSIX descriptor dispatcher, described
-in `developer/debug/test/native-socket/README.md` at the core root. Linking
+in the PomAROS core's native socket tests. Linking
 against an SDK alone does not install or qualify those runtime components.
 
 Socket duplication and nonblocking mode use AROS operations. Connection timeout
 uses single-socket native readiness followed by `SO_ERROR`, without depending
 on Linux poll event semantics. IPv4 multicast TTL/loop options use the native
 one-byte payload. Unsupported socketpair and message/ancillary transport report
-explicit errors. Generic POSIX poll and process execution retain their
+explicit errors. Socket-only batch poll uses native operation 17 with a single
+wait context and deadline; POSIX files, DOS pipes and legacy owners return
+EOPNOTSUPP. The stack knows three readiness kinds (IN, PRI, OUT); the adapter
+maps the POSIX band events onto them as BSD sockets do: `POLLRDNORM` is IN,
+`POLLRDBAND` is PRI, `POLLWRNORM` is `POLLOUT` itself, and `POLLWRBAND` is never
+reported. A set that asks for band events reaches the stack as a translated
+copy, so the caller's `events` stay as given and `revents` holds only what was
+asked. General POSIX readiness and pipe wakers remain unsupported. See
+the PomAROS core's native poll tests for the exact
+ERR/HUP/invalid-fd and concurrent-close contract. Process execution retains its
 unsupported implementation. `FD_CLOEXEC` is stored metadata; an execution backend
 must consume it before inheritance can be qualified. Native `dup2` replacement
 and enabled `SO_LINGER` are outside the owned socket contract.
@@ -105,7 +119,11 @@ The private sysroot contains the compiled target std rlibs. An SDK build also
 provides `libaros_rs_platform.a`, the `aarch64-aros-cc` linker driver and a generated
 `cargo-config.toml` that selects this driver and the SDK's native library path.
 The platform archive contains one provider for unsupported POSIX calls as well
-as the network/file adapters. Both std and application libc declare the same
+as the network/file adapters and the stack adapter. The stack adapter serves
+crates that grow the stack (`stacker`): `aros_rs_stack_lower()` reads the
+task's `tc_SPLower`, and `aros_rs_call_on_stack()` runs a function on a new
+stack through exec's `NewStackSwap()`, because the kernel suspends a task whose
+stack pointer leaves `tc_SPLower..tc_SPUpper`. Both std and application libc declare the same
 explicit adapter symbols; neither exports duplicate C fallback bodies.
 The driver links the AROS adapters through the real target C toolchain; it adds
 no host-library or Linux fallback.
@@ -143,7 +161,8 @@ direct libc dependency. It checks the native ELF format, unresolved symbols,
 absence of allocated GOT relocations and unchanged input identities. Its
 runtime probe expects the arguments `alpha beta`; success requires its marker
 and a clean supervised return. It validates argc/argv, native UDP/options,
-application libc calls and the honest ENOSYS result of unsupported generic poll.
+application libc calls, a real empty native poll and explicit EOPNOTSUPP for
+regular-file poll. `poll-probe.rs` adds actual socket batch readiness diagnostics.
 It requires and prints the actual POSIX runtime revision. Its trace and panic
 messages use the native serial debug path independently of redirected logs.
 It also verifies `F_DUPFD`/`F_DUPFD_CLOEXEC` flags and minimum descriptor numbers,
@@ -159,7 +178,8 @@ checks the installed generation's external SDK/tool hashes before and after
 compilation, so a shared SDK rebuild cannot silently change the qualified inputs.
 `--application-libc /path/to/patched-libc-0.2.190` qualifies the application
 store alongside std's internal 0.2.189. The probe also checks zero/NULL error
-sentinels and ENOSYS for unsupported interface-name lookup and mkdtemp.
+sentinels and ENOSYS for unsupported interface-name lookup, creates and
+removes a directory with mkdtemp and reads getrusage(RUSAGE_SELF).
 
 ## Runtime diagnostic
 
@@ -206,3 +226,21 @@ and thread-local errno. Native errno behavior remains a guest-test requirement.
 `ABI/libc-exports.py` extracts and links all ELF members of std/application libc
 explicitly, rejecting duplicate C providers independently of archive order. Its
 optional `--binary` checks that the application contains one native provider.
+
+## Embedded AROS core source
+
+The SDK repository owns these library/tooling sources. Generate the core's
+integration snapshot from one immutable commit instead of editing two copies:
+
+```sh
+python3 tools/export-core-toolchain.py --output /new/core-component
+python3 tools/export-core-toolchain.py --check /new/core-component
+```
+
+The exporter records source/export hashes and the source commit in
+`SOURCE-ORIGIN.json`. It preserves APL notices for integration code and selects
+the core's authoritative socket header; the standalone header snapshot is not
+exported. Output must be a new directory outside this SDK repository. The core
+owns OS implementations and its C ABI; this export does not copy or modify
+those sources. Verify the snapshot with the same exporter revision. Runtime
+qualification is separate from export equality.

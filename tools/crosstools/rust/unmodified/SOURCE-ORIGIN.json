@@ -1,0 +1,187 @@
+{
+  "core_native_header": "workbench/network/common/include/bsdsocket/native.h",
+  "exporter_sha256": "0a2001ac67445f708a8f3e5cbf91a1791500e8a2b1b6ee506060ac98643654a0",
+  "files": {
+    ".gitattributes": {
+      "export_sha256": "1472d6e62ac2aa5757b5a5cfa4e032e422d54c6f1424c4abac88c1b3c9523ac2",
+      "source_sha256": "1472d6e62ac2aa5757b5a5cfa4e032e422d54c6f1424c4abac88c1b3c9523ac2"
+    },
+    "ABI/README.md": {
+      "export_sha256": "edef4614c993b8ce5e3a53bbde3b4a986d7d7d878ca8b08adf4b1e66c2dda2de",
+      "source_sha256": "edef4614c993b8ce5e3a53bbde3b4a986d7d7d878ca8b08adf4b1e66c2dda2de"
+    },
+    "ABI/libc-exports.py": {
+      "export_sha256": "d46143d336a62ef6250c7616e99fd8d3fca85cd831a05f7573d357b0362e17bd",
+      "source_sha256": "d6610c48c06533e4fa2a352b7248254e3b78abd548e85b867624515cfcdfdfdd"
+    },
+    "ABI/network-abi.py": {
+      "export_sha256": "cbc6d54fbd2417592baa8261bcbdf1e1794b2f7988f4e43229e7d05b9f1691f6",
+      "source_sha256": "b20c67b6afe7a9839fe14fe5320f45699260b328ca7a38d1f2b936cee17bfbc3"
+    },
+    "README.md": {
+      "export_sha256": "67d76dbe4fffeb6f19275b2db655a2bbe69afc88eb0ab0e5e65dc0d416e1c736",
+      "source_sha256": "033dd0672e382ccea177d7863fa865cf9117333e94b95b58ce58128f3957fb10"
+    },
+    "aarch64-unknown-aros.json": {
+      "export_sha256": "e37308bd1cc1cec089bab2965e27aeb6e4cc3d430816eb8dc0c5f9920350065f",
+      "source_sha256": "e37308bd1cc1cec089bab2965e27aeb6e4cc3d430816eb8dc0c5f9920350065f"
+    },
+    "build.py": {
+      "export_sha256": "4cbc1f5b746ca2df8315cc40f02dac1c0c2cac8794e72b3a0f092c0165587a7e",
+      "source_sha256": "c64bc2a8700d493956baff8b73d7f176581ce7f4d175e987475ed58680d7fa3c"
+    },
+    "channel.json": {
+      "export_sha256": "a8c4ad1dc730b7f35c14533ab6a0d999fdb4b4fb886772b368a90ef9b83a54ee",
+      "source_sha256": "a8c4ad1dc730b7f35c14533ab6a0d999fdb4b4fb886772b368a90ef9b83a54ee"
+    },
+    "consumer-check.py": {
+      "export_sha256": "fee658a35f242434867ca78bd235e4a315b692dcdcbf5206d885a7f8ebc34b8d",
+      "source_sha256": "6a6c4fdd5495ddf5aa179abb988c68afc07f8d730dea71de4c523c39f47238f8"
+    },
+    "consumer-probe.rs": {
+      "export_sha256": "8d3cee3de44c2c9b39fa56230c7d787bf563b89a0c066d814bbd3223ce440fab",
+      "source_sha256": "1fbe03b8c6c87b7de39c0dcfc4a5e9511f2a60e9bf3121431a45b847a1e8f571"
+    },
+    "consumer-trace.c": {
+      "export_sha256": "f56ee44c7879ac1ecf2a35eb1f22a21cfb9806661e5d3fa42b6e80151f3c8bc4",
+      "source_sha256": "42114b02f471411fff4cacc9268b4f83870a1d9501ebf768424b8275d725c781"
+    },
+    "fs/positioned.c": {
+      "export_sha256": "2930bebd7962f9f5830105f3ec70363eead021a08edec755fcd99bba1e05d33a",
+      "source_sha256": "27f7fbbb5bd8be60e30b0f4da1e6e95d9b02aa82b9c0fd906e5a5248eba42570"
+    },
+    "integrate.py": {
+      "export_sha256": "04744a5f816f27763826ce0c0202ab4d1f44aac7a2c3be756d7ae59e1b12f466",
+      "source_sha256": "90e103d7fc3c7bf784687f3b6c26bdf4e3f9e9b416b9675f671862d0c18f0eb9"
+    },
+    "net/resolver.c": {
+      "export_sha256": "55b194b3cb4d6900488a49a9f314502e41c13a62da900a4d3ee45a323d967f50",
+      "source_sha256": "f9eb68c5027f897d066f96ad5394cf11fa37c956260a334de6ad685f2be8156a"
+    },
+    "net/resolver.h": {
+      "export_sha256": "fdf8a07116fae3f9e1abbed9849b42d0b1c74ed01bdd81fc4d483b8298036ec4",
+      "source_sha256": "68f731edd94bf6433e44e0aee89d5437473a071bb281937c1a8ed2005c1630aa"
+    },
+    "net/resolver_aros.c": {
+      "export_sha256": "9625a9a4f834d69e6ceab16cb3e5c724656ff6c9628b435a0d1002f0877aba9f",
+      "source_sha256": "d2ccaf6d180742e7efbdca5d4698d50d3013a07aada80e63a3fdfb71b386877e"
+    },
+    "net/resolver_native.h": {
+      "export_sha256": "b6abf5fe8698777d125b371c534db51355b514679bef6082d0c13772e7775174",
+      "source_sha256": "39ff4811065335848380a41071ba72fb6996a60255a77033cb20cc509af5779e"
+    },
+    "net/socket.c": {
+      "export_sha256": "55aff74530998af11c7da19da3411ace5b59d2b4bc51803d73f5037aafa99ace",
+      "source_sha256": "9c0d89becde405ffa5739fce6d1c3dfaf0abce5648feec9042115aa722df2708"
+    },
+    "net/socket_aros.c": {
+      "export_sha256": "c4bca10dd9f103fac5b53c7f5dc4668cf6cc393069c6a51653938c0dee680cfd",
+      "source_sha256": "3e9a93077c7f7b085617cff001cefc8dfe0ee89396f844cb150369172619ee62"
+    },
+    "net/socket_native.h": {
+      "export_sha256": "b4d50e26cc9cb7c69b63fce90eb0aa7516502c02cfdf66bcc4f85bc490bb6efc",
+      "source_sha256": "02284c42694956b5c6a380120bd6fee3e4a66b0f1a8099b5390a17b576993431"
+    },
+    "net/tests/README.md": {
+      "export_sha256": "3c2c0f6f32bc6f9fdfd458732ee02649dce85c48b69f9a641085d528180f2dbb",
+      "source_sha256": "51ab4b113afc2046660c7beea467593997071c22e8b3d3dd9cbbb788ef892cbf"
+    },
+    "net/tests/alloc_hooks.h": {
+      "export_sha256": "7e40d2b153ea0ee22053a129b142965792a36cb221f92bb1b792c2fb96578731",
+      "source_sha256": "ee319f4b376fa7c8e679732105bc94e460d703c32908d7e16cef6bd09f9162b7"
+    },
+    "net/tests/include/resolver_native.h": {
+      "export_sha256": "6e486755642567b30a7f8eedb035a2c50d12938ac3d1080b528c5eb9fe59a984",
+      "source_sha256": "f792c54ffc0b9fdbe87a1edfbb153b0ac45b9c6ab4e6b0b3fdad3d9dc6b0ada2"
+    },
+    "net/tests/resolver_host.c": {
+      "export_sha256": "adaa752229bade2be9ecbe571c787c9ba67eeb18de3bec93da97d1ed60b712e4",
+      "source_sha256": "1e6bd3bf69003de7b8473ccbb27a4d75af4cffccfbce7da620648cfe44f2b17f"
+    },
+    "net/tests/run.py": {
+      "export_sha256": "50d9a4ec32da52817eaecb0e089700d695cdcea2aa335fdee86e80f5c5191692",
+      "source_sha256": "029cf122d53e0a28120a7db50ee3a324b8b8e064b6ab4081ad6cb9efaf638972"
+    },
+    "net/tests/socket/README.md": {
+      "export_sha256": "72cb5a241ef1cf89e77ea21b2dda0b6f41f8675896494f2229cb43a121d2f40c",
+      "source_sha256": "b59faeae915197a065d917731d646c1432d2a53a1ca17997face0687606b35ea"
+    },
+    "net/tests/socket/bridge_aros_host.c": {
+      "export_sha256": "fc45e4100d230a292854dd15118b5a52456c0b11a7c25799c15747ba6fe1f32e",
+      "source_sha256": "68020f3d58361a75d02823a83835b7d65334c65356edbcea006d7064829a29d2"
+    },
+    "net/tests/socket/bridge_host.c": {
+      "export_sha256": "ef93133c0b3e4cb50220d9785cadf43dabf63c7e2adb190568ea355d5a9dd4d4",
+      "source_sha256": "91c42ddc582137f1a5fed0bbe5af422adaeb816ad9c12d4756d6f5cff6f4352e"
+    },
+    "net/tests/socket/include/aros/libcall.h": {
+      "export_sha256": "e5bacec8d90bee7fb11a0ff24088e0bdb094421ae37d24cece39749ed0f13763",
+      "source_sha256": "2ac57a59c8027d422b8a62d53fc4967e4e0b2ae7d031749dcb3383fcdeec08af"
+    },
+    "net/tests/socket/include/exec/libraries.h": {
+      "export_sha256": "50e34bd8cbe0053f25a251d5a4b475ca3fe58363b597a0758b04bb0806b8a71e",
+      "source_sha256": "232bd626408cb4b2ab514076db3c0d1554bc6da95eafebe0cebbff661761f13f"
+    },
+    "net/tests/socket/include/exec/types.h": {
+      "export_sha256": "3972d34760a0b2436f2fe3f40e59d4db853dcb5e619b8a38c3a4150bc92b187a",
+      "source_sha256": "9ccc2e1d8e0fa3ae9008e60c8259a420b56e514eb7278d2e659a81c6d1a79998"
+    },
+    "net/tests/socket/include/netinet/in.h": {
+      "export_sha256": "a6383a74537c6eba197893d22a4022153c633c2334f68c3d285e57689e7d0109",
+      "source_sha256": "6a7292c402e8dc5ac3516fe18f6a21cac159668c6a793a665877387e45b8ea45"
+    },
+    "net/tests/socket/include/proto/exec.h": {
+      "export_sha256": "2a5105a848add4acbaac01e61ead3dd7b60b17ea4083101f39426865754bd959",
+      "source_sha256": "4de3ae80074ee10aadda56ad9920c4afcfa329fb9c63bfc1bf7701c34fa63c8a"
+    },
+    "net/tests/socket/include/sys/socket.h": {
+      "export_sha256": "15952b701b506c85f2e4aa8d763e643ab1b266b028ea560012473772b73d2358",
+      "source_sha256": "2ba5e8b5432beba2de5316edda1f3cab7fbfa1e13a97042d269bc3d9dfa99bc8"
+    },
+    "net/tests/socket/run.py": {
+      "export_sha256": "2e42c4648f45f195379f0882365b00c84130cad157f7e6ebd2c5259ebdf536a5",
+      "source_sha256": "0dc6f8f6f29ff367d7a1dfdfb63cbf5393adab4c769d77e711579be8b72a8a4e"
+    },
+    "network-probe.rs": {
+      "export_sha256": "2a511bed548c4c8845cef024cca73d9ff6ad9492658d9e15ba429c07d7f04b45",
+      "source_sha256": "2fd2f78caf0c452f04ba7a9ccd6b8a972b34cff57a78770bf444a8bd23153c2f"
+    },
+    "poll-probe.rs": {
+      "export_sha256": "40f4741a654ec3cd7f76aa3cd9ea7da62d4d7f6d678cd0ff3ae631dc0c5ac120",
+      "source_sha256": "762af57758dd3484fa6121b9e8571179dc885796b71fa155694cabf2ca1a02d5"
+    },
+    "probe.rs": {
+      "export_sha256": "c0bb0e803c36435e4bbe9f8c1421bc25afb4871fcc54a2b2187b31e720c5949d",
+      "source_sha256": "a1bb6a495fbf96e0430da5075798fb3a09154df6acd5689bd40b5653c9ab33ac"
+    },
+    "rust-src-aros.diff": {
+      "export_sha256": "0ad707386585dd60b15deb47b170bdb89e7e7d4754e1ae077e171e2d70c345bd",
+      "source_sha256": "0ad707386585dd60b15deb47b170bdb89e7e7d4754e1ae077e171e2d70c345bd"
+    },
+    "source-files.json": {
+      "export_sha256": "2a0ecfa122df3ad5b036bce6bd1efc03f2b0646c53b20bf0cd65905f1bf06f9e",
+      "source_sha256": "2a0ecfa122df3ad5b036bce6bd1efc03f2b0646c53b20bf0cd65905f1bf06f9e"
+    },
+    "sys/stack.c": {
+      "export_sha256": "ddbcead1a68f31a965a017f97683d0537514c192f108bb312cad817941e9ecae",
+      "source_sha256": "f8bbed14d19d87b1b572d91f495491e4e496e362bcb7be16e07dfb0de236ab5c"
+    },
+    "sys/test-host.c": {
+      "export_sha256": "59a3f4f502d157a4bc192dc6ee481428bccdf3f36854046ade223e3bf9e4ecca",
+      "source_sha256": "a5393aa4e29d4e2d8b284dd7974d9538eddecb892984ecf43c7fb32e766fd41d"
+    },
+    "sys/test.py": {
+      "export_sha256": "1a80e51f24a8a621420bfeb9e446c97ecbecfe1f9858630d301267db14b48146",
+      "source_sha256": "f1fc39d88dabe988298c1165cd47dde2c034f3e72e8e6199df3a585ed8e5e272"
+    },
+    "sys/unavailable.c": {
+      "export_sha256": "c33c4e42e2949d37e41c1773212b3e469b04a650536941a480ca75a0d03a13dc",
+      "source_sha256": "2acbe117500b0d39c1e0bbea8482b813e64f8c7f288623583216657a89cdc314"
+    }
+  },
+  "schema": 1,
+  "source_directory": "toolchain",
+  "source_repository": "https://github.com/pomaros/rust-aros.git",
+  "source_revision": "7eb97255e5df4c962d791685b0f4c44e0a7a4a78",
+  "transformations": "APL notices for owned integration files; authoritative core socket header paths; core command paths in documentation"
+}

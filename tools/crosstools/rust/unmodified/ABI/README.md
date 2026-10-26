@@ -19,9 +19,14 @@ outside all three input trees. The tool records commands, diagnostics, generated
 C/Rust sources, objects, extracted bytes, and a JSON comparison. It fingerprints
 the consumed SDK headers and std/tool inputs and verifies them after compilation.
 
+The poll native contract header is copied from the source tree (or
+`--native-header`) into private output, allowing an ABI check before SDK
+installation without modifying shared headers.
+
 The records cover sizes, alignment, member offsets and member sizes for socket
 addresses, resolver records, scatter/gather messages, ancillary message headers,
-linger and timeout records, plus socket options, protocol identifiers and ioctl
+linger, timeout and pollfd records, plus nfds_t/short widths, poll event bits,
+socket options, protocol identifiers and ioctl
 values. `MSG_NOSIGNAL` is an optional capability: absence in both SDK and Rust is
 reported as unsupported. A Rust value with no native counterpart fails.
 
@@ -42,3 +47,17 @@ archives and links them explicitly into one relocatable object. This forces
 collisions that ordinary lazy archive extraction could hide. It rejects Rust
 crate definitions of the unavailable C interfaces and, with `--binary FILE`,
 requires exactly one native provider for the probed application calls.
+
+The native AArch64 declarations include `pthread_condattr_t.cond_clock` from
+`pthread.h`. Its attribute storage and field offsets must match the SDK; a
+smaller declaration would let native initialization overwrite the caller's
+allocation. File metadata, time types and pthread attributes require exact
+layout checks when updating the SDK. The mutex, condition, rwlock and semaphore
+facades use overallocated aligned storage for pointer-only calls; sufficient
+storage does not establish compatibility for embedding those types in C structs
+or passing arrays whose stride is the native type size.
+
+The layout gate also compares `pthread_condattr_t`, both field offsets/sizes,
+`clockid_t` and the realtime/monotonic clock constants against the actual SDK.
+A stale std libc without the condition-clock field must fail qualification;
+matching socket layouts alone cannot establish thread ABI agreement.

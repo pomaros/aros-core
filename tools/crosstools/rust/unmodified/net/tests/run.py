@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (C) 2026, John KNIPPER <code@jkn.me>.
-# Licensed under the AROS Public License (APL) Version 1.1.
+# Licensed under the AROS Public License (APL) Version 1.1
 """Compile the actual resolver conversion with LP64 AROS mocks and sanitizers."""
 import argparse
 import hashlib

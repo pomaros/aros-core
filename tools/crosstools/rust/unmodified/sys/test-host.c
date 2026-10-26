@@ -1,5 +1,5 @@
 /* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
-   Licensed under the AROS Public License (APL), Version 1.1. */
+   Licensed under the AROS Public License (APL) Version 1.1 */
 #include <assert.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -13,17 +13,16 @@ static void *worker(void *arg)
     for (int i = 0; i < 512; ++i) {
         char name[] = "RAM:unchanged-XXXXXX";
         errno = EINVAL;
-        assert(aros_rs_poll(NULL, 0, 0) == -1 && errno == ENOSYS);
-        errno = EINVAL;
         assert(aros_rs_fork() == (intptr_t)-1 && errno == ENOSYS);
         errno = EINVAL;
         assert(aros_rs_if_nametoindex("unavailable") == 0 && errno == ENOSYS);
         errno = EINVAL;
-        assert(aros_rs_mkdtemp(name) == NULL && errno == ENOSYS);
-        assert(strcmp(name, "RAM:unchanged-XXXXXX") == 0);
-        errno = EINVAL;
         assert(aros_rs_gethostname(name, sizeof(name)) == -1 && errno == ENOSYS);
         assert(strcmp(name, "RAM:unchanged-XXXXXX") == 0);
+        errno = EINVAL;
+        assert(aros_rs_ttyname_r(-1, name, sizeof(name)) == ENOSYS && errno == EINVAL);
+        assert(strcmp(name, "RAM:unchanged-XXXXXX") == 0);
+        assert(aros_rs_ttyname_r(-1, NULL, 0) == ENOSYS && errno == EINVAL);
         errno = EINVAL;
         assert(aros_rs_mmap(NULL, 1, 0, 0, -1, 0) == (void *)(intptr_t)-1 && errno == ENOSYS);
     }

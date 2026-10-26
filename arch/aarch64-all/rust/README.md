@@ -1,13 +1,14 @@
 # Rust target for native AArch64 AROS
 
-`aarch64-unknown-aros.json` is the target of every native AArch64 AROS build:
+`aarch64-unknown-aros.json` is the kernel-side target for native AArch64 AROS:
 Apple Silicon, the PomAROS VM and QEMU guests, and later Raspberry Pi. It is
 the PomAROS Hosted target (`pomaros-hosted/hosted/rust/`) without
 `+reserve-x18`: native AROS treats x18 as an ordinary register, and only
 hosted AROS, which calls macOS directly, reserves it.
 
 A stock nightly builds for it with `-Zbuild-std=core,alloc` (kernel-side
-code) or with the AROS `std` of `jonx/rust-aros`. Code is static, uses the
+code) for kernel modules. User-space std and its matching target are installed by
+`tools/crosstools/rust/unmodified/`, using the official nightly compiler. Code is static, uses the
 large code model and no thread-local storage, aborts on panic, and produces
 GOT-free relocations that `LoadSeg` and the module loader accept.
 

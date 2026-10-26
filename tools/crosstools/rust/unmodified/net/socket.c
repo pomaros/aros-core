@@ -1,6 +1,6 @@
 /*
     Copyright (C) 2026, John KNIPPER <code@jkn.me>.
-    Licensed under the AROS Public License (APL) Version 1.1.
+    Licensed under the AROS Public License (APL) Version 1.1
 */
 #include "socket_native.h"
 #include <sys/types.h>
@@ -8,6 +8,8 @@
 #include <netinet/in.h>
 #include <errno.h>
 #include <stdint.h>
+#include <fcntl.h>
+#include <stdlib.h>
 #include <string.h>
 
 static ssize_t invoke(struct aros_socket_request *request)
@@ -243,4 +245,79 @@ ssize_t aros_rs_recvfrom(int fd, void *buffer, size_t length, int flags,
         .arg0 = flags, .buffer = buffer, .length = length,
         .address = address, .address_length = address_length};
     return invoke(&request);
+}
+
+/* POSIX band events, with BSD values. The native batch knows three
+   readiness kinds, IN, PRI and OUT: normal data is IN (POLLWRNORM is POLLOUT
+   itself) and priority band data is PRI, as on BSD sockets. These sockets
+   have no write bands, so POLLWRBAND is never reported. */
+#define AROS_RS_POLLRDNORM 0x40
+#define AROS_RS_POLLRDBAND 0x80
+#define AROS_RS_POLLWRBAND 0x100
+#define AROS_RS_POLLBANDS (AROS_RS_POLLRDNORM | AROS_RS_POLLRDBAND | AROS_RS_POLLWRBAND)
+
+static WORD native_events(WORD events)
+{
+    WORD native = (WORD)(events & (AROS_POLL_IN | AROS_POLL_PRI | AROS_POLL_OUT));
+    if (events & AROS_RS_POLLRDNORM) native = (WORD)(native | AROS_POLL_IN);
+    if (events & AROS_RS_POLLRDBAND) native = (WORD)(native | AROS_POLL_PRI);
+    return native;
+}
+
+static WORD posix_revents(WORD asked, WORD native)
+{
+    WORD revents = (WORD)(native & (AROS_POLL_ERR | AROS_POLL_HUP | AROS_POLL_NVAL));
+    revents = (WORD)(revents | (native & asked & (AROS_POLL_IN | AROS_POLL_PRI | AROS_POLL_OUT)));
+    if ((asked & AROS_RS_POLLRDNORM) && (native & AROS_POLL_IN))
+        revents = (WORD)(revents | AROS_RS_POLLRDNORM);
+    if ((asked & AROS_RS_POLLRDBAND) && (native & AROS_POLL_PRI))
+        revents = (WORD)(revents | AROS_RS_POLLRDBAND);
+    return revents;
+}
+
+/* pollfd is kept as its exact C/libc scalar ABI, not an fd_set or host tag.
+   A set that asks for band events goes to the stack as a translated copy, so
+   the caller's events stay as given and revents holds only what it asked. */
+int aros_rs_poll(struct aros_socket_pollfd *fds, unsigned int count, int timeout)
+{
+    struct aros_socket_request request = {.operation = AROS_SOCKET_POLL_BATCH,
+        .arg1 = timeout, .buffer = fds, .length = count};
+    struct aros_socket_pollfd *native = fds;
+    int result, saved_errno;
+    unsigned int i;
+    if (count && !fds) { errno = EFAULT; return -1; }
+    if (timeout < -1) { errno = EINVAL; return -1; }
+    for (i = 0; i < count && !(fds[i].events & AROS_RS_POLLBANDS); i++)
+        ;
+    if (i < count) {
+        native = malloc((size_t)count * sizeof(*native));
+        if (!native) { errno = ENOMEM; return -1; }
+        for (i = 0; i < count; i++) {
+            native[i].fd = fds[i].fd;
+            native[i].events = native_events(fds[i].events);
+            native[i].revents = 0;
+        }
+        request.buffer = native;
+    }
+    result = (int)invoke(&request);
+    if (native != fds) {
+        saved_errno = errno;
+        if (result >= 0)
+            for (i = 0; i < count; i++)
+                fds[i].revents = posix_revents(fds[i].events, native[i].revents);
+        free(native);
+        errno = saved_errno;
+    }
+    if (result < 0) return -1;
+    /* stdin/out/err are task-local POSIX slots, unlike global socket numbers.
+       The stack cannot identify them: refuse valid local slots explicitly. */
+    for (i = 0; i < count; i++) {
+        if ((fds[i].revents & AROS_POLL_NVAL) && fds[i].fd >= 0 && fds[i].fd <= 2) {
+            int saved_errno = errno;
+            if (fcntl(fds[i].fd, F_GETFD) >= 0) { errno = EOPNOTSUPP; return -1; }
+            if (errno != EBADF) return -1;
+            errno = saved_errno;
+        }
+    }
+    return result;
 }

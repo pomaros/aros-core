@@ -1,5 +1,5 @@
 /* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
-   Licensed under the AROS Public License (APL), Version 1.1. */
+   Licensed under the AROS Public License (APL) Version 1.1 */
 #include <aros/debug.h>
 #include <libraries/posixc.h>
 void aros_rs_consumer_trace(const char *event) { bug("[RUSTAPP_TRACE] %s\n", event); }

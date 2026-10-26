@@ -1,6 +1,6 @@
 /*
     Copyright (C) 2026, John KNIPPER <code@jkn.me>.
-    Licensed under the AROS Public License (APL) Version 1.1.
+    Licensed under the AROS Public License (APL) Version 1.1
 */
 #define __BSDSOCKET_NOLIBBASE__
 #include <exec/libraries.h>

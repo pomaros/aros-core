@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (C) 2026 John KNIPPER <code@jkn.me>.
-# Licensed under the AROS Public License (APL), Version 1.1.
+# Licensed under the AROS Public License (APL) Version 1.1
 """Prepare official host tools and install the native AROS Rust SDK in a dedicated prefix."""
 import argparse
 import hashlib
@@ -16,7 +16,7 @@ import urllib.request
 
 sys.dont_write_bytecode = True
 
-from build import HERE, PIN, COMMIT, TOOLCHAIN, digest, run
+from build import HERE, PIN, COMMIT, TOOLCHAIN, MIN_BUILD_FREE, digest, run
 
 
 def write(path, text, executable=False):
@@ -55,6 +55,19 @@ def component(item, cache, offline):
     return roots[0]
 
 
+def native_build_command(compiler, cargo, stock, native, args):
+    """Pass the explicit worker bound through to the actual std builder."""
+    if args.jobs < 1:
+        raise ValueError("jobs must be positive")
+    command = [str(HERE / 'build.py'), '--rustc', str(compiler), '--cargo', str(cargo),
+               '--rust-src', str(stock), '--output', str(native), '--sdk', str(args.sdk.resolve()),
+               '--crosstools', str(args.crosstools.resolve()),
+               '--collect-aros', str(args.collect_aros.resolve()), '--jobs', str(args.jobs)]
+    if args.posix_stubs:
+        command += ['--posix-stubs', str(args.posix_stubs.resolve())]
+    return command
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     for name in ('prefix', 'work', 'sdk', 'crosstools', 'collect-aros'):
@@ -65,7 +78,10 @@ def main():
     p.add_argument('--std-build', type=Path, help='install an existing matching native std qualification output')
     p.add_argument('--posix-stubs', type=Path, help='private matching import archive for an older read-only SDK')
     p.add_argument('--offline', action='store_true')
+    p.add_argument('--jobs', type=int, default=1, help='positive Cargo worker bound (default: 1)')
     a = p.parse_args()
+    if a.jobs < 1:
+        p.error('--jobs must be positive')
     if sys.version_info < (3, 12):
         p.error("Python 3.12 or newer is required for filtered archive extraction")
     prefix, work = a.prefix.resolve(), a.work.resolve()
@@ -82,9 +98,9 @@ def main():
     if prefix.exists() and not (prefix / 'aros-official-rust.json').is_file():
         p.error('an existing prefix must be a managed AROS official Rust installation')
     ancestor = next(x for x in work.parents if x.is_dir())
-    required = 32 * 1024**2 if a.std_build and a.host_root else 5 * 1024**3
+    required = 32 * 1024**2 if a.std_build and a.host_root else MIN_BUILD_FREE
     if shutil.disk_usage(ancestor).free < required:
-        p.error('insufficient disk space: building requires 5 GiB; installing existing artifacts requires 32 MiB')
+        p.error('insufficient disk space: building requires 6 GiB; installing existing artifacts requires 32 MiB')
     work.mkdir(parents=True, exist_ok=True)
     cache = work / 'components'
     cache.mkdir(exist_ok=True)
@@ -131,11 +147,7 @@ def main():
     key = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
     native = a.std_build.resolve() if a.std_build else work / ('native-' + key[:20])
     if not (native / 'result.json').is_file():
-        command = [str(HERE / 'build.py'), '--rustc', str(compiler), '--cargo', str(cargo),
-                   '--rust-src', str(stock), '--output', str(native), '--sdk', str(a.sdk.resolve()),
-                   '--crosstools', str(a.crosstools.resolve()), '--collect-aros', str(a.collect_aros.resolve())]
-        if a.posix_stubs:
-            command += ['--posix-stubs', str(a.posix_stubs.resolve())]
+        command = native_build_command(compiler, cargo, stock, native, a)
         run([sys.executable, *command], log=work / 'std-build.log')
     result = json.loads((native / 'result.json').read_text())
     if (result.get('native_link') != 'PASS' or result['compiler_sha256'] != digest(compiler)
@@ -183,8 +195,18 @@ def main():
                              ('aarch64-aros-cc', native / 'aarch64-aros-cc'),
                              ('rustdoc', host / 'bin/rustdoc')):
         arguments = [str(executable)]
+        if name == 'rustc':
+            # Invoke the official binary directly: an intermediate /bin/sh
+            # clears DYLD_* variables on Darwin before it reaches rustc.
+            arguments = [str(compiler), '--sysroot', str(native / 'sysroot')]
         if name == 'rustdoc':
             arguments += ['--sysroot', str(native / 'sysroot')]
+        # Official Darwin rust-objcopy looks for libLLVM through a relative
+        # rpath that misses the compiler's top-level lib directory. Keep all
+        # upstream binaries unchanged and supply that directory to child
+        # loader lookups, scoped to this SDK invocation only.
+        if a.host_triple.endswith('-apple-darwin') and name in ('rustc', 'cargo', 'rustdoc'):
+            arguments = ['env', 'DYLD_FALLBACK_LIBRARY_PATH=' + str(host / 'lib'), *arguments]
         write(prefix / 'bin' / name, '#!/bin/sh\nexec ' + shlex.join(arguments) + ' "$@"\n', True)
     write(prefix / 'cargo-config.toml', '[target.aarch64-unknown-aros]\nlinker = ' +
           json.dumps(str(prefix / 'bin/aarch64-aros-cc')) + '\nrustflags = [' +

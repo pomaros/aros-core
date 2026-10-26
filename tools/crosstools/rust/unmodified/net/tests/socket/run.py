@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (C) 2026, John KNIPPER <code@jkn.me>.
-# Licensed under the AROS Public License (APL) Version 1.1.
+# Licensed under the AROS Public License (APL) Version 1.1
 """Run actual socket bridge and AROS adapter against synchronous host mocks."""
 import argparse
 import hashlib
@@ -16,10 +16,7 @@ import sys
 def main():
     here = Path(__file__).resolve().parent
     net = here.parents[1]
-    core = here.parents[6]
-    default_native = core / 'workbench/network/common/include/bsdsocket/native.h'
-    if not default_native.is_file():
-        default_native = core.parent / 'aros-core-rust-native-handles/workbench/network/common/include/bsdsocket/native.h'
+    default_native = net.parent.parents[3] / 'workbench/network/common/include/bsdsocket/native.h'
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True, help='fresh artifact directory')
     parser.add_argument('--cc', default=os.environ.get('CC', 'clang'))
@@ -46,7 +43,7 @@ def main():
         shutil.copy2(p, destination)
     native_include = snapshots / 'native-contract'
     common = [args.cc, '-std=c11', '-Wall', '-Wextra', '-Werror', '-g', '-O1',
-              '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
+              '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-Dfcntl=aros_fixture_fcntl',
               '-I' + str(here / 'include'), '-I' + str(native_include), '-I' + str(net)]
     commands = [[args.cc, '--version']]
     for production, fixture, binary in [('socket.c', 'bridge_host.c', 'socket-host'),

@@ -16,12 +16,15 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import struct
 import subprocess
 import sys
 
 
 LAYOUTS = {
+    "pthread_condattr_t": "pshared cond_clock",
+    "pollfd": "fd events revents",
     "sockaddr": "sa_len sa_family sa_data",
     "sockaddr_in": "sin_len sin_family sin_port sin_addr sin_zero",
     "sockaddr_in6": "sin6_len sin6_family sin6_port sin6_flowinfo sin6_addr sin6_scope_id",
@@ -41,10 +44,11 @@ IPPROTO_IP IPPROTO_ICMP IPPROTO_ICMPV6 IPPROTO_TCP IPPROTO_UDP IPPROTO_IPV6
 TCP_NODELAY IP_TTL IP_MULTICAST_TTL IP_MULTICAST_LOOP IP_ADD_MEMBERSHIP
 IP_DROP_MEMBERSHIP IPV6_MULTICAST_LOOP IPV6_V6ONLY IPV6_JOIN_GROUP
 IPV6_LEAVE_GROUP MSG_PEEK MSG_NOSIGNAL SHUT_RD SHUT_WR SHUT_RDWR
-FIONBIO FIONREAD FIOCLEX FIONCLEX EAI_SYSTEM
+FIONBIO FIONREAD FIOCLEX FIONCLEX EAI_SYSTEM CLOCK_REALTIME CLOCK_MONOTONIC
+POLLIN POLLPRI POLLOUT POLLERR POLLHUP POLLNVAL
 ENOSYS EINVAL EBADF EAFNOSUPPORT EOPNOTSUPP EWOULDBLOCK ECONNREFUSED
 """.split()
-TYPES = "c_int c_long size_t socklen_t sa_family_t pid_t".split()
+TYPES = "c_int c_short c_long size_t socklen_t sa_family_t pid_t nfds_t clockid_t".split()
 HEADER = "// Copyright (C) 2026 John KNIPPER <code@jkn.me>\n// Licensed under the AROS Public License (APL) Version 1.1\n"
 
 
@@ -73,24 +77,25 @@ def records():
     values = []
     for name, fields in LAYOUTS.items():
         group = "resolver_bridge" if name == "addrinfo" else "direct"
-        values.extend([(group, name + ".size", f"sizeof(struct {name})",
+        ctype = name if name.endswith("_t") else "struct " + name
+        values.extend([(group, name + ".size", f"sizeof({ctype})",
                         f"size_of::<libc::{name}>()"),
-                       (group, name + ".align", f"_Alignof(struct {name})",
+                       (group, name + ".align", f"_Alignof({ctype})",
                         f"align_of::<libc::{name}>()")])
         for field in fields.split():
             values.append((group, name + "." + field + ".offset",
-                           f"__builtin_offsetof(struct {name}, {field})",
+                           f"__builtin_offsetof({ctype}, {field})",
                            f"offset_of!(libc::{name}, {field})"))
             values.append((group, name + "." + field + ".size",
-                           f"sizeof(((struct {name} *)0)->{field})",
+                           f"sizeof((({ctype} *)0)->{field})",
                            f"field_size!(libc::{name}, {field})"))
     for name in CONSTANTS:
         values.append(("direct", name, name, f"libc::{name}"))
     for name in TYPES:
-        cname = {"c_int": "int", "c_long": "long"}.get(name, name)
+        cname = {"c_int": "int", "c_short": "short", "c_long": "long", "nfds_t": "unsigned int"}.get(name, name)
         values.append(("direct", name + ".size", f"sizeof({cname})",
                        f"size_of::<libc::{name}>()"))
-    return values
+    return [(g,n,c.replace("struct pollfd", "struct aros_socket_pollfd"),r) for g,n,c,r in values]
 
 
 def main():
@@ -98,6 +103,8 @@ def main():
     for name in ("sdk", "crosstools", "std-build", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--application-libc-rlib", type=Path)
+    parser.add_argument("--native-header", type=Path,
+        default=Path(__file__).resolve().parents[5] / "workbench/network/common/include/bsdsocket/native.h")
     args = parser.parse_args()
     sdk, tools, build, output = (getattr(args, n).resolve()
                                   for n in ("sdk", "crosstools", "std_build", "output"))
@@ -115,10 +122,17 @@ def main():
     wrapper, target = build / "rustc", build / "aarch64-unknown-aros.json"
     output.mkdir(parents=True)
     inputs = {str(p): digest(p) for p in (core, libc, wrapper, target, build / "result.json")}
+    native_header = args.native_header.resolve()
+    inputs[str(native_header)] = digest(native_header)
+    private_include = output / "include/bsdsocket"
+    private_include.mkdir(parents=True)
+    shutil.copyfile(native_header, private_include / "native.h")
     entries = records()
     c = HEADER + "\n".join("#include <" + name + ">" for name in (
         "errno.h", "sys/types.h", "sys/socket.h", "sys/uio.h", "sys/time.h", "sys/ioctl.h",
-        "netinet/in.h", "netinet/tcp.h", "netdb.h"))
+        "netinet/in.h", "netinet/tcp.h", "netdb.h", "bsdsocket/native.h", "pthread.h", "time.h"))
+    for name in ("IN", "PRI", "OUT", "ERR", "HUP", "NVAL"):
+        c += "\n#define POLL" + name + " AROS_POLL_" + name
     c += '\n__attribute__((used,section(".aros_abi")))\nconst unsigned long ABI[] = {\n'
     for entry in entries:
         if entry[1] in CONSTANTS:
@@ -170,7 +184,7 @@ macro_rules! field_size {
         rust = rust.replace("(libc::MSG_NOSIGNAL) as u64", "u64::MAX")
         (output / "rust.rs").write_text(rust)
     cflags = [str(tools / "bin/clang"), "--target=aarch64-unknown-aros", "-std=c11",
-              "-D_BSD_SOURCE=1", "-I" + str(sdk / "include/aros/posixc"),
+              "-D_BSD_SOURCE=1", "-I" + str(output / "include"), "-I" + str(sdk / "include/aros/posixc"),
               "-I" + str(sdk / "include/aros/stdc"), "-I" + str(sdk / "include")]
     deptext = command(cflags + ["-M", str(output / "native.c")], output, "dependencies")
     headers = shlex.split(deptext.replace("\\\n", " ").split(":", 1)[1])
