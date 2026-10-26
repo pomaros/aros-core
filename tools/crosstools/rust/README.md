@@ -56,9 +56,18 @@ the JSON target, native linker and aborting panics. Cargo consumers use
 `%rust_cargo_config`, which selects the JSON target and enables Cargo's nightly
 JSON-target interface. `RUST_TARGET_TRIPLE` is an identifier for target tables
 and output directories; it is not a built-in rustc target in this profile.
-Loading the installed Cargo config selects AROS for all Cargo commands that
-load it. Run host tests without that config, or override `--target` with the
+`$(RUST_CARGO)` loads the installed SDK Cargo configuration as well as the
+crate-store configuration for the official profile. Its SDK generation flags
+participate in Cargo dependency fingerprints even when a consumer supplies
+another project configuration. Loading that installed configuration selects
+AROS for all Cargo commands that load it. Run host tests without that config, or override `--target` with the
 host triple; host build scripts/proc macros are still compiled for the host.
+
+`tests/cargo-sdk-fingerprint.py --std-build BUILD --cargo CARGO` exercises the
+actual core Cargo command with a qualified custom sysroot and an offline
+no-dependency library. It checks an omitted-SDK-config refusal, a same-generation
+cache hit and changed-generation recompilation while retaining project flags.
+The generation markers are test inputs; the test performs no target execution.
 
 The native application libc patch is an immutable generated snapshot from
 `pomaros/rust-aros`, recorded by `crates/NATIVE-LIBC-ORIGIN.json`. The standard
@@ -75,7 +84,7 @@ admitted patch SHA-256. Rust configuration refuses a failed admission, and the
 libc target checks again before its fetch recipe, including parallel and cached
 invocations. The toolchain origin binds the application patch and origin hashes;
 changing both application files cannot satisfy the pinned binding. A different
-patch selects a different store, isolating filename-based applied markers. Its libc
+patch selects a different store, isolating filename-based applied markers. The libc
 0.2.190 patch uses the same AROS declarations and native adapter aliases as
 std's locked libc 0.2.189, with the macro spelling required by each release.
 Both libc versions contain FFI declarations for unavailable calls, rather than
