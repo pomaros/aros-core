@@ -11,6 +11,13 @@ implementations where their contracts fit AROS; it does not identify AROS as
 Linux. Networking uses AROS libraries and descriptor ownership, and file I/O
 uses native DOS handles. There is no macOS or hosted-service fallback.
 
+The core's direct rustc flags and generated per-program Cargo configuration
+remap build, source, crate-store and Cargo-home paths to stable relative names.
+The installed SDK configuration is loaded alongside the program configuration,
+so custom-sysroot generation flags participate in Cargo fingerprints. The
+`tests/cargo-path-remap.py` and `tests/cargo-sdk-fingerprint.py` host checks use
+an explicitly supplied compiled std and offline Cargo; they do not rebuild std.
+
 ## Native AArch64 recipe
 
 `tools-crosstools-rust` prepares official host `rustc`, host `rust-std`, Cargo

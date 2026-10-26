@@ -3769,6 +3769,9 @@ endif
 	    $(ECHO) '' ; \
 	    $(ECHO) '[target.$(RUST_TARGET_TRIPLE)]' ; \
 	    $(ECHO) 'linker = "$(TARGET_RUST_LINKER)"' ; \
+	    $(ECHO) 'rustflags = [' ; \
+	    for f in $(RUST_REMAP_FLAGS) ; do $(ECHO) "    \"$$f\"," ; done ; \
+	    $(ECHO) ']' ; \
 	    $(ECHO) '' ; \
 	    $(ECHO) '[build]' ; \
 	    $(ECHO) 'target-dir = "%(targetdir)"' ; \
