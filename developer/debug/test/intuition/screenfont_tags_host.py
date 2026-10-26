@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+# Licensed under the AROS Public License (APL) Version 1.1.
 """Run actual screen font open bodies under ASan/UBSan; old code must fail."""
 from pathlib import Path
 import os
@@ -50,15 +52,22 @@ expect_tags=0;ext.tfe_Tags=NULL;assert(SafeReopenFont(&base,&p)==&source);source
 assert(source.tf_Accessors==4&&!forbidden&&fontcalls==8&&diskcalls==5);puts("PASS: tagged DPI preserved, null extension/tags untagged, synchronous accessor lifetime, memory/disk/bitmap paths");return 0;}
 '''
 def extract(text):
-    helper=''
-    marker=text.find('void ScreenFontTextAttr(')
-    if marker>=0:
-        end=text.index('{',marker)+1;depth=1
+    # Select complete font bodies, independent of unrelated pointer helpers
+    # inserted between the last font function and MakePointerFromData.
+    bodies=[]
+    for signature in ('void ScreenFontTextAttr(',
+                      'struct TextFont *OpenScaledScreenFont(',
+                      'struct TextFont *SafeReopenFont('):
+        start=text.find(signature)
+        if start < 0:
+            if signature.startswith('void ScreenFontTextAttr('):
+                continue  # Historical negative control predates this helper.
+            raise ValueError('missing production font function: '+signature)
+        end=text.index('{',start)+1;depth=1
         while depth:
             depth+=(text[end]=='{')-(text[end]=='}');end+=1
-        helper=text[marker:end]+'\n'
-    start=text.index('struct TextFont *OpenScaledScreenFont(')
-    return helper+text[start:text.index('\nObject *MakePointerFromData',start)]
+        bodies.append(text[start:end])
+    return '\n'.join(bodies)+'\n'
 def run(text,where,label):
     path=where/(label+'.c');exe=where/label;path.write_text(PRE+extract(text)+TEST)
     subprocess.run(['cc','-std=c99','-g','-O1','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer',str(path),'-o',str(exe)],check=True)
