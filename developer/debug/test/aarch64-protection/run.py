@@ -16,15 +16,19 @@ p.add_argument("--output", type=Path, required=True)
 p.add_argument("--page-bits", type=int, choices=(12, 14), default=12)
 args = p.parse_args()
 out = args.output.resolve()
-out.mkdir(parents=True, exist_ok=True)
 here = Path(__file__).resolve().parent
 core = here.parents[3]
+if out == core or core in out.parents:
+    p.error("output must be outside the source checkout")
+if out.exists() or args.output.is_symlink():
+    p.error("output must be a new directory")
 engine = core / "arch/aarch64-all/kernel"
 clang = os.environ.get("CLANG", shutil.which("clang"))
 lld = os.environ.get("LD_LLD", shutil.which("ld.lld"))
 qemu = os.environ.get("QEMU", shutil.which("qemu-system-aarch64"))
 if not all((clang, lld, qemu)):
     raise SystemExit("clang, ld.lld and qemu-system-aarch64 are required")
+out.mkdir(parents=True)
 
 def run(command):
     subprocess.run([str(x) for x in command], check=True, timeout=60)

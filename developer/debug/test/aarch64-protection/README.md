@@ -1,18 +1,20 @@
 # AArch64 protection engine and fault fixture
 
 The production engine is `arch/aarch64-all/kernel/setprotection.c`, exposed by
-`protection.h`. The Apple target's existing `setprotection.c` adapter compiles
-and calls it; hosted AArch64 continues to use its host implementation. The
-generic guarded-stack caller is `arch/aarch64-all/kernel/guarded_stack.c`.
+`protection.h`. Platform adapters supply mapping and synchronization policy.
+The generic guarded-stack caller is `arch/aarch64-all/kernel/guarded_stack.c`.
 
 ## Reproduce
 
 From the core checkout, with clang, ld.lld and qemu-system-aarch64 on PATH:
 
 ```sh
-python3 developer/debug/test/aarch64-protection/run.py --output developer/debug/test/aarch64-protection/artifacts/4k
-python3 developer/debug/test/aarch64-protection/run.py --page-bits 14 --output developer/debug/test/aarch64-protection/artifacts/16k
+python3 developer/debug/test/aarch64-protection/run.py --output /absolute/new-output-4k
+python3 developer/debug/test/aarch64-protection/run.py --page-bits 14 --output /absolute/new-output-16k
 ```
+
+Output must be a new directory outside the source checkout. MetaMake scans
+source subdirectories, including ignored build outputs.
 
 `CLANG`, `LD_LLD` and `QEMU` can override the executables. Output directories
 retain the executable images, host/serial logs, QEMU trace and JSON verdict.
@@ -58,106 +60,30 @@ guard in a separate block from that machinery. Allocation callbacks must not
 sleep; failed allocations may leave equivalent table splits but no permission
 change. One call changes one aligned page; no range-atomic promise is made.
 
-The Apple adapter uses the existing 4KB, 48-bit identity map and EL0-to-EL1
-supervisor callback. Stage two already pre-splits the mutable page arena;
-ordinary arena leaf changes therefore allocate no tables, even under pressure.
-Only MAIR index 0 (Device-nGnRnE) blocks may split live. Normal RAM blocks are
-rejected because they may contain executing code, stack or table aliases.
-Explicit shared-execution policy preserves AROS library text execution at both
-EL0 and EL1 while keeping it read-only. The generic default grants execute only
-at the requested privilege.
+## Product-controlled task proof
 
-The adapter rejects interrupt callers and builds with `__AROSEXEC_SMP__` until
-shared mapping locks and CPU quiescence exist. On this single-CPU target,
-`Forbid` protects the operation record; SVC exception entry masks interrupts
-during the actual walk. This is not a general SMP synchronization mechanism.
-The upstream native mapper's smaller roots and EL1 policy still need their own
-adapter; it is not silently replaced.
+A product owns guest composition, boot policy, debugger setup and transcript
+classification. Keep those drivers with the product, alongside its SDK and
+binary identities. The common core supplies the controlled Exec-task workload
+and the portable fault-matching checks; this directory's standalone EL1 run
+qualifies its own setup.
 
-The native `AROSAppleGuardedStackCreate/Destroy` binding allocates from the
-pre-split arena, guards 16KB, and retains backing on a failed restoration.
-`KrnFreePages` likewise uses the status-bearing internal protection API and
-does not free after a failed restore. These primitives are compiled into the
-kernel but are not yet connected to every Exec/DOS stack creator.
+The controlled workload requires an unguarded store, a fault attributed to the
+registered task and exact PC/FAR/exception attributes, restored stack registers,
+child continuation and parking, parent removal of the child, and successful
+stack release. Subsequent loader/ABI and startup completion must also succeed.
+Transcript checks require one loader boundary, exact single markers in order
+within each stream, successful runner exit, an empty diagnostic trace and no
+failure token after successful markers. A missing loader boundary is a failure;
+the complete serial stream must remain available for diagnosis. Separate serial
+and startup streams do not establish chronology between streams without an
+independent observation record.
 
-## Remaining MP1 acceptance work
-
-The spec's 16KB guard span is implemented over the current 4KB granule. Task
-stack allocation/free must adopt the new guarded-stack primitive, with bounds
-metadata for fault attribution. SMP activation requires the synchronization
-and quiescence mechanism described above.
-The opt-in native fixture is selected by the decimal `/chosen` property
-`aros,mp1-proof=1`. It creates an actual Exec task with a caller-owned 64KB
-stack and a 16KB guard, then uses the same assembly store for an unguarded
-control and the guarded probe. Recovery accepts only the registered task,
-exact probe PC/FAR, EL0 synchronous L3 write translation fault and expected
-stack registers. The fixed continuation restores the original SP before C.
-The child signals its parent and parks; the parent checks `TS_WAIT`, removes
-it, and only then releases its stack. Ordinary faults retain their existing
-handling. Host tests reject wrong task, PC, FAR and exception attributes.
-
-The native fixture passed a booted AROS run on 2026-10-15: no-guard control,
-exact task guard hit, resumed/parked child removal and parent continuation,
-then B2A W^X/unload and B2Q startup completion. QEMU exited zero and its
-`guest_errors,unimp` trace was empty. Its `[MP1] PASS` marker is conditional
-on both tasks and successful cleanup; it does not claim every task is
-protected. The run required the upstream-merge ELF loader correction that
-removes the obsolete final all-hunks RX pass (`ba3a9b0937`, equivalent to
-`9173c12a1a`). Without that fix the controlled task passed, but later DOS
-startup stalled: that earlier whole-lane verdict was a failure.
-
-The base profile logs deferred library opens and unavailable deadline timer
-before the proof, then passes its final startup checks. This evidence proves
-controlled task progress, not timer-driven fairness or hardware support.
-
-Every-task integration needs matching allocation and release changes in
-`NewCreateTaskA` and DOS `CreateNewProc`: their `tc_MemEntry` records currently
-own ordinary `AllocMem` stacks. An arena-backed pointer must not be placed in
-those records, because `FreeEntry` would call the wrong allocator. A separate
-stack ownership record and cleanup path, plus general fault attribution and
-termination, are still required.
-
-The standalone fixture proves descriptor/TLB/cache behavior and recoverable
-EL1 faults for its own setup. It does **not** meet MP1's every-task-stack,
-task-attribution or continued-AROS-operation requirements, and makes no Apple
-hardware or SMP validation claim. No `[MP1] PASS` line is emitted.
-
-## Reproduce the native controlled-task lane
-
-Use an **external** UP Apple build directory. MetaMake scans the source tree,
-including ignored directories, so placing build output under `artifacts/`
-causes generated makefiles to be mistaken for source. Initialize the pinned
-`rom/dos/catalogs` submodule before the build; `locale.library` needs its
-`catalog_version.h`. The AROS compiler prefix must have verified compiler-rt
-builtins; this runner does not install or modify that toolchain.
-
-After configuring `--target=apple-aarch64 --with-toolchain=llvm
---with-aros-toolchain=yes --with-aros-toolchain-install=PREFIX --without-x`,
-run `gmake -j2 apple-boot-payloads` in that external directory. Then:
-
-```sh
-python3 developer/debug/test/aarch64-protection/native.py \
-  --build /absolute/path/to/apple-build \
-  --integration /absolute/path/to/aros-apple-silicon \
-  --toolchain /absolute/path/to/aros-crosstools \
-  --output developer/debug/test/aarch64-protection/artifacts/native
-```
-
-The runner needs QEMU, `dtc`'s `fdtput`, GNU make and the integration loader's
-LLVM/LLD tools. `--firmware` overrides the Homebrew EDK2 default. It compiles
-the integration UEFI loader into its own output, builds the CLI ABI probe
-against this native SDK, packages the same 20 components as the integration
-base recipe, and injects the opt-in property into a private DTB. It never
-rebuilds or writes the integration checkout. The ABI producer is native;
-this does not claim parity with the separately locked hosted ABI corpus.
-
-`result.json`, `inputs.json`, `prepare.log`, `runner.log` and `run/` retain
-commands, component/firmware hashes and serial/semihost/QEMU evidence. A short
-transient directory avoids the UNIX socket path limit; evidence is copied
-back before cleanup. Acceptance requires each control/guard/continuation,
-B2A and B2Q marker exactly once, in order, exit zero and an empty QEMU trace.
-Every-task allocation, general overflow termination and SMP remain open as
-listed above.
+Every-task stack ownership and general overflow attribution/termination require
+separate acceptance. A caller-owned arena stack must not be added to an ordinary
+AllocMem/FreeEntry ownership list. SMP acceptance also requires the mapping
+synchronization and quiescence contract above. The standalone fixture emits no
+`[MP1] PASS` claim.
 
 ## Provenance
 
