@@ -5,14 +5,19 @@
 
 Exec pools, minlists and semaphores are host substitutes. Region algebra and
 128-rectangle/20-chunk pool allocator are production code, not bitmap mocks.
-Usage: preparedregions_host.py [--source CORE_CHECKOUT]
+Usage: preparedregions_host.py [--source CORE_CHECKOUT] [--output FRESH_DIRECTORY]
 """
 import argparse
+import contextlib
+import resource
+import signal
+import re
+import json
 from pathlib import Path
 import subprocess
 import tempfile
 import hashlib
-parser=argparse.ArgumentParser();parser.add_argument('--source',type=Path)
+parser=argparse.ArgumentParser();parser.add_argument('--source',type=Path);parser.add_argument('--output',type=Path)
 a=parser.parse_args();ROOT=a.source or Path(__file__).resolve().parents[4]
 def read(rel):return (ROOT/rel).read_text(encoding='latin1')
 def strip(s):return '\n'.join(x for x in s.splitlines() if not x.lstrip().startswith('#include'))+'\n'
@@ -154,12 +159,13 @@ int main(void){
    unsigned baseline=live;struct PreparedLayer p[N]={0};for(int i=0;i<N;i++)p[i].layer=&l[i];
    struct LayerGeometryRequest req[]={{&l[1],{4,3,19,17},NULL,0,NULL},{&l[4],{5,4,18,16},NULL,0,NULL},{&l[7],{2,2,15,14},NULL,0,NULL}};
    ordinal=0;failat=f;
-   BOOL ok=PrepareLayerRegions(p,N,req,3,&base);
-   if(!pass){assert(ok);attempts=ordinal;success(p);
+   struct LayerGeometryRefusal refusal={0};
+   BOOL ok=PrepareLayerRegions(p,N,req,3,&refusal,&base);
+   if(!pass){assert(ok&&!refusal.lgr_Check);attempts=ordinal;success(p);
     hardtrap=1;InstallPreparedLayerFields(p,N,FALSE);
     for(int i=0;i<N;i++)assert(l[i].shape==p[i].next.shape&&l[i].Width==p[i].next.width);
     InstallPreparedLayerFields(p,N,TRUE);hardtrap=0;
-   }else{assert(!ok&&denied==1);failures++;}
+   }else{assert(!ok&&denied==1);assert(refusal.lgr_Check==LGR_NO_MEMORY&&refusal.lgr_Value[1]==LGR_MEM_REGION&&refusal.lgr_Layer);failures++;}
    assert(!memcmp(before,l,sizeof l));
    for(int i=0;i<N;i++){
     assert(hashes[i][0]==hashregion(l[i].shape)&&hashes[i][1]==hashregion(l[i].visibleshape));
@@ -170,14 +176,18 @@ int main(void){
    /* Refuse active updates and unresolved changed hooks without mutations. */
    if(!pass){
     memset(p,0,sizeof p);for(int i=0;i<N;i++)p[i].layer=&l[i];l[1].Flags|=LAYERUPDATING;
-    assert(!PrepareLayerRegions(p,N,req,3,&base));ReleasePreparedLayerRegions(p,N,FALSE,&base);l[1].Flags&=~LAYERUPDATING;
+    refusal=(struct LayerGeometryRefusal){0};
+    assert(!PrepareLayerRegions(p,N,req,3,&refusal,&base));assert(refusal.lgr_Check==LGR_UPDATING&&refusal.lgr_Layer==&l[1]);ReleasePreparedLayerRegions(p,N,FALSE,&base);l[1].Flags&=~LAYERUPDATING;
     memset(p,0,sizeof p);for(int i=0;i<N;i++)p[i].layer=&l[i];l[1].shapehook=(void*)1;
-    assert(!PrepareLayerRegions(p,N,req,3,&base));ReleasePreparedLayerRegions(p,N,FALSE,&base);
+    refusal=(struct LayerGeometryRefusal){0};
+    assert(!PrepareLayerRegions(p,N,req,3,&refusal,&base));assert(refusal.lgr_Check==LGR_SHAPE_HOOK&&refusal.lgr_Layer==&l[1]);ReleasePreparedLayerRegions(p,N,FALSE,&base);
     memset(p,0,sizeof p);for(int i=0;i<N;i++)p[i].layer=&l[i];req[0].flags=LGT_RESOLVED_SHAPE;req[0].resolved_hook=l[1].shapehook;
-    assert(PrepareLayerRegions(p,N,req,3,&base));ReleasePreparedLayerRegions(p,N,FALSE,&base);
+    refusal=(struct LayerGeometryRefusal){0};
+    assert(PrepareLayerRegions(p,N,req,3,&refusal,&base));assert(!refusal.lgr_Check);ReleasePreparedLayerRegions(p,N,FALSE,&base);
     req[0].flags=0;req[0].resolved_hook=NULL;l[1].shapehook=NULL;
     memset(p,0,sizeof p);for(int i=0;i<N;i++)p[i].layer=&l[i];l[2].parent=&l[4];
-    assert(!PrepareLayerRegions(p,N,req,3,&base));ReleasePreparedLayerRegions(p,N,FALSE,&base);l[2].parent=NULL;
+    refusal=(struct LayerGeometryRefusal){0};
+    assert(!PrepareLayerRegions(p,N,req,3,&refusal,&base));assert(refusal.lgr_Check==LGR_PARENT&&refusal.lgr_Value[0]==1);ReleasePreparedLayerRegions(p,N,FALSE,&base);l[2].parent=NULL;
     assert(live==baseline);
    }
    for(unsigned k=0;k<occupancy;k++)__DisposeRegionRectangleExtChunk(ballast[k],GfxBase);
@@ -193,21 +203,48 @@ intheader=strip(read('rom/graphics/intregions.h'))
 public=strip(read('compiler/include/graphics/layertransaction.h'))
 prepared=strip(read('rom/hyperlayers/preparedgeometry.h'))
 builder=strip(read('rom/hyperlayers/preparedregions.c'))
-mutations={'unchecked-shape-union':builder.replace('if (!OrRectRegion(next->shape, &local)) return FALSE;', 'OrRectRegion(next->shape, &local);'),
+mutations={'unchecked-shape-union':builder.replace('if (!OrRectRegion(next->shape, &local) ||', 'if ((OrRectRegion(next->shape, &local), FALSE) ||'),
  'live-damage-mutation':builder.replace('capture_fields(layer, &layers[i].old);','ClearRegion(layer->DamageList); capture_fields(layer, &layers[i].old);'),
- 'ignore-parent':builder.replace('if (entry->layer->parent)','if (FALSE && entry->layer->parent)')}
-with tempfile.TemporaryDirectory() as tmp:
+ 'ignore-parent':builder.replace('if (entry->layer->parent)','if (FALSE && entry->layer->parent)'),
+ 'lost-region-refusal':builder.replace('return LayerRefusalRegion(refusal, layer);','return LayerRefusalRegion(NULL, layer);')}
+if a.output:
+ a.output=a.output.resolve()
+ if a.output==ROOT.resolve() or ROOT.resolve() in a.output.parents:raise ValueError('output must be outside source')
+ a.output.mkdir(parents=True,exist_ok=False)
+def limits():
+ resource.setrlimit(resource.RLIMIT_CORE,(0,0))
+ resource.setrlimit(resource.RLIMIT_CPU,(20,20))
+ resource.setrlimit(resource.RLIMIT_FSIZE,(16<<20,16<<20))
+expected_assertions={
+ 'unchecked-shape-union':('!ok&&denied==1','main'),
+ 'live-damage-mutation':('point(p[i].next.damage,x,y)==(x>=0&&x<=7&&y>=0&&y<=7&&x<p[i].next.width&&y<p[i].next.height)','success'),
+ 'ignore-parent':('point(p[i].next.visibleshape,x,y)==shapeoracle(p,i,x,y,1)','success'),
+ 'lost-region-refusal':('refusal.lgr_Check==LGR_NO_MEMORY&&refusal.lgr_Value[1]==LGR_MEM_REGION&&refusal.lgr_Layer','main')}
+def expected_assertion(name,result):
+ expression,function=expected_assertions[name]
+ text=result.stdout+result.stderr
+ if result.returncode!=-signal.SIGABRT or len(text.splitlines())!=1:return False
+ return text.startswith('Assertion failed: ('+expression+'), function '+function+', file ') or bool(re.fullmatch(r".*\.c:\d+: "+re.escape(function)+r": Assertion [`']"+re.escape(expression)+r"' failed\.\n?",text))
+for name,changed in mutations.items():
+ if changed==builder:raise ValueError('mutation location not found: '+name)
+with (contextlib.nullcontext(str(a.output)) if a.output else tempfile.TemporaryDirectory()) as tmp:
  d=Path(tmp)
+ records=[]
  for name,body in [('production',builder),*mutations.items()]:
   c=d/f'{name}.c';exe=d/name;c.write_text(prefix+chunks+protos+intheader+intregions+bodies+public+prepared+body+main)
-  result=subprocess.run(['clang','-std=gnu11','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer',str(c),'-o',str(exe)],capture_output=True,text=True)
+  result=subprocess.run(['clang','-std=gnu11','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer',str(c),'-o',str(exe)],capture_output=True,text=True,timeout=25,preexec_fn=limits)
+  (d/(name+'-compile.log')).write_text(result.stdout+result.stderr)
   if result.returncode:raise RuntimeError(result.stderr)
-  result=subprocess.run([str(exe)],capture_output=True,text=True)
+  result=subprocess.run([str(exe)],capture_output=True,text=True,timeout=25,preexec_fn=limits)
+  (d/(name+'-run.log')).write_text(result.stdout+result.stderr)
+  records.append(dict(variant=name,exit=result.returncode,source_sha256=hashlib.sha256(c.read_bytes()).hexdigest()))
   if name=='production':
    if result.returncode:raise RuntimeError(result.stdout+result.stderr)
    print(result.stdout.strip())
-  elif not result.returncode:raise RuntimeError(f'mutation escaped: {name}')
+  elif not expected_assertion(name,result):raise RuntimeError(f'mutation did not hit its exact assertion: {name}: {result.stdout+result.stderr}')
   else:print(f'REJECT {name}')
+ if a.output:
+  (d/'result.json').write_text(json.dumps(dict(result='PASS',scope=__doc__,cases=records,semantic_mutants_rejected=len(mutations)),indent=2)+'\n')
 print('SOURCE',ROOT)
 for rel in ['rom/hyperlayers/preparedregions.c','rom/hyperlayers/preparedgeometry.h','compiler/include/graphics/layertransaction.h','rom/graphics/intregions.c','rom/graphics/intregions.h','rom/graphics/graphics_intern.h'] + [f'rom/graphics/{name.lower()}.c' for _,name,_ in ops]:
  print(hashlib.sha256((ROOT/rel).read_bytes()).hexdigest(),rel)
