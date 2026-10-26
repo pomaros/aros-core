@@ -29,11 +29,13 @@ After startup the same retained blob is available through the platform's
 existing boot handoff. This library does not replace the runtime
 `openfirmware.resource` interface or construct a second mutable device tree.
 
-The shared GIC bootstrap in `../../irq/` consumes these descriptors. Its current
-owner is one CPU with IRQs masked: distributor setup must be split from per-CPU
-setup before secondary CPUs use it. Probe evidence is maintained by the private
-`pomaros-vm` integration project; a probe pass is not an OS or physical-board
-qualification.
+The shared GIC bootstrap in `../../irq/` consumes these descriptors. The boot
+CPU calls `AROSGICInit` once for shared distributor setup, with IRQs masked.
+Secondary CPUs use `AROSGICInitCPU`, which preserves the distributor and prepares
+only the executing CPU. Callers retain the described mappings and serialize
+shared initialization. Component host tests and guest qualification are separate;
+see the public `pomaros/pomaros-vm` product's qualification status for guest
+results. A component probe is not physical-board acceptance.
 
 Without an explicit inherited `interrupt-parent`, interrupt lookup uses the
 first ancestor declaring `interrupt-controller`; interrupt nexuses remain
