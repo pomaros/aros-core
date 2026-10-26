@@ -1,23 +1,22 @@
-# AppIcon tile foundation
+<!-- Copyright (C) 2026 John KNIPPER. -->
+<!-- Licensed under the AROS Public License (APL), version 1.1. -->
 
-This change adds copied, paced, program-drawn AppIcon surfaces. Native target
-compilation and the host regression pass. Three actual TCG guest runs on
-2026-10-15 pass the scoped B2.1 task 5 checks: two-region clicks (including
-rapid repeats), mixed 2x2/1x1 grid placement and dragging, paced publication,
-and static fallback before five seconds after silence and abrupt owner exit.
-The validation branch `codex-tiles-review-vm` records the report and artifact
-hashes in `developer/debug/test/workbench/tiles_vm/RESULT.md`. This is not
-acceptance of the broader TILE1/TILE5 snapshot, reboot or folding requirements.
+# AppIcon surfaces and regression probes
+
+Workbench copies program-drawn AppIcon surfaces and owns their presentation
+state. This directory contains host component checks and guest probes. Product
+repositories own packaging, debugger observation and live display qualification.
 
 ## Owner protocol
 
 Register with `WBAPPICONA_Cells = WBAPPICON_CELLS(w,h)`, a `BitMap *` in
 `WBAPPICONA_Surface`, optional `AppIconRegions *`, and cadence in milliseconds.
-Both dimensions must be 1..4; this initial presenter uses 64-pixel cells.
+Ordinary tile dimensions must be 1..4; registered groups may reserve up to
+32 by 32 cells through `WBAPPICONA_Group`. Cells contain 64-pixel source images.
 The bitmap must exactly match `64*w` by `64*h`. Regions are half-open pixel
 rectangles, at most eight, with unique nonempty NUL-terminated inline names
 of at most 31 bytes. Declaration order resolves overlapping regions. Invalid
-registration returns NULL and `ERROR_BAD_NUMBER`. Allocation failure currently
+registration returns NULL and `ERROR_BAD_NUMBER`. Allocation failure
 uses that same error; callers must treat any NULL registration as failure.
 
 Registration copies the bitmap, region values/names, fallback DiskObject and
@@ -26,7 +25,8 @@ call `WorkbenchControlA(NULL, tags)` with `WBCTRLA_PublishAppIcon` pointing to
 an `AppIconPublish { icon, bitmap }`. The bitmap is borrowed only for the call;
 copying and `WaitBlit` finish before it returns. An invalid-size, allocation
 failure or too-early publish returns FALSE and leaves the previous frame intact.
-Cadence clamps to at least 250 ms. NULL bitmap renews the cached image lifetime and reclaims replies without
+Normal frame cadence clamps to at least 250 ms; opt-in pointer hover uses
+the separate pacing contract in the public Workbench header. NULL bitmap renews the cached image lifetime and reclaims replies without
 copying pixels or advancing the frame-cadence timestamp. Drawing into a bitmap alone does not publish a frame.
 
 Clicks and menu events are delivered immediately to `ai_MsgPort`; no later
@@ -101,27 +101,26 @@ keeps the registry handle for six seconds, and removes the orphan afterwards.
 This separately exercises owner exit without leaving an orphan permanently.
 The probe logs observations but never prints an automatic TILE pass.
 
-## Remaining acceptance work
+## Layout and observation scope
 
-The presenter supplies multi-cell image bounds, draws/clicks through a virtual
-IconList method, and packs mixed layouts with exact cell reservations: ordinary
-icons use 1x1, tiles use their declared width/height. The base pitch is at least
-64 pixels and expands to fit ordinary icon labels/images. All placements share
-the existing spacing anchor. Supplied positions snap to cells; intersecting
-reservations relocate to the next free cells. Horizontal/vertical wrapping and
-Clean Up share the same pure placement solver. All-normal layouts keep the old
-path. Tile source bitmaps remain 64 pixels per declared cell and are centered
-inside the reserved width when the common pitch is larger. Labels consume space
-inside reservations. Actual display-scale-aware surface scaling remains future
-work.
+Mixed layouts reserve whole cells: ordinary icons use 1 by 1, and tiles/groups
+use their declared dimensions. Ordinary icon labels/images determine the base
+pitch; reservations do not enlarge that pitch on subsequent layout passes.
+The common solver handles pinned collisions, horizontal/vertical wrapping and
+Clean Up. The host grid checks exercise mixed 40-entry layouts and group bounds.
+Check scaled presentation, live input, persistence and restart behavior through
+the product's qualification procedure.
 
-The host suite runs 80 mixed 40-entry packing cases, pinned collisions, narrow
-viewports, bounds, snap rounding, restored cell coordinates and Clean Up span
-preservation. Drag-drop now invokes this solver before final position
-propagation. The actual guest probe confirms the 2x2 mixed-grid geometry and drag snapping.
-Snapshot file persistence, reboot restoration and broader size/label cases
-remain unverified.
-Workbook, display scaling, `.info` SIZE fallback, template centering, window
-fold/unfold integration, covered-tile suppression, the shared two-redraw budget
-and power policies are not implemented here. These remain TILE1/TILE2/TILE5
-requirements; this foundation must not be promoted as those gates passing.
+The host suite also exercises pointer coalescing, geometry, suspension and
+snapshot ownership/capacity/retirement. Details are in
+[the indicator checks](tiles_host/INDICATOR.md) and
+[the snapshot checks](tiles_host/SNAPSHOT.md). Graphics pixels, MUI delivery and
+real kernel concurrency require guest evidence beyond these fixtures.
+
+`tiles_pixels.py` retains read-only locators for the guest probe's split
+128 by 128 live image and 32 by 32 checkerboard fallback in QMP P6 screendumps.
+Run `python3 -B developer/debug/test/workbench/test_tiles_pixels.py` for the
+synthetic positive/negative and malformed/truncated-image controls. These
+probe-specific locators require a unique matching pattern and make no timing
+or whole-desktop acceptance claim. Cadence, freshness, lifetime reuse and grid
+invariants are checked against production code by `tiles_host/run.py`.
