@@ -1,6 +1,7 @@
 /*
     Copyright (C) 2025-2026, The AROS Development Team.
     All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
 
     POSIX.1-2008 function fstatat
 */
@@ -63,6 +64,12 @@
     if (!pathname || !statbuf)
     {
         errno = EFAULT;
+        return -1;
+    }
+
+    if (flags & ~AT_SYMLINK_NOFOLLOW)
+    {
+        errno = EINVAL;
         return -1;
     }
 

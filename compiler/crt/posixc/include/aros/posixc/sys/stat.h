@@ -3,6 +3,7 @@
 
 /*
     Copyright © 1995-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     $Id$
 
     Desc: POSIX.1-2008 header file sys/stat.h
@@ -158,7 +159,12 @@ int fstat(int fd, struct stat *sb);
 #endif
 int fstat64(int fd, struct stat64 *sb);
 
+#if defined(__USE_FILE_OFFSET64)
+int fstatat(int, const char *__restrict, struct stat *__restrict, int) __asm__("fstatat64");
+#else
 int fstatat(int, const char *__restrict, struct stat *__restrict, int);
+#endif
+int fstatat64(int, const char *__restrict, struct stat64 *__restrict, int);
 int futimens(int, const struct timespec [2]);
 int lstat64(const char * __restrict path, struct stat64 * __restrict sb);
 #if defined(__USE_FILE_OFFSET64)

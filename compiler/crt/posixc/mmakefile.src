@@ -102,6 +102,7 @@ POSIXC := \
     fsetpos64 \
     fstat \
     fstatat \
+    fstatat64 \
     fstatvfs \
     futimens \
     fstat64 \
