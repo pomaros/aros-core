@@ -25,7 +25,9 @@ static int __posixc_resize(int fd, QUAD length)
         error = EBADF;
     else if (file->privflags & _FCB_ISDIR)
         error = EISDIR;
-    else if (!(file->flags & (O_WRONLY | O_RDWR)))
+    /* AROS access modes are read/write bits (1/2/3), not Unix's 0/1/2.
+     * O_RDWR includes the read bit, so testing its union admits O_RDONLY. */
+    else if (!(file->flags & O_WRONLY))
         error = EBADF;
     else if (length < 0)
         error = EINVAL;

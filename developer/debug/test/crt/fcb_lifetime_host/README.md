@@ -28,7 +28,7 @@ the caller must preserve its operation error. Metadata conversion runs without a
 semaphore held because name/time conversion can reenter CRT services. Invalid and overflow admission are
 also checked without foreign fallback.
 
-Seventeen compiling controls independently remove operation retention, operation
+Eighteen compiling controls independently remove operation retention, operation
 release, record metadata disposal, duplication rollback, overflow admission,
 metadata retention/error preservation, retaining an I/O lock across metadata
 conversion, sync reference release, seek retention/serialization or ignored
@@ -58,3 +58,9 @@ second restoration error. The mock resize exposes dirty bytes deliberately;
 the actual CRT body must clear every added byte while preserving the prefix.
 Native filesystem zero-extension, buffered DOS internals and atomic visibility
 to independently opened handles are outside this fixture's scope.
+
+Access-mode constants come directly from AROS's public fcntl.h, including its
+1/2/3 read/write bit encoding. Both truncate widths refuse O_RDONLY with unrelated
+flags before native resize I/O, preserve size/position, and accept O_WRONLY.
+A control restores the incorrect O_WRONLY/O_RDWR union test and must fail the
+specific read-only refusal assertion.

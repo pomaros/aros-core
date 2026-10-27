@@ -26,8 +26,7 @@ typedef void *APTR;
 #define __FDH_CLOSE 3
 #define __FDH_FCNTL 5
 #define __FDH_DUP 6
-#define O_WRONLY 1
-#define O_RDWR 2
+/* AROS_OPEN_FLAGS */
 #define F_GETFD 1
 #define FD_OWNER_POSIXC 1
 #define FD_CLOEXEC 1
@@ -375,7 +374,12 @@ int main(void) {
         assert(resize_calls==calls && positions[11]==100 && (file->privflags&_FCB_FLUSHONREAD));
         io_fail=0;file->privflags=0;sizes[11]=INT64_C(0x100000007);
         assert(!ar_ftruncate64(5,INT64_C(0x100000007)) && sizes[11]==INT64_C(0x100000007) && positions[11]==100);
-        file->flags=0;assert((width?ar_ftruncate64(5,4):ar_ftruncate(5,4))==-1 && errno==EBADF);
+        file->flags=O_RDONLY|O_NONBLOCK;calls=resize_calls;
+        int readonly_result=width?ar_ftruncate64(5,4):ar_ftruncate(5,4);
+        assert(readonly_result==-1 && errno==EBADF && "read-only resize refused before native I/O");
+        assert(resize_calls==calls && positions[11]==100 && sizes[11]==INT64_C(0x100000007));
+        file->flags=O_WRONLY|O_NONBLOCK;
+        assert(!(width?ar_ftruncate64(5,4):ar_ftruncate(5,4)) && sizes[11]==4 && positions[11]==100);
         file->flags=O_RDWR;file->privflags|=_FCB_ISDIR;
         assert((width?ar_ftruncate64(5,4):ar_ftruncate(5,4))==-1 && errno==EISDIR);
         file->privflags=0;file->handle=0;

@@ -21,10 +21,10 @@ output.mkdir(parents=True, exist_ok=False)
 inputs = []
 
 
-def read(name):
+def read(name, encoding='utf-8'):
     path = posixc / name
     inputs.append(path)
-    return path.read_text()
+    return path.read_text(encoding=encoding)
 
 
 def block(text, signature):
@@ -51,6 +51,9 @@ header = read('__fdesc.h')
 source = read('__fdesc.c')
 reclock = read('__reclock.c')
 parts = {
+    'AROS_OPEN_FLAGS': '\n'.join(re.findall(
+        r'^#define O_(?:ACCMODE|RDONLY|WRONLY|RDWR|NONBLOCK)\b[^\n]*',
+        read('include/aros/posixc/fcntl.h', encoding='latin-1'), flags=re.M)),
     'FCB_TYPES': block(header, 'typedef struct _fcb\n') + ' fcb;',
     'FDESC_TYPES': block(header, 'typedef struct _fdesc\n') + ' fdesc;',
     'FCB_LOCK': block(header, 'static inline void __fcb_lock('),
@@ -118,6 +121,9 @@ controls.update({
         'Assertion failed: (atomic_load(&handle_closes[11])==1 && atomic_load(&block_frees)==1)'),
 })
 controls.update({
+    'resize-readonly-admitted': ('!(file->flags & O_WRONLY)',
+        '!(file->flags & (O_WRONLY | O_RDWR))',
+        'read-only resize refused before native I/O'),
     'resize-unretained': (parts['RESIZE'], parts['RESIZE'].replace(
         '__holdfcb(fd, &admission_error)',
         '(admission_error=0,__getfdesc(fd)?__getfdesc(fd)->fcb:NULL)'),
