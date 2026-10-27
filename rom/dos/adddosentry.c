@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2012, The AROS Development Team. All rights reserved.
 
     Desc: Adds a given dos list entry to the dos list.
@@ -112,6 +113,7 @@
 
         dlist->dol_Next = dinf->di_DevInfo;
         dinf->di_DevInfo = MKBADDR(dlist);
+        assign_generation_changed(DOSBase);
     }
 
     UnLockDosList(LDF_ENTRY|LDF_WRITE);

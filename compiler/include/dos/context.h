@@ -11,6 +11,11 @@ struct DosLibrary;
  * keeps its callback code and request data alive until RunWithContext returns.
  * No cancellation or forced-caller-removal guarantee is provided. */
 typedef SIPTR (*DosContextCallback)(APTR data, struct DosLibrary *dos);
+/* DupAssignLock231 (DOS 50.87) captures the primary lock of a bound assign.
+ * The result is caller-owned; use its explicit handler and secondary result.
+ * Device/volume/deferred/nonbinding kinds return no lock and zero error so
+ * resolution can occur outside the namespace guard. No iteration, cancellation
+ * or forced-removal guarantee is implied. */
 struct DevProc;
 #define DOS_PATH_RESOLVER_VERSION 1
 enum {

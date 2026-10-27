@@ -47,6 +47,7 @@ struct IntDosBase
     struct RootNode             rootNode  __attribute__((aligned(4)));
     struct ErrorString          errors  __attribute__((aligned(4)));
     struct SignalSemaphore      segsem;
+    ULONG                       assignGenerationLow, assignGenerationHigh;
     struct List                 segdata;
     struct Library              *securityBase;  /* security.library, only when resident in ROM */
     struct List                 handlerStarts;  /* devices whose handler is being started (getdeviceproc.c) */
@@ -114,6 +115,15 @@ struct vfp
 /* Softlink handling */
 STRPTR ResolveSoftlink(BPTR cur, struct DevProc *dvp, CONST_STRPTR name, struct DosLibrary *DOSBase);
 LONG RootDir(struct DevProc *dvp, struct DosLibrary *DOSBase);
+
+/* Assign mutation generation. Changes hold ALL WRITE or ENTRY WRITE;
+ * snapshots also take ENTRY READ because AddDosEntry publishes under READ. */
+struct assign_generation { ULONG low, high; };
+struct assign_generation assign_generation_current(struct DosLibrary *DOSBase);
+void assign_generation_changed(struct DosLibrary *DOSBase);
+BPTR dup_assign_member(CONST_STRPTR name, ULONG index,
+    struct assign_generation *generation, struct MsgPort **handler,
+    LONG *kind, SIPTR *result2, struct DosLibrary *DOSBase);
 
 /* Packet I/O */
 struct DosPacket *allocdospacket(void);

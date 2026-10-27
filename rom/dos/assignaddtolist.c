@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 2020, The AROS Development Team. All rights reserved.
 
     Desc:
@@ -50,85 +51,113 @@
 *****************************************************************************/
 {
     AROS_LIBFUNC_INIT
-    struct DosList     *dl;
-    struct AssignList **al, *newal;
-    int cnt = 0;
-    BOOL retval = DOSTRUE;
+    struct AssignList *newal;
+    STRPTR newname = NULL;
+    ULONG retry;
+    char lockname[128];
+    SIPTR error = ERROR_OBJECT_IN_USE;
 
-    D(bug("[DOS] %s('%s', 0x%p, %d)\n", __func__, name, lock, position);)
-
-    if(lock == BNULL)
+    if (!name || !*name || !lock) {
+        SetIoErr(ERROR_BAD_NUMBER);
         return DOSFALSE;
-
-    dl = LockDosList(LDF_ASSIGNS | LDF_WRITE);
-    dl = FindDosEntry(dl, name, LDF_ASSIGNS);
-
-    if (dl != NULL)
-    {
-        D(bug("[DOS] %s: dl = 0x%p, type = %08x\n", __func__, dl, dl->dol_Type);)
-        if  (!(dl->dol_Type == DLT_VOLUME || dl->dol_Type == DLT_DEVICE))
-        {
-            newal = AllocVec(sizeof(struct AssignList), MEMF_PUBLIC | MEMF_CLEAR);
-            if(newal != NULL)
-            {
-                for(al = &dl->dol_misc.dol_assign.dol_List; *al && (cnt < position + 1); al = &((*al)->al_Next), cnt++);
-                if (cnt == 0)
-                {
-                    char lnTmp[128];
-
-                    D(bug("[DOS] %s: replacing top level lock 0x%p\n", __func__, dl->dol_Lock);)
-                    if ((newal->al_Lock = dl->dol_Lock) == BNULL)
-                    {
-                        newal->al_Lock = Lock(dl->dol_misc.dol_assign.dol_AssignName, SHARED_LOCK);
-                    }
-                    dl->dol_Lock = lock;
-                    if (NameFromLock(lock, lnTmp, sizeof(lnTmp)))
-                    {
-                        STRPTR s2, oldin = dl->dol_misc.dol_assign.dol_AssignName;
-
-                        s2 = (STRPTR)AllocVec(strlen(lnTmp) + 1, MEMF_PUBLIC | MEMF_CLEAR);
-                        if (s2 != NULL)
-                        {
-                            Strlcpy(s2, lnTmp, strlen(lnTmp) + 1);
-                            dl->dol_misc.dol_assign.dol_AssignName = s2;
-                            FreeVec(oldin);
-                        }
-                        else
-                        {
-                            SetIoErr(ERROR_NO_FREE_STORE);
-                        }
-                    }
-                }
-                else
-                {
-                    D(bug("[DOS] %s: inseting @ %d\n", __func__, cnt);)
-                    newal->al_Lock = lock;
-                }
-
-                if (*al)
-                    newal->al_Next = *al;
-                *al = newal;
+    }
+    newal = AllocVec(sizeof(*newal), MEMF_PUBLIC | MEMF_CLEAR);
+    if (!newal) { SetIoErr(ERROR_NO_FREE_STORE); return DOSFALSE; }
+    /* Incoming lock is still caller-owned. Name lookup cannot wait under
+     * a namespace guard, even when the handler needs DOS WRITE itself. */
+    if (NameFromLock(lock, lockname, sizeof(lockname))) {
+        newname = AllocVec(strlen(lockname) + 1, MEMF_PUBLIC);
+        if (!newname) { error = ERROR_NO_FREE_STORE; goto failed; }
+        CopyMem(lockname, newname, strlen(lockname) + 1);
+    }
+    for (retry = 0; retry < 64; ++retry) {
+        struct DosList *dl;
+        struct assign_generation generation, current;
+        struct AssignList **link;
+        STRPTR path = NULL, oldname = NULL;
+        BPTR resolved = BNULL;
+        ULONG count;
+        BOOL needs_path;
+        dl = LockDosList(LDF_ALL | LDF_READ);
+        LockDosList(LDF_ENTRY | LDF_READ);
+        dl = FindDosEntry(dl, name, LDF_ASSIGNS);
+        if (!dl || (dl->dol_Type != DLT_DIRECTORY &&
+                dl->dol_Type != DLT_LATE && dl->dol_Type != DLT_NONBINDING)) {
+            UnLockDosList(LDF_ENTRY | LDF_READ);
+            UnLockDosList(LDF_ALL | LDF_READ);
+            error = ERROR_OBJECT_WRONG_TYPE; goto failed;
+        }
+        generation = assign_generation_current(DOSBase);
+        needs_path = !dl->dol_Lock;
+        if (needs_path) {
+            CONST_STRPTR target = dl->dol_misc.dol_assign.dol_AssignName;
+            if (target) {
+                path = AllocVec(strlen(target) + 1, MEMF_PUBLIC);
+                if (path) CopyMem(target, path, strlen(target) + 1);
             }
-            else
-            {
-                SetIoErr(ERROR_NO_FREE_STORE);
-                retval = DOSFALSE;
+            if (!path) {
+                UnLockDosList(LDF_ENTRY | LDF_READ);
+                UnLockDosList(LDF_ALL | LDF_READ);
+                error = target ? ERROR_NO_FREE_STORE : ERROR_INVALID_LOCK;
+                goto failed;
             }
         }
-        else
-        {
-            SetIoErr(ERROR_OBJECT_WRONG_TYPE);
-            retval = DOSFALSE;
+        UnLockDosList(LDF_ENTRY | LDF_READ);
+        UnLockDosList(LDF_ALL | LDF_READ);
+        if (needs_path) {
+            resolved = Lock(path, SHARED_LOCK);
+            error = IoErr();
+            FreeVec(path);
+            if (!resolved) goto failed;
         }
+        dl = LockDosList(LDF_ALL | LDF_WRITE);
+        dl = FindDosEntry(dl, name, LDF_ASSIGNS);
+        current = assign_generation_current(DOSBase);
+        if (!dl || generation.low != current.low || generation.high != current.high) {
+            UnLockDosList(LDF_ALL | LDF_WRITE);
+            UnLock(resolved);
+            continue;
+        }
+        count = 0;
+        for (link = &dl->dol_misc.dol_assign.dol_List;
+                *link && count < position + 1; link = &(*link)->al_Next, ++count)
+            ;
+        if (!count) {
+            newal->al_Lock = dl->dol_Lock ? dl->dol_Lock : resolved;
+            resolved = BNULL;
+            dl->dol_Lock = lock;
+            dl->dol_Task = ((struct FileLock *)BADDR(lock))->fl_Task;
+            dl->dol_Type = DLT_DIRECTORY;
+            if (newname) {
+                oldname = dl->dol_misc.dol_assign.dol_AssignName;
+                dl->dol_misc.dol_assign.dol_AssignName = newname;
+                newname = NULL;
+            }
+        } else {
+            newal->al_Lock = lock;
+            if (!dl->dol_Lock) {
+                dl->dol_Lock = resolved;
+                resolved = BNULL;
+            }
+            dl->dol_Task = ((struct FileLock *)BADDR(dl->dol_Lock))->fl_Task;
+            dl->dol_Type = DLT_DIRECTORY;
+        }
+        newal->al_Next = *link;
+        *link = newal;
+        assign_generation_changed(DOSBase);
+        UnLockDosList(LDF_ALL | LDF_WRITE);
+        UnLock(resolved);
+        FreeVec(oldname);
+        FreeVec(newname);
+        SetIoErr(0);
+        return DOSTRUE;
     }
-    else
-    {
-        SetIoErr(ERROR_OBJECT_WRONG_TYPE);
-        retval = DOSFALSE;
-    }
-    UnLockDosList(LDF_ASSIGNS | LDF_WRITE);
-
-    return retval;
+    error = ERROR_OBJECT_IN_USE;
+failed:
+    FreeVec(newname);
+    FreeVec(newal);
+    SetIoErr(error ? error : ERROR_BAD_NUMBER);
+    return DOSFALSE;
 
     AROS_LIBFUNC_EXIT
 } /* AssignAddToList */

@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2013, The AROS Development Team. All rights reserved.
 
     Desc: RemAssignList() - Remove an entry from a multi-dir assign.
@@ -53,82 +54,94 @@
 *****************************************************************************/
 {
     AROS_LIBFUNC_INIT
+    ULONG index = 0, retries = 0;
+    struct assign_generation expected = {0, 0};
+    BOOL have_generation = FALSE;
 
-    struct DosList *dl = NULL;
-    BOOL res = DOSFALSE;
-
-    D(bug("RemAssignList: name = \"%s\", lock = $%lx\n", name, lock));
-    dl = LockDosList(LDF_ASSIGNS | LDF_WRITE);
-
-    while (!res && (dl = FindDosEntry(dl, name, LDF_ASSIGNS)))
-    {
-        struct AssignList *al, *lastal = NULL;
-
-        al = dl->dol_misc.dol_assign.dol_List;
-
-        /*
-            We have a matching element, lets find the correct
-            member to remove. Initially check the inline lock.
-        */
-
-        if (SameLock(dl->dol_Lock, lock) == LOCK_SAME)
-        {
-            /*
-                This is a bit tricky, me move the first element
-                in the list to the header
-            */
-            
-            UnLock(dl->dol_Lock);
-
-            if (al)
-            {
-                dl->dol_misc.dol_assign.dol_List = al->al_Next;
-                dl->dol_Lock = al->al_Lock;
-                FreeVec(al);
+    if (!name || !*name || !lock) {
+        SetIoErr(ERROR_BAD_NUMBER);
+        return DOSFALSE;
+    }
+    for (;;) {
+        struct assign_generation generation, current;
+        struct DosList *dl;
+        struct AssignList *member = NULL, **link = NULL;
+        SIPTR error = 0;
+        LONG kind = -1;
+        BPTR snapshot, detached = BNULL;
+        BOOL same, removed_entry = FALSE;
+        snapshot = dup_assign_member(name, index, &generation, NULL,
+            &kind, &error, DOSBase);
+        if (!snapshot) {
+            if (error == ERROR_NO_MORE_ENTRIES && have_generation &&
+                    (expected.low != generation.low || expected.high != generation.high)) {
+                index = 0; have_generation = FALSE;
+                if (++retries == 64) break;
+                continue;
             }
-            else
-            {
-                RemDosEntry(dl);
-                FreeDosEntry(dl);
-            }
-            
-            res = DOSTRUE;
+            if (error == ERROR_NO_MORE_ENTRIES) error = ERROR_OBJECT_NOT_FOUND;
+            else if (!error) error = ERROR_OBJECT_WRONG_TYPE;
+            SetIoErr(error);
+            return DOSFALSE;
         }
-        else
-        {
-            while (al)
-            {
-                if (SameLock(al->al_Lock, lock) == LOCK_SAME)
-                {
-                    /* Remove this element. Singly linked list */
-                    if (lastal == NULL)
-                    {
-                        /* First element of list... */
-                        dl->dol_misc.dol_assign.dol_List = al->al_Next;
-                    }
-                    else
-                    {
-                        lastal->al_Next = al->al_Next;
-                    }
-
-                    UnLock(al->al_Lock);
-                    FreeVec(al);
-                    al = NULL;
-                    res = DOSTRUE;
-                }
-                else
-                {
-                    lastal = al;
-                    al = al->al_Next;
-                }
+        /* A previous non-match is only meaningful for this generation. */
+        if (have_generation && (expected.low != generation.low ||
+                expected.high != generation.high)) {
+            UnLock(snapshot);
+            index = 0; have_generation = FALSE;
+            if (++retries == 64) break;
+            continue;
+        }
+        same = SameLock(snapshot, lock) == LOCK_SAME;
+        UnLock(snapshot); /* no DOS list guard during any handler wait */
+        dl = LockDosList(LDF_ALL | LDF_WRITE);
+        dl = FindDosEntry(dl, name, LDF_ASSIGNS);
+        current = assign_generation_current(DOSBase);
+        if (!dl || dl->dol_Type != DLT_DIRECTORY ||
+                generation.low != current.low || generation.high != current.high) {
+            UnLockDosList(LDF_ALL | LDF_WRITE);
+            index = 0; have_generation = FALSE;
+            if (++retries == 64) break;
+            continue;
+        }
+        if (!same) {
+            expected = generation; have_generation = TRUE; ++index;
+            UnLockDosList(LDF_ALL | LDF_WRITE);
+            continue;
+        }
+        if (index == 0) {
+            detached = dl->dol_Lock;
+            member = dl->dol_misc.dol_assign.dol_List;
+            if (member) {
+                dl->dol_Lock = member->al_Lock;
+                dl->dol_Task = ((struct FileLock *)BADDR(dl->dol_Lock))->fl_Task;
+                dl->dol_misc.dol_assign.dol_List = member->al_Next;
+            } else {
+                RemDosEntry(dl);
+                removed_entry = TRUE;
             }
-        } /* in the assignlist */
-
-    } /* the assign exists */
-
-    UnLockDosList(LDF_ASSIGNS | LDF_WRITE);
-
-    return res;
+        } else {
+            ULONG ordinal;
+            link = &dl->dol_misc.dol_assign.dol_List;
+            for (ordinal = 1; ordinal < index; ++ordinal)
+                link = &(*link)->al_Next;
+            member = *link;
+            detached = member->al_Lock;
+            *link = member->al_Next;
+        }
+        assign_generation_changed(DOSBase);
+        UnLockDosList(LDF_ALL | LDF_WRITE);
+        UnLock(detached);
+        FreeVec(member);
+        if (removed_entry) {
+            FreeVec(dl->dol_misc.dol_assign.dol_AssignName);
+            FreeDosEntry(dl);
+        }
+        SetIoErr(0);
+        return DOSTRUE;
+    }
+    SetIoErr(ERROR_OBJECT_IN_USE);
+    return DOSFALSE;
 
     AROS_LIBFUNC_EXIT
 } /* RemAssignList */

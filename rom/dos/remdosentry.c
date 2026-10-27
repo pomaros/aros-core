@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
 
     Desc:
@@ -75,6 +76,7 @@
         if(dl2 == dlist)
         {
             dl->dol_Next = dlist->dol_Next;
+            assign_generation_changed(DOSBase);
             break;
         }
 

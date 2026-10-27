@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2007, The AROS Development Team. All rights reserved.
 
     Desc: Add a directory to an assign.
@@ -85,6 +86,7 @@
     for(al = &dl->dol_misc.dol_assign.dol_List; *al; al = &((*al)->al_Next));
 
     *al = newal;
+    assign_generation_changed(DOSBase);
     UnLockDosList(LDF_ASSIGNS | LDF_WRITE);
 
     return DOSTRUE;

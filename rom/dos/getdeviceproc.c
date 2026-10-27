@@ -243,7 +243,7 @@ static struct DevProc *deviceproc_internal(struct DosLibrary *DOSBase, CONST_STR
          * promotion for the same entry - and each of them used to
          * FreeVec() the same assign name, corrupting the allocator (the
          * adjacent DosList nodes were absorbed into the free list while
-         * still linked). Claim the promotion atomically: the first task
+         * still linked). Claim the promotion under ENTRY WRITE: the first task
          * performs it, later ones discard their duplicate target lock
          * and use the promoted entry. The name string must not be freed
          * here - a racing task may still be inside Lock() on it - so it
@@ -253,20 +253,20 @@ static struct DevProc *deviceproc_internal(struct DosLibrary *DOSBase, CONST_STR
          * acquired while any promoter still holds READ, so the normal
          * assign teardown releases it at a safe time.
          */
-        Forbid();
+        /* ENTRY excludes other promoters and assign snapshots on SMP. */
+        LockDosList(LDF_ENTRY | LDF_WRITE);
         if (dl->dol_Type == DLT_LATE) {
-            if (dl->dol_Lock == BNULL)
+            if (dl->dol_Lock == BNULL) {
                 dl->dol_Lock = lock;
-            else if (lock != BNULL)
-                UnLock(lock);
+                lock = BNULL;
+            }
             dl->dol_Task = ((struct FileLock*)BADDR(dl->dol_Lock))->fl_Task;
             dl->dol_Type = DLT_DIRECTORY;
-            Permit();
-        } else {
-            Permit();
-            if (lock != BNULL)
-                UnLock(lock);
+            assign_generation_changed(DOSBase);
         }
+        UnLockDosList(LDF_ENTRY | LDF_WRITE);
+        if (lock != BNULL)
+            UnLock(lock);
 
         /* the entry is a plain assign now - possibly a multi-directory one
          * when directories were added before its first use - so it is
