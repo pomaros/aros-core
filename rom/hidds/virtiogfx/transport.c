@@ -30,9 +30,14 @@ struct VirtioGPU {
     ULONG wait_mask;
     volatile ULONG interrupts;
     BOOL irq_reported;
+    BOOL pending,repaint;
+    UWORD pending_next;
+    unsigned pending_bytes;
+    uint32_t pending_type;
 };
-/* Queue ownership stays in task context. Current platforms are single CPU;
- * Disable protects the borrowed caller/signal until the callback is detached. */
+/* Queue ownership stays in task context. Disable protects the borrowed
+ * caller/signal against local IRQs; it does not serialize a remote-CPU IRQ.
+ * Cross-CPU waiter lifetime requires a separate synchronization contract. */
 static AROS_INTH1(gpu_irq,struct VirtioGPU *,gpu)
 {
     AROS_INTFUNC_INIT
@@ -48,26 +53,50 @@ struct GPUHeader { uint32_t type,flags;uint64_t fence;uint32_t context;uint8_t r
 struct GPUDisplay { struct GPUHeader header;struct { uint32_t x,y,width,height,enabled,flags; } mode[16]; };
 _Static_assert(sizeof(struct GPUHeader)==24,"GPU header wire size");
 _Static_assert(sizeof(struct GPUDisplay)==408,"GPU display response wire size");
+/* An interrupt is a wakeup hint, not ownership of a particular descriptor.
+ * Observe the device's publication before reading its response. DMA memory on
+ * the supported transport is coherent; this barrier orders those reads. */
+static int gpu_reap(struct VirtioGPU *gpu)
+{
+    struct virtio_queue *q=gpu->device.dev_VQ;
+    UWORD used=q->q_Used->idx;
+    if(used!=gpu->pending_next)return 0;
+    __asm__ volatile("dsb sy" ::: "memory");
+    unsigned slot=(UWORD)(gpu->pending_next-1)%8;
+    uint32_t id=q->q_Used->ring[slot].id,len=q->q_Used->ring[slot].len;
+    volatile struct GPUHeader *response=(void *)((UBYTE *)gpu->message+64);
+    uint32_t type=response->type,flags=response->flags;
+    UQUAD fence=response->fence;
+    gpu->pending=FALSE;
+    if(id || len!=gpu->pending_bytes || type!=gpu->pending_type ||
+       !(flags&1) || fence!=gpu->fence) {
+        bug("[VirtioGfx] invalid completion used=%u id=%lu len=%lu/%lu type=%lx/%lx flags=%lx fence=%lu/%lu\n",
+            (unsigned)used,(unsigned long)id,(unsigned long)len,(unsigned long)gpu->pending_bytes,
+            (unsigned long)type,(unsigned long)gpu->pending_type,(unsigned long)flags,
+            (unsigned long)fence,(unsigned long)gpu->fence);
+        gpu->failed=TRUE;return -1;
+    }
+    return 1;
+}
 static int gpu_command(struct VirtioGPU *gpu,unsigned request_bytes,
                        unsigned response_bytes,uint32_t response_type)
 {
-    if(gpu->failed || request_bytes>64 || response_bytes>448)return 0;
+    if(gpu->failed || gpu->pending || request_bytes>64 || response_bytes>448)return 0;
     BYTE bit=AllocSignal(-1);
-    if(bit<0) { gpu->failed=TRUE;return 0; }
+    if(bit<0) { bug("[VirtioGfx] no signal available; present deferred\n");return 0; }
     ULONG mask=1UL<<bit;
     SetSignal(0,mask);
     gpu->timer_port.mp_SigTask=FindTask(NULL);
     gpu->timer_port.mp_SigBit=bit;gpu->timer_port.mp_Flags=PA_SIGNAL;
     Disable();gpu->waiter=FindTask(NULL);gpu->wait_mask=mask;
     ULONG before=gpu->interrupts;Enable();
-    gpu->timer->tr_node.io_Command=TR_ADDREQUEST;
-    gpu->timer->tr_time.tv_secs=1;gpu->timer->tr_time.tv_micro=0;
-    SendIO((struct IORequest *)gpu->timer);
     device_t dev=&gpu->device;void *memory=gpu->message;UQUAD bus=gpu->message_bus;
     struct virtio_queue *q=dev->dev_VQ;
     struct GPUHeader *request=memory,*response=(void *)((UBYTE *)memory+64);
     UWORD next=q->q_Avail->idx+1;
     request->flags=1;request->fence=++gpu->fence;
+    gpu->pending=TRUE;gpu->pending_next=next;
+    gpu->pending_bytes=response_bytes;gpu->pending_type=response_type;
     memset(response,0,response_bytes);
     q->q_Desc[0].addr=bus;q->q_Desc[0].len=request_bytes;
     q->q_Desc[0].flags=VIRTQ_DESC_F_NEXT;q->q_Desc[0].next=1;
@@ -76,24 +105,30 @@ static int gpu_command(struct VirtioGPU *gpu,unsigned request_bytes,
     q->q_Avail->ring[(UWORD)(next-1)%8]=0;__asm__ volatile("dsb sy" ::: "memory");
     q->q_Avail->idx=next;__asm__ volatile("dsb sy" ::: "memory");
     *q->q_Notify=0;__asm__ volatile("dsb sy" ::: "memory");
+    /* Start the deadline after submission: a preempted producer must not
+     * consume the entire device timeout before it has notified the device. */
+    gpu->timer->tr_node.io_Command=TR_ADDREQUEST;
+    gpu->timer->tr_time.tv_secs=1;gpu->timer->tr_time.tv_micro=0;
+    SendIO((struct IORequest *)gpu->timer);
     while(!CheckIO((struct IORequest *)gpu->timer) &&
-          (q->q_Used->idx!=(UWORD)next || gpu->interrupts==before))
+          q->q_Used->idx!=next)
         Wait(mask);
     Disable();gpu->waiter=NULL;Enable();
     if(!CheckIO((struct IORequest *)gpu->timer))AbortIO((struct IORequest *)gpu->timer);
     WaitIO((struct IORequest *)gpu->timer);
     gpu->timer_port.mp_Flags=PA_IGNORE;
     SetSignal(0,mask);FreeSignal(bit);
-    __asm__ volatile("dsb sy" ::: "memory");
-    int okay=gpu->interrupts!=before && q->q_Used->idx==next && q->q_Used->ring[(UWORD)(next-1)%8].id==0 &&
-        q->q_Used->ring[(UWORD)(next-1)%8].len==response_bytes &&
-        response->type==response_type && (response->flags&1) && response->fence==gpu->fence;
-    if(!okay)gpu->failed=TRUE;
-    else if(!gpu->irq_reported) {
+    int result=gpu_reap(gpu);
+    if(!result) {
+        /* Keep the one in-flight chain and all its DMA storage. A later
+         * present may reap it, but must not overwrite it before completion. */
+        bug("[VirtioGfx] completion delayed; retaining command fence=%lu\n",(unsigned long)gpu->fence);
+    }
+    else if(result>0 && !gpu->irq_reported && gpu->interrupts!=before) {
         gpu->irq_reported=TRUE;
         bug("[VM] virtio graphics IRQ completion PASS\n");
     }
-    return okay;
+    return result>0;
 }
 
 static uint32_t *gpu_request(struct VirtioGPU *gpu,uint32_t type)
@@ -118,7 +153,19 @@ BOOL VirtioGPUPresent(struct VirtioGPU *gpu,ULONG x,ULONG y,ULONG width,ULONG he
 {
     if(!gpu)return FALSE;
     ObtainSemaphore(&gpu->lock);
+    if(gpu->pending) {
+        int result=gpu_reap(gpu);
+        if(!result){gpu->repaint=TRUE;ReleaseSemaphore(&gpu->lock);return FALSE;}
+        if(result>0) {
+            gpu->repaint=TRUE;
+            bug("[VirtioGfx] late completion recovered; repainting screen\n");
+        }
+    }
+    /* Keep damage across every deferred presentation, including a transient
+     * signal shortage after reaping. Clear it only after transfer AND flush. */
+    if(gpu->repaint){x=y=0;width=1024;height=768;}
     BOOL okay=gpu->ready && !gpu->failed && gpu_present(gpu,x,y,width,height);
+    gpu->repaint=!okay;
     ReleaseSemaphore(&gpu->lock);return okay;
 }
 BOOL VirtioGPUGetSurface(struct VirtioGPU *gpu,struct VirtioGPUSurface *surface)
@@ -132,9 +179,9 @@ ULONG VirtioGPUClose(struct VirtioGPU *gpu)
     struct VirtIOBase *VirtIOBase=&gpu->base;device_t dev=&gpu->device;
     if(gpu->mapped) {
         uint32_t *body;
-        if(!gpu->failed && gpu->scanout) { gpu_request(gpu,0x103);gpu_command(gpu,48,24,0x1100); }
-        if(!gpu->failed && gpu->backing) { body=gpu_request(gpu,0x107);body[0]=1;gpu_command(gpu,32,24,0x1100); }
-        if(!gpu->failed && gpu->resource) { body=gpu_request(gpu,0x102);body[0]=1;gpu_command(gpu,32,24,0x1100); }
+        if(!gpu->failed && !gpu->pending && gpu->scanout) { gpu_request(gpu,0x103);gpu_command(gpu,48,24,0x1100); }
+        if(!gpu->failed && !gpu->pending && gpu->backing) { body=gpu_request(gpu,0x107);body[0]=1;gpu_command(gpu,32,24,0x1100); }
+        if(!gpu->failed && !gpu->pending && gpu->resource) { body=gpu_request(gpu,0x102);body[0]=1;gpu_command(gpu,32,24,0x1100); }
         if(!virtio_hw_stop(dev)) { gpu->failed=TRUE;gpu->ready=FALSE;return 0; }
         if(gpu->interrupt_installed) {
             HIDD_PCIDriver_RemoveInterrupt(dev->dev_PCIDriverObject,dev->dev_Object,&gpu->interrupt);

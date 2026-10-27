@@ -91,8 +91,9 @@ AROS_UFH3(static IPTR, FindGPU,
 }
 static void Present(APTR context, ULONG x, ULONG y, ULONG w, ULONG h)
 {
-    if (!VirtioGPUPresent(context, x, y, w, h))
-        bug("[VirtioGfx] present failed; device retained until reset\n");
+    /* The transport reports the transition once and retains pending DMA until
+     * it can reap a late completion. Repeated draws must not flood the log. */
+    VirtioGPUPresent(context, x, y, w, h);
 }
 BOOL initEFIFBGfxHW(struct HWData *data)
 {
