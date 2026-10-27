@@ -31,3 +31,18 @@ Backends without a synchronization callback omit it from NSCMD_DEVICEQUERY and
 return IOERR_NOCMD. Host fsync is the stated contract; host drive-cache policies
 and power-loss guarantees are outside this fixture. Unit startup, abort/close,
 forced-stop behavior and other backend implementations require separate tests.
+
+## Guest probe
+
+`guest.c` is a standalone Hosted guest probe. The product runner must create
+and identify a disposable host image whose path ends in `/Barrier.img` and pass
+that absolute host path with `write-disposable-image`. The probe writes 4096
+bytes at offset zero: never select a system disk or an existing user image.
+The separate `reject-old-device` control checks refusal before any write.
+No historical host directory or build path selects the fixture.
+
+This probe assumes a uniprocessor Hosted guest: Forbid holds off the unit task
+while the write and barrier are submitted, allowing an explicit no-overtake
+check. It is not an SMP synchronization test. Product qualification must also
+verify backing-file bytes, orderly guest exit and the image's source identity.
+Compilation alone does not establish those results.
