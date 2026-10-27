@@ -1978,6 +1978,8 @@ static void writesets(FILE *out, struct config *cfg)
         fprintf(out,
             "DEFINESET(OPENLIB)\n"
             "DEFINESET(CLOSELIB)\n"
+            "DEFINESET(ABORTOPENLIB)\n"
+            "DEFINESET(CANCLOSELIB)\n"
         );
     if (cfg->modtype == DEVICE)
         fprintf(out,

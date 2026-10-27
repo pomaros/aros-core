@@ -10,6 +10,11 @@ AddressSanitizer and UndefinedBehaviorSanitizer.
 
 Cases:
 
+The generated empty ABORTOPENLIB and CANCLOSELIB sets must link with two
+zero entries. A mutant omitting their definitions must fail to link or
+return a missing-set failure. This checks the actual generated DEFINESET
+output and the production symbol-set macros, separately from the mocks.
+
 1. A refused close, called while another base is current: CloseLib
    returns at once; the guard saw the explicit base; the per-task open
    count, the root's open count, the offset table, the task slot, both

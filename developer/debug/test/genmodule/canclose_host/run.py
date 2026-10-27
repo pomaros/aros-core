@@ -10,7 +10,7 @@ __GM_DupBase helpers, OpenLib and CloseLib, and links them with the real
 _set_open_rellibraries_list, _set_close_rellibraries_list and
 set_call_libfuncs. Mutants remove each part of the rollback.
 """
-import argparse, hashlib, json, subprocess
+import argparse, hashlib, json, re, subprocess
 from pathlib import Path
 
 p = argparse.ArgumentParser(); p.add_argument('--output', type=Path, required=True); a = p.parse_args()
@@ -24,6 +24,40 @@ conf = root / 'developer/debug/test/library/userel.conf'
 (gen / 'userel.conf').write_text(conf.read_text())
 subprocess.run([str(genmodule), '-c', 'userel.conf', '-d', '.', 'writefiles', 'userel', 'library'], cwd=gen, check=True, capture_output=True, timeout=30)
 start = (gen / 'userel_start.c').read_text()
+
+# Exercise the generated empty-set definitions too: extracting OpenLib and
+# CloseLib alone misses undefined weak sets in modules without these hooks.
+header = (root / 'compiler/include/aros/symbolsets.h').read_text()
+macros = '\n'.join(re.search(r'^#define ' + name + r'\([^\n]*?(?:\\\n[^\n]*)?$',
+                              header, re.M).group() for name in
+                   ('SETNAME', 'DECLARESET', 'DEFINESET'))
+definitions = '\n'.join(re.findall(r'^DEFINESET\([^\n]+', start, re.M))
+for missing in (False, True):
+    tested = definitions
+    if missing:
+        tested = re.sub(r'^DEFINESET\((?:ABORTOPENLIB|CANCLOSELIB)\)\n?', '', tested, flags=re.M)
+    source = out / ('empty-sets-missing.c' if missing else 'empty-sets.c')
+    source.write_text(macros + '\nDECLARESET(ABORTOPENLIB)\nDECLARESET(CANCLOSELIB)\n' + tested + '''
+int main(void)
+{
+    const void * const *abortset = SETNAME(ABORTOPENLIB);
+    const void * const *closeset = SETNAME(CANCLOSELIB);
+    return !abortset || !closeset || abortset[0] || abortset[1]
+        || closeset[0] || closeset[1];
+}
+''')
+    binary = source.with_suffix('')
+    compiled = subprocess.run(['clang', '-std=gnu11', '-Wall', '-Werror', str(source), '-o', str(binary)],
+                              capture_output=True, text=True, timeout=30)
+    source.with_suffix('.log').write_text(compiled.stdout + compiled.stderr)
+    if compiled.returncode:
+        # Mach-O refuses the missing weak definitions at link time; ELF may
+        # allow them and report a null weak address when the probe runs.
+        assert missing and all(name in compiled.stderr for name in
+                               ('__ABORTOPENLIB_LIST__', '__CANCLOSELIB_LIST__'))
+        continue
+    checked = subprocess.run([str(binary)], timeout=10)
+    assert checked.returncode == (1 if missing else 0), 'generated empty hook sets'
 
 def between(text, a, b, include_b=False):
     i = text.index(a); j = text.index(b, i)
@@ -81,7 +115,8 @@ for name, m in mutations.items():
     rows.append({'name': name, 'compile_exit': c.returncode, 'run_exit': None if r is None else r.returncode})
 inputs = [root / 'tools/genmodule/writestart.c', root / 'compiler/autoinit/libraries.c', root / 'compiler/libinit/libinit.c',
           root / 'compiler/include/aros/symbolsets.h', conf, here / 'host.c', Path(__file__).resolve()]
-record = {'scope': 'CANCLOSELIB: genmodule-generated per-task OpenLib/CloseLib for userel.conf and the actual rellibrary and libfunc set code, host Exec/task-storage/library mocks. No native module build or guest.',
+record = {'scope': 'CANCLOSELIB: genmodule-generated empty hook sets and per-task OpenLib/CloseLib for userel.conf and the actual rellibrary and libfunc set code, host Exec/task-storage/library mocks. No native module build or guest.',
+          'empty_hook_sets': 'PASS: generated definitions link and contain two zero entries; missing-definition mutant rejected',
           'inputs': {str(v.relative_to(root)): hashlib.sha256(v.read_bytes()).hexdigest() for v in inputs}, 'checks': rows}
 (out / 'result.json').write_text(json.dumps(record, indent=2) + '\n')
 print(rows)
