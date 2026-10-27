@@ -60,6 +60,8 @@ struct PosixCIntBase
 
     /* __exec.c */
     BPTR exec_seglist;
+    BPTR exec_cwd, exec_progdir; /* owned locks until RunCommand returns */
+    struct _fcb *exec_files[3]; /* retained through native stdio restoration */
     char *exec_args;
     char *exec_taskname;
     APTR exec_pool;
@@ -72,6 +74,7 @@ struct PosixCIntBase
        descriptor table itself is retained independently in fd_namespace. */
     struct PosixCIntBase *fd_owner;
     struct __fd_namespace *fd_namespace;
+    struct __cwd_binding *cwd_runtime;
 
     /* __upath.c */
     char *upathbuf;  /* Buffer that holds intermediate converted paths */
@@ -119,6 +122,9 @@ struct PosixCIntBase
     APTR dl_release;
     struct MinList dl_errors;
 };
+
+/* Select the calling Task's live runtime binding, including nested opens. */
+struct PosixCIntBase *__cwd_runtime_base(void);
 
 /* flags; values of flags are power of two so they can be ORed together */
 

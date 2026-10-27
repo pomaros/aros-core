@@ -45,7 +45,7 @@ static void __usergroup_release(int status, void *arg)
     struct StdCIntBase *StdCBase =
         (struct StdCIntBase *)__aros_getbase_StdCBase();
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
 
     (void)status;
 

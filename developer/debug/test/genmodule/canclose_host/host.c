@@ -175,10 +175,12 @@ int main(void)
           close takes one */
     reset(); b = OpenLib(0, root); assert(OpenLib(0, root) == b);
     assert(((struct __GM_DupBase *)b)->taskopencount == 2);
+    assert(__GM_GetBaseOpenCount(b) == 2);
     allow_close = 0; CloseLib(b);
     assert(((struct __GM_DupBase *)b)->taskopencount == 2 && live_bases == 1);
     allow_close = 1; CloseLib(b);
     assert(((struct __GM_DupBase *)b)->taskopencount == 1 && live_bases == 1 && slot == b);
+    assert(__GM_GetBaseOpenCount(b) == 1);
     CloseLib(b);
     assert(live_bases == 0 && slot == NULL);
 

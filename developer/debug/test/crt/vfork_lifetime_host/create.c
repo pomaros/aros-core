@@ -61,7 +61,9 @@ struct ETask {struct Node node;ULONG et_UniqueID;LONG et_Result1;struct List et_
 struct Task {APTR tc_SPLower,tc_SPUpper;ULONG tc_Flags;union {struct ETask *tc_ETask;} tc_UnionETask;};
 struct TagItem {IPTR ti_Tag,ti_Data;};
 struct Process {struct Task task;BPTR pr_CES;};
-struct StdCBase;struct Library;struct __env_item;
+struct __cwd_context;struct __fd_namespace;struct StdCBase;struct Library;struct __env_item;
+struct __vfork_binding { int unused; };
+struct __cwd_snapshot {void *cwd,*progdir;BOOL unix_paths;};
 struct PosixCIntBase {int flags;};
 /* VFORK_DATA */
 static struct PosixCIntBase base;
@@ -69,6 +71,7 @@ static struct Process parent;
 static struct ETask parent_record;
 static struct Process *running, *pending_exit;
 static int failure, signals, messages, allocations, records, forbidden, final_return;
+static int locks,refs,snapshots,copies;
 static ULONG next_uid=100;
 static struct vfork_data *published;
 #define GET_THIS_TASK (&parent.task)
@@ -85,33 +88,53 @@ static void retire(struct Process *p) {
 }
 static void ExpungeETask(struct ETask *e) {assert(e->dead);records--;free(e);}
 ULONG SetSignal(ULONG new,ULONG mask) {(void)new;assert(mask==SIGF_CHILD);return 0;}
-struct PosixCIntBase *__aros_getbase_PosixCBase(void) {return &base;}
+struct PosixCIntBase *__cwd_runtime_base(void) {return &base;}
 struct Task *FindTask(APTR unused) {(void)unused;return &parent.task;}
 LONG launcher(void) {return 0;}
 void FreeMem(APTR p,size_t size) {(void)size;free(p);allocations--;}
 void vfork_longjmp(jmp_buf env,int val) {longjmp(env,val);}
+BOOL __cwd_runtime_snapshot(struct __cwd_snapshot *s) {
+ if(failure==5)return FALSE;
+ s->cwd=(APTR)(uintptr_t)21;s->progdir=(APTR)(uintptr_t)22;s->unix_paths=TRUE;snapshots++;return TRUE;
+}
+BPTR __cwd_directory_lock(APTR dir) {return dir;}
+BPTR DupLock(BPTR lock) {
+ assert(snapshots==1);copies++;assert(lock==(APTR)(uintptr_t)(copies==1?21:22));
+ if(failure==copies+5)return NULL;
+ locks++;return malloc(1);
+}
+void UnLock(BPTR p) {if(p){locks--;free(p);}}
+void __cwd_snapshot_release(struct __cwd_snapshot *s) {(void)s;assert(snapshots==1);snapshots--;}
+void __fd_namespace_drop(struct __fd_namespace *s) {if(s){assert(s==(APTR)(uintptr_t)41);refs--;}}
+void __cwd_context_release(struct __cwd_context *s) {if(s){assert(s==(APTR)(uintptr_t)42);refs--;}}
+BOOL __vfork_binding_enter(struct PosixCIntBase *b,struct __fd_namespace *n,struct __cwd_context *c,struct __vfork_binding *scope) {
+ assert(b==&base&&n==(APTR)(uintptr_t)41&&c==(APTR)(uintptr_t)42&&scope);return failure!=8;
+}
 BYTE AllocSignal(int bit) {(void)bit;if(failure==1)return -1;signals++;return 4;}
 void FreeSignal(int bit) {assert(bit==4 && signals==1);signals--;}
 BPTR Input(void) {return (APTR)(uintptr_t)31;}
 BPTR Output(void) {return (APTR)(uintptr_t)32;}
 struct Process *CreateNewProc(struct TagItem *tags) {
- assert(base.flags & VFORK_PARENT);BOOL notify=FALSE;
+ assert((base.flags & VFORK_PARENT)&&!snapshots);BOOL notify=FALSE;BPTR cwd=NULL,home=NULL;
  for(struct TagItem *t=tags;t->ti_Tag;t++) {
+  if(t->ti_Tag==NP_CurrentDir)cwd=(APTR)t->ti_Data;
+  if(t->ti_Tag==NP_HomeDir)home=(APTR)t->ti_Data;
   if(t->ti_Tag==NP_UserData)published=(APTR)t->ti_Data;
   if(t->ti_Tag==NP_NotifyOnDeath)notify=t->ti_Data;
  }
- assert(published && notify);
+ assert(published && notify && cwd && home && cwd!=home && locks==2 && published->child_unix_paths);
  if(failure==2)return NULL;
  struct Process *p=calloc(1,sizeof(*p));assert(p);struct ETask *e=record_new();
  p->task.tc_Flags=TF_ETASK;p->task.tc_UnionETask.tc_ETask=e;
  AddTail(&parent_record.et_Children,&e->node);running=p;
+ UnLock(cwd);UnLock(home);
  published->child_pid=GetETaskID(&p->task); /* launcher publishes while live */
  published->child_signal=4;
  if(failure==3 || failure==4) {
   published->child_errno=ENOMEM;published->child_state=CHILD_STATE_SETUP_FAILED;
   /* Fast failure destroys the Task before CreateNewProc returns its address. */
   if(failure==3)retire(p);else pending_exit=p;
- } else published->child_state=CHILD_STATE_SETUP_FINISHED;
+ } else {published->child_namespace=(APTR)(uintptr_t)41;published->child_context=(APTR)(uintptr_t)42;published->child_state=CHILD_STATE_SETUP_FINISHED;refs=2;}
  return p;
 }
 ULONG Wait(ULONG mask) {
@@ -136,8 +159,8 @@ static void __stdc_set_exitjmp(jmp_buf a,jmp_buf b) {(void)a;(void)b;}
 int main(void) {
  parent.task.tc_Flags=TF_ETASK;parent.task.tc_UnionETask.tc_ETask=&parent_record;
  newlist(&parent_record.et_Children);newlist(&parent_record.et_TaskMsgPort.mp_MsgList);
- for(int repeat=0;repeat<64;repeat++) for(failure=0;failure<=4;failure++) for(int nested=0;nested<2;nested++) {
-  published=NULL;messages=0;base.flags=64|(nested?VFORK_PARENT|PRETEND_CHILD:0);int old_flags=base.flags;
+ for(int repeat=0;repeat<64;repeat++) for(failure=0;failure<=8;failure++) for(int nested=0;nested<2;nested++) {
+  copies=0;published=NULL;messages=0;base.flags=64|(nested?VFORK_PARENT|PRETEND_CHILD:0);int old_flags=base.flags;
   struct ETask *other=record_new();other->dead=TRUE;other->et_Result1=73;
   ULONG unrelated=other->et_UniqueID;AddTail(&parent_record.et_TaskMsgPort.mp_MsgList,&other->node);
   struct vfork_data *u=calloc(1,sizeof(*u));assert(u);allocations++;
@@ -147,9 +170,9 @@ int main(void) {
   if(!failure) {
    assert(signals==1&&allocations==1);retire(running);
    assert(ChildWait(u->child_pid)!=(IPTR)CHILD_NOTNEW);ChildFree(u->child_pid);
-   FreeSignal(u->parent_signal);FreeMem(u,sizeof(*u));
+   FreeSignal(u->parent_signal);__fd_namespace_drop(u->child_namespace);__cwd_context_release(u->child_context);FreeMem(u,sizeof(*u));
   }
-  assert(base.flags==old_flags);assert(!signals&&!allocations&&!running&&!pending_exit);
+  assert(base.flags==old_flags);assert(!signals&&!locks&&!allocations&&!refs&&!snapshots&&!running&&!pending_exit);
   assert(records==1);int status=0;
   assert(host_waitpid(-1,&status,WNOHANG)==(int)unrelated && status==73);
   assert(host_waitpid(unrelated,&status,WNOHANG)==-1 && errno==ECHILD);
@@ -168,5 +191,5 @@ int main(void) {
  if(!result) {_VFORK_COPYENV(u->vfork_jmp,env);__vfork_exit_controlled_stack(u);abort();}
  assert(result==expected&&!allocations&&!signals&&!running);ChildFree(expected);assert(!records);
  puts("PASS: controlled-stack return after child and shared-data destruction");
- puts("PASS: 640 create attempts; actual Exec child queues/wait/free/status + actual waitpid; no ghosts, unrelated result73 preserved");return 0;
+ puts("PASS: 1152 create attempts; actual Exec child queues/wait/free/status + actual waitpid; no ghosts, unrelated result73 preserved");return 0;
 }

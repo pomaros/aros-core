@@ -9,6 +9,7 @@
 #include <proto/exec.h>
 #include <proto/dos.h>
 #include <libraries/posixc.h>
+#include "__posixc_intbase.h"
 #include "__fdesc.h"
 
 #include <string.h>
@@ -51,7 +52,7 @@
 
 ******************************************************************************/
 {
-    struct PosixCBase *PosixCBase = __aros_getbase_PosixCBase();
+    struct PosixCBase *PosixCBase = &__cwd_runtime_base()->PosixCBase;
 
     char *s = fgets(buffer, BUFSIZ, PosixCBase->_stdin);
     if (s)

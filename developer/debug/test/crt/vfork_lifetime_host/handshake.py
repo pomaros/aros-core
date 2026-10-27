@@ -116,7 +116,7 @@ result = {
     'scope': ('Complete actual launcher, failed-exec proxy and parent-return C '
               'functions; 128 failed execs before each final exit/retry. '
               'Modeled Exec signals, library Open/Close, exec body, parent '
-              'restoration and scheduler. Four real launcher setup failures. '
+              'restoration and scheduler. Six real launcher setup failures, including descriptor and cwd capture. '
               'No CreateNewProc, assembly or guest qualification.'),
 }
 (output / 'result.json').write_text(json.dumps(result, indent=2) + '\n')

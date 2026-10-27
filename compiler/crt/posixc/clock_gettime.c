@@ -52,7 +52,7 @@
 
 ******************************************************************************/
 {
-    struct PosixCIntBase *PosixCBase = (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+    struct PosixCIntBase *PosixCBase = __cwd_runtime_base();
     int retval = -1;
 
     if (!TimerBase)

@@ -4,9 +4,9 @@
 import argparse,hashlib,json,os,subprocess,tempfile
 from pathlib import Path
 p=argparse.ArgumentParser();p.add_argument('--output',type=Path,required=True);a=p.parse_args()
-here=Path(__file__).resolve().parent;root=here.parents[4];source=root/'compiler/pthread/pthread_create.c';text=source.read_text();body=text[text.index('{\n    ThreadInfo *inf;\n    struct Task *created;'):]
+here=Path(__file__).resolve().parent;root=here.parents[4];source=root/'compiler/pthread/pthread_create.c';text=source.read_text();body=text[text.index('{\n    ThreadInfo *inf;\n    char name[NAMELEN];'):]
 code='int pthread_create(pthread_t *thread,const pthread_attr_t *attr,void *(*start)(void *),void *arg)\n'+body
-variants={'positive':code,'reread-retired-record':code.replace('    *thread = threadnew;','    if (!inf->task) return EAGAIN;\n    *thread = threadnew;'),'clear-after-release':code.replace('        memset(inf, 0, sizeof(*inf));\n        ReleaseSemaphore(&thread_sem);','        ReleaseSemaphore(&thread_sem);\n        inf->parent = NULL;')}
+variants={'positive':code,'reread-retired-record':code.replace('    *thread = threadnew;','    if (!inf->task) return EAGAIN;\n    *thread = threadnew;'),'clear-after-release':code.replace('        memset(inf, 0, sizeof(ThreadInfo));\n        ReleaseSemaphore(&thread_sem);','        ReleaseSemaphore(&thread_sem);\n        inf->parent = NULL;')}
 a.output.mkdir(parents=True,exist_ok=False);rows=[]
 with tempfile.TemporaryDirectory(prefix='pthread-create-') as tmp:
  for name,c in variants.items():

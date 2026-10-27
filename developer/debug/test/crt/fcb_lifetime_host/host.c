@@ -52,7 +52,7 @@ static fdesc *table[SLOTS];
 static struct SignalSemaphore table_guard, reclock_sem;
 static _Thread_local int table_depth;
 static struct PosixCIntBase base;
-static struct PosixCIntBase *__aros_getbase_PosixCBase(void) { return &base; }
+static struct PosixCIntBase *__cwd_runtime_base(void) { return &base; }
 #define FD_LOCK(b) do { (void)(b); __fdesc_lock(); } while (0)
 #define FD_UNLOCK(b) do { (void)(b); __fdesc_unlock(); } while (0)
 static atomic_int handle_closes[64], handle_unlocks[64], block_frees, record_puts, record_closes;

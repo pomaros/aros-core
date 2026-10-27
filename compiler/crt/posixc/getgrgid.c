@@ -45,7 +45,7 @@
 ******************************************************************************/
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
 
     if (__usergroup_available(PosixCBase)) {
         return AROS_LC1(struct group *, getgrgid,

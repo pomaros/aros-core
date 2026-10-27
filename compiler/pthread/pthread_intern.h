@@ -45,6 +45,9 @@
 #include <stdlib.h>
 
 #include "pthread.h"
+#ifdef __AROS__
+#include <aros/crt_thread_context.h>
+#endif
 #include "debug.h"
 
 #if defined(__AMIGA__) && !defined(__MORPHOS__)
@@ -121,7 +124,23 @@ typedef struct
     int canceled;
     int detached;
     int thread_errno;           /* this thread's private C errno (see pthread_errno.c) */
+#ifdef __AROS__
+    struct CRTThreadContextSet ctxset;
+    struct PThreadAdmission *admit;
+#endif
 } ThreadInfo;
+
+#ifdef __AROS__
+/* Two references: worker publishes its result and drops its reference before
+   signalling. Creator never reads a worker slot after creation is released. */
+struct PThreadAdmission
+{
+    LONG refs;
+    struct Task *creator;
+    ULONG mask;
+    LONG result;
+};
+#endif
 
 extern ThreadInfo *threads[PTHREAD_THREADS_MAX];
 extern pthread_t threads_used;

@@ -1,6 +1,6 @@
 /*
     Copyright (C) 2008-2026, The AROS Development Team. All rights reserved.
-    Copyright (C) 2026 John KNIPPER
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>
 */
 
 #include <aros/debug.h>
@@ -10,6 +10,7 @@
 #include <proto/stdc.h>
 #include <exec/exec.h>
 #include <exec/tasks.h>
+#include <exec/alerts.h>
 #include <dos/dos.h>
 #include <libraries/stdc.h>
 #include <aros/cpu.h>
@@ -97,6 +98,11 @@
         >0: Running in parent, pid of child is return value.
 
     NOTES
+        The current launcher requires a DOS Process parent with an ETask.
+        Direct vfork calls from a raw Exec Task are not yet admitted: DOS
+        streams and pr_CES below require Process state. Retained worker
+        context support alone does not establish that admission contract.
+
         Current implementation of vfork() will only really start running things
         in parallel on an exec*() call. After vfork(), child code will run until
         _exit() or exec*(). With _exit(), the child will exit and the parent
@@ -141,7 +147,8 @@ LONG launcher()
     int exec_error; /* errno for when calling __exec_do */
     LONG ret = 0;
 
-    /* Publish while this Task is alive, including setup failure paths. */
+    /* A failed launcher may disappear before CreateNewProc returns. Publish
+       its stable identity while this Task is live, before any failure path. */
     udata->child_pid = GetETaskID(this);
 
     /* Allocate signal for parent->child communication */
@@ -188,6 +195,25 @@ LONG launcher()
           PosixCBase, PosixCBase->PosixCBase.StdCBase
     ));
 
+    /* Capture while running in the actual child. Publish only retained heap
+       objects; the proxy must never resolve its table through a child base. */
+    udata->child_namespace = __fd_namespace_capture();
+    udata->child_context = __cwd_runtime_context_capture();
+    if (!udata->child_namespace || !udata->child_context) {
+        __fd_namespace_drop(udata->child_namespace);
+        __cwd_context_release(udata->child_context);
+        udata->child_namespace = NULL;
+        udata->child_context = NULL;
+        CloseLibrary((struct Library *)PosixCBase->PosixCBase.StdCIOBase);
+        CloseLibrary((struct Library *)PosixCBase->PosixCBase.StdCBase);
+        CloseLibrary((struct Library *)PosixCBase);
+        FreeSignal(child_signal);
+        udata->child_errno = ENOMEM;
+        SETCHILDSTATE(CHILD_STATE_SETUP_FAILED);
+        Signal(udata->parent, 1UL << udata->parent_signal);
+        return -1;
+    }
+    __cwd_runtime_conversion_set(udata->child_unix_paths);
     udata->child_posixcbase = PosixCBase;
 
     if (setjmp(exec_exitjmp) == 0)
@@ -236,10 +262,10 @@ child_wait_command:
             ASSERTPARENTSTATE(PARENT_STATE_EXEC_DO_FINISHED);
             PRINTSTATE;
 
-            if (!exec_id)
-            {
-                /* The failed command is consumed before the proxy may submit
-                   another command using the same signal bit. */
+            if (!exec_id) {
+                /* Failed exec leaves the pretend child alive. Complete the
+                   failure acknowledgement before the caller may retry: two
+                   commands on one signal bit must never coalesce. */
                 SETCHILDSTATE(CHILD_STATE_EXEC_FAILED_READY);
                 Signal(udata->parent, 1UL << udata->parent_signal);
                 goto child_wait_command;
@@ -251,17 +277,25 @@ child_wait_command:
             Signal(udata->parent, 1UL << udata->parent_signal);
 
             D(bug("launcher: waiting for parent to be after _exit()\n"));
-            /* Shared data belongs to the parent after publication above.
-               Only child-local state may be accessed from this point. */
+            /* UDATA_NOT_USED transfers ownership back to the parent: from
+               this point on, only child-local state may be accessed. */
             Wait(1UL << child_signal);
 
-            D(bug("launcher: catch _exit()\n"));
-            __stdc_program_startup(exec_exitjmp, &exec_error);
+            if (exec_id)
+            {
+                D(bug("launcher: catch _exit()\n"));
+                __stdc_program_startup(exec_exitjmp, &exec_error);
 
-            D(bug("launcher: executing command\n"));
-            __exec_do(exec_id);
+D(bug("launcher: executing command\n"));
+                __exec_do(exec_id);
 
-            assert(0); /* Should not be reached */
+                assert(0); /* Should not be reached */
+            }
+            else
+            {
+                D(bug("launcher: __exec_prepare returned with an error\n"));
+                ret = -1;
+            }
         }
         else /* !udata->child_executed */
         {
@@ -272,8 +306,8 @@ child_wait_command:
             /* Inform parent that we won't use udata anymore */
             SETCHILDSTATE(CHILD_STATE_UDATA_NOT_USED);
             Signal(udata->parent, 1UL << udata->parent_signal);
-            /* The proxy still borrows our library bases and path storage.
-               Close them only after it restores its own runtime state. */
+            /* Even an _exit without exec must keep the borrowed StdC and
+               path buffer alive until the proxy has restored its own base. */
             Wait(1UL << child_signal);
         }
     }
@@ -285,12 +319,12 @@ child_wait_command:
         ret = exec_error;
     }
 
-    /* Publish from the real child before its Task and library bases vanish.
-       DOS entry return alone does not provide the ETask status for waitpid. */
+    /* DOS calls the entry's return value an exit code but does not publish it
+       to ETask unless an exit hook does so. waitpid consumes this exact field.
+       Publish from the real child, before its bases and context are closed. */
     {
         struct ETask *etask = GetETask(FindTask(NULL));
-        if (etask)
-            etask->et_Result1 = ret;
+        if (etask) etask->et_Result1 = ret;
     }
 
     D(bug("launcher: freeing child_signal\n"));
@@ -320,8 +354,13 @@ child_wait_command:
 pid_t __vfork(jmp_buf env)
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     struct Task *this = FindTask(NULL);
+    if (this->tc_Node.ln_Type != NT_PROCESS || !GetETaskID(this))
+    {
+        errno = ENOSYS;
+        vfork_longjmp(env, -1);
+    }
     struct vfork_data *udata = AllocMem(sizeof(struct vfork_data), MEMF_ANY | MEMF_CLEAR);
     if (udata == NULL)
     {
@@ -372,7 +411,7 @@ pid_t __vfork(jmp_buf env)
         /* Stack may have been overwritten when we return here,
          * we jump to here from a function lower in the call chain
          */
-        PosixCBase = (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        PosixCBase = __cwd_runtime_base();
         udata = PosixCBase->vfork_data;
 
         D(bug("__vfork: ParentPretendingChild: vfork_data = %x\n", udata));
@@ -433,9 +472,11 @@ static __attribute__((noinline)) void __vfork_exit_controlled_stack(struct vfork
     */
     parent_leavepretendchild(udata);
 
-    /* Both exec and plain _exit keep the child alive until restoration. */
+    /* Both launcher paths wait for this final acknowledgement. */
     SETPARENTSTATE(PARENT_STATE_STOPPED_PRETENDING);
     Signal(udata->child, 1UL << udata->child_signal);
+    __fd_namespace_drop(udata->child_namespace);
+    __cwd_context_release(udata->child_context);
 
     D(bug("__vfork: Parent: restoring startup buffer\n"));
     /* Restore parent errorptr and startup buffer */
@@ -456,10 +497,12 @@ static __attribute__((noinline)) void __vfork_exit_controlled_stack(struct vfork
 static void parent_createchild(struct vfork_data *udata)
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     jmp_buf vfork_jmp;
     struct Task *self = FindTask(NULL);
     struct Process *parent = (struct Process *)self;
+    struct __cwd_snapshot paths;
+    BPTR child_cwd, child_home;
 
     /* Inherit the parent's stack size for the child process.  An exec*()ed
      * child runs via RunCommand() using the child CLI's cli_DefaultStack,
@@ -471,6 +514,26 @@ static void parent_createchild(struct vfork_data *udata)
     IPTR childstack = (IPTR)self->tc_SPUpper - (IPTR)self->tc_SPLower;
 
     _VFORK_COPYENV(vfork_jmp,udata->vfork_jmp);
+
+    /* Logical paths can differ from Process fields (including on workers).
+       Duplicate while the snapshot owns the source locks. Explicit NP locks
+       transfer to the child only on successful CreateNewProc. */
+    if (!__cwd_runtime_snapshot(&paths)) {
+        FreeMem(udata, sizeof(*udata));
+        errno = ENOMEM;
+        vfork_longjmp(vfork_jmp, -1);
+    }
+    udata->child_unix_paths = paths.unix_paths;
+    child_cwd = DupLock(__cwd_directory_lock(paths.cwd));
+    child_home = DupLock(__cwd_directory_lock(paths.progdir));
+    __cwd_snapshot_release(&paths);
+    if (!child_cwd || !child_home) {
+        UnLock(child_cwd);
+        UnLock(child_home);
+        FreeMem(udata, sizeof(*udata));
+        errno = ENOMEM;
+        vfork_longjmp(vfork_jmp, -1);
+    }
 
     struct TagItem tags[] =
     {
@@ -487,6 +550,8 @@ static void parent_createchild(struct vfork_data *udata)
         { NP_Output,        (IPTR) Output() },
         { NP_Error,         (IPTR) parent->pr_CES },
         { NP_Cli,           (IPTR) TRUE },
+        { NP_CurrentDir,    (IPTR) child_cwd },
+        { NP_HomeDir,       (IPTR) child_home },
         { NP_Name,          (IPTR) "vfork()" },
         { NP_UserData,      (IPTR) udata },
         { NP_NotifyOnDeath, (IPTR) TRUE },
@@ -499,6 +564,8 @@ static void parent_createchild(struct vfork_data *udata)
     if (udata->parent_signal == -1)
     {
         /* Couldn't allocate the signal, return -1 */
+        UnLock(child_cwd);
+        UnLock(child_home);
         FreeMem(udata, sizeof(struct vfork_data));
         errno = ENOMEM;
         vfork_longjmp(vfork_jmp, -1);
@@ -514,6 +581,8 @@ static void parent_createchild(struct vfork_data *udata)
     {
         D(bug("__vfork: Child could not be created\n"));
         /* Something went wrong, return -1 */
+        UnLock(child_cwd);
+        UnLock(child_home);
         PosixCBase->flags = old_flags;
         FreeSignal(udata->parent_signal);
         FreeMem(udata, sizeof(struct vfork_data));
@@ -533,8 +602,6 @@ static void parent_createchild(struct vfork_data *udata)
         /* An error occured during child setup */
         D(bug("__vfork: Child returned an error (%d)\n", udata->child_errno));
         int error = udata->child_errno;
-        /* The Task may already be gone. Join and reap its retained ETask
-           by the ID published by the launcher before releasing shared data. */
         ChildWait(udata->child_pid);
         ChildFree(udata->child_pid);
         FreeSignal(udata->parent_signal);
@@ -542,12 +609,33 @@ static void parent_createchild(struct vfork_data *udata)
         errno = error;
         vfork_longjmp(vfork_jmp, -1);
     }
+
+    if (!__vfork_binding_enter(PosixCBase, udata->child_namespace,
+                              udata->child_context, &udata->binding)) {
+        /* Refuse before changing StdC/exitjmp or running any user child code.
+           Let the actual launcher finish its normal exit handshake. */
+        SETPARENTSTATE(PARENT_STATE_EXIT_CALLED);
+        Signal(udata->child, 1UL << udata->child_signal);
+        Wait(1UL << udata->parent_signal);
+        SETPARENTSTATE(PARENT_STATE_STOPPED_PRETENDING);
+        Signal(udata->child, 1UL << udata->child_signal);
+        /* The final acknowledgement permits teardown; join the exact child
+           before discarding the failed operation's death notification. */
+        ChildWait(udata->child_pid);
+        ChildFree(udata->child_pid);
+        __fd_namespace_drop(udata->child_namespace);
+        __cwd_context_release(udata->child_context);
+        FreeSignal(udata->parent_signal);
+        FreeMem(udata, sizeof(*udata));
+        errno = ENOMEM;
+        vfork_longjmp(vfork_jmp, -1);
+    }
 }
 
 static void parent_enterpretendchild(struct vfork_data *udata)
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     D(bug("parent_enterpretendchild(%x): entered\n", udata));
 
     PosixCBase->vfork_data = udata;
@@ -567,12 +655,9 @@ static void parent_enterpretendchild(struct vfork_data *udata)
     __posixc_set_envlistptr(udata->child_posixcbase->PosixCBase.StdCIOBase->env_list);
 #endif
 
-    /* Select the live child's retained descriptor namespace only for this
-       synchronous proxy. Worker namespaces retain the parent's original table
-       directly and are unaffected by the proxy's temporary selection. */
-    udata->parent_fd_owner = PosixCBase->fd_owner;
-    PosixCBase->fd_owner = udata->child_posixcbase;
-    
+    /* The retained table/context scope was admitted before any startup state
+       was changed. Worker bases still own the original namespace. */
+
     /* Remember and switch chdir fields */
     udata->parent_cd_changed = PosixCBase->cd_changed;
     PosixCBase->cd_changed = udata->child_posixcbase->cd_changed;
@@ -594,7 +679,7 @@ static void parent_enterpretendchild(struct vfork_data *udata)
 static void child_takeover(struct vfork_data *udata)
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     D(bug("child_takeover(%x): entered\n", udata));
 
     /* Set current dir to parent's current dir */
@@ -608,8 +693,15 @@ static void child_takeover(struct vfork_data *udata)
 static void parent_leavepretendchild(struct vfork_data *udata)
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     D(bug("parent_leavepretendchild(%x): entered\n", udata));
+
+    /* Refusal indicates a violated same-Task/LIFO runtime contract. Do not
+       free the scope or resume the parent with a partial restoration. */
+    if (!__vfork_binding_leave(PosixCBase, &udata->binding)) {
+        Alert(AT_DeadEnd);
+        for (;;) Wait(0);
+    }
 
     /* Restore parent's StdCBase */
     PosixCBase->PosixCBase.StdCBase = udata->parent_stdcbase;
@@ -618,9 +710,6 @@ static void parent_leavepretendchild(struct vfork_data *udata)
     /* Restore parent's env var list */
     __posixc_set_envlistptr(udata->parent_env_list);
 #endif
-
-    /* Restore parent's descriptor-table owner (see parent_enterpretendchild) */
-    PosixCBase->fd_owner = udata->parent_fd_owner;
 
     /* Switch to currentdir from before vfork() call */
     PosixCBase->cd_changed = udata->parent_cd_changed;

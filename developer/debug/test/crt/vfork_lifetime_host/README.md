@@ -13,7 +13,8 @@ and `waitpid`. The fixture models DOS process creation, Task execution,
 signalling and startup restoration, while retaining real intrusive child and
 notification lists. ASan and UBSan check memory accesses.
 
-The 640 creation attempts cover parent signal exhaustion, creation failure,
+The 1152 creation attempts cover cwd snapshot/duplication refusal, context
+binding refusal, parent signal exhaustion, creation failure,
 setup failure before `CreateNewProc` returns, setup failure with delayed exit,
 and successful admission, with and without existing parent flags. An unrelated
 child's exit result must remain available. A separate controlled-stack return
@@ -41,7 +42,8 @@ return on two host threads. Modeled signals use mutexes and condition variables;
 library open/close, exec bodies and parent restoration are fixture boundaries.
 The four scenarios check exit status 23, successful exec status 37, 128 failed
 exec attempts followed by exit status 43, and 128 failures followed by successful
-exec. Four launcher setup failures must publish the stable child ID before
+exec. Six launcher setup failures, including namespace/cwd capture refusal, must
+publish the stable child ID before
 teardown. The scheduler delays the child after each final acknowledgement until
 the parent has freed shared data, making later accesses observable by ASan.
 

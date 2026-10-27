@@ -69,7 +69,7 @@
 ******************************************************************************/
 {
     struct PosixCIntBase *PosixCIntBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
 
     if (length > GETENTROPY_MAX)
     {

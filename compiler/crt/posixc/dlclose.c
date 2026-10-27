@@ -46,7 +46,7 @@
 ******************************************************************************/
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     struct PosixCIntBase *owner = __dl_owner(PosixCBase);
     struct __dl_module *module;
 

@@ -1,5 +1,6 @@
 /*
     Copyright (C) 2008-2013, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>
 */
 
 #include "__posixc_intbase.h"
@@ -12,6 +13,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include "__upath.h"
+#include "__cwd_runtime.h"
 #include <aros/debug.h>
 
 /*****************************************************************************
@@ -50,48 +52,27 @@
 
 ******************************************************************************/
 {
-    struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
-    BPTR oldlock = BNULL;
-    BPTR newlock = BNULL;
-    BPTR handle = BNULL;
-
-    fdesc *fdc = __getfdesc(fd);
-    if (!(fdc->fcb->privflags & _FCB_ISDIR))
-    {
-        errno = ENOTDIR;
-        goto error;
+    int admission_error;
+    fcb *file = __holdfcb(fd, &admission_error);
+    struct __cwd_directory *directory;
+    LONG error;
+    BOOL changed;
+    BPTR handle;
+    if (!file) { errno = admission_error ? admission_error : EBADF; return -1; }
+    __fcb_lock(file);
+    if (!(file->privflags & _FCB_ISDIR)) {
+        __fcb_unlock(file); __releasefcb(file);
+        errno = ENOTDIR; return -1;
     }
-
-    if ( __get_default_file(fd, (long*) &handle) != 0 )
-    {
-        errno = EBADF;
-        goto error;
-    }
-
-    newlock = DupLock(handle);
-
-    if( newlock == BNULL )
-    {
-        errno = __stdc_ioerr2errno( IoErr() );
-        goto error;
-    }
-    oldlock = CurrentDir( newlock );
-
-    if( PosixCBase->cd_changed )
-    {
-        UnLock( oldlock );
-    }
-    else
-    {
-        PosixCBase->cd_changed = TRUE;
-        PosixCBase->cd_lock    = oldlock;
-    }
+    handle = file->handle;
+    __fcb_unlock(file);
+    /* Admission keeps this immutable directory handle alive during COPY_DIR;
+       no fcb semaphore is needed while waiting for the handler. */
+    directory = __cwd_directory_capture(handle, &error);
+    __releasefcb(file);
+    if (!directory) { errno = __stdc_ioerr2errno(error); return -1; }
+    changed = __cwd_runtime_set(directory);
+    __cwd_directory_release(directory);
+    if (!changed) { errno = ENOMEM; return -1; }
     return 0;
-
-error:
-    if( newlock != BNULL )
-        UnLock( newlock );
-    
-    return -1;
 }

@@ -178,7 +178,7 @@ static void init_random_state(struct __random_state *rs)
 
 static struct __random_state *get_random_state(void)
 {
-    struct PosixCIntBase *PosixCIntBase = (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+    struct PosixCIntBase *PosixCIntBase = __cwd_runtime_base();
     struct __random_state *rs;
 
     if (PosixCIntBase->rs)

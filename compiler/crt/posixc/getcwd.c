@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2012, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>
 
     POSIX.1-2008 function getcwd().
 */
@@ -8,7 +9,10 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <limits.h>
+#include <exec/memory.h>
 #include "__upath.h"
+#include "__cwd_runtime.h"
 #include <proto/exec.h>
 #include <proto/dos.h>
 
@@ -55,59 +59,39 @@
 
 ******************************************************************************/
 {
-    char pathname[FILENAME_MAX];
-    const char *tpath;
-    BPTR lock;
-  
-    lock = CurrentDir(BNULL);
-    CurrentDir(lock);
-    if (NameFromLock (lock, pathname, FILENAME_MAX) == 0)
-    {
-        errno = __stdc_ioerr2errno (IoErr ());
-        return NULL;
+    if (buf && !size) { errno = EINVAL; return NULL; }
+    POSIXC_CWD_SCOPE_OR_RETURN(NULL);
+    struct __cwd_snapshot snapshot;
+    char *native = NULL, *result = buf;
+    const char *converted;
+    size_t capacity = 256, length;
+    LONG error;
+    BOOL named;
+
+    if (!__cwd_runtime_snapshot(&snapshot)) { errno = ENOMEM; return NULL; }
+    for (;;) {
+        native = AllocVec(capacity, MEMF_PUBLIC);
+        if (!native) { error = ERROR_NO_FREE_STORE; break; }
+        named = NameFromLock(__cwd_directory_lock(snapshot.cwd), native, (LONG)capacity);
+        error = IoErr();
+        if (named) break;
+        FreeVec(native); native = NULL;
+        if (error != ERROR_LINE_TOO_LONG) break;
+        if (capacity > (size_t)0x7fffffffU / 2) break;
+        capacity *= 2;
     }
-
-    tpath = __path_a2u(pathname);
-    strcpy(pathname, tpath);
-
-    if (buf != NULL)
-    {
-        if (strlen(pathname) < size)
-        {
-            strcpy (buf, pathname);
-        }
-        else
-        {
-            errno = ERANGE;
-            return NULL;
-        }
+    __cwd_snapshot_release(&snapshot);
+    if (!native) { errno = __stdc_ioerr2errno(error); return NULL; }
+    converted = __path_a2u(native);
+    if (!converted) { FreeVec(native); return NULL; }
+    length = strlen(converted);
+    if (!size && !buf) size = length + 1;
+    if (length >= size) {
+        FreeVec(native); errno = ERANGE; return NULL;
     }
-    else
-    {
-        int len;
-        char *newbuf;
-
-        len = strlen(pathname);
-
-        if (size == 0)
-        {
-            size = len+1;
-        }
-
-        if (len < size)
-        {
-            newbuf = (char *)malloc (size*sizeof(char));
-            strcpy (newbuf, pathname);
-            return newbuf;
-        }
-        else
-        {
-            errno = ERANGE;
-            return NULL;
-        }
-    }
-
-    return buf;
-
+    if (!result) result = malloc(size);
+    if (!result) { FreeVec(native); errno = ENOMEM; return NULL; }
+    memmove(result, converted, length + 1);
+    FreeVec(native);
+    return result;
 } /* getcwd */
-

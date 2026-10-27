@@ -47,7 +47,7 @@
 
 ******************************************************************************/
 {
-    struct PosixCBase *PosixCBase = __aros_getbase_PosixCBase();
+    struct PosixCBase *PosixCBase = &__cwd_runtime_base()->PosixCBase;
     struct PosixCIntBase *PosixCIntBase = (struct PosixCIntBase *)PosixCBase;
     char *s;
 

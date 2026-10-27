@@ -1,5 +1,6 @@
 /*
     Copyright (C) 2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>
 
     Desc: helpers for the POSIX.1-2008 *at() functions
 */
@@ -14,6 +15,7 @@
 
 #include "__fdesc.h"
 #include "__at.h"
+#include "__cwd_runtime.h"
 
 int __at_isabsolute(const char *pathname)
 {
@@ -31,22 +33,31 @@ int __at_isabsolute(const char *pathname)
 
 int __at_enter(int dirfd, BPTR *oldcd, BPTR *dirlock)
 {
-    fdesc *desc;
+    fcb *file;
+    LONG error;
+    BPTR handle;
 
     *oldcd = BNULL;
     *dirlock = BNULL;
 
-    if (dirfd == AT_FDCWD)
+    if (dirfd == AT_FDCWD) {
+        if (!__cwd_runtime_scope_enter()) { errno = ENOMEM; return -1; }
+        *oldcd = (BPTR)-1; /* marks an admitted scope with no override lock */
         return 0;
+    }
 
-    desc = __getfdesc(dirfd);
-    if (!desc)
+    int admission_error;
+    file = __holdfcb(dirfd, &admission_error);
+    if (!file)
     {
-        errno = EBADF;
+        errno = admission_error ? admission_error : EBADF;
         return -1;
     }
-    if (!(desc->fcb->privflags & _FCB_ISDIR))
+    __fcb_lock(file);
+    if (!(file->privflags & _FCB_ISDIR))
     {
+        __fcb_unlock(file);
+        __releasefcb(file);
         errno = ENOTDIR;
         return -1;
     }
@@ -54,14 +65,21 @@ int __at_enter(int dirfd, BPTR *oldcd, BPTR *dirlock)
     /* The directory descriptor holds a shared lock; duplicate it so the
        current directory stays valid even if the descriptor is closed by
        another thread meanwhile. */
-    *dirlock = DupLock(desc->fcb->handle);
+    handle = file->handle;
+    __fcb_unlock(file);
+    *dirlock = DupLock(handle);
+    error = *dirlock == BNULL ? IoErr() : 0;
+    __releasefcb(file);
     if (*dirlock == BNULL)
     {
-        errno = __stdc_ioerr2errno(IoErr());
+        errno = __stdc_ioerr2errno(error);
         return -1;
     }
 
-    *oldcd = CurrentDir(*dirlock);
+    if (!__cwd_runtime_scope_enter()) {
+        UnLock(*dirlock); *dirlock = BNULL; errno = ENOMEM; return -1;
+    }
+    *oldcd = __cwd_runtime_override(*dirlock);
     D(bug("[posixc] %s: dirfd %d -> lock %p (old cd %p)\n", __func__, dirfd, BADDR(*dirlock), BADDR(*oldcd)));
     return 0;
 }
@@ -70,7 +88,8 @@ void __at_leave(BPTR oldcd, BPTR dirlock)
 {
     if (dirlock != BNULL)
     {
-        CurrentDir(oldcd);
+        __cwd_runtime_override(oldcd);
         UnLock(dirlock);
-    }
+        __cwd_runtime_scope_leave();
+    } else if (oldcd == (BPTR)-1) __cwd_runtime_scope_leave();
 }

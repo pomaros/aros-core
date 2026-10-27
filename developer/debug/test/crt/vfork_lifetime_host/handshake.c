@@ -32,12 +32,13 @@ typedef uintptr_t IPTR;typedef void *APTR;typedef void *BPTR;typedef int BOOL;ty
 struct Library {int kind;};struct StdCBase;struct StdCIOBase;struct __cwd_context;struct __fd_namespace;struct __env_item;
 struct Task { APTR tc_UserData; pthread_mutex_t guard; pthread_cond_t changed; unsigned signals; };
 struct PosixCIntBase {struct vfork_data *vfork_data;struct {struct StdCBase *StdCBase;struct StdCIOBase *StdCIOBase;} PosixCBase;int doupath;};
+struct __vfork_binding {int unused;};
 /* VFORK_DATA */
 static _Thread_local struct Task *self;
 static _Thread_local jmp_buf *exit_jump;
 static _Thread_local int *exit_code;
 static struct Task parent,child;
-static atomic_int freed,closed,restored,borrowed;
+static atomic_int freed,closed,restored,references,borrowed;
 static int terminal_wait, premature_control, fail_first, setup_failure;
 struct ETask {LONG et_Result1;};static struct ETask etask;
 struct ETask *GetETask(struct Task *task) {assert(task==&child);return &etask;}
@@ -66,6 +67,11 @@ void CloseLibrary(struct Library *lib) {
  assert(!atomic_load(&borrowed)||atomic_load(&restored)); /* no proxy before setup succeeds */
  atomic_store(&closed,1);free(lib);
 }
+struct __fd_namespace *__fd_namespace_capture(void) {if(setup_failure==5)return NULL;atomic_fetch_add(&references,1);return(APTR)(uintptr_t)1;}
+struct __cwd_context *__cwd_runtime_context_capture(void) {if(setup_failure==6)return NULL;atomic_fetch_add(&references,1);return(APTR)(uintptr_t)2;}
+void __fd_namespace_drop(struct __fd_namespace *s) {if(s)assert(atomic_fetch_sub(&references,1)>0);}
+void __cwd_context_release(struct __cwd_context *c) {if(c)assert(atomic_fetch_sub(&references,1)>0);}
+void __cwd_runtime_conversion_set(BOOL b) {(void)b;}
 static void child_takeover(struct vfork_data *u) {(void)u;}
 void *__exec_prepare(const char *name,int flags,char *const *argv,char *const *env) {(void)name;(void)flags;(void)argv;(void)env;if(!strcmp(name,"missing")) {errno=ENOENT;return NULL;}return(APTR)(uintptr_t)3;}
 void __stdc_program_startup(jmp_buf env,int *code) {exit_jump=(APTR)env;exit_code=code;}
@@ -85,7 +91,7 @@ int main(void) {
  for(int mode=0;mode<4;mode++) {
   int exec=mode==1 || mode==3;
   init_task(&parent);init_task(&child);self=&parent;
-  atomic_store(&freed,0);atomic_store(&closed,0);atomic_store(&restored,0);atomic_store(&borrowed,0);terminal_wait=0;
+  atomic_store(&freed,0);atomic_store(&closed,0);atomic_store(&restored,0);atomic_store(&references,0);atomic_store(&borrowed,0);terminal_wait=0;
   etask.et_Result1=-999;fail_first=mode>=2;
   struct vfork_data *u=calloc(1,sizeof(*u));assert(u);child.tc_UserData=u;u->parent=&parent;u->child=&child;u->parent_signal=4;
   struct PosixCIntBase parent_base={.vfork_data=u};u->parent_posixcbase=&parent_base;
@@ -103,20 +109,20 @@ int main(void) {
   jmp_buf env;int result=setjmp(env);
   if(!result) {_VFORK_COPYENV(u->vfork_jmp,env);__vfork_exit_controlled_stack(u);assert(0);}
   assert(result==91);APTR ret;assert(!pthread_join(thread,&ret));assert((intptr_t)ret==(exec?37:mode==2?43:23));assert(etask.et_Result1==(LONG)(intptr_t)ret);
-  assert(atomic_load(&freed)&&atomic_load(&closed));
+  assert(atomic_load(&freed)&&atomic_load(&closed)&&!atomic_load(&references));
   assert(!pthread_mutex_destroy(&parent.guard));assert(!pthread_cond_destroy(&parent.changed));
   assert(!pthread_mutex_destroy(&child.guard));assert(!pthread_cond_destroy(&child.changed));
  }
- for(setup_failure=1;setup_failure<=4;setup_failure++) {
+ for(setup_failure=1;setup_failure<=6;setup_failure++) {
   init_task(&parent);init_task(&child);self=&parent;
-  atomic_store(&freed,0);atomic_store(&closed,0);atomic_store(&restored,0);atomic_store(&borrowed,0);terminal_wait=0;
+  atomic_store(&freed,0);atomic_store(&closed,0);atomic_store(&restored,0);atomic_store(&references,0);atomic_store(&borrowed,0);terminal_wait=0;
   struct vfork_data *u=calloc(1,sizeof(*u));assert(u);child.tc_UserData=u;u->parent=&parent;u->child=&child;u->parent_signal=4;
   pthread_t thread;assert(!pthread_create(&thread,NULL,run_child,NULL));Wait(1U<<4);
   assert(u->child_state==CHILD_STATE_SETUP_FAILED && u->child_pid==91 && u->child_errno==ENOMEM);
   APTR ret;assert(!pthread_join(thread,&ret));assert((intptr_t)ret==-1);
-  assert(!atomic_load(&borrowed));FreeMem(u,sizeof(*u));
+  assert(!atomic_load(&references)&&!atomic_load(&borrowed));FreeMem(u,sizeof(*u));
   assert(!pthread_mutex_destroy(&parent.guard));assert(!pthread_cond_destroy(&parent.changed));
   assert(!pthread_mutex_destroy(&child.guard));assert(!pthread_cond_destroy(&child.changed));
  }
- puts("PASS: launcher/proxy/return exit23/exec37/failure then43/retry37; four real launcher setup failures publish UID before teardown");return 0;
+ puts("PASS: launcher/proxy/return exit23/exec37/failure then43/retry37; six real launcher setup failures publish UID before teardown");return 0;
 }

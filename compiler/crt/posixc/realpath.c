@@ -82,7 +82,7 @@ __realpath_ados(const char *path, char *resolved_path);
 ******************************************************************************/
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     char *ret;
     int dofree = 0;
     int fd;

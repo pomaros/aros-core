@@ -101,6 +101,9 @@ static void *AllocMem(size_t size, ULONG flags);
 static void FreeMem(void *p, size_t size);
 static struct Library *OpenLibrary(CONST_STRPTR name, ULONG version);
 static void CloseLibrary(struct Library *base);
+#define PROVIDERS 9
+static _Thread_local APTR selected_instances[PROVIDERS];
+static _Thread_local int pin_instances[PROVIDERS];
 #include <aros/crt_thread_context.h>
 
 static atomic_int allocations;
@@ -124,7 +127,6 @@ static void FreeMem(void *p, size_t size) {
     assert(!pthread_rwlock_destroy(&((struct CRTThreadContexts *)p)->tc_Sem.lock));
     atomic_fetch_sub(&allocations, 1); free(p);
 }
-#define PROVIDERS 9
 struct provider {
     struct CRTThreadContextHooks hooks;
     char name[24];
@@ -135,13 +137,16 @@ static struct provider providers[PROVIDERS];
 struct context { struct provider *owner; struct Library *worker; };
 static int reload_on_open;
 static unsigned leave_order[PROVIDERS], leave_count;
-static BOOL provider_active(unsigned n) {
-    assert(semaphore_depth && !namespace_depth); return providers[n].active;
+static APTR provider_select(unsigned n) {
+    assert(semaphore_depth && !namespace_depth);
+    return providers[n].active ? selected_instances[n] : NULL;
 }
-static BOOL provider_capture(unsigned n, APTR *out, int expected_instance) {
+static BOOL provider_capture(unsigned n, APTR source, APTR *out, int expected_instance) {
     struct provider *p = &providers[n];
     assert(!semaphore_depth && !namespace_depth && p->opens > 0);
     assert(p->instance == expected_instance);
+    assert(p->active && "inactive providers must never be captured");
+    assert(source == p && "capture must use the instance selected before pinning");
     if (p->fail_capture && !p->partial_capture) return FALSE;
     struct context *c = calloc(1, sizeof(*c)); assert(c); c->owner = p;
     p->contexts++; p->captures++; *out = c;
@@ -166,13 +171,13 @@ static void provider_cancel(unsigned n, APTR data) {
     p->cancelled++; p->contexts--; free(c);
 }
 #define HOOKS(n) \
-    static BOOL active##n(void) { return provider_active(n); } \
-    static BOOL capture##n(APTR *o) { return provider_capture(n,o,0); } \
+    static APTR select##n(void) { return provider_select(n); } \
+    static BOOL capture##n(APTR s, APTR *o) { return provider_capture(n,s,o,0); } \
     static BOOL enter##n(APTR c) { return provider_enter(n,c); } \
     static struct Library *leave##n(APTR c) { return provider_leave(n,c); } \
     static void cancel##n(APTR c) { provider_cancel(n,c); }
 HOOKS(0) HOOKS(1) HOOKS(2) HOOKS(3) HOOKS(4) HOOKS(5) HOOKS(6) HOOKS(7) HOOKS(8)
-static BOOL capture_new(APTR *o) { return provider_capture(0,o,1); }
+static BOOL capture_new(APTR s, APTR *o) { return provider_capture(0,s,o,1); }
 static struct Library *OpenLibrary(CONST_STRPTR name, ULONG version) {
     assert(!semaphore_depth && !namespace_depth); (void)version;
     unsigned n;
@@ -186,18 +191,20 @@ static struct Library *OpenLibrary(CONST_STRPTR name, ULONG version) {
     }
     if (p->fail_open) return NULL;
     struct Library *l = malloc(sizeof(*l)); assert(l);
-    l->provider = n; l->opener = pthread_self(); p->opens++; return l;
+    l->provider = n; l->opener = pthread_self(); p->opens++;
+    selected_instances[n]=&pin_instances[n]; return l;
 }
 static void CloseLibrary(struct Library *l) {
     assert(!semaphore_depth && !namespace_depth && !in_leave);
     assert(pthread_equal(l->opener, pthread_self()));
     struct provider *p = &providers[l->provider]; assert(p->opens > 0); p->opens--; free(l);
+    if (!p->opens) selected_instances[p-providers]=p;
     if (!p->opens && p->expunge) CRTThreadContextUnregister(&p->hooks);
 }
 static void reset(void) {
     for (unsigned n = 0; n < PROVIDERS; n++) {
         struct provider *p = &providers[n]; assert(!p->opens && !p->contexts);
-        p->active = n < 2; p->captures = p->entered = p->left = p->cancelled = 0;
+        selected_instances[n]=p; p->active = n < 2; p->captures = p->entered = p->left = p->cancelled = 0;
         p->fail_open = p->fail_capture = p->partial_capture = p->fail_enter = p->expunge = 0;
     }
     leave_count = 0;
@@ -238,7 +245,7 @@ static void enter_worker(struct CRTThreadContextSet *set, BOOL success) {
 #define INIT(n) do { \
     struct provider *p=&providers[n]; snprintf(p->name,sizeof(p->name),"provider%u.library",n); \
     p->hooks=(struct CRTThreadContextHooks){ .tc_Version=CRT_THREAD_CONTEXT_VERSION, \
-      .tc_LibName=p->name, .tc_Active=active##n, .tc_Capture=capture##n, \
+      .tc_LibName=p->name, .tc_Select=select##n, .tc_Capture=capture##n, \
       .tc_Enter=enter##n, .tc_Leave=leave##n, .tc_Cancel=cancel##n }; \
 } while (0)
 int main(void) {

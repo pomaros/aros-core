@@ -59,7 +59,7 @@ for marker, implementation in replacements.items():
 # unrelated assertion or sanitizer error.
 controls = {
     'signal-leak': ('FreeSignal(udata->parent_signal);', '/* missing signal cleanup */',
-                    'Assertion failed: (!signals&&!allocations&&!running&&!pending_exit)'),
+                    'Assertion failed: (!signals&&!locks&&!allocations&&!refs&&!snapshots&&!running&&!pending_exit)'),
     'nested-flags': ('PosixCBase->flags = old_flags;',
                      'PosixCBase->flags &= ~VFORK_PARENT; (void)old_flags;',
                      'Assertion failed: (base.flags==old_flags)'),

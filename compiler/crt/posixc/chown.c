@@ -52,7 +52,7 @@
 ******************************************************************************/
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     int                  res     = -1;
     BPTR                 lock    = BNULL;
     struct FileInfoBlock *fib    = NULL;

@@ -8,6 +8,7 @@
 #include <proto/dos.h>
 #include <errno.h>
 #include "__upath.h"
+#include "__cwd_runtime.h"
 #include "__dos_error.h"
 
 extern int __stdcio_remove(const char *);
@@ -46,6 +47,7 @@ int remove (
 
 ******************************************************************************/
 {
+    POSIXC_CWD_SCOPE_OR_RETURN(-1);
     const char *native_path = __path_u2a(pathname);
     LONG error;
     int result;

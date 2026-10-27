@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2026 John KNIPPER <code@jkn.me> (altered creation-result handling)
+  Copyright (C) 2026 John KNIPPER <code@jkn.me> (altered runtime admission)
   Copyright (C) 2014 Szilard Biro
   Copyright (C) 2018 Harry Sintonen
   Copyright (C) 2019 Stefan "Bebbo" Franke - AmigaOS 3 port
@@ -32,66 +32,23 @@
 #include "pthread_intern.h"
 #include "debug.h"
 
-/*
- * Loosely-coupled C-runtime per-thread hook registry.  Kept in sync with the
- * identical declarations in compiler/crt/posixc/__threadhook.c and found by
- * name in the public semaphore list.
- *
- * A C runtime that uses per-task library bases (e.g. posixc.library, which is
- * "pertaskbase") reads the calling Task's own base out of per-task storage and
- * jumps through it directly.  A worker we create never runs the program's C
- * startup, so its slot is NULL and the first CRT call would bus-fault.  The
- * CRT registers enter/leave hooks here; we run them in every worker so it
- * acquires a valid CRT base of its own.  pthread stays C-runtime agnostic - it
- * neither knows nor names any CRT.
- */
-#define CRT_THREADHOOKS_SEMNAME "crt.thread-hooks.v1"
-#define CRT_MAX_THREADHOOKS     8
-
-struct CRTThreadHook
+static void ClearThreadInfo(ThreadInfo *inf)
 {
-    struct MinNode  th_Node;
-    void          (*th_Enter)(void);
-    void          (*th_Leave)(void);
-};
+    volatile UBYTE *p = (volatile UBYTE *)inf;
+    ULONG n = sizeof(ThreadInfo);
 
-struct CRTThreadHooks
-{
-    struct SignalSemaphore th_Sem;
-    struct MinList         th_Hooks;
-    char                   th_Name[sizeof(CRT_THREADHOOKS_SEMNAME)];
-};
-
-static void RunCRTThreadHooks(BOOL enter)
-{
-    struct CRTThreadHooks *reg;
-    struct CRTThreadHook *h;
-    void (*fns[CRT_MAX_THREADHOOKS])(void);
-    int n = 0, i;
-
-    reg = (struct CRTThreadHooks *)FindSemaphore((STRPTR)CRT_THREADHOOKS_SEMNAME);
-    if (!reg)
-        return;
-
-    /* Snapshot the hook pointers under the lock, then call them unlocked: an
-       enter hook opens a library and must not run under our semaphore. */
-    ObtainSemaphoreShared(&reg->th_Sem);
-    for (h = (struct CRTThreadHook *)reg->th_Hooks.mlh_Head;
-         h->th_Node.mln_Succ != NULL && n < CRT_MAX_THREADHOOKS;
-         h = (struct CRTThreadHook *)h->th_Node.mln_Succ)
-    {
-        void (*fn)(void) = enter ? h->th_Enter : h->th_Leave;
-        if (fn)
-            fns[n++] = fn;
-    }
-    ReleaseSemaphore(&reg->th_Sem);
-
-    /* Leave hooks run in the reverse order of the enter hooks. */
-    if (enter)
-        for (i = 0; i < n; i++) fns[i]();
-    else
-        for (i = n - 1; i >= 0; i--) fns[i]();
+    while (n--)
+        *p++ = 0;
 }
+
+#ifdef __AROS__
+static void ReleaseAdmission(struct PThreadAdmission *admit)
+{
+    if (__atomic_sub_fetch(&admit->refs, 1, __ATOMIC_ACQ_REL) == 0)
+        FreeVec(admit);
+}
+
+#endif
 
 static void StarterFunc(void)
 {
@@ -118,6 +75,33 @@ static void StarterFunc(void)
     ObtainSemaphore(&thread_sem);
     ReleaseSemaphore(&thread_sem);
 
+#ifdef __AROS__
+    // admission: enter every captured C-runtime context, then tell the
+    // creator, which is waiting and holds the providers' pins until then.
+    // Nothing of the token is touched after the reference is dropped.
+    {
+        struct PThreadAdmission *admit = inf->admit;
+        struct Task *creator = admit->creator;
+        ULONG mask = admit->mask;
+        BOOL admitted = CRTThreadContextEnter(&inf->ctxset);
+
+        inf->admit = NULL;
+        admit->result = admitted;
+        ReleaseAdmission(admit);
+        Signal(creator, mask);
+        if (!admitted)
+        {
+            // refused: start never runs; the creator reports EAGAIN and
+            // never looks at this slot again, so free it here
+            ObtainSemaphore(&thread_sem);
+            ClearThreadInfo(inf);
+            ReleaseSemaphore(&thread_sem);
+            return;
+        }
+    }
+
+#endif
+
     // trim the name
     //inf->task->tc_Node.ln_Name[inf->oldlen];
 
@@ -134,10 +118,6 @@ static void StarterFunc(void)
 #endif
     SetExcept(SIGBREAKF_CTRL_C, SIGBREAKF_CTRL_C);
 #endif
-
-    // give this worker its own C runtime base(s) before running any user or
-    // CRT code; run once, before the pthread_exit jump point
-    RunCRTThreadHooks(TRUE);
 
     // set a jump point for pthread_exit
     if (!setjmp(inf->jmp))
@@ -205,8 +185,10 @@ static void StarterFunc(void)
     ReleaseSemaphore(&tls_sem);
 
     // release the C runtime base(s) acquired above, after all user code
-    // (including TLS destructors) has run
-    RunCRTThreadHooks(FALSE);
+    // (including TLS destructors) has run, in reverse admission order
+#ifdef __AROS__
+    CRTThreadContextLeave(&inf->ctxset);
+#endif
 
     // decide under thread_sem: pthread_detach() and pthread_join() may run
     // concurrently. A joiner is woken even if we were detached meanwhile.
@@ -215,7 +197,7 @@ static void StarterFunc(void)
     if (!inf->detached)
         inf->finished = TRUE;
     else
-        memset(inf, 0, sizeof(ThreadInfo));
+        ClearThreadInfo(inf);
     ReleaseSemaphore(&thread_sem);
     // the joiner may unload our code: let it run once we are gone
     Forbid();
@@ -254,14 +236,23 @@ static void StarterFunc(void)
 
     RESULT
         0 on success; *thread receives the identifier. EINVAL if thread or start
-        is NULL. EAGAIN if no slot is available, a thread record cannot be
-        allocated, or process creation fails.
-        On error, *thread is unchanged. Errors are returned directly.
+        is NULL. EAGAIN if no slot is available, a thread record, the
+        admission token or a signal cannot be allocated, the process cannot
+        be created, or a C runtime refuses to capture the creator's context
+        or to enter it in the worker. On error, *thread is unchanged and
+        start has not run. Errors are returned directly.
 
     NOTES
         Include <pthread.h> and link with the pthread link library. Call from
         task context with its runtime initialized. Creation can wait for the
         internal thread semaphore and system allocation; it has no timeout.
+
+        Creation runs the version-2 C-runtime admission of
+        <aros/crt_thread_context.h>: every registered runtime captures the
+        creator's context first, and the call returns only after the worker
+        has entered all of them. A worker that cannot enter them exits
+        without running start. Provider code stays pinned until admission has
+        been acknowledged; there is no legacy callback fallback.
 
         The worker runs in a DOS process and applies attr's scheduling priority.
         Scheduling inheritance and contention-scope fields are not implemented
@@ -287,18 +278,46 @@ static void StarterFunc(void)
 *****************************************************************************/
 {
     ThreadInfo *inf;
-    struct Task *created;
     char name[NAMELEN];
     size_t oldlen;
     pthread_t threadnew;
+    struct Task *task;
+#ifdef __AROS__
+    struct CRTThreadContextSet set;
+    struct PThreadAdmission *admit;
+    BYTE sigbit;
+    ULONG i;
+    BOOL admitted;
+#endif
 
     D(bug("%s(%p, %p, %p, %p)\n", __FUNCTION__, thread, attr, start, arg));
 
-    /* Route stdc's errno through per-thread storage before any worker runs. */
     _pthread_init_errno();
 
     if (thread == NULL || start == NULL)
         return EINVAL;
+
+#ifdef __AROS__
+    // capture the creator's C-runtime contexts before anything exists; this
+    // pins each provider's library and may wait, so not under thread_sem
+    if (!CRTThreadContextCapture(&set))
+        return EAGAIN;
+    // AllocVec: memory from a thread's C runtime goes away with the thread
+    admit = AllocVec(sizeof(*admit), MEMF_PUBLIC | MEMF_CLEAR);
+    sigbit = admit ? AllocSignal(-1) : -1;
+    if (sigbit < 0)
+    {
+        if (admit)
+            FreeVec(admit);
+        CRTThreadContextCancel(&set);
+        return EAGAIN;
+    }
+    admit->refs = 2;
+    admit->creator = GET_THIS_TASK;
+    admit->mask = 1UL << sigbit;
+    SetSignal(0, admit->mask);
+
+#endif
 
     ObtainSemaphore(&thread_sem);
 
@@ -307,15 +326,24 @@ static void StarterFunc(void)
     if (threadnew == PTHREAD_THREADS_MAX)
     {
         ReleaseSemaphore(&thread_sem);
+#ifdef __AROS__
+        FreeSignal(sigbit);
+        FreeVec(admit);
+        CRTThreadContextCancel(&set);
+#endif
         return EAGAIN;
     }
 
     if (threadnew == threads_used)
     {
-        // AllocVec: memory from a thread's C runtime goes away with the thread
         if (!(threads[threadnew] = AllocVec(sizeof(ThreadInfo), MEMF_ANY)))
         {
             ReleaseSemaphore(&thread_sem);
+#ifdef __AROS__
+            FreeSignal(sigbit);
+            FreeVec(admit);
+            CRTThreadContextCancel(&set);
+#endif
             return EAGAIN;
         }
         __atomic_store_n(&threads_used, threadnew + 1, __ATOMIC_RELEASE);
@@ -335,6 +363,14 @@ static void StarterFunc(void)
     inf->cancelstate = PTHREAD_CANCEL_ENABLE;
     inf->canceltype = PTHREAD_CANCEL_DEFERRED;
     inf->detached = inf->attr.detachstate == PTHREAD_CREATE_DETACHED;
+#ifdef __AROS__
+    // the worker gets the contexts; the pins stay in the creator's copy
+    inf->ctxset = set;
+    for (i = 0; i < inf->ctxset.cs_Count; i++)
+        inf->ctxset.cs_Entries[i].ce_Pin = NULL;
+    inf->admit = admit;
+
+#endif
 
     // let's trick CreateNewProc into allocating a larger buffer for the name
     snprintf(name, sizeof(name), "pthread thread #%d", threadnew);
@@ -343,7 +379,7 @@ static void StarterFunc(void)
     name[sizeof(name) - 1] = '\0';
 
     // start the child thread
-    created = (struct Task *)CreateNewProcTags(NP_Entry, (IPTR)StarterFunc,
+    task = (struct Task *)CreateNewProcTags(NP_Entry, (IPTR)StarterFunc,
 #ifdef __MORPHOS__
         NP_CodeType, CODETYPE_PPC,
         (inf->attr.stackaddr == NULL && inf->attr.stacksize > 0) ? NP_PPCStackSize : TAG_IGNORE, inf->attr.stacksize,
@@ -358,18 +394,33 @@ static void StarterFunc(void)
 #endif
         NP_Name, (IPTR)name,
         TAG_DONE);
-
-    inf->task = created;
-    if (!created)
+    inf->task = task;
+    if (!task)
     {
-        /* The slot becomes reusable when the semaphore is released. */
-        memset(inf, 0, sizeof(*inf));
+        // no worker ever saw the contexts or the token
+        memset(inf, 0, sizeof(ThreadInfo));
         ReleaseSemaphore(&thread_sem);
+#ifdef __AROS__
+        FreeSignal(sigbit);
+        FreeVec(admit);
+        CRTThreadContextCancel(&set);
+#endif
         return EAGAIN;
     }
-    /* After release a detached worker may clear or reuse inf immediately.
-     * The creation result belongs to this call, not to that shared record. */
     ReleaseSemaphore(&thread_sem);
+
+#ifdef __AROS__
+    // success only once the worker has entered its contexts. From here on
+    // inf belongs to the worker: a detached one may already be gone.
+    Wait(admit->mask);
+    admitted = admit->result;
+    CRTThreadContextReleasePins(&set);
+    FreeSignal(sigbit);
+    ReleaseAdmission(admit);
+    if (!admitted)
+        return EAGAIN;
+
+#endif
 
     *thread = threadnew;
 

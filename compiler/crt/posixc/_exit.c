@@ -5,6 +5,7 @@
 */
 
 #include <setjmp.h>
+#include <stdlib.h>
 
 #include "__posixc_intbase.h"
 #include "__vfork.h"
@@ -47,7 +48,7 @@
 ******************************************************************************/
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
 
     if (PosixCBase->flags & PRETEND_CHILD)
     {

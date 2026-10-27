@@ -60,7 +60,8 @@ struct PosixCIntBase {
 };
 static _Thread_local struct PosixCIntBase *current_base,*parent_base;
 static _Thread_local struct Task *current_task;
-static struct PosixCIntBase *__aros_getbase_PosixCBase(void) { return current_base; }
+static _Thread_local struct __fd_namespace *admitted_space;
+static struct PosixCIntBase *__cwd_runtime_base(void) { return current_base; }
 static void *__GM_GetBaseParent(struct PosixCIntBase *base) { assert(base==current_base);return parent_base; }
 static struct Task *FindTask(void *unused) { (void)unused;return current_task; }
 static ULONG GetETaskID(struct Task *task) { assert(task==current_task);return task->id; }
@@ -132,6 +133,13 @@ static void __releasefcb(fcb *file) {
     atomic_fetch_add(&closed_blocks,1);FreeVec(file);
 }
 /* DISPOSE */
+/* CAPTURE_SPACE */
+/* DROP_SPACE */
+/* Model the admission token boundary with an owned namespace, never a base. */
+static struct __fd_namespace *__cwd_admission_namespace(BOOL *pending) {
+    *pending=admitted_space!=NULL;
+    return admitted_space && __fd_namespace_retain(admitted_space) ? admitted_space : NULL;
+}
 static void __fcb_lock(fcb *file) { ObtainSemaphore(&file->io_lock); }
 static void __fcb_unlock(fcb *file) { ReleaseSemaphore(&file->io_lock); }
 static int __copy_fdarray(fdesc **array,int slots) { (void)array;(void)slots;abort(); }
@@ -155,9 +163,10 @@ static void DeletePool(void *pool) { free(pool);atomic_fetch_add(&pools_freed,1)
 static void *worker(void *data) {
     struct PosixCIntBase base={.internalpool=malloc(8)};
     struct Task task={.tc_Node.ln_Type=NT_TASK,.id=101+(ULONG)atomic_fetch_add(&worker_ids,1)};
-    current_base=&base;parent_base=data;current_task=&task;
-    assert(__init_fd(&base));parent_base=NULL;
+    current_base=&base;parent_base=NULL;current_task=&task;admitted_space=data;
     atomic_fetch_add(&ready,1);while(!atomic_load(&go))sched_yield();
+    assert(__init_fd(&base));
+    __fd_namespace_drop(admitted_space);admitted_space=NULL;
     struct __fd_namespace *space=__fd_namespace_current();
     assert(space && space->process_id==42);
     if(task.id==101)assert(space && space->process_id==42 && owner_pid(owner_namespace())==42);
@@ -181,7 +190,11 @@ int main(void) {
     struct reclock *record=AllocVec(sizeof(*record),MEMF_PUBLIC|MEMF_CLEAR);
     record->owner=creator->fd_namespace;AddTail((struct List *)&reclock_list,(struct Node *)record);
     atomic_store(&active_records,1);
-    pthread_t threads[8];for(int n=0;n<8;n++)assert(!pthread_create(&threads[n],NULL,worker,creator));
+    pthread_t threads[8];
+    for(int n=0;n<8;n++) {
+        struct __fd_namespace *captured=__fd_namespace_capture();assert(captured);
+        assert(!pthread_create(&threads[n],NULL,worker,captured));
+    }
     while(atomic_load(&ready)!=8)sched_yield();
     assert(__optionallibs_close(creator));__exit_fd(creator);__posixc_close(creator);
     free(creator);free(process);current_base=NULL;current_task=NULL;
@@ -190,6 +203,6 @@ int main(void) {
     assert(atomic_load(&closed_registry)==1 && !atomic_load(&active_records));
     assert(atomic_load(&closed_blocks)==3 && atomic_load(&pools_freed)==9);
     assert(!atomic_load(&live_allocations));assert(!pthread_mutex_destroy(&reclock_sem.mutex));
-    puts("PASS: actual POSIXC table attach/exit, eight workers after creator base/Task/pool free, stable lock PID and final owner/registry disposal");
+    puts("PASS: actual POSIXC table attach/exit, eight workers admitted after creator base/Task/pool free, stable lock PID and final owner/registry disposal");
     return 0;
 }

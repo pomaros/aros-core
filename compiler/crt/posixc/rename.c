@@ -14,6 +14,7 @@
 #include <errno.h>
 
 #include "__upath.h"
+#include "__cwd_runtime.h"
 #include "__dos_error.h"
 
 extern int __stdcio_rename(const char *, const char *);
@@ -65,6 +66,7 @@ int rename (
 
 ******************************************************************************/
 {
+    POSIXC_CWD_SCOPE_OR_RETURN(-1);
     const char *converted_old = __path_u2a(oldpath);
     char *aoldpath;
     const char *anewpath;

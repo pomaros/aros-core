@@ -125,7 +125,7 @@ static BOOL __dl_resolve(const char *file, char *out, LONG size)
 ******************************************************************************/
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     struct PosixCIntBase *owner = __dl_owner(PosixCBase);
     struct __dl_module *module;
     const struct AROSDLModule *desc;

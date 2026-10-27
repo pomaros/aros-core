@@ -37,7 +37,7 @@
 ******************************************************************************/
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     mode_t oumask = PosixCBase->umask;
 
     PosixCBase->umask = numask;

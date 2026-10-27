@@ -5,7 +5,7 @@
     Copyright (C) 2026 John KNIPPER <code@jkn.me>
     Distributed under the AROS Public License 1.1.
 
-    Desc: C-runtime thread-context admission, version 2.
+    Desc: C-runtime thread-context admission, version 3.
 
     A C runtime (the provider) that keeps per-task state, such as posixc's
     descriptors and current directory, registers one set of hooks in a
@@ -19,17 +19,17 @@
 
     1. Creator, before the Task exists: CRTThreadContextCapture(&set).
        Under the registry semaphore, where no provider can unregister,
-       tc_Active() is asked of each provider and the hooks and library name
-       of the active ones are copied; nothing is opened before that, since
-       opening a provider's library may create the state tc_Active()
+       tc_Select() selects each active provider's calling instance and the
+       source, hooks and library name are copied. Nothing is opened first:
+       opening a provider's library may create the state tc_Select()
        reports. More than CRT_THREAD_CONTEXTS_MAX active providers, or an
        active one whose name does not fit, refuses the creation. Each
        active provider's library is then pinned with OpenLibrary() outside
        the semaphore; a pin that fails refuses the creation. If a provider
        unregistered meanwhile, the pins are closed and the capture starts
        again. Each active provider's tc_Capture() then runs outside the
-       semaphore and returns an opaque heap context holding its own
-       references, never a pointer to the creator's base. A FALSE from
+       semaphore with that selected source and returns an opaque heap context
+       holding its own references, never a pointer to the creator's base. A FALSE from
        tc_Capture() refuses the creation: what was captured is cancelled
        and the pins are closed.
     2. Creator: create the Task. On failure, CRTThreadContextCancel(&set).
@@ -52,8 +52,15 @@
       unregister (CRTThreadContextUnregister) at expunge. Unregister takes
       the registry semaphore exclusively, so it waits for any creator that
       is between steps of point 1.
-    - tc_Active() runs under the registry semaphore: no waiting, no
-      OpenLibrary(), no allocation that can wait.
+    - tc_Select() returns NULL if inactive, otherwise an opaque borrowed
+      source for the caller's current instance. It runs under the registry
+      semaphore: no waiting, OpenLibrary(), or allocation that can wait.
+      The provider keeps the selected source valid while that calling instance
+      is open. Pin opens may select another instance; tc_Capture() must use
+      the selected source, not resolve the current instance again. No source
+      is dereferenced if the provider generation changed during pinning.
+      The borrowed source is used synchronously in the creator only and never
+      handed to a worker. The resulting context must own all worker state.
     - tc_Capture(), tc_Enter(), tc_Leave() and tc_Cancel() run outside it.
       tc_Cancel() may run in the creator or in the new Task, and only for a
       context that tc_Enter() did not take. Capture must initialize its output;
@@ -82,8 +89,8 @@
 #include <proto/execlock.h>
 #include <aros/types/spinlock_s.h>
 
-#define CRT_THREAD_CONTEXTS_SEMNAME  "crt.thread-contexts.v2"
-#define CRT_THREAD_CONTEXT_VERSION   2
+#define CRT_THREAD_CONTEXTS_SEMNAME  "crt.thread-contexts.v3"
+#define CRT_THREAD_CONTEXT_VERSION   3
 #define CRT_THREAD_CONTEXTS_MAX      8
 #define CRT_THREAD_CONTEXT_NAMELEN   64
 #define CRT_THREAD_CONTEXT_RETRIES   8
@@ -94,8 +101,8 @@ struct CRTThreadContextHooks
     ULONG            tc_Version;     /* CRT_THREAD_CONTEXT_VERSION            */
     CONST_STRPTR     tc_LibName;     /* pinned in the creator during capture  */
     ULONG            tc_MinVersion;
-    BOOL           (*tc_Active)(void);
-    BOOL           (*tc_Capture)(APTR *context);
+    APTR           (*tc_Select)(void);
+    BOOL           (*tc_Capture)(APTR source, APTR *context);
     BOOL           (*tc_Enter)(APTR context);
     struct Library *(*tc_Leave)(APTR context);
     void           (*tc_Cancel)(APTR context);
@@ -235,7 +242,7 @@ static inline BOOL CRTThreadContextRegister(struct CRTThreadContextHooks *hooks)
     if (!hooks || hooks->tc_Version != CRT_THREAD_CONTEXT_VERSION
         || !hooks->tc_LibName || !hooks->tc_LibName[0]
         || __crt_tc_name_length(hooks->tc_LibName) == CRT_THREAD_CONTEXT_NAMELEN
-        || !hooks->tc_Active || !hooks->tc_Capture
+        || !hooks->tc_Select || !hooks->tc_Capture
         || !hooks->tc_Enter || !hooks->tc_Leave || !hooks->tc_Cancel)
         return FALSE;
     reg = CRTThreadContextsGet(TRUE);
@@ -308,6 +315,7 @@ static inline BOOL CRTThreadContextCapture(struct CRTThreadContextSet *set)
     struct CRTThreadContexts *reg;
     struct CRTThreadContextHooks copy[CRT_THREAD_CONTEXTS_MAX];
     char names[CRT_THREAD_CONTEXTS_MAX][CRT_THREAD_CONTEXT_NAMELEN];
+    APTR sources[CRT_THREAD_CONTEXTS_MAX];
     ULONG n, i, generation, attempt;
 
     set->cs_Count = 0;
@@ -325,7 +333,7 @@ static inline BOOL CRTThreadContextCapture(struct CRTThreadContextSet *set)
               its code stays loaded: ask each one whether it is active, and
               copy the hooks and the name of the active ones. Nothing is
               opened first: opening a provider's library may itself create
-              the very state tc_Active() reports. An active provider that
+              the very state tc_Select() reports. An active provider that
               does not fit refuses the creation instead of being dropped. */
         n = 0;
         ObtainSemaphoreShared(&reg->tc_Sem);
@@ -335,7 +343,8 @@ static inline BOOL CRTThreadContextCapture(struct CRTThreadContextSet *set)
              h = (struct CRTThreadContextHooks *)h->tc_Node.mln_Succ)
         {
             ULONG len;
-            if (!h->tc_Active())
+            APTR source = h->tc_Select();
+            if (!source)
                 continue;
             len = __crt_tc_name_length(h->tc_LibName);
             if (n == CRT_THREAD_CONTEXTS_MAX || len >= CRT_THREAD_CONTEXT_NAMELEN)
@@ -343,6 +352,7 @@ static inline BOOL CRTThreadContextCapture(struct CRTThreadContextSet *set)
                 unrepresentable = TRUE;
                 break;
             }
+            sources[n] = source;
             copy[n].tc_MinVersion = h->tc_MinVersion;
             copy[n].tc_Capture = h->tc_Capture;
             copy[n].tc_Enter = h->tc_Enter;
@@ -396,7 +406,7 @@ static inline BOOL CRTThreadContextCapture(struct CRTThreadContextSet *set)
         e->ce_Cancel = copy[i].tc_Cancel;
         e->ce_Context = NULL;
         {
-            BOOL captured = copy[i].tc_Capture(&e->ce_Context);
+            BOOL captured = copy[i].tc_Capture(sources[i], &e->ce_Context);
             if (captured || e->ce_Context)
                 e->ce_State = CRT_ENTRY_CAPTURED;
             if (!captured)

@@ -5,6 +5,7 @@
 */
 
 #include <libraries/posixc.h>
+#include "__posixc_intbase.h"
 
 #include <stdarg.h>
 
@@ -263,7 +264,7 @@
 
 ******************************************************************************/
 {
-    struct PosixCBase *PosixCBase = __aros_getbase_PosixCBase();
+    struct PosixCBase *PosixCBase = &__cwd_runtime_base()->PosixCBase;
     int     retval;
     va_list args;
 

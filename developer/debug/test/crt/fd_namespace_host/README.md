@@ -30,17 +30,20 @@ lookup, descriptor allocation/free, optional-library close, private-pool cleanup
 and record-owner identity/finalization functions. It also invokes the actual
 module record-table initializer. Modeled boundaries are parent-base discovery,
 Task identity, DOS stdio construction, native file disposal and lock removal.
-Eight workers attach while the creator is alive, then use the table after the
-creator's library base, Task and private pool have been freed. Process identity
-remains a scalar in the namespace; locks and the registry survive until the
-last worker closes. Allocation refusal and repeated rollback are checked.
+The creator captures eight namespace references before creating workers, then
+frees its base, Task and pool while those workers wait before attachment. The
+actual POSIXC attachment path consumes a modeled owned admission token and the
+workers use the table independently. Process identity remains a scalar in the
+namespace; locks and the registry survive until the last worker closes.
+Allocation refusal and repeated rollback are checked.
 
-Five compiling ASan/UBSan controls restore an unretained client, creator-base
-lookup, premature registry close, missing owner finalization and lost process
-identity. TSan checks production and the four controls that do not deliberately
-read freed memory. Each control must fail for its named cause, not a timeout.
+Four compiling ASan/UBSan and TSan controls remove capture retention, close the
+registry early, omit owner finalization or lose process identity. Each control
+must fail for its named cause, not a timeout. The obsolete parent-borrowing
+control is replaced by capture ownership: admitted workers never consult a
+creator base.
 
-This proves post-attachment table ownership at modeled boundaries. It does not
-prove capture-before-create admission, relative runtime-base binding, cwd,
-module loading, inherited global numeric reservations, full native file/lock
-semantics or a linked guest. Those contracts require separate integration.
+This proves descriptor-table capture and attachment at modeled boundaries. It
+does not prove the complete CRT/provider/pthread admission handshake, relative
+runtime-base binding, cwd, module loading, inherited global numeric reservations,
+full native file/lock semantics or a linked guest.

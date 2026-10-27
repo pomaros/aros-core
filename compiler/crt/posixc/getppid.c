@@ -42,7 +42,7 @@
 ******************************************************************************/
 {
   struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
   struct Task *ParentTask;
   struct ETask *eThisTask;
   struct ETask *et;

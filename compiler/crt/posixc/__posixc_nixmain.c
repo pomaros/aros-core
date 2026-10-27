@@ -24,6 +24,7 @@
 #include <sys/param.h>
 
 #include "__upath.h"
+#include "__cwd_runtime.h"
 
 static BOOL clone_vars(struct MinList *old_vars);
 static void restore_vars(struct MinList *old_vars);
@@ -39,10 +40,10 @@ int __posixc_nixmain(int (*main)(int argc, char *argv[]), int argc, char *argv[]
     struct MinList old_vars;
 
     D(bug("__posixc_nixmain: @begin, Task=%x\n", FindTask(NULL)));
-    PosixCBase = (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+    PosixCBase = __cwd_runtime_base();
 
     /* Trigger *nix path handling on.  */
-    PosixCBase->doupath = 1;
+    __cwd_runtime_conversion_set(TRUE);
 
     /* argv[0] usually contains the name of the program, possibly with the full
        path to it. Here we translate that path, which is an AmigaDOS-style path,

@@ -29,6 +29,7 @@
 
 #include "__fdesc.h"
 #include "__fd_namespace.h"
+#include "__cwd_runtime.h"
 #include "__reclock.h"
 #include "__dos64.h"
 #include "__upath.h"
@@ -49,7 +50,7 @@ static struct __fd_namespace *__fd_space(struct PosixCIntBase *base)
 
 struct __fd_namespace *__fd_namespace_current(void)
 {
-    return __fd_space((struct PosixCIntBase *)__aros_getbase_PosixCBase());
+    return __fd_space(__cwd_runtime_base());
 }
 
 static int __fdlib_available(struct PosixCIntBase *PosixCBase)
@@ -81,14 +82,14 @@ static void __set_errno(struct PosixCIntBase *PosixCBase, int enval)
 void __fdesc_lock(void)
 {
     struct PosixCIntBase *base =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     FD_LOCK(base);
 }
 
 void __fdesc_unlock(void)
 {
     struct PosixCIntBase *base =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     FD_UNLOCK(base);
 }
 
@@ -111,7 +112,7 @@ static fdesc __fd_reserved;
 int __getfdslots(void)
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
 
     return FD_SLOTS(PosixCBase);
 }
@@ -119,7 +120,7 @@ int __getfdslots(void)
 fdesc *__getfdesc(register int fd)
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     fdesc *local;
 
     /* Read the slot count and array entry atomically w.r.t. a grow. */
@@ -187,7 +188,7 @@ void __releasefcb(fcb *file)
 const struct fd_hooks *__getfdhooks(int fd, APTR *datap)
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     struct Library *FDBase;
     fd_owner_t owner;
     const struct fd_hooks *hooks;
@@ -215,7 +216,7 @@ const struct fd_hooks *__getfdhooks(int fd, APTR *datap)
 void __setfdesc(register int fd, fdesc *desc)
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
 
     /* FIXME: Check if fd is in valid range... */
     /* Publish the slot pointer under the table guard so a concurrent grow
@@ -240,7 +241,7 @@ void __setfdesc(register int fd, fdesc *desc)
 int __getfirstfd(register int startfd)
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
 
     /* FIXME: Check if fd is in valid range... */
     if (!__fdlib_available(PosixCBase)) {
@@ -268,7 +269,7 @@ int __getfirstfd(register int startfd)
 static int __reservefdslot(int wanted_fd, int minimum)
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     LONG error;
 
     /* Hold the table guard across the grow/close below: the realloc+free
@@ -365,7 +366,7 @@ int __getfreefdslot(int minimum)
 int __dupfd(int oldfd, int minimum, int flags)
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     fdesc *old, *copy;
     int slot, result = -1, reserved = 0, retained = 0;
     LONG error = 0;
@@ -458,7 +459,9 @@ LONG __oflags2amode(int flags)
 int __open(int wanted_fd, const char *pathname, int flags, int mode)
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
+
+    POSIXC_CWD_SCOPE_OR_RETURN(-1);
 
     BPTR fh = BNULL, lock = BNULL;
     fdesc *currdesc = NULL;
@@ -701,6 +704,18 @@ static void dispose_descriptor(fdesc *desc, struct Library *FDBase, int fd)
     }
 }
 
+struct __fd_namespace *__fd_namespace_capture(void)
+{
+    struct __fd_namespace *space = __fd_namespace_current();
+    return __fd_namespace_retain(space) ? space : NULL;
+}
+
+void __fd_namespace_drop(struct __fd_namespace *space)
+{
+    __fd_namespace_release(space, dispose_descriptor,
+                           __posixc_reclock_release_namespace);
+}
+
 static void stderrlogic(struct Process *me, fcb *fcb)
 {
     if ((fcb->handle != BNULL) && !(fcb->privflags & _FCB_DONTCLOSE_FH))
@@ -804,7 +819,7 @@ int __init_stdfiles(struct PosixCIntBase *PosixCBase)
 static int __copy_fdarray(fdesc **__src_fd_array, int fd_slots)
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     int i;
     
     for(i = fd_slots - 1; i >= 0; i--)
@@ -834,34 +849,18 @@ static int __copy_fdarray(fdesc **__src_fd_array, int fd_slots)
 
 int __init_fd(struct PosixCIntBase *PosixCBase)
 {
-    struct PosixCIntBase *pPosixCBase =
-        (struct PosixCIntBase *)__GM_GetBaseParent(PosixCBase);
+    BOOL pending;
+    struct PosixCIntBase *pPosixCBase;
     struct Task *task = FindTask(NULL);
 
-    D(bug("Found parent PosixCBase %p with flags 0x%x\n",
-          pPosixCBase, pPosixCBase ? pPosixCBase->flags : 0
-    ));
+    PosixCBase->fd_owner = NULL;
+    PosixCBase->fd_namespace = __cwd_admission_namespace(&pending);
+    if (pending)
+        return PosixCBase->fd_namespace != NULL;
 
-    PosixCBase->fd_namespace = NULL;
-
-    if (pPosixCBase &&
-        !(pPosixCBase->flags & (VFORK_PARENT | EXEC_PARENT)) &&
-        (task->tc_Node.ln_Type == NT_TASK ||
-         (task->tc_Node.ln_Type == NT_PROCESS &&
-          ((struct Process *)task)->pr_CLI == BNULL)))
-    {
-        /* The existing worker startup retains the shared namespace while its
-           creator is live. Capture-before-create admission is a separate step;
-           after this retain, table use never follows a creator base. */
-        struct __fd_namespace *space = __fd_space(pPosixCBase);
-        if (!__fd_namespace_retain(space))
-            return FALSE;
-        PosixCBase->fd_namespace = space;
-        /* The existing module-owner path is separate from table ownership. */
-        PosixCBase->fd_owner = pPosixCBase->fd_owner ? pPosixCBase->fd_owner : pPosixCBase;
-        return TRUE;
-    }
-
+    /* Only ordinary independent opens consult native parent state. Admitted
+       workers already own their captured table before this Task exists. */
+    pPosixCBase = (struct PosixCIntBase *)__GM_GetBaseParent(PosixCBase);
     PosixCBase->fd_owner = PosixCBase;
     PosixCBase->fd_namespace = __fd_namespace_create(GetETaskID(task));
     if (!PosixCBase->fd_namespace)
@@ -899,14 +898,13 @@ void __exit_fd(struct PosixCIntBase *PosixCBase)
 {
     struct __fd_namespace *space = PosixCBase->fd_namespace;
     PosixCBase->fd_namespace = NULL;
-    __fd_namespace_release(space, dispose_descriptor,
-                           __posixc_reclock_release_namespace);
+    __fd_namespace_drop(space);
 }
 
 void __close_on_exec_fdescs(void)
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     int i;
     fdesc *fd;
 
@@ -929,7 +927,7 @@ void __close_on_exec_fdescs(void)
 void __updatestdio(void)
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     struct Process *me;
     fcb *fcb = NULL;
 

@@ -91,6 +91,8 @@ struct PosixCIntBase;
 struct __fd_namespace;
 /* Borrowed only while the calling runtime remains open. */
 struct __fd_namespace *__fd_namespace_current(void);
+struct __fd_namespace *__fd_namespace_capture(void);
+void __fd_namespace_drop(struct __fd_namespace *space);
 void __fdesc_lock(void);
 void __fdesc_unlock(void);
 int __getfdslots(void);

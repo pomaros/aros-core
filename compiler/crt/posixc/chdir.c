@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2013, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>
 
     POSIX.1-2008 function chdir().
 */
@@ -12,6 +13,7 @@
 #include <aros/symbolsets.h>
 #include <errno.h>
 #include "__upath.h"
+#include "__cwd_runtime.h"
 
 /*****************************************************************************
 
@@ -53,60 +55,27 @@
 
 ******************************************************************************/
 {
-    struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
-    BPTR oldlock;
-    BPTR newlock;
-    
+    struct __cwd_directory *directory;
+    BPTR lock;
+    LONG error;
+    struct FileInfoBlock information;
+    if (!path) { errno = EFAULT; return -1; }
     path = __path_u2a(path);
-    
-    if (path == NULL)
-        return -1;
-            
-    newlock = Lock( path, SHARED_LOCK );
-
-    if( newlock == BNULL )
-    {
-        errno = __stdc_ioerr2errno( IoErr() );
-        goto error;
+    if (!path) return -1;
+    lock = Lock(path, SHARED_LOCK);
+    if (!lock) { errno = __stdc_ioerr2errno(IoErr()); return -1; }
+    if (!Examine(lock, &information)) {
+        error = IoErr(); UnLock(lock);
+        errno = __stdc_ioerr2errno(error); return -1;
     }
-
-    oldlock = CurrentDir( newlock );
-    
-    if( PosixCBase->cd_changed )
-    {
-        UnLock( oldlock );
+    if (information.fib_DirEntryType <= 0) {
+        UnLock(lock); errno = ENOTDIR; return -1;
     }
-    else
-    {
-        PosixCBase->cd_changed = TRUE;
-        PosixCBase->cd_lock    = oldlock;
-    }
-    
+    directory = __cwd_directory_capture(lock, &error);
+    UnLock(lock);
+    if (!directory) { errno = __stdc_ioerr2errno(error); return -1; }
+    BOOL changed = __cwd_runtime_set(directory);
+    __cwd_directory_release(directory);
+    if (!changed) { errno = ENOMEM; return -1; }
     return 0;
-
-error:
-    if( newlock != BNULL ) UnLock( newlock );
-    
-    return -1;
 }
-
-int __init_chdir(struct PosixCIntBase *PosixCBase)
-{
-    PosixCBase->cd_changed = FALSE;
-
-    return 1;
-}
-
-void __exit_chdir(struct PosixCIntBase *PosixCBase)
-{
-    if( PosixCBase->cd_changed )
-    {
-        BPTR lock = CurrentDir( PosixCBase->cd_lock );
-
-        UnLock( lock );
-    }
-}
-
-ADD2OPENLIB(__init_chdir, -100);
-ADD2CLOSELIB(__exit_chdir, -100);

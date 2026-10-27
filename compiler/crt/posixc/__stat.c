@@ -240,14 +240,11 @@ static int __stat_from_path_common(const char *path, void *sb, BOOL wide)
 {
     int                  len;
     char                 *mypath = NULL;
-    int                  cwdsize = FILENAME_MAX;
-    char                 *cwd = NULL;
     char                 *abspath = NULL;
     char                 *filepart = NULL;
     char                 *split;
     struct FileInfoBlock64 *fib = NULL;
     BPTR                 lock = BNULL;
-    BPTR                 cwdlock;
     int                  fallback_to_defaults = 0;
     BOOL                 loop;
     int                  res = -1;
@@ -263,56 +260,9 @@ static int __stat_from_path_common(const char *path, void *sb, BOOL wide)
     if (len && mypath[len-1] == '/')
         mypath[len-1] = '\0';
 
-    /* do we have an absolute path */
-    if (!strchr(mypath, ':'))
-    {
-        /* no, then create one */
-        cwdlock = CurrentDir(BNULL);
-        CurrentDir(cwdlock);
-        do
-        {
-            if (!(cwd = AllocVec(cwdsize, MEMF_ANY)))
-            {
-                errno = ENOMEM;
-                goto out;
-            }
-
-            if (NameFromLock(cwdlock, cwd, cwdsize))
-                break;
-            else if (IoErr() != ERROR_LINE_TOO_LONG)
-            {
-                errno = __stdc_ioerr2errno(IoErr());
-                goto out;
-            }
-
-            FreeVec(cwd);
-            cwdsize *= 2;
-        }
-        while (TRUE);
-
-        /* get memory for current dir + '/' + input path + zero byte */
-        len = strlen(cwd) + 1 + len + 1;
-        abspath = AllocVec(len, MEMF_ANY);
-        if (!abspath)
-        {
-            errno = ENOMEM;
-            goto out;
-        }
-
-        strcpy(abspath, cwd);
-        if (!AddPart(abspath, mypath, len))
-        {
-            errno = __stdc_ioerr2errno(IoErr());
-            goto out;
-        }
-        FreeVec(mypath);
-        mypath = NULL;
-    }
-    else
-    {
-        abspath = mypath;
-        mypath = NULL;
-    }
+    /* Resolve the parent relative to the retained cwd/dirfd context.
+       Native Process fields are not the logical directory of a worker. */
+    abspath = mypath;
 
     /* split into path part and file part */
     split = FilePart(abspath);
@@ -387,7 +337,6 @@ out:
     if (lock)
         UnLock(lock);
 
-    FreeVec(cwd);
 
     /* if we had absolute path as input, mypath is free'd here */
     FreeVec(abspath);

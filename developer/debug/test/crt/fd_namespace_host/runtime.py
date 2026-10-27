@@ -43,6 +43,8 @@ parts={
  'ALLOC_DESC':block(source,'fdesc *__alloc_fdesc('),
  'FREE_DESC':block(source,'void __free_fdesc('),
  'DISPOSE':block(source,'static void dispose_descriptor('),
+ 'CAPTURE_SPACE':block(source,'struct __fd_namespace *__fd_namespace_capture('),
+ 'DROP_SPACE':block(source,'void __fd_namespace_drop('),
  'INIT_FD':block(source,'int __init_fd('),
  'EXIT_FD':block(source,'void __exit_fd('),
  'OPTIONAL_CLOSE':block(read('__optionallibs.c'),'int __optionallibs_close('),
@@ -72,10 +74,8 @@ void CloseLibrary(struct Library *);
 for name in ['exec/types.h','exec/semaphores.h','exec/memory.h','proto/exec.h']:
     path=shim/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text('#include "test_boundary.h"\n')
 controls={
- 'unretained-client':('if (!__fd_namespace_retain(space))','if (FALSE)',
+ 'unretained-capture':('return __fd_namespace_retain(space) ? space : NULL;', 'return space;',
    'Assertion failed: (atomic_load(&closed_registry)==0 && atomic_load(&active_records)==1 && atomic_load(&pools_freed)==1)'),
- 'borrowed-creator':('if ((base->flags & PRETEND_CHILD) && base->fd_owner)','if (base->fd_owner)',
-   'AddressSanitizer: heap-use-after-free'),
  'early-registry-close':('    /* The descriptor namespace releases fd.library at final owner teardown. */',
    '    CloseLibrary(__fd_space(PosixCBase)->registry);',
    'Assertion failed: (atomic_load(&active_records)==0 && atomic_load(&closed_blocks)==3)'),
@@ -87,7 +87,6 @@ controls={
 }
 cases=[('production',text,None)]
 for name,(before,after,expected) in controls.items():
-    if args.tsan and name=='borrowed-creator':continue
     assert before in text,name
     cases.append((name,text.replace(before,after),expected))
 rows=[]
@@ -107,7 +106,7 @@ for name,actual,expected in cases:
     rows.append(row)
 r={'result':'PASS' if all(x['pass'] for x in rows) else 'FAIL','records':rows,
  'inputs':{str(p.relative_to(root)):hashlib.sha256(p.read_bytes()).hexdigest() for p in [*inputs,here/'runtime.c',Path(__file__)]},
- 'scope':'Actual namespace engine and POSIXC attachment/exit, allocation/free, owner identity/cleanup, module lock initialization and optional/private-pool close functions. Modeled parent lookup, Task identity, library calls, stdio setup, file-block disposal and native record-lock removal. Eight workers after creator base/Task/pool free; no capture-before-create admission, full I/O/inheritance, loader, cwd or guest claim.'}
+ 'scope':'Actual namespace engine and POSIXC attachment/exit, allocation/free, owner identity/cleanup, module lock initialization and optional/private-pool close functions. Modeled owned admission-token lookup, parent lookup, Task identity, library calls, stdio setup, file-block disposal and native record-lock removal. Actual table capture before thread creation and eight worker attachments after creator base/Task/pool free; no full CRT/provider/pthread admission, full I/O/inheritance, loader, cwd or guest claim.'}
 (output/'result.json').write_text(json.dumps(r,indent=2)+'\n');print(r['result'])
 for row in rows:
     if not row['pass']:print(row['name'],row['compile_exit'],row['run_exit'])

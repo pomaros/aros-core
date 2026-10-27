@@ -7,6 +7,7 @@
 #include <aros/debug.h>
 
 #include <libraries/posixc.h>
+#include "__posixc_intbase.h"
 
 /*****************************************************************************
 
@@ -37,7 +38,7 @@
 
 ******************************************************************************/
 {
-    struct PosixCBase *PosixCBase = __aros_getbase_PosixCBase();
+    struct PosixCBase *PosixCBase = &__cwd_runtime_base()->PosixCBase;
 
     D(bug("[putchar]PosixCBase: %p, stdout: %p\n", PosixCBase, PosixCBase->_stdout));
 

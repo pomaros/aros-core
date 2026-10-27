@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>
 
     Function to write libdefs.h. Part of genmodule.
 */
@@ -221,6 +222,7 @@ void writeinclibdefs(struct config *cfg)
         fprintf(out,
                 "\n"
                 "LIBBASETYPEPTR __GM_GetBaseParent(LIBBASETYPEPTR);\n"
+                "ULONG __GM_GetBaseOpenCount(LIBBASETYPEPTR);\n"
         );
     }
 

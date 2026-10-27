@@ -225,7 +225,7 @@ void RemoveFromList(struct SignalSemaphore *sem);
 LONG AddToList(struct SignalSemaphore *sem)
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     struct FlockNode *node;
     node = AllocMem(sizeof(struct FlockNode), MEMF_ANY | MEMF_CLEAR);
     if(!node)
@@ -238,7 +238,7 @@ LONG AddToList(struct SignalSemaphore *sem)
 void RemoveFromList(struct SignalSemaphore *sem)
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     struct FlockNode *varNode;
     struct Node *tmpNode;
     

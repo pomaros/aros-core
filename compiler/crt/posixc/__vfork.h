@@ -2,8 +2,8 @@
 #define __VFORK_H
 
 /*
-    Copyright © 2008-2026, The AROS Development Team. All rights reserved.
-    Copyright (C) 2026 John KNIPPER
+    Copyright (C) 2008-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>
     $Id$
 */
 
@@ -15,6 +15,7 @@
 #include <aros/startup.h>
 
 #include "__fdesc.h"
+#include "__vfork_binding.h"
 
 struct PosixCIntBase;
 
@@ -35,17 +36,23 @@ struct vfork_data
     BPTR parent_cd_lock;
     BPTR parent_curdir;
     struct __env_item *parent_env_list;
-    struct PosixCIntBase *parent_fd_owner;
+    APTR parent_internalpool;
+    int parent_numslots;
+    fdesc **parent_fd_array;
+    struct __vfork_binding binding;
     int parent_flags;
     char *parent_upathbuf;
 
     struct Task *child;
-    pid_t child_pid;
+    pid_t child_pid; /* published by the live launcher before any setup result */
     int child_executed;
+    BOOL child_unix_paths;
     int child_error, child_errno;
     BYTE child_signal;
     BYTE child_state;
     struct PosixCIntBase *child_posixcbase;
+    struct __fd_namespace *child_namespace;
+    struct __cwd_context *child_context;
 
     const char *exec_filename;
     char *const *exec_argv;

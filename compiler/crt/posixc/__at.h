@@ -2,14 +2,16 @@
 #define ___AT_H
 /*
     Copyright (C) 2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>
 
     Desc: helpers for the POSIX.1-2008 *at() functions (openat, fstatat, ...)
 */
 
 #include <dos/dos.h>
 
-/* Make the directory referenced by dirfd the current directory for the
-   duration of an *at() call. dirfd may be AT_FDCWD (no change). On success
+/* Retain a context snapshot and optionally override its directory with the
+   captured dirfd lock for this Task. No native Process cwd is changed.
+   dirfd may be AT_FDCWD. On success
    returns 0 and the caller must later call __at_leave() with the two
    values; on failure returns -1 with errno set. */
 int __at_enter(int dirfd, BPTR *oldcd, BPTR *dirlock);

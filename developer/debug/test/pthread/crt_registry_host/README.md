@@ -33,3 +33,10 @@ and capture. A target compilation must also inspect undefined symbols: the
 protocol cannot depend on a C runtime that it is admitting. That target check is
 separate from this host model; both optimized and debug objects need inspection.
 The provider and creator migration is separate from staging this shared header.
+
+Provider selection occurs before pin opens. The mock pin deliberately changes
+its current instance; capture must receive the original opaque selection.
+The `source-reselected-after-pin` control must fail for that exact mismatch.
+The selected source is synchronous creator state only: worker contexts retain
+their own references. The version-3 namespace separates this callback contract
+from earlier prototypes without a compatibility path.

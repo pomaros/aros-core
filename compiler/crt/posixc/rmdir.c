@@ -1,3 +1,5 @@
+#include "__cwd_runtime.h"
+#include <errno.h>
 /*
     Copyright (C) 2003-2013, The AROS Development Team. All rights reserved.
 
@@ -40,6 +42,7 @@
 
 ******************************************************************************/
 {
+    POSIXC_CWD_SCOPE_OR_RETURN(-1);
     /* FIXME: Shouldn't we check if pathname is actually a directory ? */
     return remove(pathname);
 } /* rmdir() */

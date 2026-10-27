@@ -65,7 +65,7 @@
 ******************************************************************************/
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     struct StdCBase *StdCBase = PosixCBase->PosixCBase.StdCBase;
 
     if (!__CRT_ASCTIME_VALID(tm))

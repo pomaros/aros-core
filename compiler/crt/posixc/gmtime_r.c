@@ -59,7 +59,7 @@
 ******************************************************************************/
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     struct StdCBase *StdCBase = PosixCBase->PosixCBase.StdCBase;
 
     __CRT_GMTIME(StdCBase, tt, tm);

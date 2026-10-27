@@ -11,6 +11,7 @@
 #include "__posixc_intbase.h"
 #include "__stat.h"
 #include "__upath.h"
+#include "__cwd_runtime.h"
 
 /* like Dos_Lock() but no automatic soft link resolution */
 static BPTR __lock(
@@ -57,8 +58,9 @@ static BPTR __lock(
 
 ******************************************************************************/
 {
+    POSIXC_CWD_SCOPE_OR_RETURN(-1);
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     int res = 0;
     BPTR lock;
 

@@ -48,7 +48,7 @@
 ******************************************************************************/
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     FILENODE * fn;
 
     if (close(stream->fd) == -1)

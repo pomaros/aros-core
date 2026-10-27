@@ -23,7 +23,7 @@
 static struct Library *__dos64_base(void)
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
 
     if (__dos64_available(PosixCBase))
         return PosixCBase->PosixCDOS64Base;

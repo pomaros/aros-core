@@ -62,7 +62,7 @@
 ******************************************************************************/
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     int oflags, wanted_accmode, current_accmode;
     fdesc *fdesc;
     FILENODE *fn;

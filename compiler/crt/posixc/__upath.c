@@ -14,6 +14,7 @@
 #include <exec/lists.h>
 
 #include "__posixc_intbase.h"
+#include "__cwd_runtime.h"
 
 static const char *__path_devstuff_u2a(const char *path);
 static void  __path_normalstuff_u2a(const char *path, char *buf);
@@ -119,13 +120,13 @@ void __upath_free_others(struct PosixCIntBase *PosixCBase)
 ******************************************************************************/
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     const char *newpath;
 
     D(bug("Entering __path_u2a(\"%s\")\n", upath));
 
     /* Does the path really need to be converted?  */
-    if (!PosixCBase->doupath)
+    if (!__cwd_runtime_conversion())
     {
         D(bug("__path_u2a: No conversion needed\n"));
 
@@ -211,7 +212,7 @@ void __upath_free_others(struct PosixCIntBase *PosixCBase)
 ******************************************************************************/
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     const char *old_apath = apath;
     char ch, *upath, *old_upath;
     size_t size = 0;
@@ -233,7 +234,7 @@ void __upath_free_others(struct PosixCIntBase *PosixCBase)
         return NULL;
     }
 
-    if (!PosixCBase->doupath)
+    if (!__cwd_runtime_conversion())
         return apath;
         
     while ((ch = *apath++))

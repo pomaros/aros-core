@@ -49,7 +49,7 @@
 ******************************************************************************/
 {
     struct PosixCBase *PosixCBase =
-        (struct PosixCBase *)__aros_getbase_PosixCBase();
+        (struct PosixCBase *)__cwd_runtime_base();
     int retval;
 
     D(

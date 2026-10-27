@@ -40,7 +40,7 @@
 ******************************************************************************/
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     struct ETask *et;
 
     if(PosixCBase->flags & PRETEND_CHILD)

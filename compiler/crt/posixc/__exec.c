@@ -28,6 +28,7 @@
 #include "__posixc_env.h"
 #include "__upath.h"
 #include "__fdesc.h"
+#include "__cwd_runtime.h"
 #include "__vfork.h"
 
 static BOOL containswhite(const char *str);
@@ -50,7 +51,7 @@ static APTR __exec_prepare_regular(char * filename2, char *const argv[], char *c
 void __exec_do(APTR id)
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
 
     D(bug("[__exec_do] Entering, id(%x)\n", id));
 
@@ -72,10 +73,12 @@ void __exec_do(APTR id)
 APTR __exec_prepare(const char *filename, int searchpath, char *const argv[], char *const envp[])
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     char *filename2 = NULL;
     char ***environptr = __posixc_get_environptr();
     char **environ = (environptr != NULL) ? *environptr : NULL;
+
+    POSIXC_CWD_SCOPE_OR_RETURN(NULL);
 
     D(bug("Entering __exec_prepare(\"%s\", %d, %x, %x)\n",
           filename, searchpath, argv, envp
@@ -84,6 +87,12 @@ APTR __exec_prepare(const char *filename, int searchpath, char *const argv[], ch
     if (filename == NULL || filename[0] == '\0' || argv == NULL)
     {
         errno = EINVAL;
+        goto error;
+    }
+    /* Environment and RunCommand operate on an actual DOS Process. */
+    if (FindTask(NULL)->tc_Node.ln_Type != NT_PROCESS)
+    {
+        errno = ENOSYS;
         goto error;
     }
 
@@ -155,6 +164,11 @@ static char * assign_filename(const char *filename, int searchpath, char **envir
         D(bug("assign_filename: PATH('%s')\n", path));
 
         path_ptr = AllocPooled(PosixCBase->exec_pool, strlen(path) + 1);
+        if (!path_ptr)
+        {
+            errno = ENOMEM;
+            return NULL;
+        }
         strcpy(path_ptr, path);
         path = path_ptr;
 
@@ -201,6 +215,12 @@ static char * assign_filename(const char *filename, int searchpath, char **envir
             strcat(filename2, "/");
             strcat(filename2, filename);
             filename2_dos = __path_u2a(filename2);
+            if (!filename2_dos)
+            {
+                if (fib != NULL)
+                    FreeDosObject(DOS_FIB, fib);
+                return NULL;
+            }
             lock = Lock(filename2_dos, SHARED_LOCK);
             D(bug("assign_filename: Lock(\"%s\") == %x\n", filename2, (APTR)lock));
 
@@ -287,10 +307,34 @@ static APTR __exec_prepare_regular(char * filename2, char *const argv[], char *c
     const char *filename2_dos = NULL;
     int argssize = 512;
     struct Process *me;
+    struct __cwd_snapshot snapshot;
+
+    if (!__cwd_runtime_snapshot(&snapshot))
+    {
+        errno = ENOMEM;
+        goto error;
+    }
+    PosixCBase->exec_cwd = DupLock(__cwd_directory_lock(snapshot.cwd));
+    if (PosixCBase->exec_cwd)
+        PosixCBase->exec_progdir = DupLock(__cwd_directory_lock(snapshot.progdir));
+    LONG directory_error = IoErr();
+    __cwd_snapshot_release(&snapshot);
+    if (!PosixCBase->exec_cwd || !PosixCBase->exec_progdir)
+    {
+        errno = directory_error ? __stdc_ioerr2errno(directory_error) : ENOMEM;
+        goto error;
+    }
 
     filename2_dos = __path_u2a(filename2);
+    if (!filename2_dos)
+        goto error;
 
     PosixCBase->exec_args = AllocPooled(PosixCBase->exec_pool, argssize);
+    if (!PosixCBase->exec_args)
+    {
+        errno = ENOMEM;
+        goto error;
+    }
     PosixCBase->exec_args[0] = '\0';
 
     /* Let's check if it's a script */
@@ -339,14 +383,26 @@ static APTR __exec_prepare_regular(char * filename2, char *const argv[], char *c
                     );
                     if (!PosixCBase->exec_args)
                     {
+                        Close(fh);
                         errno = ENOMEM;
                         goto error;
                     }
 
                     /* Set file to execute as the script interpreter */
                     filename2 = AllocPooled(PosixCBase->exec_pool, strlen(inter) + 1);
+                    if (!filename2)
+                    {
+                        Close(fh);
+                        errno = ENOMEM;
+                        goto error;
+                    }
                     strcpy(filename2, inter);
                     filename2_dos = __path_u2a(filename2);
+                    if (!filename2_dos)
+                    {
+                        Close(fh);
+                        goto error;
+                    }
                 }
             }
         }
@@ -396,6 +452,11 @@ static APTR __exec_prepare_regular(char * filename2, char *const argv[], char *c
         goto error;
     }
 
+    /* stat may reuse or resize the path conversion buffer. */
+    filename2_dos = __path_u2a(filename2);
+    if (!filename2_dos)
+        goto error;
+
     /* Set taskname */
     PosixCBase->exec_taskname = AllocPooled(PosixCBase->exec_pool, strlen(filename2_dos) + 1);
     if (!PosixCBase->exec_taskname)
@@ -406,14 +467,27 @@ static APTR __exec_prepare_regular(char * filename2, char *const argv[], char *c
     strcpy(PosixCBase->exec_taskname, filename2_dos);
 
     /* Load file to execute */
-    PosixCBase->exec_seglist = LoadSeg((CONST_STRPTR)filename2_dos);
+    SIPTR load_args[] = { (SIPTR)filename2_dos }, load_error = 0;
+    PosixCBase->exec_seglist = (BPTR)__cwd_runtime_native(
+        POSIXC_CONTEXT_LOAD_SEG, load_args, &load_error);
     if (!PosixCBase->exec_seglist)
     {
-        errno = ENOEXEC;
+        errno = load_error ? __stdc_ioerr2errno((LONG)load_error) : ENOEXEC;
         goto error;
     }
 
     me = (struct Process *)FindTask(NULL);
+
+    for (unsigned i = 0; i < 3; i++)
+    {
+        int admission_error = 0;
+        PosixCBase->exec_files[i] = __holdfcb(i, &admission_error);
+        if (admission_error)
+        {
+            errno = admission_error;
+            goto error;
+        }
+    }
 
     if (envp && envp != environ)
     {
@@ -523,39 +597,40 @@ static void __exec_do_regular(struct PosixCIntBase *PosixCBase)
 
 
     /* Set standard files to the standard files from arosc */
-    fdesc *in = __getfdesc(STDIN_FILENO), *out = __getfdesc(STDOUT_FILENO),
-        *err = __getfdesc(STDERR_FILENO);
+    fcb *in = PosixCBase->exec_files[STDIN_FILENO];
+    fcb *out = PosixCBase->exec_files[STDOUT_FILENO];
+    fcb *err = PosixCBase->exec_files[STDERR_FILENO];
     BPTR oldin = BNULL, oldout = BNULL, olderr = BNULL;
     char inchanged = 0, outchanged = 0, errchanged = 0;
     struct Process *me = (struct Process *)FindTask(NULL);
 
-    if(in && in->fcb->handle != Input())
+    if(in && in->handle != Input())
     {
-        oldin = SelectInput(in->fcb->handle);
+        oldin = SelectInput(in->handle);
         inchanged = 1;
     }
-    if(out && out->fcb->handle != Output())
+    if(out && out->handle != Output())
     {
-        oldout = SelectOutput(out->fcb->handle);
+        oldout = SelectOutput(out->handle);
         outchanged = 1;
     }
     if (err)
     {
         if (me->pr_CES)
         {
-            if (me->pr_CES != err->fcb->handle)
+            if (me->pr_CES != err->handle)
                 errchanged = 1;
         }
         else /* me->pr_CES */
         {
             /* Only replace if stdout != stderr */
-            if (out && out->fcb->handle != err->fcb->handle)
+            if (out && out->handle != err->handle)
                 errchanged = 1;
         }
         if (errchanged)
         {
             olderr = me->pr_CES;
-            me->pr_CES = err->fcb->handle;
+            me->pr_CES = err->handle;
         }
     }
 
@@ -565,6 +640,11 @@ static void __exec_do_regular(struct PosixCIntBase *PosixCBase)
        instances across the program's lifetime and restore them afterwards. */
     struct StdCBase *savedstdc = PosixCBase->PosixCBase.StdCBase;
     struct StdCIOBase *savedstdcio = PosixCBase->PosixCBase.StdCIOBase;
+    /* RunCommand must inherit the same owned logical directories used while
+       preparing the executable, rather than this Process's stale native cwd. */
+    BPTR oldcwd = CurrentDir(PosixCBase->exec_cwd);
+    BPTR oldprogdir = SetProgramDir(PosixCBase->exec_progdir);
+    PosixCBase->exec_cwd = PosixCBase->exec_progdir = BNULL;
 
     D(bug("[__exec_do_regular] Running program, PosixCBase=%x\n", PosixCBase));
     returncode = RunCommand(
@@ -590,9 +670,11 @@ static void __exec_do_regular(struct PosixCIntBase *PosixCBase)
         SelectOutput(oldout);
     if(errchanged)
         me->pr_CES = olderr;
+    UnLock(CurrentDir(oldcwd));
+    UnLock(SetProgramDir(oldprogdir));
 
-    D(bug("[__exec_do_regular] Program ran, PosixCBase=%x, __aros_getbase_PosixCBase()=%x\n",
-          PosixCBase, __aros_getbase_PosixCBase()
+    D(bug("[__exec_do_regular] Program ran, PosixCBase=%x, __cwd_runtime_base()=%x\n",
+          PosixCBase, __cwd_runtime_base()
       )
     );
 
@@ -607,7 +689,7 @@ static void __exec_do_regular(struct PosixCIntBase *PosixCBase)
     PosixCBase->PosixCBase.StdCIOBase = savedstdcio;
     {
         struct PosixCIntBase *curbase =
-            (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+            __cwd_runtime_base();
         if (curbase && curbase != PosixCBase)
         {
             curbase->PosixCBase.StdCBase = savedstdc;
@@ -625,7 +707,7 @@ static void __exec_do_regular(struct PosixCIntBase *PosixCBase)
 char *const *__exec_valist2array(const char *arg1, va_list list)
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     int argc, i;
     static char *no_arg[] = {NULL};
     va_list list2;
@@ -670,7 +752,7 @@ char *const *__exec_valist2array(const char *arg1, va_list list)
 void __exec_cleanup_array()
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
 
     if (PosixCBase->exec_tmparray)
     {
@@ -784,7 +866,24 @@ static char *appendargs(char *argptr, int *argssizeptr, char *const args[], APTR
 
 static void __exec_cleanup(struct PosixCIntBase *PosixCBase)
 {
+    int saved_errno = errno;
     D(bug("[__exec_cleanup] me(%x)\n", FindTask(NULL)));
+    for (unsigned i = 0; i < 3; i++)
+    {
+        if (PosixCBase->exec_files[i])
+            __releasefcb(PosixCBase->exec_files[i]);
+        PosixCBase->exec_files[i] = NULL;
+    }
+    if (PosixCBase->exec_cwd)
+    {
+        UnLock(PosixCBase->exec_cwd);
+        PosixCBase->exec_cwd = BNULL;
+    }
+    if (PosixCBase->exec_progdir)
+    {
+        UnLock(PosixCBase->exec_progdir);
+        PosixCBase->exec_progdir = BNULL;
+    }
 
     if (PosixCBase->exec_pool)
     {
@@ -802,4 +901,5 @@ static void __exec_cleanup(struct PosixCIntBase *PosixCBase)
         PosixCBase->PosixCBase.StdCBase = PosixCBase->exec_oldstdcbase;
         PosixCBase->exec_oldstdcbase = NULL;
     }
+    errno = saved_errno;
 }

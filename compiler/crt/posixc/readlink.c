@@ -41,7 +41,7 @@
 */
 {
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     ssize_t          res = -1;
     struct DevProc   *dvp = NULL;
     LONG             error;

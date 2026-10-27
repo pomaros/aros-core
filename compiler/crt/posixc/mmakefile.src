@@ -10,6 +10,7 @@ POSIXC := \
     __at \
     __dl \
     __cwd_context \
+    __cwd_runtime __cwd_runtime_call \
     __fd_namespace \
     __fdesc \
     __reclock \

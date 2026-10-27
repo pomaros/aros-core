@@ -9,6 +9,7 @@
 
 #include "__stat.h"
 #include "__upath.h"
+#include "__cwd_runtime.h"
 #include "__posixc_intbase.h"
 
 /*****************************************************************************
@@ -74,8 +75,9 @@
 
 ******************************************************************************/
 {
+    POSIXC_CWD_SCOPE_OR_RETURN(-1);
     struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
+        __cwd_runtime_base();
     int res = 0;
     BPTR lock;
 

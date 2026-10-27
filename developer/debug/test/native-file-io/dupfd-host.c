@@ -27,7 +27,7 @@ static pthread_mutex_t table_lock;
 static fcb control;
 static fdesc original, *table[128];
 static int registry[128], fail_copy, fail_reserve, fail_grow, copies;
-static struct PosixCIntBase *__aros_getbase_PosixCBase(void) { return &base; }
+static struct PosixCIntBase *__cwd_runtime_base(void) { return &base; }
 #define FD_LOCK(b) ((void)(b), pthread_mutex_lock(&table_lock))
 #define FD_UNLOCK(b) ((void)(b), pthread_mutex_unlock(&table_lock))
 static void __fcb_lock(fcb *p) { assert(!pthread_mutex_lock(&p->lock)); }
