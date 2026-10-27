@@ -119,6 +119,7 @@ LONG RootDir(struct DevProc *dvp, struct DosLibrary *DOSBase);
 struct DosPacket *allocdospacket(void);
 void freedospacket(struct DosPacket *dp);
 SIPTR dopacket(SIPTR *res2, struct MsgPort *port, LONG action, SIPTR arg1, SIPTR arg2, SIPTR arg3, SIPTR arg4, SIPTR arg5, SIPTR arg6, SIPTR arg7);
+SIPTR dopacket_after_send(SIPTR *res2, struct MsgPort *port, LONG action, SIPTR arg1, SIPTR arg2, SIPTR arg3, SIPTR arg4, SIPTR arg5, SIPTR arg6, SIPTR arg7, void (*after_send)(APTR), APTR callback_data);
 void internal_SendPkt(struct DosPacket *dp, struct MsgPort *port, struct MsgPort *replyport);
 struct DosPacket *internal_WaitPkt(struct MsgPort *msgPort);
 void internal_ReplyPkt(struct DosPacket *dp, struct MsgPort *replyPort, SIPTR res1, LONG res2);

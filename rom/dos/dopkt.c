@@ -61,14 +61,26 @@
  * All Amiga kickstart versions accept most dos packet dos calls without dosbase in A6.
  * So we have this internal routine here for compatibility purposes.
  */
-SIPTR dopacket(SIPTR *res2, struct MsgPort *port, LONG action, SIPTR arg1, SIPTR arg2, SIPTR arg3, SIPTR arg4, SIPTR arg5, SIPTR arg6, SIPTR arg7)
+static SIPTR packet_error(struct Process *me, SIPTR *res2, SIPTR error)
+{
+    if (res2)
+        *res2 = error;
+    if (__is_process(me))
+        me->pr_Result2 = error;
+    return DOSFALSE;
+}
+
+SIPTR dopacket_after_send(SIPTR *res2, struct MsgPort *port, LONG action, SIPTR arg1, SIPTR arg2, SIPTR arg3, SIPTR arg4, SIPTR arg5, SIPTR arg6, SIPTR arg7, void (*after_send)(APTR), APTR callback_data)
 {
     SIPTR res;
     struct Process   *me = (struct Process *)FindTask(NULL);
     struct DosPacket *dp;
     struct MsgPort   *replyPort;
 
-    ASSERT_VALID_PROCESS(me);
+    ASSERT_VALID_TASK((struct Task *)me);
+
+    if (res2)
+        *res2 = 0;
 
     if (port == NULL)
     {
@@ -87,16 +99,14 @@ SIPTR dopacket(SIPTR *res2, struct MsgPort *port, LONG action, SIPTR arg1, SIPTR
     {
         bug("[DoPkt] task '%s': BAD handler port 0x%p (action %ld)"
             " - failing request\n",
-            me->pr_Task.tc_Node.ln_Name, port, (LONG)action);
-        if (res2)
-            *res2 = ERROR_OBJECT_WRONG_TYPE;
-        return DOSFALSE;
+            me->pr_Task.tc_Node.ln_Name, port, (long)action);
+        return packet_error(me, res2, ERROR_OBJECT_WRONG_TYPE);
     }
 
     /* First I create a regular dos packet */
     dp = allocdospacket();
     if (NULL == dp)
-        return FALSE;
+        return packet_error(me, res2, ERROR_NO_FREE_STORE);
 
     if (__is_process(me))
         replyPort = &me->pr_MsgPort;
@@ -112,7 +122,7 @@ SIPTR dopacket(SIPTR *res2, struct MsgPort *port, LONG action, SIPTR arg1, SIPTR
         if (NULL == replyPort)
         {
             freedospacket(dp);
-            return FALSE;
+            return packet_error(me, res2, ERROR_NO_FREE_STORE);
         }
     }
     
@@ -130,6 +140,9 @@ SIPTR dopacket(SIPTR *res2, struct MsgPort *port, LONG action, SIPTR arg1, SIPTR
     dp->dp_Res2 = 0;
 
     internal_SendPkt(dp, port, replyPort);
+    /* The packet is now ordered before any later message to this port.
+       Release a caller's namespace guard before waiting for the handler. */
+    if (after_send) after_send(callback_data);
 
     /* Did we get different packet back? System is in unstable state. */
     if (internal_WaitPkt(replyPort) != dp)
@@ -148,4 +161,11 @@ SIPTR dopacket(SIPTR *res2, struct MsgPort *port, LONG action, SIPTR arg1, SIPTR
 
     freedospacket(dp);
     return res;
+}
+
+/* Existing users retain the exact transport and NIL/error behavior. */
+SIPTR dopacket(SIPTR *res2, struct MsgPort *port, LONG action, SIPTR arg1, SIPTR arg2, SIPTR arg3, SIPTR arg4, SIPTR arg5, SIPTR arg6, SIPTR arg7)
+{
+    return dopacket_after_send(res2, port, action, arg1, arg2, arg3,
+        arg4, arg5, arg6, arg7, NULL, NULL);
 }
