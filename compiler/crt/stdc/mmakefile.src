@@ -707,6 +707,10 @@ STDCIO_LINKLIB := \
 
 #MM- core-linklibs : linklibs-stdc linklibs-stdcio linklibs-libm
 
+# The shared/relative errno accessor calls task.resource even in the early
+# core-linklibs bootstrap, before the complete includes-all graph.
+#MM compiler-stdc-linklib : kernel-task-includes
+
 STDC_LINKOBJS := $(addsuffix .o,$(addprefix $(GENDIR)/$(CURDIR)/stdc/,$(notdir $(STDC_COMMON) $(STDC_WCHAR_COMMON)) $(addprefix linklib/,$(STDC_CHAR_LIBSTUBS) $(STDC_WCHAR_LIBSTUBS))))
 
 # Ugh. These are for the math routines, which have a number of
