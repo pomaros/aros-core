@@ -7,7 +7,8 @@
 #include <oop/oop.h>
 struct VirtioGPU;
 struct VirtioGPUSurface { APTR pixels;ULONG width,height,stride; };
-/* Task context. Caller retains the OOP/PCI provider while a context exists.
+/* Task context with interrupts and scheduling enabled. Caller retains the
+ * OOP/PCI provider while a context exists.
  * On failure *out is NULL after complete unwind, or a quarantined context
  * whose DMA must remain alive until a later acknowledged reset. */
 BOOL VirtioGPUOpen(struct Library *oop,OOP_Object *device,struct VirtioGPU **out);

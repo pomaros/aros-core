@@ -1,0 +1,112 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * SPDX-License-Identifier: APL-1.1
+ */
+#include <assert.h>
+#include <pthread.h>
+#include <sched.h>
+#include <stdatomic.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <time.h>
+
+typedef uint32_t ULONG;
+#define __AROSEXEC_SMP__ 1
+#define SPINLOCK_MODE_WRITE 1
+#define LOCKF_DISABLE 1
+#define TRUE 1
+#define AROS_INTH1(name, type, arg) int name(type arg)
+#define AROS_INTFUNC_INIT
+#define AROS_INTFUNC_EXIT
+#define __ufi_intmask 0
+#define __ufi_custom 0
+#define __ufi_code 0
+#define SysBase 0
+struct Task { atomic_uint received; atomic_int alive; } task;
+struct VirtioGPU {
+    struct { volatile unsigned char *dev_ISR; } device;
+    struct Task *waiter;
+    ULONG wait_mask,interrupts,irq_users;
+    void *irq_lock,*irq_lock_base;
+};
+static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+static atomic_int signal_started,allow_return,signal_done,detached;
+static _Thread_local unsigned disabled;
+static struct Task *FindTask(void *unused) { (void)unused;return &task; }
+static int ObtainLock(void *p, unsigned mode, unsigned flags)
+{
+    assert(p == &lock && mode == SPINLOCK_MODE_WRITE && flags == LOCKF_DISABLE);
+    ++disabled;
+    assert(!pthread_mutex_lock(p));
+    return 1;
+}
+static void ReleaseLock(void *p, unsigned flags)
+{
+    assert(p == &lock && flags == LOCKF_DISABLE && disabled);
+    assert(!pthread_mutex_unlock(p));
+    --disabled;
+}
+static void Signal(struct Task *target, ULONG mask)
+{
+    /* Signal must run without the publication lock or its extra Disable
+     * nesting; this count is relative to the IRQ's incoming mask state. */
+    assert(!disabled && atomic_load(&target->alive));
+    atomic_fetch_or(&target->received,mask);
+    atomic_fetch_add(&signal_started,1);
+    while(!atomic_load(&allow_return))sched_yield();
+    assert(atomic_load(&target->alive));
+    atomic_fetch_add(&signal_done,1);
+}
+@PRODUCTION@
+
+static void *irq_thread(void *arg) { gpu_irq(arg);return NULL; }
+static void *detach_thread(void *arg)
+{
+    gpu_wait_end(arg);
+    assert(atomic_load(&signal_done) == 2);
+    atomic_store(&task.alive,0);
+    atomic_store(&detached,1);
+    return NULL;
+}
+static void deadline(time_t end) { assert(time(NULL) <= end);sched_yield(); }
+int main(void)
+{
+    struct VirtioGPU gpu = { .irq_lock = &lock };
+    pthread_t irq,irq2,detach;
+    time_t end = time(NULL) + 5;
+    atomic_store(&task.alive,1);
+    assert(!gpu_wait_begin(&gpu,1u << 7));
+    assert(!pthread_create(&irq,NULL,irq_thread,&gpu));
+    assert(!pthread_create(&irq2,NULL,irq_thread,&gpu));
+    while(atomic_load(&signal_started) != 2)deadline(end);
+    assert(!pthread_create(&detach,NULL,detach_thread,&gpu));
+    for(;;) {
+        assert(!pthread_mutex_lock(&lock));
+        int removed = gpu.waiter == NULL;
+        assert(!pthread_mutex_unlock(&lock));
+        if(removed)break;
+        deadline(end);
+    }
+    /* An IRQ after detachment cannot acquire the old Task/signal.
+     * Both original producers remain inside Signal until released. */
+    assert(!atomic_load(&detached));
+    assert(atomic_load(&task.alive));
+    gpu_irq(&gpu);
+    assert(__atomic_load_n(&gpu.irq_users,__ATOMIC_ACQUIRE) == 2);
+    atomic_store(&allow_return,1);
+    assert(!pthread_join(irq,NULL));
+    assert(!pthread_join(irq2,NULL));
+    assert(!pthread_join(detach,NULL));
+    assert(!gpu.irq_users && !gpu.waiter && !gpu.wait_mask && atomic_load(&detached));
+    atomic_store(&task.received,0);
+    gpu_irq(&gpu);
+    assert(!atomic_load(&task.received));
+
+    atomic_store(&task.alive,1);
+    assert(gpu_wait_begin(&gpu,1u << 7) == 4);
+    gpu_irq(&gpu);
+    gpu_wait_end(&gpu);
+    assert(atomic_load(&task.received) == (1u << 7));
+    assert(gpu.interrupts == 5 && !gpu.irq_users && !disabled);
+    puts("virtio-waiter PASS: borrowed Task joined, late IRQ ignored, signal reuse, fresh waiter");
+    return 0;
+}

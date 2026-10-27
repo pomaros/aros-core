@@ -5,7 +5,9 @@ import argparse,hashlib,json,subprocess
 from pathlib import Path
 p=argparse.ArgumentParser();p.add_argument('--output',type=Path,required=True);a=p.parse_args()
 here=Path(__file__).resolve().parent;root=here.parents[4];source=root/'rom/hidds/virtiogfx/transport.c'
-s=source.read_text();code=s[s.index('struct GPUHeader '):s.index('BOOL VirtioGPUGetSurface')]
+s=source.read_text()
+code=s[s.index('static void gpu_wait_lock('):s.index('static AROS_INTH1(gpu_irq,')]
+code+=s[s.index('struct GPUHeader '):s.index('BOOL VirtioGPUGetSurface')]
 code=code.replace('__asm__ volatile("dsb sy" ::: "memory");','atomic_thread_fence(memory_order_seq_cst);')
 out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
 mutants={

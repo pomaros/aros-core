@@ -29,7 +29,7 @@ struct VirtioGPU {
  struct Device device; struct SignalSemaphore lock; void *message; uint64_t message_bus,fence;
  BOOL failed,ready,irq_reported,pending,repaint; UWORD pending_next;
  unsigned pending_bytes; uint32_t pending_type; struct Task *waiter;
- ULONG wait_mask; volatile ULONG interrupts; struct timerequest *timer; struct MsgPort timer_port;
+ ULONG wait_mask,interrupts,irq_users; struct timerequest *timer; struct MsgPort timer_port;
 };
 static struct VirtioGPU g;
 static struct avail av; static struct used us; static struct desc ds[2];

@@ -20,6 +20,7 @@ mutations must compile and fail at runtime. Inspect failure logs to distinguish
 assertions for the intended defect from unrelated host failures.
 
 This test does not exercise the IRQ callback, real DMA/cache coherency, close or
-reset, or cross-CPU waiter/signal synchronization. The transport's existing
-local Disable/Enable protection is not evidence of an SMP lifetime guarantee.
-Full module builds and VM runtime qualification remain separate from this test.
+reset, or cross-CPU waiter/signal synchronization. The separate
+[waiter test](../virtiogfx_waiter_host/README.md) executes the IRQ and publication/
+join helpers with concurrent host threads. Full module builds and VM runtime
+qualification remain separate from both tests.

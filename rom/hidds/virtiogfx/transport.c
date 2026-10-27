@@ -11,8 +11,15 @@
 #endif
 #define __OOP_NOMETHODBASES__
 #include "transport.h"
+#include <exec/lists.h>
 #include <devices/timer.h>
 #include <aros/asmcall.h>
+#if defined(__AROSEXEC_SMP__)
+#define __EXECLOCK_NOLIBBASE__
+#define __aros_getbase_ExecLockBase() (gpu->irq_lock_base)
+#include <proto/execlock.h>
+#include <aros/types/spinlock_s.h>
+#endif
 #include "../../devs/virtio/virtio_hw.c"
 #include "../../devs/virtio/virtio_queue.c"
 struct VirtioGPU {
@@ -28,24 +35,70 @@ struct VirtioGPU {
     struct timerequest *timer;
     struct Task *waiter;
     ULONG wait_mask;
-    volatile ULONG interrupts;
+    ULONG interrupts,irq_users;
+#if defined(__AROSEXEC_SMP__)
+    APTR irq_lock_base,irq_lock;
+#endif
     BOOL irq_reported;
     BOOL pending,repaint;
     UWORD pending_next;
     unsigned pending_bytes;
     uint32_t pending_type;
 };
-/* Queue ownership stays in task context. Disable protects the borrowed
- * caller/signal against local IRQs; it does not serialize a remote-CPU IRQ.
- * Cross-CPU waiter lifetime requires a separate synchronization contract. */
+/* The public Exec lock resource serializes publication with remote IRQs.
+ * Never hold this lock across Signal: claiming IPI space may drain callbacks.
+ * Each IRQ instead retains a producer reference until Signal has returned. */
+static void gpu_wait_lock(struct VirtioGPU *gpu)
+{
+#if defined(__AROSEXEC_SMP__)
+    ObtainLock(gpu->irq_lock,SPINLOCK_MODE_WRITE,LOCKF_DISABLE);
+#else
+    (void)gpu;Disable();
+#endif
+}
+static void gpu_wait_unlock(struct VirtioGPU *gpu)
+{
+#if defined(__AROSEXEC_SMP__)
+    ReleaseLock(gpu->irq_lock,LOCKF_DISABLE);
+#else
+    (void)gpu;Enable();
+#endif
+}
+static ULONG gpu_wait_begin(struct VirtioGPU *gpu,ULONG mask)
+{
+    gpu_wait_lock(gpu);
+    gpu->waiter=FindTask(NULL);gpu->wait_mask=mask;
+    ULONG before=__atomic_load_n(&gpu->interrupts,__ATOMIC_RELAXED);
+    gpu_wait_unlock(gpu);
+    return before;
+}
+static void gpu_wait_end(struct VirtioGPU *gpu)
+{
+    gpu_wait_lock(gpu);
+    gpu->waiter=NULL;gpu->wait_mask=0;
+    gpu_wait_unlock(gpu);
+    /* Interrupts remain enabled while joining remote producers, so an IPI
+     * sender waiting for queue space cannot deadlock with this consumer.
+     * Signal publishes bits synchronously; a deferred wakeup carries no bits.
+     * Joining therefore also ends every producer's use of this signal bit. */
+    while(__atomic_load_n(&gpu->irq_users,__ATOMIC_ACQUIRE)) {}
+}
 static AROS_INTH1(gpu_irq,struct VirtioGPU *,gpu)
 {
     AROS_INTFUNC_INIT
     (void)__ufi_intmask;(void)__ufi_custom;(void)__ufi_code;(void)SysBase;
     if(gpu->device.dev_ISR)(void)*gpu->device.dev_ISR;
     __asm__ volatile("dsb sy" ::: "memory");
-    ++gpu->interrupts;
-    if(gpu->waiter)Signal(gpu->waiter,gpu->wait_mask);
+    __atomic_fetch_add(&gpu->interrupts,1,__ATOMIC_RELAXED);
+    gpu_wait_lock(gpu);
+    struct Task *waiter=gpu->waiter;
+    ULONG mask=gpu->wait_mask;
+    if(waiter)__atomic_fetch_add(&gpu->irq_users,1,__ATOMIC_RELAXED);
+    gpu_wait_unlock(gpu);
+    if(waiter) {
+        Signal(waiter,mask);
+        __atomic_fetch_sub(&gpu->irq_users,1,__ATOMIC_RELEASE);
+    }
     return TRUE;
     AROS_INTFUNC_EXIT
 }
@@ -88,8 +141,7 @@ static int gpu_command(struct VirtioGPU *gpu,unsigned request_bytes,
     SetSignal(0,mask);
     gpu->timer_port.mp_SigTask=FindTask(NULL);
     gpu->timer_port.mp_SigBit=bit;gpu->timer_port.mp_Flags=PA_SIGNAL;
-    Disable();gpu->waiter=FindTask(NULL);gpu->wait_mask=mask;
-    ULONG before=gpu->interrupts;Enable();
+    ULONG before=gpu_wait_begin(gpu,mask);
     device_t dev=&gpu->device;void *memory=gpu->message;UQUAD bus=gpu->message_bus;
     struct virtio_queue *q=dev->dev_VQ;
     struct GPUHeader *request=memory,*response=(void *)((UBYTE *)memory+64);
@@ -113,7 +165,7 @@ static int gpu_command(struct VirtioGPU *gpu,unsigned request_bytes,
     while(!CheckIO((struct IORequest *)gpu->timer) &&
           q->q_Used->idx!=next)
         Wait(mask);
-    Disable();gpu->waiter=NULL;Enable();
+    gpu_wait_end(gpu);
     if(!CheckIO((struct IORequest *)gpu->timer))AbortIO((struct IORequest *)gpu->timer);
     WaitIO((struct IORequest *)gpu->timer);
     gpu->timer_port.mp_Flags=PA_IGNORE;
@@ -124,7 +176,8 @@ static int gpu_command(struct VirtioGPU *gpu,unsigned request_bytes,
          * present may reap it, but must not overwrite it before completion. */
         bug("[VirtioGfx] completion delayed; retaining command fence=%lu\n",(unsigned long)gpu->fence);
     }
-    else if(result>0 && !gpu->irq_reported && gpu->interrupts!=before) {
+    else if(result>0 && !gpu->irq_reported &&
+            __atomic_load_n(&gpu->interrupts,__ATOMIC_RELAXED)!=before) {
         gpu->irq_reported=TRUE;
         bug("[VM] virtio graphics IRQ completion PASS\n");
     }
@@ -194,6 +247,9 @@ ULONG VirtioGPUClose(struct VirtioGPU *gpu)
     }
     if(gpu->timer_open)CloseDevice((struct IORequest *)gpu->timer);
     if(gpu->timer)DeleteIORequest((struct IORequest *)gpu->timer);
+#if defined(__AROSEXEC_SMP__)
+    if(gpu->irq_lock)FreeLock(gpu->irq_lock);
+#endif
     if(gpu->base.virtio_HiddPCIDeviceAttrBase)OOP_ReleaseAttrBase((CONST_STRPTR)IID_Hidd_PCIDevice);
     ULONG result=gpu->failed?2:1;
     FreeMem(gpu,sizeof(*gpu));return result;
@@ -207,6 +263,11 @@ BOOL VirtioGPUOpen(struct Library *oop,OOP_Object *object,struct VirtioGPU **out
     *out=gpu;InitSemaphore(&gpu->lock);
     struct VirtIOBase *VirtIOBase=&gpu->base;device_t dev=&gpu->device;
     const char *stage=NULL;
+#if defined(__AROSEXEC_SMP__)
+    stage="IRQ lock";
+    gpu->irq_lock_base=OpenResource("execlock.resource");
+    if(!gpu->irq_lock_base || !(gpu->irq_lock=AllocLock()))goto fail;
+#endif
     gpu->base.virtio_OOPBase=oop;
     gpu->base.virtio_HiddPCIDeviceAttrBase=OOP_ObtainAttrBase((CONST_STRPTR)IID_Hidd_PCIDevice);
     if(!gpu->base.virtio_HiddPCIDeviceAttrBase)goto fail;
@@ -228,7 +289,7 @@ BOOL VirtioGPUOpen(struct Library *oop,OOP_Object *object,struct VirtioGPU **out
     dev->dev_VQ=virtio_alloc_queue(dev,0,8);
     if(!dev->dev_VQ || !virtio_hw_setup_queue(dev,0,dev->dev_VQ))goto fail;
     stage="timer";
-    NewList(&gpu->timer_port.mp_MsgList);
+    NEWLIST(&gpu->timer_port.mp_MsgList);
     gpu->timer_port.mp_Node.ln_Type=NT_MSGPORT;gpu->timer_port.mp_Flags=PA_IGNORE;
     gpu->timer=CreateIORequest(&gpu->timer_port,sizeof(*gpu->timer));
     if(!gpu->timer || OpenDevice("timer.device",UNIT_MICROHZ,(struct IORequest *)gpu->timer,0))goto fail;
