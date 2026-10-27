@@ -36,8 +36,12 @@ for name, tested in variants.items():
     result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10)
     file.with_suffix('.log').write_text(result.stdout + result.stderr)
     rows.append({'variant': name, 'exit': result.returncode})
-    assert result.returncode == 0 if name == 'production' else (
-        result.returncode != 0 and 'Assertion failed' in result.stderr)
+    if name == 'production':
+        assert result.returncode == 0, result.stdout + result.stderr
+    else:
+        expected = ('task.tc_SigRecvd == mask' if name == 'delayed-bits'
+                    else '!task.tc_SigRecvd && task.tc_State == TS_WAIT')
+        assert result.returncode != 0 and expected in result.stderr, result.stderr
 record = {'result': 'PASS', 'checks': rows,
           'source_sha256': hashlib.sha256(source.encode()).hexdigest(),
           'scope': 'Actual Signal and signal_hook, deterministic delayed IPI queue and Exec mocks; ASan/UBSan, no real inter-CPU/IRQ/guest scheduling proof'}
