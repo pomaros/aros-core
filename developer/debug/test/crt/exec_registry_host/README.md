@@ -17,6 +17,9 @@ uses local interrupt exclusion; an SMP build without it refuses the operation.
 Allocation, blocking waits and library opens happen outside the namespace lock.
 Already initialized semaphore nodes are published directly under that lock;
 AddSemaphore would reacquire it. Registry storage lives until system shutdown.
+It owns a copy of its public name: unloading the provider must not leave a
+namespace node pointing into the provider's released image. The fixture erases
+the original module-name storage and checks lookup by the stable public name.
 
 Missing registry access or task-storage allocation causes CRT initialization to
 fail. Slot failure leaves no linked callback and releases the registry semaphore;
@@ -25,7 +28,7 @@ not open absent libraries or call OpenLibrary while holding the list lock.
 
 Both UP and SMP compilation paths execute with modeled resource/mutex/task-slot
 operations under ASan/UBSan. Exact negative mutations must reject duplicate
-publication and an unsafe missing-resource fallback. These are HOST algorithm
+publication, a borrowed module name and an unsafe missing-resource fallback. These are HOST algorithm
 checks, not real interrupt, spinlock, loader or guest qualification. Generated
 executables are temporary; source, diagnostics and input identities remain in
 the output directory.

@@ -53,8 +53,9 @@ struct CRTThreadHook
 
 struct CRTThreadHooks
 {
-    struct SignalSemaphore th_Sem;   /* ss_Link.ln_Name = CRT_THREADHOOKS_SEMNAME */
+    struct SignalSemaphore th_Sem;
     struct MinList         th_Hooks;
+    char                   th_Name[sizeof(CRT_THREADHOOKS_SEMNAME)];
 };
 
 static struct CRTThreadHook __posixc_threadhook;
@@ -117,7 +118,9 @@ static struct CRTThreadHooks *__get_threadhooks(BOOL create)
     if (!newreg)
         return NULL;
     InitSemaphore(&newreg->th_Sem);
-    newreg->th_Sem.ss_Link.ln_Name = (char *)CRT_THREADHOOKS_SEMNAME;
+    /* The registry outlives the library containing this string literal. */
+    CopyMem((APTR)CRT_THREADHOOKS_SEMNAME, newreg->th_Name, sizeof(newreg->th_Name));
+    newreg->th_Sem.ss_Link.ln_Name = newreg->th_Name;
     NEWLIST(&newreg->th_Hooks);
 
     if (!__crt_list_enter(&guard, &SysBase->SemaphoreList, SPINLOCK_MODE_WRITE))

@@ -58,6 +58,7 @@ struct CRTThreadHooks
 {
     struct SignalSemaphore th_Sem;
     struct MinList         th_Hooks;
+    char                   th_Name[sizeof(CRT_THREADHOOKS_SEMNAME)];
 };
 
 static void RunCRTThreadHooks(BOOL enter)

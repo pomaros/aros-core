@@ -41,6 +41,7 @@ def main():
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+typedef void *APTR;
 typedef int BOOL;
 typedef unsigned long ULONG;
 typedef long LONG;
@@ -52,12 +53,14 @@ typedef const char *CONST_STRPTR;
 #define LOCKF_DISABLE 1
 #define SPINLOCK_MODE_READ 1
 #define SPINLOCK_MODE_WRITE 2
-#define CRT_THREADHOOKS_SEMNAME "crt.thread-hooks.v1"
+static char module_name[] = "crt.thread-hooks.v1";
+#define CRT_THREADHOOKS_SEMNAME module_name
+#define CopyMem(from,to,size) memcpy((to),(from),(size))
 struct Node { struct Node *next; char *ln_Name; };
 struct List { struct Node *head; };
 struct Library { int dummy; };
 struct SignalSemaphore { struct Node ss_Link; int initialized; };
-struct CRTThreadHooks { struct SignalSemaphore th_Sem; struct List th_Hooks; };
+struct CRTThreadHooks { struct SignalSemaphore th_Sem; struct List th_Hooks; char th_Name[sizeof(CRT_THREADHOOKS_SEMNAME)]; };
 struct ExecBase { struct List SemaphoreList, LibList; };
 static struct ExecBase execbase;
 static struct ExecBase *SysBase = &execbase;
@@ -183,6 +186,13 @@ int main(int argc,char **argv) {
  assert(!semaphore_held&&!additions&&!__posixc_threadhook.th_Node.mln_Succ);
  slot_failure=0;assert(__posixc_threadhook_init(NULL));assert(additions==1&&__posixc_threadbase_slot==7);
  assert(__posixc_threadhook_init(NULL));assert(additions==1&&!semaphore_held);
+ /* Model unloading the library's original name storage. The public registry
+    must remain discoverable by its stable name until system shutdown. */
+ memset(module_name,0,sizeof(module_name));
+ struct __crt_list_guard name_guard;
+ assert(__crt_list_enter(&name_guard,&SysBase->SemaphoreList,SPINLOCK_MODE_READ));
+ assert(FindName(&SysBase->SemaphoreList,"crt.thread-hooks.v1")==winner);
+ __crt_list_leave(&name_guard);
  free(winner);
  assert(!pthread_barrier_destroy(&allocate_barrier));
  puts("PASS single initialized registry, losing allocations freed, 80000 lookups");
@@ -209,6 +219,7 @@ static void host_barrier_wait(struct host_barrier *b) {
     missing = '#if defined(__AROSEXEC_SMP__)\n    return FALSE;\n#else\n    Disable();\n    return TRUE;\n#endif'
     assert guard_text.count(missing)==1
     variants = {'current': (fixture,guard_text),
+        'borrowed-registry-name': (fixture.replace('newreg->th_Sem.ss_Link.ln_Name = newreg->th_Name;', 'newreg->th_Sem.ss_Link.ln_Name = (char *)CRT_THREADHOOKS_SEMNAME;'),guard_text),
         'duplicate-registry': (fixture[:where]+'reg = NULL;'+fixture[stop:],guard_text),
         'missing-smp-lock': (fixture,guard_text.replace(missing,'    Disable();\n    return TRUE;'))}
 
@@ -231,7 +242,7 @@ static void host_barrier_wait(struct host_barrier *b) {
                 for resource, write_failure in cases:
                     run = subprocess.run([str(binary),resource,write_failure], capture_output=True,text=True,timeout=30)
                     (variant/(configuration+'-'+resource+'-'+write_failure+'.log')).write_text(run.stdout+run.stderr)
-                    failure = '!__crt_list_enter(&guard,&SysBase->SemaphoreList,SPINLOCK_MODE_WRITE)' if name=='missing-smp-lock' else '!FindName(list,node->ln_Name)'
+                    failure = '!__crt_list_enter(&guard,&SysBase->SemaphoreList,SPINLOCK_MODE_WRITE)' if name=='missing-smp-lock' else 'FindName(&SysBase->SemaphoreList,"crt.thread-hooks.v1")==winner' if name=='borrowed-registry-name' else '!FindName(list,node->ln_Name)'
                     expected = run.returncode == 0 if name=='current' else run.returncode != 0 and failure in run.stderr
                     row = {'variant': name, 'configuration': configuration,'smp_resource':resource=='1',
                            'publication_lock_failure':write_failure=='1','exit':run.returncode,'expected':expected}
