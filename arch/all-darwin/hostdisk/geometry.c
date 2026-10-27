@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>
+ * Distributed under the AROS Public License 1.1. */
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
 */
@@ -35,7 +37,7 @@ ULONG Host_DeviceGeometry(int file, struct DriveGeometry *dg, struct HostDiskBas
     if (ret != -1)
         ret = HOST_VACALL3(hdskBase->iface->ioctl, file, DKIOCGETBLOCKCOUNT, &sectors);
 
-    err = *hdskBase->errnoPtr;
+    err = Host_Errno(hdskBase);
 
     HostLib_Unlock();
 

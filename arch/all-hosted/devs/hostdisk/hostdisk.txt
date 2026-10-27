@@ -58,3 +58,19 @@ the partition you want to mount.
 
  The same applies to image files, with the exception that you don't need to run
 AROS under root to gain access to them. You just need an access to the file.
+
+ Queued update barrier (version 1.1).
+ ==============================================
+
+ CMD_UPDATE is processed in the same unit queue as writes. On UNIX hosts,
+its completion follows a successful fsync of the open host file. Interrupted
+calls are retried; unavailable barriers and failed host calls return an error.
+The request's io_Actual is zero. NSCMD_DEVICEQUERY omits CMD_UPDATE on backends
+without a barrier implementation. CMD_CLEAR and CMD_FLUSH retain their existing
+behavior and do not imply this barrier.
+
+ Version 1.0 advertised CMD_UPDATE but acknowledged it before queued writes.
+A consumer requiring a barrier must reject that version and inspect the query
+and I/O results. fsync completion does not establish a tested physical-media
+power-loss guarantee, including on hosts whose drive caches require stronger
+platform-specific operations.

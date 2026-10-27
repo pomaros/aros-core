@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>
+ * Distributed under the AROS Public License 1.1. */
 /*
     Copyright (C) 1995-2014, The AROS Development Team. All rights reserved.
 */
@@ -101,6 +103,14 @@ static ULONG error(int unixerr)
     }
 }
 
+/* Host errno belongs to the calling host thread, not the init task. */
+int Host_Errno(struct HostDiskBase *hdskBase)
+{
+    int *value = hdskBase->iface->__error();
+    AROS_HOST_BARRIER
+    return *value;
+}
+
 ULONG Host_Open(struct unit *Unit)
 {
     struct HostDiskBase *hdskBase = Unit->hdskBase;
@@ -113,7 +123,7 @@ ULONG Host_Open(struct unit *Unit)
 
     Unit->file = hdskBase->iface->open(Unit->filename, O_RDWR, 0755, &err);
     AROS_HOST_BARRIER
-    err = *hdskBase->errnoPtr;
+    err = Unit->file == -1 ? Host_Errno(hdskBase) : 0;
 
     if (err == EBUSY || err == EROFS || err == EACCES || err == EPERM)
     {
@@ -123,7 +133,7 @@ ULONG Host_Open(struct unit *Unit)
 
         Unit->file = hdskBase->iface->open(Unit->filename, O_RDONLY, 0755);
         AROS_HOST_BARRIER
-        err = *hdskBase->errnoPtr;
+        err = Unit->file == -1 ? Host_Errno(hdskBase) : 0;
     }
 
     HostLib_Unlock();
@@ -164,7 +174,7 @@ LONG Host_Read(struct unit *Unit, APTR buf, ULONG size, ULONG *ioerr)
 
     ret = hdskBase->iface->read(Unit->file, buf, size);
     AROS_HOST_BARRIER
-    err = *hdskBase->errnoPtr;
+    err = Host_Errno(hdskBase);
 
     HostLib_Unlock();
 
@@ -185,7 +195,7 @@ LONG Host_Write(struct unit *Unit, APTR buf, ULONG size, ULONG *ioerr)
 
     ret = hdskBase->iface->write(Unit->file, buf, size);
     AROS_HOST_BARRIER
-    err = *hdskBase->errnoPtr;
+    err = Host_Errno(hdskBase);
 
     HostLib_Unlock();
 
@@ -193,6 +203,37 @@ LONG Host_Write(struct unit *Unit, APTR buf, ULONG size, ULONG *ioerr)
         *ioerr = error(err);
 
     return ret;
+}
+
+/* CMD_UPDATE is a file-descriptor barrier, completed by the unit worker.
+ * It promises the host fsync contract, not untested physical power-loss safety. */
+static ULONG Host_Update(struct unit *Unit)
+{
+    struct HostDiskBase *hdskBase = Unit->hdskBase;
+    int ret, err, *host_errno;
+    if (!hdskBase->iface->fsync)
+        return IOERR_NOCMD;
+    if (Unit->file == INVALID_HANDLE_VALUE)
+        return TDERR_DiskChanged;
+    do {
+        HostLib_Lock();
+        /* errno is per host thread; a pointer cached at device init need
+         * not belong to the worker which is making this call. */
+        host_errno = hdskBase->iface->__error();
+        AROS_HOST_BARRIER
+        ret = hdskBase->iface->fsync(Unit->file);
+        AROS_HOST_BARRIER
+        err = ret == -1 ? *host_errno : 0;
+        HostLib_Unlock();
+    } while (ret == -1 && err == EINTR);
+    if (ret == 0)
+        return 0;
+    if (err == ENOSYS || err == EINVAL || err == ENOTSUP || err == EOPNOTSUPP)
+        return IOERR_NOCMD;
+    if (err == EROFS || err == EACCES)
+        return TDERR_WriteProt;
+    /* A failed host call with no errno must never turn into success. */
+    return error(err ? err : EIO);
 }
 
 ULONG Host_Seek(struct unit *Unit, ULONG pos)
@@ -229,7 +270,7 @@ static ULONG InternalGetGeometry(int file, struct DriveGeometry *dg, struct Host
     HostLib_Lock();
 
     res = hdskBase->iface->fstat64(file, &st);
-    err = *hdskBase->errnoPtr;
+    err = Host_Errno(hdskBase);
 
     HostLib_Unlock();
 
@@ -316,6 +357,7 @@ static const char *libcSymbols[] =
     "fstat64" INODE64_SUFFIX,
     "stat64" INODE64_SUFFIX,
 #endif
+    "fsync",
     NULL
 };
 
@@ -383,7 +425,7 @@ static int Host_Init(struct HostDiskBase *hdskBase)
     if ((!hdskBase->iface) || r)
         return FALSE;
 
-    hdskBase->errnoPtr = hdskBase->iface->__error();
+    hdskBase->update = Host_Update;
 
     hdskBase->DiskDevice = DISK_DEVICE;
     hdskBase->unitBase   = DISK_BASE;

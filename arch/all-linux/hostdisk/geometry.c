@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>
+ * Distributed under the AROS Public License 1.1. */
 /*
     Copyright (C) 1995-2014, The AROS Development Team. All rights reserved.
 */
@@ -40,7 +42,7 @@ ULONG Host_DeviceGeometry(int file, struct DriveGeometry *dg, struct HostDiskBas
     if (ret != -1)
         ret = hdskBase->iface->ioctl(file, BLKGETSIZE, &devsize);
 
-    err = *hdskBase->errnoPtr;
+    err = Host_Errno(hdskBase);
 
     HostLib_Unlock();
 

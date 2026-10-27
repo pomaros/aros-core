@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>
+ * Distributed under the AROS Public License 1.1. */
 #ifndef FDSK_DEVICE_H
 #define FDSK_DEVICE_H
 
@@ -13,6 +15,8 @@
 #include <exec/ports.h>
 #include <dos/dos.h>
 
+struct unit;
+
 struct HostDiskBase
 {
     struct Device               device;
@@ -24,7 +28,8 @@ struct HostDiskBase
     APTR                        HostLibBase;
     APTR                        KernelHandle;
     struct HostInterface       *iface;
-    int                        *errnoPtr;
+    /* Optional backend barrier; NULL means CMD_UPDATE is unsupported. */
+    ULONG                     (*update)(struct unit *unit);
 };
 
 #define HostLibBase hdskBase->HostLibBase

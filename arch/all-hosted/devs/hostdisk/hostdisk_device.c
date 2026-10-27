@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>
+ * Distributed under the AROS Public License 1.1. */
 /*
     Copyright (C) 1995-2011, The AROS Development Team. All rights reserved.
 */
@@ -203,9 +205,9 @@ ADD2CLOSEDEV(GM_UNIQUENAME(Close), 0)
 
 static const UWORD NSDSupported[] = {
 //  CMD_RESET,
+    CMD_UPDATE, /* first: skipped by query on backends without a barrier */
     CMD_READ,
     CMD_WRITE,
-    CMD_UPDATE,
     CMD_CLEAR,
 //  CMD_STOP,
 //  CMD_START,
@@ -246,7 +248,6 @@ AROS_LH1(void, beginio,
     DCMD(bug("hostdisk: command %u\n", iotd->iotd_Req.io_Command));
     switch(iotd->iotd_Req.io_Command)
     {
-        case CMD_UPDATE:
         case CMD_CLEAR:
         case CMD_FLUSH:
         case TD_MOTOR:
@@ -254,6 +255,7 @@ AROS_LH1(void, beginio,
             iotd->iotd_Req.io_Error = 0;
             break;
 
+        case CMD_UPDATE:
         case CMD_READ:
         case CMD_WRITE:
         case TD_SEEK:
@@ -274,9 +276,9 @@ AROS_LH1(void, beginio,
         case TD_EJECT:
         case TD_PROTSTATUS:
             /* Forward to unit thread */
-            PutMsg(((struct unit *)iotd->iotd_Req.io_Unit)->port, &iotd->iotd_Req.io_Message);
-            /* Not done quick */
+            /* Publish final request flags before the worker can reply. */
             iotd->iotd_Req.io_Flags &= ~IOF_QUICK;
+            PutMsg(((struct unit *)iotd->iotd_Req.io_Unit)->port, &iotd->iotd_Req.io_Message);
             return;
 
         /*
@@ -290,7 +292,7 @@ AROS_LH1(void, beginio,
             nsdq->SizeAvailable     = sizeof(struct NSDeviceQueryResult);
             nsdq->DeviceType        = NSDEVTYPE_TRACKDISK;
             nsdq->DeviceSubType     = 0;
-            nsdq->SupportedCommands = (UWORD *)NSDSupported;
+            nsdq->SupportedCommands = (UWORD *)(NSDSupported + (hdskBase->update ? 0 : 1));
 
             iotd->iotd_Req.io_Actual = sizeof(struct NSDeviceQueryResult);
             iotd->iotd_Req.io_Error  = 0;
@@ -392,6 +394,8 @@ static LONG write(struct unit *unit, struct IOExtTD *iotd)
     while(size)
     {
         subsize = Host_Write(unit, buf, size, &ioerr);
+        if(subsize == 0)
+            return IOERR_BADLENGTH;
         if(subsize == -1)
         {
             return ioerr;
@@ -532,6 +536,14 @@ static void unitentry(struct IOExtTD *iotd)
                  * In fact these two commands make a little sense, but they exist,
                  * so we honestly process them.
                  */
+                case CMD_UPDATE:
+                    /* Same unit FIFO as writes: do not acknowledge until
+                     * the host backend has completed its real barrier. */
+                    iotd->iotd_Req.io_Actual = 0;
+                    err = unit->hdskBase->update ?
+                        unit->hdskBase->update(unit) : IOERR_NOCMD;
+                    break;
+
                 case TD_SEEK:
                     DCMD(bug("%s: received CMD_SEEK.\n", me->tc_Node.ln_Name));
                     err = Host_Seek(unit, iotd->iotd_Req.io_Offset);

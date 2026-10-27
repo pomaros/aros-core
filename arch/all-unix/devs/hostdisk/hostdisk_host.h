@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>
+ * Distributed under the AROS Public License 1.1. */
 /*
  * avoid conflicts between our __unused define and the ones that might come in
  * via sys/stat.h
@@ -83,6 +85,7 @@ struct HostInterface
     int            (*fstat64)(int fd, struct stat64 *buf);
 #endif
     int            (*stat64)(const char *path, struct stat64 *buf);
+    int            (*fsync)(int filedes);
 };
 
 #ifdef HOST_LONG_ALIGNED
@@ -97,6 +100,9 @@ struct HostInterface
 #endif
 
 struct HostDiskBase;
+
+/* Caller holds HostLib_Lock; errno is read from that host thread. */
+int Host_Errno(struct HostDiskBase *hdskBase);
 
 /* This routine is specific to a particular UNIX variant */
 ULONG Host_DeviceGeometry(int file, struct DriveGeometry *dg, struct HostDiskBase *hdskBase);
