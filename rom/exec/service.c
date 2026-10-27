@@ -9,6 +9,8 @@
 #include <exec/tasks.h>
 #include <aros/libcall.h>
 #include <proto/exec.h>
+#define __TASK_NOLIBBASE__
+#include <proto/task.h>
 
 #include "etask.h"
 #include "exec_intern.h"
@@ -45,7 +47,8 @@ void ServiceTask(struct ExecBase *SysBase)
              * So, currently we ignore this.
              */
 
-            switch (task->tc_State)
+            UBYTE state = task->tc_State;
+            switch (state)
             {
 #if defined(__AROSEXEC_SMP__)
             case TS_TOMBSTONED:
@@ -66,8 +69,17 @@ void ServiceTask(struct ExecBase *SysBase)
             case TS_INVALID:
                 DREMTASK("ServiceTask: Removal request for Task 0x%p <%s> (State:%08x)", task, task->tc_Node.ln_Name, task->tc_State);
 
-                // TODO: Make sure the task has terminated..
+                /* Only an already-INVALID entry on a certified platform
+                 * proves the stack handoff; fallthrough does not. */
                 task->tc_State = TS_INVALID;
+#if defined(EXEC_SELF_EXIT_HANDOFF)
+                if (state == TS_INVALID && SysBase->lb_TaskResBase &&
+                    SysBase->lb_TaskResBase->lib_Version >= 2)
+                {
+                    APTR TaskResBase = SysBase->lb_TaskResBase;
+                    NotifyTaskStopped(task);
+                }
+#endif
 
                 /*
                  * Note tc_MemEntry list is part of the task structure which

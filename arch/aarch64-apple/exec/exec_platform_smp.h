@@ -31,6 +31,10 @@
 struct MsgPort;
 void AROSAppleExecPortLock(struct MsgPort *port);
 #define EXEC_PORT_LOCK(port) AROSAppleExecPortLock(port)
+/* The service queue receives self-removal only after the dispatcher has
+ * replaced the departing task stack/TLS. UP and other adapters do not claim
+ * this capability. Keep it paired with EXEC_DEFER_SELF_EXIT below. */
+#define EXEC_SELF_EXIT_HANDOFF 1
 /* RemTask retains ownership until cpu_Dispatch has abandoned its EL0 stack. */
 #define EXEC_DEFER_SELF_EXIT(task, base, publish) \
     AROSAppleExecSMPAPIGet()->self_exit_queue((task), (base), (publish))

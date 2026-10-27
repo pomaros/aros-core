@@ -79,4 +79,28 @@ struct TaskNotifyMsg
 #define TNA_REMOVED                     (2)
 #define TNA_FAILED                      (3)
 
+/* task.resource 2.0: a separate list, controlled by TaskStopHookControl().
+ * Adding requires Exec 51.12 or later, which supplies the service handoff.
+ * It also requires platform EXEC_SELF_EXIT_HANDOFF support; unsupported
+ * platforms refuse addition and never dispatch this notification. Dispatch
+ * accepts only the actual Exec service task, identified by its private port.
+ * Hooks receive CallHookPkt(hook, task, NULL) from Exec's service task after
+ * its TS_INVALID handoff and before freeing the Task allocation. ETask,
+ * context, TaskStorage and borrowed library bases are already unavailable.
+ * Only compare the Task pointer with a pre-existing heap record and publish
+ * bounded atomic state. Hooks run with interrupts disabled and the list's
+ * SMP lock held: no allocation, waiting, Exec calls or hook-list mutation.
+ * The hook and its code/data must remain resident until successful removal;
+ * install it before publishing owner records; serialize its own registration
+ * and destruction. The callback may not take any additional locks.
+ * Each Hook node belongs exclusively to this list; never also register it
+ * with AddTaskNotifyHook, AddTaskHook or another intrusive list. A refused
+ * removal (including calls under Disable/Forbid or from a callback) leaves
+ * the hook registered and its code/data must remain resident.
+ * Successful removal joins callbacks already in flight. This is one barrier only:
+ * records published to another actor also need that actor's completion.
+ * Notification covers ServiceTask's INVALID path, including the certified SMP
+ * self-exit handoff. It does not certify remotely removed RUN tasks, reclaim their
+ * requests, or promise notification on other removal paths. */
+
 #endif /* TASKRES_H */

@@ -55,6 +55,8 @@ TASKRES_FUNCS :=             \
         AddTaskNotifyHook    \
         RemTaskNotifyHook    \
         SetTaskAffinity      \
+        TaskStopHookControl \
+        NotifyTaskStopped   \
         TaskResourceControl
 
 TASKRES_FILES :=             \

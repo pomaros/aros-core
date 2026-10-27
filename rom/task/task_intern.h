@@ -64,7 +64,9 @@ struct TaskResBase
     struct SignalSemaphore      trb_NotifySem;                      /* Protects trb_NotifyHooks                                     */
 #if defined(__AROSEXEC_SMP__)
     spinlock_t                  trb_RTLock;
+    spinlock_t                  trb_StopLock;
 #endif
+    struct MinList              trb_StopHooks;
     struct MinList              trb_RTContexts;
     struct MinList              trb_RTRecords;
     struct MinList              trb_RTPins;
