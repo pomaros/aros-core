@@ -3,6 +3,7 @@
 
 /*
     Copyright © 2008-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER
     $Id$
 */
 
@@ -42,6 +43,7 @@ struct vfork_data
     char *parent_upathbuf;
 
     struct Task *child;
+    pid_t child_pid;
     int child_executed;
     int child_error, child_errno;
     BYTE child_signal;

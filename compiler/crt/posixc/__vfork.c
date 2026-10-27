@@ -1,5 +1,6 @@
 /*
     Copyright (C) 2008-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER
 */
 
 #include <aros/debug.h>
@@ -139,6 +140,9 @@ LONG launcher()
     jmp_buf exec_exitjmp; /* jmp_buf for when calling __exec_do */
     int exec_error; /* errno for when calling __exec_do */
     LONG ret = 0;
+
+    /* Publish while this Task is alive, including setup failure paths. */
+    udata->child_pid = GetETaskID(this);
 
     /* Allocate signal for parent->child communication */
     child_signal = udata->child_signal = AllocSignal(-1);
@@ -409,6 +413,7 @@ static __attribute__((noinline)) void __vfork_exit_controlled_stack(struct vfork
 {
     jmp_buf dummy;
     jmp_buf env;
+    pid_t child_pid = udata->child_pid;
 
     D(bug("__vfork: ParentPretendingChild: freeing parent signal\n"));
     FreeSignal(udata->parent_signal);
@@ -442,7 +447,7 @@ static __attribute__((noinline)) void __vfork_exit_controlled_stack(struct vfork
 
     D(bug("__vfork: Parent jumping to jmp_buf %p\n", env));
     D(bug("__vfork: ip: %p, stack: %p\n", env->retaddr, env->regs[SP]));
-    vfork_longjmp(env, GetETaskID(udata->child));
+    vfork_longjmp(env, child_pid);
 }
 
 static void parent_createchild(struct vfork_data *udata)
@@ -496,6 +501,7 @@ static void parent_createchild(struct vfork_data *udata)
         vfork_longjmp(vfork_jmp, -1);
     }
 
+    int old_flags = PosixCBase->flags;
     PosixCBase->flags |= VFORK_PARENT;
 
     D(bug("__vfork: Parent: Creating child\n"));
@@ -505,6 +511,8 @@ static void parent_createchild(struct vfork_data *udata)
     {
         D(bug("__vfork: Child could not be created\n"));
         /* Something went wrong, return -1 */
+        PosixCBase->flags = old_flags;
+        FreeSignal(udata->parent_signal);
         FreeMem(udata, sizeof(struct vfork_data));
         errno = ENOMEM; /* Most likely */
         vfork_longjmp(vfork_jmp, -1);
@@ -516,15 +524,21 @@ static void parent_createchild(struct vfork_data *udata)
     ASSERTCHILDSTATE(CHILD_STATE_SETUP_FAILED | CHILD_STATE_SETUP_FINISHED);
     PRINTSTATE;
 
+    PosixCBase->flags = old_flags;
     if (udata->child_errno)
     {
         /* An error occured during child setup */
         D(bug("__vfork: Child returned an error (%d)\n", udata->child_errno));
-        errno = udata->child_errno;
+        int error = udata->child_errno;
+        /* The Task may already be gone. Join and reap its retained ETask
+           by the ID published by the launcher before releasing shared data. */
+        ChildWait(udata->child_pid);
+        ChildFree(udata->child_pid);
+        FreeSignal(udata->parent_signal);
+        FreeMem(udata, sizeof(*udata));
+        errno = error;
         vfork_longjmp(vfork_jmp, -1);
     }
-
-    PosixCBase->flags &= ~VFORK_PARENT;
 }
 
 static void parent_enterpretendchild(struct vfork_data *udata)
