@@ -7,7 +7,7 @@
 #include <sched.h>
 #include <stdio.h>
 #include "test_boundary.h"
-static atomic_int allocations, disposed, registry_closed, fail_alloc;
+static atomic_int allocations, disposed, registry_closed, fail_alloc, finalized;
 struct Library { int alive; };
 struct _fdesc { unsigned identity; };
 void *AllocVec(size_t n, unsigned flags) {
@@ -22,9 +22,15 @@ void CloseLibrary(struct Library *library) {
     library->alive = 0; atomic_fetch_add(&registry_closed, 1); FreeVec(library);
 }
 #include "NAMESPACE_SOURCE"
-static void dispose(struct _fdesc *d, struct Library *library) {
+static void dispose(struct _fdesc *d, struct Library *library, int fd) {
+    assert(atomic_load(&finalized)==1 && (fd==0 || fd==2));
     assert(library && library->alive); assert(d->identity == 44 || d->identity == 55);
     atomic_fetch_add(&disposed, 1); FreeVec(d);
+}
+static void finalize(struct __fd_namespace *space) {
+    assert(space->process_id==123 && space->registry->alive);
+    assert(atomic_load(&disposed)==0);
+    assert(atomic_fetch_add(&finalized,1)==0);
 }
 static atomic_int ready, go;
 static void *worker(void *data) {
@@ -36,12 +42,12 @@ static void *worker(void *data) {
     assert(space->array[0]->identity == 44);
     assert(space->array[2]->identity == 55);
     assert(!pthread_mutex_unlock(&space->guard.mutex));
-    __fd_namespace_release(space, dispose); return NULL;
+    __fd_namespace_release(space, dispose, finalize); return NULL;
 }
 int main(void) {
-    atomic_store(&fail_alloc, 1); assert(!__fd_namespace_create());
+    atomic_store(&fail_alloc, 1); assert(!__fd_namespace_create(123));
     assert(!__fd_namespace_retain(NULL));
-    struct __fd_namespace *space = __fd_namespace_create(); assert(space);
+    struct __fd_namespace *space = __fd_namespace_create(123); assert(space);
     space->registry = AllocVec(sizeof(*space->registry), 0); space->registry->alive = 1;
     space->slots = 3; space->array = AllocVec(3 * sizeof(*space->array), 0);
     for (int i = 0; i < 3; i += 2) {
@@ -55,7 +61,7 @@ int main(void) {
     }
     while (atomic_load(&ready) != 8) sched_yield();
     /* The creator closes and its runtime storage is no longer involved. */
-    __fd_namespace_release(space, dispose);
+    __fd_namespace_release(space, dispose, finalize);
     assert(atomic_load(&disposed) == 0); assert(atomic_load(&registry_closed) == 0);
     atomic_store(&go, 1);
     for (int i = 0; i < 8; i++) assert(!pthread_join(threads[i], NULL));

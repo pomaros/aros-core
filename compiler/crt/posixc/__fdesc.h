@@ -85,19 +85,15 @@ typedef struct _fdesc
 {
     fcb  *fcb;
     int  fdflags;
-    APTR allocpool;   /* pool this fdesc was allocated from; a descriptor
-                         table can cross posixc.library instances during
-                         vfork/launcher handoff, so free it to the allocator
-                         it came from rather than the current base's pool. */
 } fdesc;
 
 struct PosixCIntBase;
+struct __fd_namespace;
+/* Borrowed only while the calling runtime remains open. */
+struct __fd_namespace *__fd_namespace_current(void);
 void __fdesc_lock(void);
 void __fdesc_unlock(void);
 int __getfdslots(void);
-void __getfdarray(APTR *arrayptr, int *slotsptr);
-void __setfdarray(APTR array, int slots);
-void __setfdarraybase(struct PosixCIntBase *PosixCBase2);
 fdesc *__getfdesc(register int fd);
 void __setfdesc(register int fd, fdesc *fdesc);
 int __getfdslot(int wanted_fd);

@@ -35,9 +35,6 @@ struct vfork_data
     BPTR parent_cd_lock;
     BPTR parent_curdir;
     struct __env_item *parent_env_list;
-    APTR parent_internalpool;
-    int parent_numslots;
-    fdesc **parent_fd_array;
     struct PosixCIntBase *parent_fd_owner;
     int parent_flags;
     char *parent_upathbuf;

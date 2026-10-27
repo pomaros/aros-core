@@ -16,7 +16,12 @@ typedef int BOOL;
 struct Library { int unused; };
 typedef struct { unsigned int opencount; pthread_mutex_t lock; } fcb;
 typedef struct { fcb *fcb; int fdflags; } fdesc;
-struct PosixCIntBase { struct Library *PosixCFDBase; };
+struct PosixCIntBase { int unused; };
+struct __fd_namespace { struct Library *registry; };
+static struct __fd_namespace namespace_boundary;
+static struct __fd_namespace *__fd_space(struct PosixCIntBase *base) {
+    (void)base;return &namespace_boundary;
+}
 static struct PosixCIntBase base;
 static pthread_mutex_t table_lock;
 static fcb control;

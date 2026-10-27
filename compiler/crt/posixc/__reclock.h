@@ -17,6 +17,7 @@ int __posixc_reclock(int fd, fdesc *desc, int cmd, struct flock *fl);
 void __posixc_reclock_close(fdesc *desc);
 /* Last fcb reference, after all descriptor and operation references leave. */
 void __posixc_reclock_release_file(fcb *file);
-void __posixc_reclock_release_owner(APTR base);
+struct __fd_namespace;
+void __posixc_reclock_release_namespace(struct __fd_namespace *space);
 
 #endif /* ___RECLOCK_H */

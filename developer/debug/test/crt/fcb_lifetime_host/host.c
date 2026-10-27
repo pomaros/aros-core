@@ -34,7 +34,12 @@ typedef void *APTR;
 struct reclock_file;
 struct SignalSemaphore { pthread_mutex_t lock; };
 struct Library { int unused; };
-struct PosixCIntBase { struct Library *PosixCFDBase; };
+struct PosixCIntBase { int unused; };
+struct __fd_namespace { struct Library *registry; };
+static struct __fd_namespace namespace_boundary;
+static struct __fd_namespace *__fd_space(struct PosixCIntBase *base) {
+    (void)base;return &namespace_boundary;
+}
 /* FCB_TYPES */
 /* FDESC_TYPES */
 static void ObtainSemaphore(struct SignalSemaphore *s) { assert(!pthread_mutex_lock(&s->lock)); }

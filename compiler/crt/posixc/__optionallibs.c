@@ -132,14 +132,12 @@ int __optionallibs_close(struct PosixCIntBase *PosixCBase)
         CloseLibrary(PosixCBase->PosixCUserGroupBase);
         PosixCBase->PosixCUserGroupBase = NULL;
     }
-    if (PosixCBase->PosixCFDBase) {
-        CloseLibrary(PosixCBase->PosixCFDBase);
-        PosixCBase->PosixCFDBase = NULL;
-    }
+    /* The descriptor namespace releases fd.library at final owner teardown. */
     if (PosixCBase->PosixCDOS64Base) {
         CloseLibrary(PosixCBase->PosixCDOS64Base);
         PosixCBase->PosixCDOS64Base = NULL;
     }
+    return TRUE;
 }
 
 static int __close_posixcoptional(struct PosixCIntBase *PosixCBase)
@@ -152,3 +150,5 @@ static int __close_posixcoptional(struct PosixCIntBase *PosixCBase)
 }
 
 ADD2CLOSELIB(__close_posixcoptional, 0)
+
+ADD2ABORTOPENLIB(__optionallibs_close, 0);

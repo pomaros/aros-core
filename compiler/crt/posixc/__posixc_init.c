@@ -1,5 +1,6 @@
 /*
     Copyright (C) 2012-2021, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER
 
     Internal initialisation code for posixc.library
 */
@@ -26,7 +27,7 @@ static int __posixc_open(struct PosixCIntBase *PosixCBase)
 {
     D(bug("[posixc] %s(0x%p)\n", __func__, PosixCBase));
 
-    /* Tasks sharing this base (pthreads) allocate descriptors from it */
+    /* Per-runtime scratch memory; descriptor storage owns its Exec heap. */
     PosixCBase->internalpool = CreatePool(MEMF_PUBLIC|MEMF_CLEAR|MEMF_SEM_PROTECTED, 256, 256);
 
     PosixCBase->upath_task = FindTask(NULL);
@@ -39,10 +40,14 @@ static int __posixc_open(struct PosixCIntBase *PosixCBase)
 static void __posixc_close(struct PosixCIntBase *PosixCBase)
 {
     D(bug("[posixc] %s(0x%p)\n", __func__, PosixCBase));
-    __posixc_reclock_release_owner(PosixCBase);
-    __upath_free_others(PosixCBase);
-    DeletePool(PosixCBase->internalpool);
+    if (PosixCBase->internalpool)
+    {
+        __upath_free_others(PosixCBase);
+        DeletePool(PosixCBase->internalpool);
+        PosixCBase->internalpool = NULL;
+    }
 }
 
 ADD2OPENLIB(__posixc_open, -50);
 ADD2CLOSELIB(__posixc_close, -50);
+ADD2ABORTOPENLIB(__posixc_close, -50);

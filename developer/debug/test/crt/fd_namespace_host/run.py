@@ -31,7 +31,7 @@ for case in ['production','control-unretained','control-early-close','control-no
  text=e.read_text()
  if case=='control-unretained':text=text.replace('old + 1,','old,')
  if case=='control-early-close':text=text.replace('if (!space || __atomic_sub_fetch(&space->references, 1, __ATOMIC_ACQ_REL)) return;', 'if (!space) return; if (space->registry) { CloseLibrary(space->registry); space->registry = NULL; } if (__atomic_sub_fetch(&space->references, 1, __ATOMIC_ACQ_REL)) return;')
- if case=='control-no-dispose':text=text.replace('dispose(space->array[i], space->registry);','(void)dispose;')
+ if case=='control-no-dispose':text=text.replace('dispose(space->array[i], space->registry, i);','(void)dispose;')
  actual=o/(case+'-source.c');actual.write_text(text);wrapper=o/(case+'-test.c');wrapper.write_text((f/'test.c').read_text().replace('NAMESPACE_SOURCE',str(actual)));binary=o/case
  cmd=['clang','-std=c11','-Wall','-Wextra','-Werror','-g','-pthread','-fsanitize='+('thread' if a.tsan else 'address,undefined'),'-I'+str(shim),'-iquote',str(e.parent),str(wrapper),'-o',str(binary)]
  with(o/(case+'-build.log')).open('w') as log:q=subprocess.run(cmd,stdout=log,stderr=subprocess.STDOUT, timeout=30)

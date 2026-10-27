@@ -1,5 +1,6 @@
 /*
     Copyright (C) 2012-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER
 
     This file defines the private part of PosixCBase.
     This should only be used internally in posixc.library code so
@@ -34,7 +35,6 @@ struct PosixCIntBase
 
     /* optional libs */
     struct Library           *PosixCUserGroupBase;
-    struct Library           *PosixCFDBase;
     struct Library           *PosixCEntropyBase;    /* entropy.resource, for getentropy() */
     struct Library           *PosixCDOS64Base;      /* dos64.library, for 64-bit file I/O */
 
@@ -68,21 +68,10 @@ struct PosixCIntBase
     struct StdCBase *exec_oldstdcbase;
 
     /* __fdesc.c */
-    /* A pthread worker Task gets its own posixc.library base but shares the
-       POSIX descriptor table of the Process that created it.  fd_owner points
-       at the base that actually owns the fd_array/fd_slots/internalpool used
-       for descriptor lookups; it is self for an ordinary Process/CLI child.
-       Resolved through __fd_owner() / FD_ARRAY() / FD_SLOTS() / FD_POOL(). */
+    /* Synchronous vfork override and the existing module-owner path. The
+       descriptor table itself is retained independently in fd_namespace. */
     struct PosixCIntBase *fd_owner;
-    int fd_slots;
-    struct _fdesc **fd_array;
-    /* Serialises fd_array/fd_slots access. The descriptor table is shared
-       between the owner Process and its pthread workers (fd_owner), which
-       run as independent Tasks; without this, one Task growing the table
-       (realloc+free in __getfdslot) races a concurrent lookup in another
-       and dereferences freed/half-swapped memory. Initialised and held in
-       the owner base only; borrowers reach it through __fd_owner(). */
-    struct SignalSemaphore fd_sem;
+    struct __fd_namespace *fd_namespace;
 
     /* __upath.c */
     char *upathbuf;  /* Buffer that holds intermediate converted paths */

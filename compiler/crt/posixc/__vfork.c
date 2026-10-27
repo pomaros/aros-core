@@ -567,19 +567,9 @@ static void parent_enterpretendchild(struct vfork_data *udata)
     __posixc_set_envlistptr(udata->child_posixcbase->PosixCBase.StdCIOBase->env_list);
 #endif
 
-    /* Redirect this base's descriptor-table OWNER to the child base for the
-       pretend-child window, rather than mutating this base's own fd_array/
-       fd_slots/internalpool in place.
-
-       pthread workers created by this Process (e.g. git's sideband-demux
-       thread) share our descriptor table by routing every access through
-       __fd_owner(worker)->fd_array, which is *our* fd_array.  If we mutated
-       our fields in place, a concurrently-running worker would momentarily see
-       the child's partial (copied) table and dereference a NULL slot -> crash.
-       Redirecting our fd_owner leaves our own fd_array/fd_slots/internalpool
-       fields untouched (so workers keep seeing the real table) while our own
-       pretend-child accesses, which resolve through __fd_owner(us), now see the
-       child's copied table. */
+    /* Select the live child's retained descriptor namespace only for this
+       synchronous proxy. Worker namespaces retain the parent's original table
+       directly and are unaffected by the proxy's temporary selection. */
     udata->parent_fd_owner = PosixCBase->fd_owner;
     PosixCBase->fd_owner = udata->child_posixcbase;
     

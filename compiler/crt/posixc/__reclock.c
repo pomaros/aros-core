@@ -8,8 +8,7 @@
     ACTION_LOCK_RECORD, so posixc keeps the locks itself, in one table shared
     by every program.
 
-    A lock belongs to a POSIX process: the descriptor table's owner base
-    (fd_owner), which the pthreads of a program share, so threads of one
+    A lock belongs to a POSIX process: the retained descriptor namespace, which the pthreads of a program share, so threads of one
     program never conflict with each other, as POSIX requires.
 
     A file is the filesystem object, not its name: posixc keeps a shared DOS
@@ -44,6 +43,8 @@
 
 #include "__posixc_intbase.h"
 #include "__fdesc.h"
+#include "__fd_namespace.h"
+#include <aros/symbolsets.h>
 #include "__reclock.h"
 
 #define RECLOCK_EOF INT64_MAX   /* a lock "to the end of the file" */
@@ -64,43 +65,33 @@ struct reclock
     struct reclock_file *file;
     int64_t start, end;         /* inclusive byte range */
     short type;                 /* F_RDLCK or F_WRLCK */
-    APTR owner;                 /* the owner base: one POSIX process */
+    APTR owner;                 /* retained namespace identity: POSIX process */
     pid_t pid;                  /* for F_GETLK */
 };
 
 static struct SignalSemaphore reclock_sem;
 static struct MinList reclock_files;
 static struct MinList reclock_list;
-static volatile int reclock_ready;
-
-static void reclock_init(void)
+/* Module initialization precedes publication/OpenLib. A process-local
+   Forbid cannot serialize lazy initialization across SMP CPUs. */
+static int reclock_init(struct PosixCIntBase *base)
 {
-    if (reclock_ready)
-        return;
-    Forbid();
-    if (!reclock_ready)
-    {
-        InitSemaphore(&reclock_sem);
-        NEWLIST((struct List *)&reclock_files);
-        NEWLIST((struct List *)&reclock_list);
-        reclock_ready = 1;
-    }
-    Permit();
+    (void)base;
+    InitSemaphore(&reclock_sem);
+    NEWLIST((struct List *)&reclock_files);
+    NEWLIST((struct List *)&reclock_list);
+    return TRUE;
+}
+ADD2INITLIB(reclock_init, 0);
+
+static struct __fd_namespace *owner_namespace(void)
+{
+    return __fd_namespace_current();
 }
 
-/* The POSIX process of the calling task */
-static struct PosixCIntBase *owner_base(void)
+static pid_t owner_pid(struct __fd_namespace *owner)
 {
-    struct PosixCIntBase *PosixCBase =
-        (struct PosixCIntBase *)__aros_getbase_PosixCBase();
-
-    return PosixCBase->fd_owner ? PosixCBase->fd_owner : PosixCBase;
-}
-
-static pid_t owner_pid(struct PosixCIntBase *owner)
-{
-    struct ETask *et = GetETask(owner->upath_task ? owner->upath_task : FindTask(NULL));
-    return et ? (pid_t)et->et_UniqueID : 0;
+    return owner ? (pid_t)owner->process_id : 0;
 }
 
 static void put_file(struct reclock_file *rf)
@@ -326,7 +317,7 @@ static int lock_range(int fd, struct flock *fl, int64_t *pstart, int64_t *pend)
 
 int __posixc_reclock(int fd, fdesc *desc, int cmd, struct flock *fl)
 {
-    struct PosixCIntBase *owner = owner_base();
+    struct __fd_namespace *owner = owner_namespace();
     struct reclock_file *rf;
     int64_t start, end;
     int result = 0;
@@ -354,7 +345,6 @@ int __posixc_reclock(int fd, fdesc *desc, int cmd, struct flock *fl)
     if (lock_range(fd, fl, &start, &end) < 0)
         return -1;
 
-    reclock_init();
     ObtainSemaphore(&reclock_sem);
     rf = file_of(desc->fcb, TRUE);
     ReleaseSemaphore(&reclock_sem);
@@ -432,14 +422,12 @@ int __posixc_reclock(int fd, fdesc *desc, int cmd, struct flock *fl)
 
 void __posixc_reclock_close(fdesc *desc)
 {
-    struct PosixCIntBase *owner;
+    struct __fd_namespace *owner;
     struct reclock_file *rf = NULL;
     struct reclock *r;
     fcb *f = desc->fcb;
 
-    if (!reclock_ready)
-        return;
-    owner = owner_base();
+    owner = owner_namespace();
     ObtainSemaphore(&reclock_sem);
     if (f->reclock)
         rf = f->reclock;
@@ -479,18 +467,14 @@ void __posixc_reclock_release_file(fcb *file)
     ReleaseSemaphore(&reclock_sem);
 }
 
-void __posixc_reclock_release_owner(APTR base)
+void __posixc_reclock_release_namespace(struct __fd_namespace *space)
 {
-    struct PosixCIntBase *PosixCBase = base;
     struct reclock *r, *next;
 
-    /* A pthread worker's base is not a process: its locks are its owner's */
-    if (!reclock_ready || (PosixCBase->fd_owner && PosixCBase->fd_owner != PosixCBase))
-        return;
     ObtainSemaphore(&reclock_sem);
     ForeachNodeSafe(&reclock_list, r, next)
     {
-        if (r->owner == base)
+        if (r->owner == space)
             free_lock(r, TRUE);
     }
     ReleaseSemaphore(&reclock_sem);
