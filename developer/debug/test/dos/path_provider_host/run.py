@@ -11,10 +11,13 @@ text=(fixture/'test.c').read_text()
 for marker,key in [('PUBLIC_HEADER','public'),('PRIVATE_HEADER','taskpathresolver.h'),('REGISTRY_SOURCE','taskpathresolver.c'),('IOERR_SOURCE','ioerr.c'),('SETIOERR_SOURCE','setioerr.c')]:text=text.replace('/* '+marker+' */',strip(paths[key].read_text()))
 opening=paths['open.c'].read_text();start=opening.index('DOS_PATH_DISPATCH(');end=opening.index(';',start)+1
 text=text.replace('/* OPEN_DISPATCH */',opening[start:end]);records=[]
-for case in ['production','control-drop-dispatch','control-drop-error','control-parent-borrow']:
+for case in ['production','control-drop-dispatch','control-drop-error','control-parent-borrow','control-drop-policy','control-task-fallback','control-unheld-policy']:
  actual=text
  if case=='control-drop-dispatch':actual=actual.replace(opening[start:end],'(void)__dos_path_operation;')
  if case=='control-drop-error':actual=actual.replace('SetIoErr(error);','SetIoErr(0); (void)error;')
+ if case=='control-unheld-policy':actual=actual.replace('resolver->active = TRUE;\n    if (!resolver->accept', 'if (!resolver->accept').replace('result = resolver->invoke', 'resolver->active = TRUE;\n    result = resolver->invoke')
+ if case=='control-drop-policy':actual=actual.replace('if (!resolver->accept(resolver->data)) {','if (FALSE) {')
+ if case=='control-task-fallback':actual=actual.replace('if (FindTask(NULL)->tc_Node.ln_Type == NT_PROCESS) {','if (TRUE) {')
  if case=='control-parent-borrow':actual=actual.replace('return (struct DosPathResolver *)GetTaskStorageSlot(slot);','return (struct DosPathResolver *)GetParentTaskStorageSlot(slot);')
  path=o/(case+'.c');path.write_text(actual);binary=o/case;cmd=['clang','-std=c11','-Wall','-Wextra','-Werror','-Wno-unused-parameter','-Wno-unused-function','-g','-pthread','-fsanitize='+('thread' if a.tsan else 'address,undefined'),'-I'+str(o/'shim'),str(path),'-o',str(binary)]
  with(o/(case+'-build.log')).open('w') as f:q=subprocess.run(cmd,stdout=f,stderr=subprocess.STDOUT,timeout=30)

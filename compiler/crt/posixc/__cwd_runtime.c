@@ -197,6 +197,19 @@ void __cwd_runtime_conversion_set(BOOL mode)
         b->base->doupath = mode;
     }
 }
+/* Native exclusive locks cannot be duplicated into an owned snapshot. A
+ * direct DOS call can instead run synchronously in its owning Process. Never
+ * borrow that lock for another Task or bypass an explicit POSIX scope. */
+static BOOL accept_path(APTR data)
+{
+    struct __cwd_binding *b = data;
+    struct Task *task = FindTask(NULL);
+    BPTR cwd;
+    if (b->scope_depth || task->tc_Node.ln_Type != NT_PROCESS) return TRUE;
+    cwd = ((struct Process *)task)->pr_CurrentDir;
+    return !cwd || ((struct FileLock *)BADDR(cwd))->fl_Access != EXCLUSIVE_LOCK;
+}
+
 static SIPTR invoke(APTR data, LONG operation, const SIPTR *args,
     SIPTR *error, struct DosLibrary *DOSBase)
 {
@@ -290,6 +303,7 @@ static int runtime_open(struct PosixCIntBase *base)
         b->native_cwd_root = ((struct Process *)task)->pr_CurrentDir == BNULL;
     }
     b->resolver.version = DOS_PATH_RESOLVER_VERSION;
+    b->resolver.accept = accept_path;
     b->resolver.invoke = invoke;
     b->resolver.data = b;
     if (!SetTaskStorageSlot(runtime_slot, (IPTR)b)) { binding_release(b); return FALSE; }

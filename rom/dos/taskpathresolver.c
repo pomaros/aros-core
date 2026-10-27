@@ -31,7 +31,7 @@ AROS_LH1(BOOL, SetTaskPathResolver,
     APTR TaskResBase = OpenResource("task.resource");
     LONG slot = __atomic_load_n(&path_slot, __ATOMIC_ACQUIRE);
     if (!TaskResBase || (resolver &&
-        (resolver->version != DOS_PATH_RESOLVER_VERSION || !resolver->invoke))) return FALSE;
+        (resolver->version != DOS_PATH_RESOLVER_VERSION || !resolver->accept || !resolver->invoke))) return FALSE;
     struct DosPathResolver *old = __dos_task_path_resolver();
     if (old && old->active) return FALSE;
     if (slot <= 0) {
@@ -56,6 +56,15 @@ SIPTR __dos_path_operation(LONG operation, const SIPTR *args, BOOL *handled,
     if (!resolver) return 0;
     if (resolver->active) { SetIoErr(ERROR_TOO_MANY_LEVELS); return 0; }
     resolver->active = TRUE;
+    if (!resolver->accept(resolver->data)) {
+        resolver->active = FALSE;
+        if (FindTask(NULL)->tc_Node.ln_Type == NT_PROCESS) {
+            *handled = FALSE;
+            return 0;
+        }
+        SetIoErr(ERROR_TOO_MANY_LEVELS);
+        return 0;
+    }
     result = resolver->invoke(resolver->data, operation, args, &error, DOSBase);
     resolver->active = FALSE;
     SetIoErr(error);

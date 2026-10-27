@@ -70,6 +70,11 @@ static BPTR boundary_Open(CONST_STRPTR name,LONG accessMode,struct DosLibrary *D
  (void)name;(void)accessMode;return 999;
 }
 static _Atomic int invocations;
+static BOOL accept(APTR data) {
+ struct DosLibrary dos;
+ assert(!aros_SetTaskPathResolver(NULL,&dos) && "policy callback registration must stay held");
+ return *(int *)data != 3;
+}
 static SIPTR invoke(APTR data,LONG operation,const SIPTR *args,SIPTR *error,struct DosLibrary *DOSBase)
 {
  assert(data==task->expected && operation==DOS_PATH_OPEN && args[1]==17);
@@ -86,7 +91,7 @@ static void *worker(void *data)
 {
  struct Task local={.tc_Node={NT_TASK},.expected=data};task=&local;
  struct DosLibrary dos;
- struct DosPathResolver own={.version=DOS_PATH_RESOLVER_VERSION,.invoke=invoke,.data=data};
+ struct DosPathResolver own={.version=DOS_PATH_RESOLVER_VERSION,.accept=accept,.invoke=invoke,.data=data};
  assert(aros_SetTaskPathResolver(&own,&dos));assert(__dos_task_path_resolver()==&own);
  assert(boundary_Open("relative-name",17,&dos)==456 && aros_IoErr(&dos)==789);
  assert(aros_SetIoErr(123,&dos)==789 && aros_IoErr(&dos)==123);
@@ -94,6 +99,8 @@ static void *worker(void *data)
  assert(!aros_SetTaskPathResolver(&invalid,&dos) && __dos_task_path_resolver()==&own);
  fail_set=TRUE;assert(!aros_SetTaskPathResolver(NULL,&dos));fail_set=FALSE;
  assert(__dos_task_path_resolver()==&own);
+ int decline=3;own.data=&decline;
+ assert(!boundary_Open("relative-name",17,&dos) && aros_IoErr(&dos)==ERROR_TOO_MANY_LEVELS && "plain Task must never fall through to native Process fields");
  assert(aros_SetTaskPathResolver(NULL,&dos));assert(!__dos_task_path_resolver());
  assert(aros_IoErr(&dos)==0 && aros_SetIoErr(1,&dos)==0);
  return NULL;
@@ -101,7 +108,7 @@ static void *worker(void *data)
 int main(void)
 {
  struct Task caller={.tc_Node={NT_TASK}};task=&caller;struct DosLibrary dos;
- struct DosPathResolver valid={.version=DOS_PATH_RESOLVER_VERSION,.invoke=invoke};
+ struct DosPathResolver valid={.version=DOS_PATH_RESOLVER_VERSION,.accept=accept,.invoke=invoke};
  fail_allocate=TRUE;assert(!aros_SetTaskPathResolver(&valid,&dos));fail_allocate=FALSE;
  assert(!__dos_task_path_resolver());
  struct DosPathResolver *parent=calloc(1,sizeof(*parent));assert(parent);
@@ -112,5 +119,10 @@ int main(void)
  assert(allocation_calls==2 && free_slots==1 && invocations==2);
  struct Process process={.pr_Task={.tc_Node={NT_PROCESS}},.pr_Result2=321};task=&process.pr_Task;
  assert(aros_IoErr(&dos)==321 && aros_SetIoErr(654,&dos)==321 && aros_IoErr(&dos)==654);
- assert(boundary_Open("native",0,&dos)==999);return 0;
+ assert(boundary_Open("native",0,&dos)==999);
+ int decline=3;valid.data=&decline;
+ assert(aros_SetTaskPathResolver(&valid,&dos));
+ assert(boundary_Open("native",0,&dos)==999 && "declined Process operation must run natively");
+ assert(aros_IoErr(&dos)==654 && "declining must preserve native IoErr");
+ assert(aros_SetTaskPathResolver(NULL,&dos));return 0;
 }

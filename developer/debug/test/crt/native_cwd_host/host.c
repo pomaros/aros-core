@@ -24,8 +24,9 @@ typedef int BOOL;
 #define ACTION_FREE_LOCK 15
 #define LOCK_SAME 0
 #define NT_PROCESS 13
+#define EXCLUSIVE_LOCK -1
 struct MsgPort { int unused; } filesystem;
-struct FileLock { struct MsgPort *fl_Task; unsigned identity; };
+struct FileLock { struct MsgPort *fl_Task; unsigned identity; LONG fl_Access; };
 struct SignalSemaphore { int held; };
 struct Node { int ln_Type; };
 struct Task { struct Node tc_Node; };
@@ -37,7 +38,7 @@ struct DosLibrary;
 static struct Task *self;
 static struct __cwd_binding *current;
 static int allocations, locks, fail_copy;
-static struct FileLock root={&filesystem,1}, db={&filesystem,2}, data={&filesystem,3}, other={&filesystem,4};
+static struct FileLock root={&filesystem,1,0}, db={&filesystem,2,0}, data={&filesystem,3,0}, other={&filesystem,4,0};
 static void *AllocVec(size_t n, unsigned flags) { (void)flags; void *p=calloc(1,n); assert(p);allocations++;return p; }
 static void FreeVec(void *p) { if(p){allocations--;free(p);} }
 static void InitSemaphore(struct SignalSemaphore *s) { s->held=0; }
@@ -77,6 +78,12 @@ int main(void) {
  struct __cwd_binding *b=AllocVec(sizeof(*b),MEMF_PUBLIC|MEMF_CLEAR);
  b->references=1;b->context=__cwd_context_create(&root,&data,FALSE,&error);
  b->native_cwd=__cwd_directory_capture(&root,&error);current=b;
+ assert(accept_path(b));
+ root.fl_Access=EXCLUSIVE_LOCK;
+ assert(!accept_path(b) && "exclusive native Process path must run in its owner");
+ b->scope_depth=1;assert(accept_path(b) && "explicit scope cannot silently fall through");b->scope_depth=0;
+ self=&plain;assert(accept_path(b) && "plain Task must not read a Process extension");self=&process.task;
+ root.fl_Access=0;
  assert(selected()==1);
  logical(&other);
  assert(selected()==4 && "unchanged native directory must preserve shared logical chdir");
