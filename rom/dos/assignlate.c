@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2007, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER.
 
     Desc: Create a late-binding (deferred) assign.
 */
@@ -70,7 +71,7 @@
     while(*s2++)
         ;
 
-    namelen = s2 - path + 1;
+    namelen = s2 - path; /* includes the terminating NUL */
     pathcopy = AllocVec(namelen, MEMF_PUBLIC | MEMF_CLEAR);
 
     if(pathcopy == NULL)
@@ -105,6 +106,10 @@
         AddDosEntry(newdl);
     }
     
+    /* The removed entry is detached and owned by this call. Handler waits
+       must happen after WRITE is released, including every multiassign lock. */
+    UnLockDosList(LDF_ALL | LDF_WRITE);
+
     if(dl != NULL)
     {
         UnLock(dl->dol_Lock);
@@ -126,7 +131,7 @@
         FreeDosEntry(dl);
     }
     
-    UnLockDosList(LDF_ALL | LDF_WRITE);
+
 
     return result;
 

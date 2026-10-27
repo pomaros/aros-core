@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2011, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER.
 
     Desc: Create an assign.
 */
@@ -90,6 +91,10 @@
         AddDosEntry(newdl);
     }
     
+    /* The removed entry is detached and owned by this call. Handler waits
+       must happen after WRITE is released, including every multiassign lock. */
+    UnLockDosList(LDF_ALL | LDF_WRITE);
+
     if (dl != NULL)
     {
         if (dl->dol_Lock)
@@ -114,7 +119,7 @@
         FreeDosEntry(dl);
     }
     
-    UnLockDosList(LDF_ALL | LDF_WRITE);
+
     
     return success;
     
