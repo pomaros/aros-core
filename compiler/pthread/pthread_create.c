@@ -247,7 +247,7 @@ static void StarterFunc(void)
         task context with its runtime initialized. Creation can wait for the
         internal thread semaphore and system allocation; it has no timeout.
 
-        Creation runs the version-2 C-runtime admission of
+        Creation runs the version-3 C-runtime admission of
         <aros/crt_thread_context.h>: every registered runtime captures the
         creator's context first, and the call returns only after the worker
         has entered all of them. A worker that cannot enter them exits
@@ -291,8 +291,6 @@ static void StarterFunc(void)
 #endif
 
     D(bug("%s(%p, %p, %p, %p)\n", __FUNCTION__, thread, attr, start, arg));
-
-    _pthread_init_errno();
 
     if (thread == NULL || start == NULL)
         return EINVAL;

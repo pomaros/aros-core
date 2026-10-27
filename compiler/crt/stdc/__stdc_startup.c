@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 2009-2020, The AROS Development Team. All rights reserved.
 */
 #include <dos/stdio.h>
@@ -6,6 +7,7 @@
 #include <proto/exec.h>
 
 #include <assert.h>
+#include <errno.h>
 #include <setjmp.h>
 
 #include <aros/debug.h>
@@ -60,6 +62,7 @@
 
     StdCBase->startup_errorptr = errorptr;
     *StdCBase->exit_jmpbuf = *exitjmp;
+    errno = 0; /* Reset at program entry, never on an additional library open. */
 }
 
 /*****************************************************************************

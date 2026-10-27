@@ -34,7 +34,6 @@ typedef struct { void *stackaddr; size_t stacksize; int detachstate; struct sche
 #define D(x)
 #define DB2(x)
 static inline void Forbid(void) {}
-static inline void _pthread_init_errno(void) {}
 static inline void SetTaskPri(struct Task *t, int p) { (void)t; (void)p; }
 static inline int aros_pthread_attr_init(aros_pthread_attr_t *a) { memset(a, 0, sizeof(*a)); return 0; }
 #define NP_Entry 1

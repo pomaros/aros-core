@@ -3,10 +3,11 @@
 
 /*
     Copyright © 2012-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     $Id$
 
     Public part of StdC libbase.
-    Take care of backwards compatibility when changing something in this file.
+    Rebuild the complete runtime and its consumers when changing this ABI.
 */
 
 #include <exec/libraries.h>
@@ -23,7 +24,9 @@ struct StdCBase
     const unsigned char * __ctype_tolower;
 
     /* errno.h */
-    int _errno;
+    /* Native task-local error context, shared by all same-task openers. */
+    LONG _errno_slot;
+    APTR _errno_task_resource;
 
     /* math.h */
     int _signgam;

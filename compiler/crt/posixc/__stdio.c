@@ -99,7 +99,7 @@ int __oflags2sflags(int omode)
             /* fds inherited across exec can carry unset accmode bits, and this
                runs from __init_stdio during PosixC OpenLib - before the
                opener's StdCBase is wired, so writing errno here would
-               dereference a NULL _errno.  Don't veto std streams and don't
+               dereference an unavailable runtime base.  Don't veto std streams and don't
                touch errno: treat an unknown accmode as read+write. */
             ret = __POSIXC_STDIO_READ | __POSIXC_STDIO_WRITE;
             break;

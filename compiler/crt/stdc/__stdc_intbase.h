@@ -40,6 +40,7 @@ struct StdCIntBase
 
     /* common */
     int                         flags;
+    APTR                        errno_state;
 
     /* stdlib.h */
     APTR                        mempool;

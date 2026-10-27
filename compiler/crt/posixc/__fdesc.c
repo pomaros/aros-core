@@ -34,11 +34,6 @@
 #include "__dos64.h"
 #include "__upath.h"
 
-#ifdef errno
-#undef errno
-#endif
-#define errno (*(&((struct PosixCBase *)PosixCBase)->StdCBase->_errno))
-
 static struct __fd_namespace *__fd_space(struct PosixCIntBase *base)
 {
     /* A synchronous vfork proxy borrows the live child until final ack.

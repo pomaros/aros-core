@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * Altered native shared-runtime errno ownership. */
 /*
   Copyright (C) 2014 Szilard Biro
   Copyright (C) 2018 Harry Sintonen
@@ -141,21 +143,6 @@ pthread_t GetThreadId(struct Task *task)
     return task == NULL ? used : PTHREAD_THREADS_MAX;
 }
 
-extern int *(*__stdc_errnoptr_hook)(void);
-
-static int *pthread_errnoptr(void)
-{
-    struct Task *task = GET_THIS_TASK;
-    pthread_t id = GetThreadId(task);
-    ThreadInfo *inf = GetThreadInfo(id);
-
-    return inf && inf->task == task ? &inf->thread_errno : NULL;
-}
-
-void _pthread_init_errno(void)
-{
-    __stdc_errnoptr_hook = pthread_errnoptr;
-}
 
 #if defined __mc68000__
 /* No CAS instruction on m68k */

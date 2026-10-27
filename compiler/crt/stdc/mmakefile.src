@@ -744,6 +744,7 @@ $(GENDIR)/$(CURDIR)/defaults/%.c: $(GENCTBL) $(GENDIR)/ucd/UnicodeData.txt $(GEN
 compiler-stdc-genwcharsupport : $(GENDIR)/$(CURDIR)/defaults/en_GB_ISO8859-1.c
 
 STDC_FILES := \
+    __stdc_taskerrno \
     $(STDC) \
     $(STDC_CRT) \
     $(STDC_C_CRT) \

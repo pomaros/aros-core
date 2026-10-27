@@ -36,7 +36,6 @@ typedef struct { void *(*start)(void *); void *arg; struct Task *parent, *task; 
 static ThreadInfo slot, *threads[PTHREAD_THREADS_MAX];
 static unsigned threads_used;
 static int thread_sem, locked, allocation_fails, creation_fails, exhausted, release_action;
-static void _pthread_init_errno(void) {}
 static void ObtainSemaphore(int *p) { (void)p;assert(!locked);locked=1; }
 static void ReleaseSemaphore(int *p) {
  (void)p;assert(locked);locked=0;
