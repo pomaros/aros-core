@@ -436,11 +436,12 @@ IPTR ScrDecorClass__SDM_DRAW_SCREENBAR(Class *cl, Object *obj, struct sdpDrawScr
     findtitlearea(msg->sdp_Screen, &left, &right);
 
     titleWidth = right - msg->sdp_Screen->BarHBorder;
-    if (titleWidth >= 8)
+    if (titleWidth > 0 && msg->sdp_Screen->Title)
     {
-        titleChars = titleWidth / 8;
-        if (titleChars > sizeof(titleLine))
-            titleChars = sizeof(titleLine);
+        struct TextExtent extent;
+        titleChars = TextFit(rp, msg->sdp_Screen->Title,
+                             strlen(msg->sdp_Screen->Title),
+                             &extent, NULL, 1, titleWidth, rp->TxHeight);
     }
 
     D(bug("[SCRDECOR] %s: Title_Left = %d, Title_Right = %d\n", __func__, left, right));
@@ -454,8 +455,11 @@ IPTR ScrDecorClass__SDM_DRAW_SCREENBAR(Class *cl, Object *obj, struct sdpDrawScr
         rp->Font->tf_XSize == 8 && rp->TxSpacing == 0 &&
         !(rp->AlgoStyle & (FSF_BOLD | FSF_ITALIC | FSF_UNDERLINED)))
     {
+        /* Also erase the previous longer title on the fixed-width fast path. */
+        titleChars = titleWidth > 0 ? titleWidth / 8 : 0;
         if (titleChars)
         {
+            if (titleChars > sizeof(titleLine)) titleChars = sizeof(titleLine);
             memset(titleLine, ' ', titleChars);
             if (msg->sdp_Screen->Title)
             {
