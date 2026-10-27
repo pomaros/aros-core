@@ -60,10 +60,13 @@
     }
 
     __fcb_lock(file);
-    result = __stat(file->handle, sb,
-        (file->privflags & _FCB_ISDIR) ? FALSE : TRUE);
-    saved_errno = errno;
+    BPTR handle = file->handle;
+    BOOL filehandle = !(file->privflags & _FCB_ISDIR);
     __fcb_unlock(file);
+    /* The retained file owns its native handle. Metadata/name/time conversion
+       may reenter CRT services, so do not hold its I/O semaphore here. */
+    result = __stat(handle, sb, filehandle);
+    saved_errno = errno;
     __releasefcb(file);
     errno = saved_errno;
     return result;

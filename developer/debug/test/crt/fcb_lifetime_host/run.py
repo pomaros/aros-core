@@ -94,6 +94,9 @@ controls.update({
         'metadata operation owns the admitted file'),
     'metadata-error-overwritten': ('    errno = saved_errno;', '    (void)saved_errno;',
                                    'Assertion failed: (a.error==EIO)'),
+    'metadata-lock-held': (parts['FSTAT'], parts['FSTAT'].replace(
+        '    __fcb_unlock(file);', '    /* retained metadata lock */'),
+        'Assertion failed: (isfile && !metadata_file_depth)'),
     'sync-release-lost': (parts['FSYNC'], parts['FSYNC'].replace(
         '    __releasefcb(file);', '    /* lost sync reference */'),
         'Assertion failed: (atomic_load(&handle_closes[11])==1 && atomic_load(&block_frees)==1)'),

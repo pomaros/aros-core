@@ -23,12 +23,14 @@ may span the modeled blocking DOS operation.
 Metadata/sync cases pause at the modeled descriptor-table release after actual
 admission, before native I/O locking. They close/reuse the number concurrently,
 check both success and failure, and make final disposal overwrite errno so that
-the caller must preserve its operation error. Invalid and overflow admission are
+the caller must preserve its operation error. Metadata conversion runs without an I/O
+semaphore held because name/time conversion can reenter CRT services. Invalid and overflow admission are
 also checked without foreign fallback.
 
-Eight compiling controls independently remove operation retention, operation
+Nine compiling controls independently remove operation retention, operation
 release, record metadata disposal, duplication rollback, overflow admission,
-metadata retention/error preservation or sync reference release.
+metadata retention/error preservation, retaining an I/O lock across metadata
+conversion, or sync reference release.
 They must fail for their exact named assertion; a compilation error or timeout
 does not qualify a control. Both ASan/UBSan and TSan modes are available.
 

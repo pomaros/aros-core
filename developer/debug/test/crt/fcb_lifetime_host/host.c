@@ -42,11 +42,12 @@ static struct __fd_namespace *__fd_space(struct PosixCIntBase *base) {
 }
 /* FCB_TYPES */
 /* FDESC_TYPES */
-static _Thread_local int metadata_pause, metadata_cleanup;
+static _Thread_local int metadata_pause, metadata_cleanup, metadata_file_depth;
+static _Thread_local fcb *metadata_original;
 static void pause_metadata(void);
 static struct SignalSemaphore *metadata_table_guard;
-static void ObtainSemaphore(struct SignalSemaphore *s) { if(metadata_pause && s!=metadata_table_guard)pause_metadata(); assert(!pthread_mutex_lock(&s->lock)); }
-static void ReleaseSemaphore(struct SignalSemaphore *s) { assert(!pthread_mutex_unlock(&s->lock)); }
+static void ObtainSemaphore(struct SignalSemaphore *s) { if(metadata_pause && s!=metadata_table_guard)pause_metadata(); assert(!pthread_mutex_lock(&s->lock)); if(metadata_original && s==&metadata_original->io_lock)metadata_file_depth++; }
+static void ReleaseSemaphore(struct SignalSemaphore *s) { if(metadata_original && s==&metadata_original->io_lock)metadata_file_depth--; assert(!pthread_mutex_unlock(&s->lock)); }
 /* FCB_LOCK */
 /* FCB_UNLOCK */
 /* FCB_RETAIN */
@@ -149,10 +150,10 @@ static int metadata_backend(BPTR handle) {
     return 0;
 }
 static int __stat(BPTR h,struct stat *s,BOOL isfile) {
-    assert(isfile);int result=metadata_backend(h);if(!result)s->identity=h;return result;
+    assert(isfile && !metadata_file_depth);int result=metadata_backend(h);if(!result)s->identity=h;return result;
 }
 static int __stat64(BPTR h,struct stat64 *s,BOOL isfile) {
-    assert(isfile);int result=metadata_backend(h);if(!result)s->identity=h;return result;
+    assert(isfile && !metadata_file_depth);int result=metadata_backend(h);if(!result)s->identity=h;return result;
 }
 static LONG Flush(BPTR h) { return metadata_backend(h)==0; }
 static LONG DoPkt(struct MsgPort *port,LONG action,LONG a,LONG b,LONG c,LONG d,LONG e) {
@@ -185,10 +186,10 @@ static void *run_io(void *data) {
     struct attempt *a=data;char byte=0;
     a->result=a->write?ar_write(5,&byte,1):ar_read(5,&byte,1);a->error=errno;return NULL;
 }
-struct metadata_attempt { int operation,result,error; };
+struct metadata_attempt { int operation,result,error; fcb *file; };
 static void *run_metadata(void *data) {
     struct metadata_attempt *a=data;struct stat sb;struct stat64 wide;
-    metadata_pause=metadata_cleanup=1;
+    metadata_pause=metadata_cleanup=1;metadata_original=a->file;
     a->result=a->operation==0?ar_fstat(5,&sb):a->operation==1?ar_fstat64(5,&wide):ar_fsync(5);
     a->error=errno;
     if(!a->result && a->operation<2)assert((a->operation?wide.identity:sb.identity)==11);
@@ -215,9 +216,9 @@ int main(void) {
         assert(!ar_close(5));assert(atomic_load(&handle_closes[22])==1&&atomic_load(&record_closes)==2);
     }
     for(int operation=0;operation<3;operation++)for(int failed=0;failed<2;failed++) {
-        reset_counts();install(5,11,0);io_waiting=io_proceed=0;io_fail=failed;
+        reset_counts();fcb *admitted=install(5,11,0);io_waiting=io_proceed=0;io_fail=failed;
         metadata_ports[11].handle=11;metadata_handles[11].fh_Type=&metadata_ports[11];
-        struct metadata_attempt a={.operation=operation};pthread_t thread;
+        struct metadata_attempt a={.operation=operation,.file=admitted};pthread_t thread;
         assert(!pthread_create(&thread,NULL,run_metadata,&a));
         assert(!pthread_mutex_lock(&io_gate));
         while(!io_waiting)assert(!pthread_cond_wait(&io_changed,&io_gate));
