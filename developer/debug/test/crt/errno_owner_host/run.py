@@ -32,6 +32,7 @@ k = startup_text.index('\n}', j) + 2
 startup = 'static void __stdc_program_startup(jmp_buf exitjmp,int *errorptr)' + startup_text[j:k]
 text = (here / 'host.c').read_text().replace('/* OWNER */', actual).replace('/* CLIENT_ACCESSOR */', client).replace('/* MODULE_ACCESSOR */', module).replace('/* PROGRAM_STARTUP */', startup)
 controls = {
+    'resource-vector-size-assumed': ('TaskResBase->lib_Version < 2', 'TaskResBase->lib_NegSize < 17 * LIB_VECTSIZE', 'error_init(&root)'),
     'program-entry-reset-lost': ('    errno = 0;', '    /* lost program reset */', '*client_errno()==0 && a.startup_errorptr==&exit_status'),
     'module-private-cell': (module, 'static int *module_errno(void) { static int private_error;return &private_error; }', '*client_errno()==EINVAL && client_errno()==module_errno()'),
     'foreign-close-admitted': ('state->owner_id == GetETaskID(FindTask(NULL))', 'TRUE', '!error_can_close(&a)&&!error_can_close(&b)'),

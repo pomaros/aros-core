@@ -17,7 +17,10 @@ close refusal, reference overflow, zero initialization, allocation/publication
 failure, worker admission and errno isolation, failed admission/cancellation,
 final slot retirement before disposal, and resource/registration rollback. The actual program-startup body resets
 errno at program entry; opening another library instance preserves it.
-Six compiling controls split the module error cell, admit foreign close,
+The resource fixture admits version 2 with zero library allocation sizes and
+refuses version 1 even with a large negative size, matching resource startup.
+Seven compiling controls restore the invalid vector-size admission check,
+split the module error cell, admit foreign close,
 lose opener retention, retain a stale task slot, allow reference wrap or omit
 the program-entry reset. Each
 must fail the named assertion; compile failures and timeouts do not pass.

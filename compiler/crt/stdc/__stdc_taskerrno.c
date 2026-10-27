@@ -103,7 +103,9 @@ static int error_init(struct StdCIntBase *base)
 {
     (void)base;
     TaskResBase = OpenResource((CONST_STRPTR)"task.resource");
-    if (!TaskResBase || TaskResBase->lib_NegSize < 17 * LIB_VECTSIZE)
+    /* Resource startup installs vectors but does not populate lib_NegSize.
+     * task.resource publishes its API through the explicit version header. */
+    if (!TaskResBase || TaskResBase->lib_Version < 2)
         return FALSE;
     error_slot = AllocTaskStorageSlot();
     if (error_slot <= 0) return FALSE;

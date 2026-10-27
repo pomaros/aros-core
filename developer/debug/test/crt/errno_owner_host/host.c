@@ -23,7 +23,7 @@ typedef const unsigned char *CONST_STRPTR;
 #define MEMF_CLEAR 2
 #define LIB_VECTSIZE 6
 #define CRT_THREAD_CONTEXT_VERSION 3
-struct Library { unsigned lib_NegSize; };
+struct Library { unsigned lib_NegSize, lib_Version; };
 struct StdCBase { struct Library lib; LONG _errno_slot; APTR _errno_task_resource; };
 struct StdCIntBase { struct StdCBase StdCBase; APTR errno_state; int *startup_errorptr; jmp_buf exit_jmpbuf; };
 struct CRTThreadContextHooks {
@@ -35,7 +35,8 @@ static _Thread_local ULONG task_id=1;
 static _Thread_local IPTR task_slot;
 static _Thread_local struct StdCBase *access_base;
 static struct StdCBase *creator_base;
-static struct Library resource={.lib_NegSize=200};
+/* Native resource startup leaves library allocation sizes unset. */
+static struct Library resource={.lib_NegSize=0,.lib_Version=2};
 static unsigned allocations,frees,registered,slots_allocated,slots_freed;
 static int fail_alloc,fail_set,fail_register,fail_slot,fail_resource,fail_library;
 static void *FindTask(void *unused) { (void)unused;return (void *)(uintptr_t)task_id; }
@@ -114,7 +115,8 @@ int main(void) {
     fail_register=1;assert(!error_init(&root)&&!registered&&slots_allocated==2&&slots_freed==2);fail_register=0;
     fail_slot=1;assert(!error_init(&root)&&!error_slot);fail_slot=0;
     fail_resource=1;assert(!error_init(&root));fail_resource=0;
-    resource.lib_NegSize=0;assert(!error_init(&root));resource.lib_NegSize=200;
+    resource.lib_Version=1;resource.lib_NegSize=200;
+    assert(!error_init(&root));resource.lib_Version=2;resource.lib_NegSize=0;
     assert(allocations==frees);
     puts("PASS: actual task errno ownership, two accessors, arbitrary same-task close order, worker admission/isolation and refusal rollback");
 }
