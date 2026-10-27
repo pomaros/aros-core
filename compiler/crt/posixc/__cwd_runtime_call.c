@@ -52,6 +52,7 @@ SIPTR __cwd_native_call(APTR data, struct DosLibrary *DOSBase)
     case DOS_PATH_CREATE_DIR: return (SIPTR)CreateDir((CONST_STRPTR)a[0]);
     case DOS_PATH_DELETE: return DeleteFile((CONST_STRPTR)a[0]);
     case DOS_PATH_RENAME: return Rename((CONST_STRPTR)a[0], (CONST_STRPTR)a[1]);
+    case DOS_PATH_REPLACE_OBJECT: return ReplaceObject((CONST_STRPTR)a[0], (CONST_STRPTR)a[1]);
     case DOS_PATH_MAKE_LINK: return MakeLink((CONST_STRPTR)a[0], a[1], (LONG)a[2]);
     case DOS_PATH_READ_LINK: return ReadLink((struct MsgPort *)a[0], (BPTR)a[1],
         (CONST_STRPTR)a[2], (STRPTR)a[3], (LONG)a[4]);
