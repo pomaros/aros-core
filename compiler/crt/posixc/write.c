@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER
 
     POSIX.1-2008 function write().
 */
@@ -51,20 +52,27 @@
 {
     ssize_t cnt;
 
-    fdesc *fdesc = __getfdesc(fd);
-    if (!fdesc)
+    int admission_error;
+    fcb *file = __holdfcb(fd, &admission_error);
+    if (!file)
     {
+        if (admission_error)
+        {
+            errno = admission_error;
+            return -1;
+        }
         LONG err=0;
         ssize_t result=(ssize_t)__fdhook(fd,__FDH_WRITE,(IPTR)buf,count,0,&err);
         if (result<0) errno=err;
         return result;
     }
 
-    cnt = __dos64_write (fdesc->fcb, (void *)buf, count);
+    cnt = __dos64_write (file, (void *)buf, count);
 
     if (cnt == -1)
         errno = __stdc_ioerr2errno (IoErr ());
 
+    __releasefcb(file);
     return cnt;
 } /* write */
 

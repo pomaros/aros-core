@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER
 
     POSIX.1-2008 function closedir().
 */
@@ -10,9 +11,7 @@
 #include <unistd.h>
 #include <errno.h>
 
-#include "__fdesc.h"
 #include "__dirdesc.h"
-#include "__reclock.h"
 
 /*****************************************************************************
 
@@ -48,7 +47,7 @@
 
 ******************************************************************************/
 {
-    fdesc *desc;
+    int result;
 
     if (!dir)
     {
@@ -56,28 +55,10 @@
         return -1;
     }
 
-    desc = __getfdesc(dir->fd);
-    if (!desc)
-    {
-        errno = EBADF;
-        return -1;
-    }
-
-    __fcb_lock(desc->fcb);
-    __posixc_reclock_close(desc, desc->fcb->opencount == 1);
-    if (--desc->fcb->opencount == 0)
-    {
-        UnLock(desc->fcb->handle);
-        __fcb_unlock(desc->fcb);
-        FreeVec(desc->fcb);
-    }
-    else
-        __fcb_unlock(desc->fcb);
-    __free_fdesc(desc);
-    __setfdesc(dir->fd, NULL);
+    result = close(dir->fd);
 
     FreeDosObject(DOS_FIB, dir->priv);
     free(dir);
 
-    return 0;
+    return result;
 }

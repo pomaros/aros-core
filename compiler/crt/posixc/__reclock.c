@@ -430,7 +430,7 @@ int __posixc_reclock(int fd, fdesc *desc, int cmd, struct flock *fl)
     return result;
 }
 
-void __posixc_reclock_close(fdesc *desc, int last)
+void __posixc_reclock_close(fdesc *desc)
 {
     struct PosixCIntBase *owner;
     struct reclock_file *rf = NULL;
@@ -460,10 +460,21 @@ void __posixc_reclock_close(fdesc *desc, int last)
     }
     if (rf)
         clear_range(rf, 0, RECLOCK_EOF, owner);     /* only shrinks: cannot fail */
-    if (last && f->reclock)
+    ReleaseSemaphore(&reclock_sem);
+}
+
+void __posixc_reclock_release_file(fcb *file)
+{
+    /* The final block reference owns this field exclusively. A non-NULL
+       entry proves the metadata semaphore was initialized before publication;
+       ordinary files need not inspect the lazy-init flag or take that lock. */
+    if (!file->reclock)
+        return;
+    ObtainSemaphore(&reclock_sem);
+    if (file->reclock)
     {
-        put_file(f->reclock);
-        f->reclock = NULL;
+        put_file(file->reclock);
+        file->reclock = NULL;
     }
     ReleaseSemaphore(&reclock_sem);
 }

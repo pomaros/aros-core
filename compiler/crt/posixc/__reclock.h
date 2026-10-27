@@ -13,8 +13,10 @@
 #include "__fdesc.h"
 
 int __posixc_reclock(int fd, fdesc *desc, int cmd, struct flock *fl);
-/* close() of DESC: the process's locks on its file go; LAST when the fcb goes */
-void __posixc_reclock_close(fdesc *desc, int last);
+/* close() of DESC releases the process's locks independently of active I/O. */
+void __posixc_reclock_close(fdesc *desc);
+/* Last fcb reference, after all descriptor and operation references leave. */
+void __posixc_reclock_release_file(fcb *file);
 void __posixc_reclock_release_owner(APTR base);
 
 #endif /* ___RECLOCK_H */

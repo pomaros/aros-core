@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER
 
     POSIX.1-2008 function dup2().
 */
@@ -111,21 +112,25 @@
     newfdesc->fdflags = 0;
     newfdesc->fcb = oldfdesc->fcb;
 
+    if (!__fcb_retain(newfdesc->fcb))
+    {
+        __free_fdesc(newfdesc);
+        errno = EOVERFLOW;
+        result = -1;
+        goto done;
+    }
+
     /* Put new FD into its slot (and deallocate any FD previously there) */
     int gotfd = __getfdslot(newfd);
     if (gotfd == -1)
     {
         /* Reservation failed: release the descriptor we just allocated so it
            is not leaked. errno was set by __getfdslot(). */
+        __releasefcb(newfdesc->fcb);
         __free_fdesc(newfdesc);
         { result = -1; goto done; }
     }
 
-    /* Bumping the shared fcb's reference count must be atomic against a
-       concurrent close() of another descriptor onto the same fcb. */
-    __fcb_lock(newfdesc->fcb);
-    newfdesc->fcb->opencount++;
-    __fcb_unlock(newfdesc->fcb);
     __setfdesc(gotfd, newfdesc);
 
     result = gotfd;

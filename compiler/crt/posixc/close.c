@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER
 
     POSIX.1-2008 function close().
 */
@@ -35,8 +36,9 @@
         -1 for error or zero on success.
 
     NOTES
-        This function must not be used in a shared library or
-        in a threaded application.
+        An admitted read or write retains its file independently of the
+        descriptor number. It may finish after close and reuse of that number;
+        the native handle is released after its last retained operation.
 
     EXAMPLE
 
@@ -51,7 +53,6 @@
 {
     fdesc *fdesc;
     fcb *cblock;
-    BOOL lastclose;
 
     __fdesc_lock();
     if (!(fdesc = __getfdesc(fd)))
@@ -67,36 +68,15 @@
     }
 
     cblock = fdesc->fcb;
-    __fcb_lock(cblock);
-    lastclose = (--cblock->opencount == 0);
     __setfdesc(fd, NULL);
     __fdesc_unlock();
-    /* Closing any descriptor of a file releases the process's record locks
-       on it; the descriptor is out of the table and still allocated. */
-    __posixc_reclock_close(fdesc, lastclose);
+    /* Detaching transfers the descriptor's reference to this call. Other
+       operations retain their own block, so close/reuse cannot invalidate it. */
+    __fcb_lock(cblock);
+    __posixc_reclock_close(fdesc);
+    __fcb_unlock(cblock);
     __free_fdesc(fdesc);
-
-    if (lastclose)
-    {
-        /* DOS releases the handle even when Close reports an error. */
-        if (!(cblock->privflags & _FCB_DONTCLOSE_FH))
-        {
-            // don't close directories because we don't Open() them.
-            if (cblock->privflags & _FCB_ISDIR)
-            {
-                UnLock(cblock->handle);
-            }
-            else
-            {
-                Close(cblock->handle);
-            }
-        }
-
-        __fcb_unlock(cblock);
-        FreeVec(cblock);
-    }
-    else
-        __fcb_unlock(cblock);
+    __releasefcb(cblock);
 
     return 0;
 } /* close */

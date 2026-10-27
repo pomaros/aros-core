@@ -3,6 +3,7 @@
 
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER
     $Id$
 
     Desc: file descriptors handling internals - header file
@@ -20,6 +21,7 @@ typedef struct _fcb
     BPTR handle;// if privflags has flag _FCB_ISDIR: BCPL pointer to struct FileLock
                 // otherwise: BCPL pointer to struct FileHandle
     int  flags;
+    /* Descriptor references plus retained in-flight operations. */
     unsigned int opencount;
     unsigned int privflags;
     /* Serialises DOS operations on the shared handle. A single fcb (one DOS
@@ -41,6 +43,25 @@ typedef struct _fcb
    (which also lock). A NULL/absent handle needs no serialisation. */
 static inline void __fcb_lock(fcb *f)   { if (f) ObtainSemaphore(&f->io_lock); }
 static inline void __fcb_unlock(fcb *f) { if (f) ReleaseSemaphore(&f->io_lock); }
+
+/* The caller must already own a reference or hold the descriptor-table guard
+   protecting one. Never revive a retired block or wrap its reference count. */
+static inline BOOL __fcb_retain(fcb *file)
+{
+    unsigned int count = __atomic_load_n(&file->opencount, __ATOMIC_RELAXED);
+    do
+    {
+        if (!count || count == (unsigned int)-1)
+            return FALSE;
+    } while (!__atomic_compare_exchange_n(&file->opencount, &count, count + 1,
+                FALSE, __ATOMIC_RELAXED, __ATOMIC_RELAXED));
+    return TRUE;
+}
+
+/* Retain under the table guard; error is zero for an absent/foreign fd, or
+   EOVERFLOW when a local file cannot admit another operation. */
+fcb *__holdfcb(int fd, int *error);
+void __releasefcb(fcb *file);
 
 /* privflags */
 #define _FCB_ISDIR        ((unsigned int)1<<0)

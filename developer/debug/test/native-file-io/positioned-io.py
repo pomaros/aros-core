@@ -23,7 +23,8 @@ if output.exists() or args.output.is_symlink() or output == ROOT or ROOT in outp
 sources = [ROOT / 'compiler/crt/posixc' / name for name in ('pread64.c','pwrite64.c')]
 bridge = ROOT / 'tools/crosstools/rust/unmodified/fs/positioned.c'
 dupfd = ROOT / 'compiler/crt/posixc/__fdesc.c'
-inputs = [dupfd, HERE / 'dupfd-host.c', bridge, HERE / 'positioned-bridge-host.c'] + sources + [HERE / 'positioned-io-host.c', Path(__file__).resolve()]
+fdesc_header = ROOT / 'compiler/crt/posixc/__fdesc.h'
+inputs = [dupfd, fdesc_header, HERE / 'dupfd-host.c', bridge, HERE / 'positioned-bridge-host.c'] + sources + [HERE / 'positioned-io-host.c', Path(__file__).resolve()]
 digest = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
 before = {str(p): digest(p) for p in inputs}
 output.mkdir(parents=True)
@@ -40,6 +41,15 @@ text = dupfd.read_text()
 start = text.index('int __dupfd(')
 end = text.index('\nLONG __oflags2amode', start)
 (output / 'production-dupfd.c').write_text(text[start:end])
+header = fdesc_header.read_text()
+start = header.index('static inline BOOL __fcb_retain(')
+brace = header.index('{', start)
+depth = 1
+end = brace + 1
+while depth:
+    depth += {'{': 1, '}': -1}.get(header[end], 0)
+    end += 1
+(output / 'production-fcb-retain.c').write_text(header[start:end] + '\n')
 shutil.copyfile(HERE / 'dupfd-host.c', output / 'dupfd-fixture.c')
 shutil.copyfile(HERE / 'positioned-io-host.c', output / 'fixture.c')
 command = ['clang', '-std=c11', '-g', '-O1', '-pthread', '-Wall', '-Wextra', '-Werror',

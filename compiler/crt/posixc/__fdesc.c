@@ -28,6 +28,7 @@
 #include <limits.h>
 
 #include "__fdesc.h"
+#include "__reclock.h"
 #include "__dos64.h"
 #include "__upath.h"
 
@@ -168,6 +169,42 @@ fdesc *__getfdesc(register int fd)
     }
 
     return local;
+}
+
+fcb *__holdfcb(int fd, int *error)
+{
+    fdesc *descriptor;
+    fcb *file = NULL;
+
+    *error = 0;
+    __fdesc_lock();
+    descriptor = __getfdesc(fd);
+    if (descriptor)
+    {
+        if (__fcb_retain(descriptor->fcb))
+            file = descriptor->fcb;
+        else
+            *error = EOVERFLOW;
+    }
+    __fdesc_unlock();
+    return file;
+}
+
+void __releasefcb(fcb *file)
+{
+    if (__atomic_sub_fetch(&file->opencount, 1, __ATOMIC_ACQ_REL))
+        return;
+    /* No descriptor or retained operation can use this block now. Record-lock
+       metadata and the native handle each have one final disposal point. */
+    __posixc_reclock_release_file(file);
+    if (file->handle && !(file->privflags & _FCB_DONTCLOSE_FH))
+    {
+        if (file->privflags & _FCB_ISDIR)
+            UnLock(file->handle);
+        else
+            Close(file->handle);
+    }
+    FreeVec(file);
 }
 
 const struct fd_hooks *__getfdhooks(int fd, APTR *datap)
@@ -356,7 +393,7 @@ int __dupfd(int oldfd, int minimum, int flags)
     struct PosixCIntBase *PosixCBase =
         (struct PosixCIntBase *)__aros_getbase_PosixCBase();
     fdesc *old, *copy;
-    int slot, result = -1, reserved = 0;
+    int slot, result = -1, reserved = 0, retained = 0;
     LONG error = 0;
     struct Library *FDBase = NULL;
     if (minimum < 0 || minimum == INT_MAX || (flags & ~FD_CLOEXEC)) {
@@ -369,10 +406,11 @@ int __dupfd(int oldfd, int minimum, int flags)
     copy = __alloc_fdesc();
     if (!copy) { error = ENOMEM; goto done; }
     __fcb_lock(old->fcb);
-    if (old->fcb->opencount == (unsigned int)-1) {
+    if (!__fcb_retain(old->fcb)) {
         error = EOVERFLOW;
         goto free_copy;
     }
+    retained = 1;
     slot = __getfirstfd(minimum);
     if (slot > STDERR_FILENO && __fdlib_available(PosixCBase)) {
         LONG allocated;
@@ -389,12 +427,12 @@ int __dupfd(int oldfd, int minimum, int flags)
     }
     copy->fcb = old->fcb;
     copy->fdflags = flags;
-    copy->fcb->opencount++;
     __setfdesc(slot, copy);
     result = slot;
     __fcb_unlock(old->fcb);
     goto done;
 free_copy:
+    if (retained) __releasefcb(old->fcb);
     __fcb_unlock(old->fcb);
     __free_fdesc(copy);
 done:
@@ -807,13 +845,15 @@ static int __copy_fdarray(fdesc **__src_fd_array, int fd_slots)
             if((FD_ARRAY(PosixCBase)[i] = __alloc_fdesc()) == NULL)
                 return 0;
 
+            if (!__fcb_retain(__src_fd_array[i]->fcb))
+            {
+                __free_fdesc(FD_ARRAY(PosixCBase)[i]);
+                FD_ARRAY(PosixCBase)[i] = FD_RESERVED;
+                __set_errno(PosixCBase, EOVERFLOW);
+                return 0;
+            }
             FD_ARRAY(PosixCBase)[i]->fdflags = __src_fd_array[i]->fdflags;
             FD_ARRAY(PosixCBase)[i]->fcb = __src_fd_array[i]->fcb;
-            /* The source (parent) may still be using this fcb - bump its
-               shared reference count atomically. */
-            __fcb_lock(FD_ARRAY(PosixCBase)[i]->fcb);
-            FD_ARRAY(PosixCBase)[i]->fcb->opencount++;
-            __fcb_unlock(FD_ARRAY(PosixCBase)[i]->fcb);
         }
     }
 
@@ -869,11 +909,24 @@ int __init_fd(struct PosixCIntBase *PosixCBase)
     if (pPosixCBase && (pPosixCBase->flags & (VFORK_PARENT | EXEC_PARENT)))
     {
         /* VFORK_PARENT use case - child manipulates file descriptors prior to calling exec* */
-        int res = __copy_fdarray(pPosixCBase->fd_array, pPosixCBase->fd_slots);
+        int res;
+        FD_LOCK(pPosixCBase);
+        res = __copy_fdarray(FD_ARRAY(pPosixCBase), FD_SLOTS(pPosixCBase));
+        FD_UNLOCK(pPosixCBase);
 
-        if (pPosixCBase->flags & EXEC_PARENT)
-            /* EXEC_PARENT called through RunCommand which injected parameters to Input() */
-            FD_ARRAY(PosixCBase)[STDIN_FILENO]->fcb->privflags |= _FCB_FLUSHONREAD;
+        if (res && (pPosixCBase->flags & EXEC_PARENT) &&
+            FD_SLOTS(PosixCBase) > STDIN_FILENO)
+        {
+            /* RunCommand may inject parameters into inherited Input(). A
+               failed copy or a closed stdin must not be dereferenced. */
+            fdesc *input = FD_ARRAY(PosixCBase)[STDIN_FILENO];
+            if (input && input != FD_RESERVED)
+            {
+                __fcb_lock(input->fcb);
+                input->fcb->privflags |= _FCB_FLUSHONREAD;
+                __fcb_unlock(input->fcb);
+            }
+        }
 
         return res;
     }

@@ -8,6 +8,9 @@
 #include <string.h>
 #include <fcntl.h>
 typedef long LONG;
+typedef int BOOL;
+#define TRUE 1
+#define FALSE 0
 #define STDERR_FILENO 2
 #define FD_OWNER_POSIXC 1
 struct Library { int unused; };
@@ -41,11 +44,17 @@ static LONG test_free(int fd) { assert(fd>=3 && fd<128 && registry[fd]); registr
 #define FD_Free(fd,owner) ((void)(FDBase), test_free(fd))
 static int __getfdslot(int slot) { assert(slot>=0 && slot<128 && !table[slot]); return fail_grow ? -1 : slot; }
 static void __setfdesc(int fd,fdesc *p) { assert(!table[fd]); table[fd]=p; }
+#include "production-fcb-retain.c"
+/* The original descriptor is retained throughout this fixture. Final handle
+   disposal is checked by fcb_lifetime_host, not by this registry boundary. */
+static void __releasefcb(fcb *p) {
+    assert(__atomic_sub_fetch(&p->opencount,1,__ATOMIC_ACQ_REL)>0);
+}
 #include "production-dupfd.c"
 static void release_copy(int fd) {
     assert(!pthread_mutex_lock(&table_lock));
     assert(table[fd] && table[fd]!=&original);
-    __fcb_lock(&control); assert(control.opencount>1); --control.opencount;
+    __fcb_lock(&control); assert(control.opencount>1); __releasefcb(&control);
     __fcb_unlock(&control); __free_fdesc(table[fd]); table[fd]=NULL;
     if(fd>=3) test_free(fd);
     assert(!pthread_mutex_unlock(&table_lock));
