@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2011, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
 
     Desc: Retrieve the full pathname from a lock.
 */
@@ -66,7 +67,7 @@
     LONG err;
 
     if (lock == BNULL) {
-        if (length > 5) {
+        if (length >= 5) {
             CopyMem("SYS:", buffer, 5);
             return DOSTRUE;
         } else {
@@ -77,6 +78,9 @@
 
     
     lock2 = DupLock(lock);
+    /* BNULL is the root to namefrom_internal(), not a failed duplicate. */
+    if (lock2 == BNULL)
+        return DOSFALSE;
     res = namefrom_internal(DOSBase, lock2, buffer, length);
     err = IoErr(); /* UnLock() clears pr_Result2 */
     UnLock(lock2);
