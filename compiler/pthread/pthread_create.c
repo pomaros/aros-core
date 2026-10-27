@@ -1,4 +1,5 @@
 /*
+  Copyright (C) 2026 John KNIPPER <code@jkn.me> (altered creation-result handling)
   Copyright (C) 2014 Szilard Biro
   Copyright (C) 2018 Harry Sintonen
   Copyright (C) 2019 Stefan "Bebbo" Franke - AmigaOS 3 port
@@ -254,7 +255,7 @@ static void StarterFunc(void)
     RESULT
         0 on success; *thread receives the identifier. EINVAL if thread or start
         is NULL. EAGAIN if no slot is available, a thread record cannot be
-        allocated, or the process-creation result is observed as NULL.
+        allocated, or process creation fails.
         On error, *thread is unchanged. Errors are returned directly.
 
     NOTES
@@ -273,10 +274,6 @@ static void StarterFunc(void)
         are reused; they are not permanent handles.
 
     BUGS
-        An immediately finishing detached worker can clear its record before
-        the creator tests inf->task after releasing the thread semaphore. Thus
-        an EAGAIN result does not establish that the entry point never ran.
-
         Returning from start bypasses the cleanup-handler list in this
         implementation. Use balanced cleanup operations or pthread_exit()
         when those handlers must run.
@@ -290,6 +287,7 @@ static void StarterFunc(void)
 *****************************************************************************/
 {
     ThreadInfo *inf;
+    struct Task *created;
     char name[NAMELEN];
     size_t oldlen;
     pthread_t threadnew;
@@ -345,7 +343,7 @@ static void StarterFunc(void)
     name[sizeof(name) - 1] = '\0';
 
     // start the child thread
-    inf->task = (struct Task *)CreateNewProcTags(NP_Entry, (IPTR)StarterFunc,
+    created = (struct Task *)CreateNewProcTags(NP_Entry, (IPTR)StarterFunc,
 #ifdef __MORPHOS__
         NP_CodeType, CODETYPE_PPC,
         (inf->attr.stackaddr == NULL && inf->attr.stacksize > 0) ? NP_PPCStackSize : TAG_IGNORE, inf->attr.stacksize,
@@ -361,13 +359,17 @@ static void StarterFunc(void)
         NP_Name, (IPTR)name,
         TAG_DONE);
 
-    ReleaseSemaphore(&thread_sem);
-
-    if (!inf->task)
+    inf->task = created;
+    if (!created)
     {
-        inf->parent = NULL;
+        /* The slot becomes reusable when the semaphore is released. */
+        memset(inf, 0, sizeof(*inf));
+        ReleaseSemaphore(&thread_sem);
         return EAGAIN;
     }
+    /* After release a detached worker may clear or reuse inf immediately.
+     * The creation result belongs to this call, not to that shared record. */
+    ReleaseSemaphore(&thread_sem);
 
     *thread = threadnew;
 
