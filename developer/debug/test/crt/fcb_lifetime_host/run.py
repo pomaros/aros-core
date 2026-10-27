@@ -61,6 +61,9 @@ parts = {
     'RELEASE_RECORD': block(reclock, 'void __posixc_reclock_release_file('),
     'READ': syscall('read', 'static ssize_t ar_read(int fd,void *buf,size_t count)'),
     'WRITE': syscall('write', 'static ssize_t ar_write(int fd,const void *buf,size_t count)'),
+    'FSTAT': syscall('fstat', 'static int ar_fstat(int fd,struct stat *sb)'),
+    'FSTAT64': syscall('fstat64', 'static int ar_fstat64(int fd,struct stat64 *sb)'),
+    'FSYNC': syscall('fsync', 'static int ar_fsync(int fd)'),
     'CLOSE': syscall('close', 'static int ar_close(int fd)'),
     'DUP': block(source, 'int __dupfd('),
     'DUP2': syscall('dup2', 'static int ar_dup2(int oldfd,int newfd)'),
@@ -84,6 +87,17 @@ controls = {
     'reference-wrap': ('if (!count || count == (unsigned int)-1)', 'if (!count)',
                        'Assertion failed: (ar_read(5,&byte,1)==-1&&errno==EOVERFLOW)'),
 }
+controls.update({
+    'metadata-unretained': (parts['FSTAT'], parts['FSTAT'].replace(
+        '__holdfcb(fd, &admission_error)',
+        '(admission_error=0,__getfdesc(fd)?__getfdesc(fd)->fcb:NULL)'),
+        'metadata operation owns the admitted file'),
+    'metadata-error-overwritten': ('    errno = saved_errno;', '    (void)saved_errno;',
+                                   'Assertion failed: (a.error==EIO)'),
+    'sync-release-lost': (parts['FSYNC'], parts['FSYNC'].replace(
+        '    __releasefcb(file);', '    /* lost sync reference */'),
+        'Assertion failed: (atomic_load(&handle_closes[11])==1 && atomic_load(&block_frees)==1)'),
+})
 cases = [('production', text, None)]
 for name, (before, after, expected) in controls.items():
     assert before in text, name

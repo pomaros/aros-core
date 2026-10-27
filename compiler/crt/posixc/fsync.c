@@ -1,6 +1,8 @@
 /*
     Copyright (C) 2004-2026, The AROS Development Team. All rights reserved.
 
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+
     Synchronise an open object through its native filesystem handler.
 */
 
@@ -49,53 +51,61 @@
 
 ******************************************************************************/
 {
-    fdesc *desc = __getfdesc(fd);
+    int admission_error, result = -1, saved_errno;
+    fcb *file = __holdfcb(fd, &admission_error);
     struct MsgPort *handler;
     LONG error;
 
-    if (!desc || !desc->fcb->handle)
+    if (!file)
     {
-        errno = EBADF;
+        errno = admission_error ? admission_error : EBADF;
         return -1;
     }
 
-    __fcb_lock(desc->fcb);
-    if (desc->fcb->privflags & _FCB_ISDIR)
+    __fcb_lock(file);
+    if (!file->handle)
     {
-        struct FileLock *lock = BADDR(desc->fcb->handle);
+        errno = EBADF;
+        goto done;
+    }
+    if (file->privflags & _FCB_ISDIR)
+    {
+        struct FileLock *lock = BADDR(file->handle);
         handler = lock->fl_Task;
     }
     else
     {
-        struct FileHandle *file = BADDR(desc->fcb->handle);
-        handler = file->fh_Type;
+        struct FileHandle *handle = BADDR(file->handle);
+        handler = handle->fh_Type;
         SetIoErr(0);
-        if (!Flush(desc->fcb->handle))
+        if (!Flush(file->handle))
         {
             error = IoErr();
-            __fcb_unlock(desc->fcb);
             errno = error ? __stdc_ioerr2errno(error) : EIO;
-            return -1;
+            goto done;
         }
     }
 
     if (!handler)
     {
-        __fcb_unlock(desc->fcb);
         errno = EINVAL;
-        return -1;
+        goto done;
     }
 
     SetIoErr(0);
     if (!DoPkt(handler, ACTION_FLUSH, 0, 0, 0, 0, 0))
     {
         error = IoErr();
-        __fcb_unlock(desc->fcb);
         errno = error ? __stdc_ioerr2errno(error) : EIO;
-        return -1;
+        goto done;
     }
 
-    __fcb_unlock(desc->fcb);
-    return 0;
+    result = 0;
+done:
+    saved_errno = errno;
+    __fcb_unlock(file);
+    __releasefcb(file);
+    errno = saved_errno;
+    return result;
 } /* fsync */
 

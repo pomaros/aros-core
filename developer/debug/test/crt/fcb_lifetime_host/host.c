@@ -42,7 +42,10 @@ static struct __fd_namespace *__fd_space(struct PosixCIntBase *base) {
 }
 /* FCB_TYPES */
 /* FDESC_TYPES */
-static void ObtainSemaphore(struct SignalSemaphore *s) { assert(!pthread_mutex_lock(&s->lock)); }
+static _Thread_local int metadata_pause, metadata_cleanup;
+static void pause_metadata(void);
+static struct SignalSemaphore *metadata_table_guard;
+static void ObtainSemaphore(struct SignalSemaphore *s) { if(metadata_pause && s!=metadata_table_guard)pause_metadata(); assert(!pthread_mutex_lock(&s->lock)); }
 static void ReleaseSemaphore(struct SignalSemaphore *s) { assert(!pthread_mutex_unlock(&s->lock)); }
 /* FCB_LOCK */
 /* FCB_UNLOCK */
@@ -59,7 +62,7 @@ static atomic_int handle_closes[64], handle_unlocks[64], block_frees, record_put
 static int fail_slot;
 static _Thread_local LONG native_error;
 static void __fdesc_lock(void) { ObtainSemaphore(&table_guard); table_depth++; }
-static void __fdesc_unlock(void) { assert(table_depth); table_depth--; ReleaseSemaphore(&table_guard); }
+static void __fdesc_unlock(void) { assert(table_depth); table_depth--; ReleaseSemaphore(&table_guard); if(metadata_pause)pause_metadata(); }
 static fdesc *__getfdesc(int fd) { return fd>=0 && fd<SLOTS ? table[fd] : NULL; }
 static void __setfdesc(int fd, fdesc *d) { assert(table_depth && fd>=0 && fd<SLOTS); table[fd]=d; }
 static void __set_errno(struct PosixCIntBase *b,int e) { assert(b==&base); errno=e; }
@@ -92,6 +95,7 @@ static void UnLock(BPTR handle) { atomic_fetch_add(&handle_unlocks[handle],1);na
 static void FreeVec(void *p) {
     fcb *f=p;assert(!f->reclock);assert(!pthread_mutex_destroy(&f->io_lock.lock));
     atomic_fetch_add(&block_frees,1);free(p);
+    if(metadata_cleanup)errno=ENXIO;
 }
 static LONG IoErr(void) { return native_error; }
 static int __stdc_ioerr2errno(LONG e) { assert(e==777);return EIO; }
@@ -121,6 +125,43 @@ static LONG __dos64_read(fcb *file,void *buffer,size_t count) { return backend(f
 static LONG __dos64_write(fcb *file,void *buffer,size_t count) { return backend(file,buffer,count); }
 /* READ */
 /* WRITE */
+struct stat { int identity; };
+struct stat64 { int identity; };
+struct MsgPort { BPTR handle; };
+struct FileHandle { struct MsgPort *fh_Type; };
+struct FileLock { struct MsgPort *fl_Task; };
+static struct MsgPort metadata_ports[64];
+static struct FileHandle metadata_handles[64];
+#define BADDR(h) ((void *)&metadata_handles[h])
+#define ACTION_FLUSH 27
+static LONG SetIoErr(LONG error) { LONG old=native_error;native_error=error;return old; }
+static void pause_metadata(void) {
+    metadata_pause=0;
+    assert(!table_depth);
+    assert(!pthread_mutex_lock(&io_gate));io_waiting=1;assert(!pthread_cond_broadcast(&io_changed));
+    while(!io_proceed)assert(!pthread_cond_wait(&io_changed,&io_gate));
+    assert(!pthread_mutex_unlock(&io_gate));
+}
+static int metadata_backend(BPTR handle) {
+    if(metadata_pause)pause_metadata();
+    assert(!table_depth && !atomic_load(&handle_closes[handle]));
+    if(io_fail){errno=EIO;native_error=777;return -1;}
+    return 0;
+}
+static int __stat(BPTR h,struct stat *s,BOOL isfile) {
+    assert(isfile);int result=metadata_backend(h);if(!result)s->identity=h;return result;
+}
+static int __stat64(BPTR h,struct stat64 *s,BOOL isfile) {
+    assert(isfile);int result=metadata_backend(h);if(!result)s->identity=h;return result;
+}
+static LONG Flush(BPTR h) { return metadata_backend(h)==0; }
+static LONG DoPkt(struct MsgPort *port,LONG action,LONG a,LONG b,LONG c,LONG d,LONG e) {
+    assert(action==ACTION_FLUSH && !a&&!b&&!c&&!d&&!e);
+    return metadata_backend(port->handle)==0;
+}
+/* FSTAT */
+/* FSTAT64 */
+/* FSYNC */
 /* CLOSE */
 /* DUP */
 /* DUP2 */
@@ -144,12 +185,21 @@ static void *run_io(void *data) {
     struct attempt *a=data;char byte=0;
     a->result=a->write?ar_write(5,&byte,1):ar_read(5,&byte,1);a->error=errno;return NULL;
 }
+struct metadata_attempt { int operation,result,error; };
+static void *run_metadata(void *data) {
+    struct metadata_attempt *a=data;struct stat sb;struct stat64 wide;
+    metadata_pause=metadata_cleanup=1;
+    a->result=a->operation==0?ar_fstat(5,&sb):a->operation==1?ar_fstat64(5,&wide):ar_fsync(5);
+    a->error=errno;
+    if(!a->result && a->operation<2)assert((a->operation?wide.identity:sb.identity)==11);
+    return NULL;
+}
 static void reset_counts(void) {
     for(int n=0;n<64;n++){atomic_store(&handle_closes[n],0);atomic_store(&handle_unlocks[n],0);}
     atomic_store(&block_frees,0);atomic_store(&record_puts,0);atomic_store(&record_closes,0);
 }
 int main(void) {
-    init_sem(&table_guard);init_sem(&reclock_sem);
+    init_sem(&table_guard);init_sem(&reclock_sem);metadata_table_guard=&table_guard;
     fcb retired={0};assert(!__fcb_retain(&retired));
     for(int write=0;write<2;write++)for(int failed=0;failed<2;failed++) {
         reset_counts();install(5,11,0);io_waiting=io_proceed=0;io_fail=failed;
@@ -164,10 +214,33 @@ int main(void) {
         assert(atomic_load(&handle_closes[11])==1&&atomic_load(&block_frees)==1&&atomic_load(&record_puts)==1);
         assert(!ar_close(5));assert(atomic_load(&handle_closes[22])==1&&atomic_load(&record_closes)==2);
     }
+    for(int operation=0;operation<3;operation++)for(int failed=0;failed<2;failed++) {
+        reset_counts();install(5,11,0);io_waiting=io_proceed=0;io_fail=failed;
+        metadata_ports[11].handle=11;metadata_handles[11].fh_Type=&metadata_ports[11];
+        struct metadata_attempt a={.operation=operation};pthread_t thread;
+        assert(!pthread_create(&thread,NULL,run_metadata,&a));
+        assert(!pthread_mutex_lock(&io_gate));
+        while(!io_waiting)assert(!pthread_cond_wait(&io_changed,&io_gate));
+        assert(!ar_close(5));
+        assert(!atomic_load(&handle_closes[11]) && "metadata operation owns the admitted file");
+        install(5,22,0);io_proceed=1;
+        assert(!pthread_cond_broadcast(&io_changed));assert(!pthread_mutex_unlock(&io_gate));
+        assert(!pthread_join(thread,NULL));
+        assert(a.result==(failed?-1:0));if(failed)assert(a.error==EIO);
+        assert(atomic_load(&handle_closes[11])==1 && atomic_load(&block_frees)==1);
+        assert(!ar_close(5));
+    }
     reset_counts();fcb *file=install(5,11,0);file->opencount=UINT_MAX;
     char byte=0;int before=atomic_load(&foreign_calls);
     assert(ar_read(5,&byte,1)==-1&&errno==EOVERFLOW);
     assert(ar_write(5,&byte,1)==-1&&errno==EOVERFLOW);
+    struct stat sb;struct stat64 wide;
+    assert(ar_fstat(5,&sb)==-1&&errno==EOVERFLOW);
+    assert(ar_fstat64(5,&wide)==-1&&errno==EOVERFLOW);
+    assert(ar_fsync(5)==-1&&errno==EOVERFLOW);
+    assert(ar_fstat(-1,&sb)==-1&&errno==EBADF);
+    assert(ar_fstat64(-1,&wide)==-1&&errno==EBADF);
+    assert(ar_fsync(-1)==-1&&errno==EBADF);
     assert(atomic_load(&foreign_calls)==before);file->opencount=1;assert(!ar_close(5));
     reset_counts();file=install(5,11,0);assert(__dupfd(5,6,FD_CLOEXEC)==6);
     assert(table[6]->fdflags==FD_CLOEXEC&&file->opencount==2);

@@ -1,6 +1,8 @@
 /*
     Copyright (C) 2020, The AROS Development Team. All rights reserved.
 
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+
     POSIX.1-2008 function fstat().
 */
 
@@ -49,15 +51,21 @@
 
 ******************************************************************************/
 {
-    fdesc *desc = __getfdesc(fd);
-
-    if (!desc)
+    int admission_error, result, saved_errno;
+    fcb *file = __holdfcb(fd, &admission_error);
+    if (!file)
     {
-        errno = EBADF;
-
+        errno = admission_error ? admission_error : EBADF;
         return -1;
     }
 
-    return __stat64(desc->fcb->handle, sb, (desc->fcb->privflags & _FCB_ISDIR) ? FALSE : TRUE);
+    __fcb_lock(file);
+    result = __stat64(file->handle, sb,
+        (file->privflags & _FCB_ISDIR) ? FALSE : TRUE);
+    saved_errno = errno;
+    __fcb_unlock(file);
+    __releasefcb(file);
+    errno = saved_errno;
+    return result;
 }
 
