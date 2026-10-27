@@ -26,3 +26,22 @@ against the host filesystem. That result does not qualify AROS code. Existing
 root refusal must leave a sentinel file intact. This probe complements the
 [final-component probe](../posix-lstat/README.md); neither covers
 multidirectory assign resolution or concurrent namespace changes.
+
+## Actual GNU Make timestamp comparison
+
+Build `make-rebuild-probe.c` as `MakeRebuildProbe` with a matching AROS SDK.
+Run `MakeRebuildProbe volume:unused-directory path:to/make`. The executable
+must be GNU Make with its `file` function. The probe refuses an existing root,
+sets source/output timestamps to the same second but 100 ms apart, checks
+stat/lstat/fstat/fstatat, then executes the actual make program through DOS
+RunCommand. GNU Make's own file function writes the target, so no recipe shell
+is needed. Require exit zero and `[FILES] PASS actual-make-same-second`.
+
+The 100/200 ms timestamps are representable by 50 Hz filesystems; this tests
+subsecond dependency decisions without claiming nanosecond filesystem precision.
+The probe restores CurrentDir, closes its handles, removes its three files and
+root, and treats cleanup failure as failure. Record the make executable's build
+configuration and identity, selected filesystem and coherent CRT/SDK identities.
+Compilation alone is not a guest result. Real write-clock quality needs its own
+clock-resolution contract: nanosecond fields do not guarantee unique timestamps
+for successive writes.
