@@ -42,7 +42,8 @@
 
 ******************************************************************************/
 {
-    BPTR reader, writer;
+    BPTR reader = BNULL, writer = BNULL;
+    int readfd, writefd, error = 0;
     fcb *rfcb = NULL, *wfcb = NULL;
     fdesc *rdesc = NULL, *wdesc = NULL;
     char pipe_name[POSIXC_PIPE_NAME_SIZE];
@@ -61,10 +62,10 @@
         (wdesc = __alloc_fdesc()) == NULL
     )
     {
-    FreeVec(rfcb);
+        FreeVec(rfcb);
         if(rdesc)
             __free_fdesc(rdesc);
-    FreeVec(wfcb);
+        FreeVec(wfcb);
         if(wdesc)
             __free_fdesc(wdesc);
         errno = ENOMEM;
@@ -79,6 +80,7 @@
         reader = Open(pipe_name, MODE_OLDFILE);
         if (!reader)
         {
+            error = __stdc_ioerr2errno(IoErr());
             DeleteFile(pipe_name);
             Close(writer);
             writer = BNULL;
@@ -87,10 +89,9 @@
 
     if (!writer)
     {
-        errno = __stdc_ioerr2errno(IoErr());
-        __free_fdesc(rdesc);
-        __free_fdesc(wdesc);
-        return -1;
+        if (!error)
+            error = __stdc_ioerr2errno(IoErr());
+        goto fail;
     }
 
     InitSemaphore(&rfcb->io_lock);
@@ -99,34 +100,41 @@
     /* Each number is picked and reserved in one step: a number picked first
        and claimed later can meanwhile be taken by another thread, and
        claiming an occupied slot closes it. */
-    pipedes[0] = __getfreefdslot(0);
-    pipedes[1] = pipedes[0] < 0 ? -1 : __getfreefdslot(0);
-    if (pipedes[1] < 0)
+    readfd = __getfreefdslot(0);
+    writefd = readfd < 0 ? -1 : __getfreefdslot(0);
+    if (writefd < 0)
     {
-        if (pipedes[0] >= 0)
-            __setfdesc(pipedes[0], NULL);
-        Close(reader);
-        Close(writer);
-        FreeVec(rfcb);
-        FreeVec(wfcb);
-        __free_fdesc(rdesc);
-        __free_fdesc(wdesc);
-        return -1;
+        error = errno;
+        if (readfd >= 0)
+            __setfdesc(readfd, NULL);
+        goto fail;
     }
     rdesc->fdflags = 0;
     rdesc->fcb = rfcb;
     rdesc->fcb->handle    = reader;
     rdesc->fcb->flags     = O_RDONLY;
     rdesc->fcb->opencount = 1;
-    __setfdesc(pipedes[0], rdesc);
+    __setfdesc(readfd, rdesc);
 
     wdesc->fdflags = 0;
     wdesc->fcb = wfcb;
     wdesc->fcb->handle    = writer;
     wdesc->fcb->flags     = O_WRONLY;
     wdesc->fcb->opencount = 1;
-    __setfdesc(pipedes[1], wdesc);
+    __setfdesc(writefd, wdesc);
 
+    pipedes[0] = readfd;
+    pipedes[1] = writefd;
     return 0;
+
+fail:
+    if (reader) Close(reader);
+    if (writer) Close(writer);
+    FreeVec(rfcb);
+    FreeVec(wfcb);
+    __free_fdesc(rdesc);
+    __free_fdesc(wdesc);
+    errno = error;
+    return -1;
 }
 
