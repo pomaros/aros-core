@@ -49,6 +49,8 @@ static int fail_allocation,fail_context,fail_namespace;
 static struct Task *FindTask(void *unused) { (void)unused;return &task; }
 static ULONG GetETaskID(struct Task *t) { return t->id; }
 static struct __cwd_binding *binding(void) { return current; }
+/* Native lock synchronization is covered by native_cwd_host. */
+static int sync_native_cwd(struct __cwd_binding *b) { (void)b;return 1; }
 static void *AllocVec(size_t size,unsigned flags) {
     assert(flags==(MEMF_PUBLIC|MEMF_CLEAR));if(fail_allocation)return NULL;
     void *p=calloc(1,size);assert(p);allocations++;return p;

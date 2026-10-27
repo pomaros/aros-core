@@ -37,6 +37,7 @@ def block(text, signature):
 
 runtime = read('__cwd_runtime.c')
 names = ['static struct __cwd_binding *binding(', 'static void binding_release(',
+         'static BOOL sync_native_cwd(',
          'struct PosixCIntBase *__cwd_runtime_base(',
          'struct __cwd_context *__cwd_runtime_context(',
          'BOOL __cwd_runtime_context_push(', 'BOOL __cwd_runtime_context_pop(',

@@ -21,6 +21,8 @@ struct __cwd_binding {
     struct PosixCIntBase *base; /* same-Task only; cleared before base free */
     ULONG owner_id; /* immutable ETask incarnation, no borrowed Task pointer */
     struct __cwd_context *context;
+    struct __cwd_directory *native_cwd; /* owned observation, never a Process pointer */
+    BOOL native_cwd_root;
     struct DosPathResolver resolver;
     struct __cwd_binding *previous; /* retained, may have closed its base */
     BPTR override;
@@ -47,10 +49,49 @@ static void binding_release(struct __cwd_binding *b)
         struct __cwd_binding *previous = b->previous;
         if (b->scope_depth) __cwd_snapshot_release(&b->scope);
         __cwd_context_release(b->context);
+        __cwd_directory_release(b->native_cwd);
         FreeVec(b);
         b = previous;
     }
 }
+static BPTR native_initial_directory(struct Task *task, BPTR *program);
+
+/* CurrentDir is a native Process operation and must remain effective with a
+ * CRT loaded. Compare owned locks, not remembered lock addresses (which can
+ * be freed and reused). A plain admitted Task keeps its shared logical cwd.
+ * Explicit POSIX scopes retain one snapshot until the operation has ended. */
+static BOOL sync_native_cwd(struct __cwd_binding *b)
+{
+    struct Task *task = FindTask(NULL);
+    struct __cwd_directory *next, *old;
+    BPTR current, captured = BNULL, program;
+    LONG error;
+    if (!b->native_cwd || b->scope_depth || task->tc_Node.ln_Type != NT_PROCESS)
+        return TRUE;
+    current = ((struct Process *)task)->pr_CurrentDir;
+    if ((!current && b->native_cwd_root) ||
+        (current && !b->native_cwd_root &&
+         SameLock(current, __cwd_directory_lock(b->native_cwd)) == LOCK_SAME))
+        return TRUE;
+    if (!current) {
+        captured = native_initial_directory(task, &program);
+        if (!captured) return FALSE;
+        current = captured;
+    }
+    next = __cwd_directory_capture(current, &error);
+    if (captured) UnLock(captured);
+    if (!next) return FALSE;
+    if (!__cwd_context_set(b->context, next)) {
+        __cwd_directory_release(next);
+        return FALSE;
+    }
+    old = b->native_cwd;
+    b->native_cwd = next;
+    b->native_cwd_root = captured != BNULL;
+    __cwd_directory_release(old);
+    return TRUE;
+}
+
 struct PosixCIntBase *__cwd_runtime_base(void)
 {
     struct __cwd_binding *b = binding();
@@ -59,7 +100,7 @@ struct PosixCIntBase *__cwd_runtime_base(void)
 struct __cwd_context *__cwd_runtime_context(void)
 {
     struct __cwd_binding *b = binding();
-    return b ? b->context : NULL;
+    return b && sync_native_cwd(b) ? b->context : NULL;
 }
 struct __cwd_context *__cwd_runtime_context_capture(void)
 {
@@ -104,7 +145,7 @@ BOOL __cwd_runtime_context_pop(struct __cwd_context_scope *scope)
 BOOL __cwd_runtime_snapshot(struct __cwd_snapshot *snapshot)
 {
     struct __cwd_binding *b = binding();
-    if (!b) return FALSE;
+    if (!b || !sync_native_cwd(b)) return FALSE;
     if (!b->scope_depth) return __cwd_context_snapshot(b->context, snapshot);
     *snapshot = b->scope;
     if (!__cwd_directory_retain(snapshot->cwd)) return FALSE;
@@ -124,7 +165,7 @@ BPTR __cwd_runtime_override(BPTR directory)
 BOOL __cwd_runtime_scope_enter(void)
 {
     struct __cwd_binding *b = binding();
-    if (!b || b->scope_depth == (ULONG)-1) return FALSE;
+    if (!b || b->scope_depth == (ULONG)-1 || !sync_native_cwd(b)) return FALSE;
     if (!b->scope_depth && !__cwd_context_snapshot(b->context, &b->scope)) return FALSE;
     b->scope_depth++;
     return TRUE;
@@ -240,6 +281,14 @@ static int runtime_open(struct PosixCIntBase *base)
         if (initial) UnLock(initial);
     }
     if (!b->context) { FreeVec(b); return FALSE; }
+    if (task->tc_Node.ln_Type == NT_PROCESS) {
+        BPTR program = BNULL;
+        initial = native_initial_directory(task, &program);
+        if (initial) b->native_cwd = __cwd_directory_capture(initial, &error);
+        if (initial) UnLock(initial);
+        if (!b->native_cwd) { binding_release(b); return FALSE; }
+        b->native_cwd_root = ((struct Process *)task)->pr_CurrentDir == BNULL;
+    }
     b->resolver.version = DOS_PATH_RESOLVER_VERSION;
     b->resolver.invoke = invoke;
     b->resolver.data = b;
@@ -299,7 +348,8 @@ struct __cwd_admission *__cwd_admission_capture(APTR source)
     struct __cwd_binding *selected = source;
     struct __cwd_context *context;
     if (!selected || !selected->base ||
-        selected->owner_id != GetETaskID(FindTask(NULL))) return NULL;
+        selected->owner_id != GetETaskID(FindTask(NULL)) ||
+        !sync_native_cwd(selected)) return NULL;
     context = selected->context;
     a = AllocVec(sizeof(*a), MEMF_PUBLIC | MEMF_CLEAR);
     if (!a) return NULL;

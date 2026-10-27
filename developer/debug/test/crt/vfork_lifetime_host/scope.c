@@ -40,7 +40,10 @@ struct PosixCIntBase {
     struct PosixCIntBase *fd_owner;
     BOOL doupath;
 };
-struct Task { unsigned identity; };
+#define NT_PROCESS 13
+#define LOCK_SAME 0
+struct Task { unsigned identity; struct { int ln_Type; } tc_Node; };
+struct Process { struct Task task; BPTR pr_CurrentDir; };
 static _Thread_local struct Task *self;
 static _Thread_local struct __cwd_binding *current;
 static LONG runtime_slot = 1;
@@ -87,6 +90,14 @@ static SIPTR DoPktResult(struct MsgPort *port, LONG action,
     assert(action == ACTION_FREE_LOCK);
     atomic_fetch_sub(&locks, 1); free(lock); return 1;
 }
+
+/* This harness models plain admitted Tasks; Process synchronization has its
+ * own production-engine regression in native_cwd_host. */
+static int SameLock(BPTR a, BPTR b)
+{ return ((struct FileLock *)a)->identity == ((struct FileLock *)b)->identity ? LOCK_SAME : 1; }
+static BPTR native_initial_directory(struct Task *task, BPTR *program)
+{ (void)task; (void)program; abort(); }
+static void UnLock(BPTR lock) { (void)lock; abort(); }
 
 /* CONTEXT_HEADER */
 /* NAMESPACE_HEADER */
@@ -139,7 +150,7 @@ struct worker_data {
 static void *worker(void *arg)
 {
     struct worker_data *w = arg;
-    struct Task task = {2}; self = &task;
+    struct Task task = {.identity=2}; self = &task;
     struct __cwd_binding *b = attach(w->space, w->context);
     atomic_store(&ready, 1);
     while (!atomic_load(&finish)) {
@@ -158,7 +169,7 @@ static void *worker(void *arg)
 }
 int main(void)
 {
-    struct Task parent = {1}, foreign = {3}; self = &parent;
+    struct Task parent = {.identity=1}, foreign = {.identity=3}; self = &parent;
     LONG error;
     struct __cwd_context *context = __cwd_context_create(&native_cwd, &native_progdir, FALSE, &error);
     assert(context && !error);

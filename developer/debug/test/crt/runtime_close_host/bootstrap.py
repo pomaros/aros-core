@@ -5,7 +5,7 @@
 import argparse,hashlib,json,subprocess
 from pathlib import Path
 p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',type=Path,required=True);a=p.parse_args()
-here=Path(__file__).resolve().parent;root=here.parents[4];src=root/'compiler/crt/posixc/__cwd_runtime.c';text=src.read_text();start=text.index('static BPTR native_initial_directory(');code=text[start:text.index('\nstatic int runtime_open(',start)]
+here=Path(__file__).resolve().parent;root=here.parents[4];src=root/'compiler/crt/posixc/__cwd_runtime.c';text=src.read_text();start=text.index('static BPTR native_initial_directory(struct Task *task, BPTR *program)\n{');code=text[start:text.index('\nstatic int runtime_open(',start)]
 prelude='''#include <assert.h>
 #include <stdlib.h>
 #include <stdio.h>
