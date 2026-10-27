@@ -323,6 +323,15 @@ void Exec_SignalSlow(struct Task *task, ULONG signalSet, struct ExecBase *SysBas
                 core_AbortCallIPI(cie, targetcpu);
                 return;
             }
+            /* Publish the bits before returning to the sender. A caller may
+             * join its producer, clear the signal and reuse the bit while
+             * the remote CPU still has a queued wakeup. That wakeup must not
+             * deliver the old bits into the next operation. Task teardown's
+             * sweep and this commit remain serialized by tc_SpinLock. */
+            __AROS_ATOMIC_OR_L(task->tc_SigRecvd, signalSet);
+            if (task->tc_SigRecvd & task->tc_SigExcept)
+                __AROS_ATOMIC_OR_B(task->tc_Flags, TF_EXCEPT);
+            args[2] = 0;
             core_CommitCallIPI(cie, targetcpu, &h, 3, args);
             EXEC_SPINLOCK_UNLOCK(&task->tc_SpinLock);
             Enable();

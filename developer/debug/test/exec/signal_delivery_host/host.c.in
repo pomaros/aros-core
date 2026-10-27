@@ -1,0 +1,121 @@
+/* Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+ * SPDX-License-Identifier: APL-1.1
+ */
+#include <assert.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+typedef unsigned long ULONG;
+typedef unsigned char BYTE;
+typedef uintptr_t IPTR;
+typedef void *APTR;
+typedef int BOOL;
+enum { TS_RUN, TS_WAIT, TS_READY, TS_INVALID, TS_REMOVED, TS_TOMBSTONED };
+enum { TF_EXCEPT = 1, EXECF_CPUAffinity = 1, SPINLOCK_MODE_WRITE = 1 };
+struct IntETask { int iet_CpuNumber; void *iet_CpuAffinity; };
+struct Task {
+    int tc_State, tc_SpinLock;
+    ULONG tc_SigRecvd, tc_SigWait, tc_SigExcept;
+    BYTE tc_Flags;
+    struct { struct IntETask *tc_ETask; } tc_UnionETask;
+    struct { BYTE ln_Pri; } tc_Node;
+};
+struct ExecBase { ULONG IntFlags; };
+struct KernelBase { int unused; } kernel;
+static struct KernelBase *__kernelBase = &kernel;
+struct IPIHook { IPTR ih_Args[3]; };
+struct Hook { IPTR (*h_Entry)(struct IPIHook *, void *, void *); };
+struct CallIPIEntry { int unused; } entry;
+static struct Hook queued_hook;
+static struct IPIHook queued_args;
+static unsigned queued, disables, scheduled;
+static struct Task caller;
+static int schedswitch;
+
+#define __AROSEXEC_SMP__ 1
+#define __AROSEXEC_IPI_RESTRICTED_CTX__ 1
+#define KERNEL_IPI_CALL_CANCELABLE 1
+#define D(...)
+#define AROS_UFH3(ret, name, a, b, c) ret name(a, b, c)
+#define AROS_UFHA(type, name, reg) type name
+#define AROS_LH2(ret, name, a, b, type, base, ...) ret name(a, b, type base)
+#define AROS_LHA(type, name, reg) type name
+#define AROS_USERFUNC_INIT
+#define AROS_USERFUNC_EXIT
+#define AROS_LIBFUNC_INIT
+#define AROS_LIBFUNC_EXIT
+#define GET_THIS_TASK (&caller)
+#define PrivExecBase(base) (base)
+#define IntETask(et) (et)
+#define FLAG_SCHEDSWITCH_SET (schedswitch = 1)
+#define __AROS_ATOMIC_OR_L(value, bits) ((value) |= (bits))
+#define __AROS_ATOMIC_OR_B(value, bits) ((value) |= (bits))
+#define EXEC_SPINLOCK_LOCK(lock, hook, mode) do { assert(!*(lock)); *(lock) = 1; } while (0)
+#define EXEC_SPINLOCK_UNLOCK(lock) do { assert(*(lock)); *(lock) = 0; } while (0)
+static void Disable(void) { ++disables; }
+static void Enable(void) { assert(disables); --disables; }
+static int KrnGetCPUNumber(void) { return 0; }
+static int KrnGetCPUCount(void) { return 2; }
+static int KrnCPUInMask(int cpu, void *mask) { return !!((uintptr_t)mask & (1UL << cpu)); }
+static void KrnScheduleCPU(void *mask) { (void)mask; ++scheduled; }
+static void Reschedule(void) { ++scheduled; }
+static void krnSysCallReschedTask(struct Task *task, int state) { task->tc_State = state; }
+static struct CallIPIEntry *core_ClaimCallIPI(int cpu) { assert(cpu == 1); return &entry; }
+static void core_AbortCallIPI(struct CallIPIEntry *e, int cpu) { assert(e == &entry && cpu == 1); }
+static void core_CommitCallIPI(struct CallIPIEntry *e, int cpu, struct Hook *hook,
+                              int count, IPTR *args)
+{
+    assert(e == &entry && cpu == 1 && count == 3 && !queued);
+    queued_hook = *hook;
+    memcpy(queued_args.ih_Args, args, sizeof(queued_args.ih_Args));
+    ++queued;
+}
+
+@CALLBACK@
+@SIGNAL@
+
+static void drain(void)
+{
+    assert(queued == 1);
+    queued = 0;
+    queued_hook.h_Entry(&queued_args, NULL, NULL);
+}
+
+int main(void)
+{
+    struct ExecBase sys = { EXECF_CPUAffinity };
+    struct IntETask et = { 1, (void *)2 };
+    struct Task task = { .tc_State = TS_RUN, .tc_UnionETask.tc_ETask = &et };
+    const ULONG mask = 1UL << 7;
+
+    Signal(&task, mask, &sys);
+    assert(queued == 1 && disables == 0 && !task.tc_SpinLock);
+    /* Caller has joined the producer. The signal must already be delivered
+     * before it clears and reuses its bit for an unrelated operation. */
+    assert(task.tc_SigRecvd == mask);
+    task.tc_SigRecvd = 0;
+    task.tc_SigWait = mask;
+    task.tc_State = TS_WAIT;
+    drain();
+    assert(!task.tc_SigRecvd && task.tc_State == TS_WAIT);
+
+    Signal(&task, mask, &sys);
+    assert(task.tc_SigRecvd == mask && queued == 1);
+    drain();
+    assert(task.tc_State == TS_READY && task.tc_SigRecvd == mask);
+
+    task.tc_State = TS_RUN;
+    task.tc_SigRecvd = 0;
+    task.tc_SigExcept = mask;
+    Signal(&task, mask, &sys);
+    drain();
+    assert(task.tc_Flags & TF_EXCEPT);
+
+    task.tc_State = TS_INVALID;
+    task.tc_SigRecvd = 0;
+    Signal(&task, mask, &sys);
+    assert(!queued && task.tc_SigRecvd == mask && !task.tc_SpinLock && !disables);
+    puts("signal-delivery PASS: immediate bits, delayed wakeup, reused bit, wait, exception, terminal task");
+    return 0;
+}
