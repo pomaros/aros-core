@@ -53,3 +53,27 @@ missing failure reset and late child identity publication. Each must fail for it
 named cause; timeouts do not count as successful controls. TSan runs production
 and the five controls that do not deliberately dereference freed memory. These
 checks do not execute CreateNewProc, assembly jumps or a guest runtime.
+
+## Owned proxy scope
+
+```
+python3 developer/debug/test/crt/vfork_lifetime_host/scope.py --output /tmp/vfork-scope
+python3 developer/debug/test/crt/vfork_lifetime_host/scope.py --tsan --output /tmp/vfork-scope-tsan
+```
+
+This fixture recovers the proxy-scope regression against the current owned
+context contract. It compiles the actual vfork binding header, runtime binding
+layout and push/pop/snapshot functions, plus both retained heap engines.
+Two thousand scope changes cover nesting, LIFO restoration, foreign base/Task
+refusal, active operation scope refusal, reference-count overflow and caller
+reference release before scope exit. An independently attached worker keeps its
+original directory and descriptor table while the creator switches contexts,
+and continues after creator release. Final allocations and native lock copies
+must balance.
+
+Four compiling mutations remove namespace retention, namespace restoration,
+context pop or the owner-Task check. Both sanitizers require a named assertion;
+timeout or compilation failure cannot pass a control. Exec task storage, DOS
+packets, library disposal and runtime attachment are modeled boundaries. This
+checks the scope implementation, not provider admission, generated library
+startup, real vfork assembly, forced Task removal or guest execution.
