@@ -66,7 +66,8 @@ static BOOL sync_native_cwd(struct __cwd_binding *b)
     struct __cwd_directory *next, *old;
     BPTR current, captured = BNULL, program;
     LONG error;
-    if (!b->native_cwd || b->scope_depth || task->tc_Node.ln_Type != NT_PROCESS)
+    if (!b->native_cwd || b->scope_depth || b->context_scope ||
+        task->tc_Node.ln_Type != NT_PROCESS)
         return TRUE;
     current = ((struct Process *)task)->pr_CurrentDir;
     if ((!current && b->native_cwd_root) ||
@@ -205,7 +206,8 @@ static BOOL accept_path(APTR data)
     struct __cwd_binding *b = data;
     struct Task *task = FindTask(NULL);
     BPTR cwd;
-    if (b->scope_depth || task->tc_Node.ln_Type != NT_PROCESS) return TRUE;
+    if (b->scope_depth || b->context_scope ||
+        task->tc_Node.ln_Type != NT_PROCESS) return TRUE;
     cwd = ((struct Process *)task)->pr_CurrentDir;
     return !cwd || ((struct FileLock *)BADDR(cwd))->fl_Access != EXCLUSIVE_LOCK;
 }

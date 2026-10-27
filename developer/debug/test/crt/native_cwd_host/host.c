@@ -20,6 +20,7 @@ typedef int BOOL;
 #define MEMF_CLEAR 2
 #define ERROR_INVALID_LOCK 211
 #define ERROR_NO_FREE_STORE 103
+#define ERROR_OBJECT_IN_USE 202
 #define ACTION_COPY_DIR 19
 #define ACTION_FREE_LOCK 15
 #define LOCK_SAME 0
@@ -33,12 +34,12 @@ struct Task { struct Node tc_Node; };
 struct Process { struct Task task; BPTR pr_CurrentDir; } process;
 struct Task plain;
 struct DosPathResolver { int unused; };
-struct PosixCIntBase;
+struct PosixCIntBase { BOOL doupath; };
 struct DosLibrary;
 static struct Task *self;
 static struct __cwd_binding *current;
 static int allocations, locks, fail_copy;
-static struct FileLock root={&filesystem,1,0}, db={&filesystem,2,0}, data={&filesystem,3,0}, other={&filesystem,4,0};
+static struct FileLock root={&filesystem,1,0}, db={&filesystem,2,0}, data={&filesystem,3,0}, other={&filesystem,4,0}, exclusive={&filesystem,5,EXCLUSIVE_LOCK};
 static void *AllocVec(size_t n, unsigned flags) { (void)flags; void *p=calloc(1,n); assert(p);allocations++;return p; }
 static void FreeVec(void *p) { if(p){allocations--;free(p);} }
 static void InitSemaphore(struct SignalSemaphore *s) { s->held=0; }
@@ -48,7 +49,7 @@ static struct Task *FindTask(APTR unused) { (void)unused;return self; }
 static int SameLock(BPTR a,BPTR b) { return ((struct FileLock *)a)->identity==((struct FileLock *)b)->identity ? LOCK_SAME : 1; }
 static SIPTR DoPktResult(struct MsgPort *port,LONG action,const SIPTR *args,SIPTR *error) {
  assert(port==&filesystem);*error=0;
- if(action==ACTION_COPY_DIR){if(fail_copy){fail_copy=0;*error=ERROR_NO_FREE_STORE;return 0;}
+ if(action==ACTION_COPY_DIR){if(((struct FileLock *)args[0])->fl_Access==EXCLUSIVE_LOCK){*error=ERROR_OBJECT_IN_USE;return 0;}if(fail_copy){fail_copy=0;*error=ERROR_NO_FREE_STORE;return 0;}
   struct FileLock *p=malloc(sizeof(*p));assert(p);*p=*(struct FileLock *)args[0];locks++;return (SIPTR)p;}
  assert(action==ACTION_FREE_LOCK);locks--;free((APTR)args[0]);return 1;
 }
@@ -64,7 +65,7 @@ static BPTR native_initial_directory(struct Task *task,BPTR *program) {
 }
 /* FUNCTIONS */
 static unsigned selected(void) {
- struct __cwd_snapshot snapshot;assert(__cwd_runtime_snapshot(&snapshot));
+ struct __cwd_snapshot snapshot;assert(__cwd_runtime_snapshot(&snapshot) && "selected context must ignore native directory changes");
  unsigned n=((struct FileLock *)__cwd_directory_lock(snapshot.cwd))->identity;
  __cwd_snapshot_release(&snapshot);return n;
 }
@@ -76,14 +77,25 @@ int main(void) {
  LONG error;
  process.task.tc_Node.ln_Type=NT_PROCESS;process.pr_CurrentDir=&root;self=&process.task;
  struct __cwd_binding *b=AllocVec(sizeof(*b),MEMF_PUBLIC|MEMF_CLEAR);
+ struct PosixCIntBase base={0};b->base=&base;
  b->references=1;b->context=__cwd_context_create(&root,&data,FALSE,&error);
  b->native_cwd=__cwd_directory_capture(&root,&error);current=b;
  assert(accept_path(b));
- root.fl_Access=EXCLUSIVE_LOCK;
+ process.pr_CurrentDir=&exclusive;
  assert(!accept_path(b) && "exclusive native Process path must run in its owner");
  b->scope_depth=1;assert(accept_path(b) && "explicit scope cannot silently fall through");b->scope_depth=0;
+ struct __cwd_context *child=__cwd_context_create(&data,&data,FALSE,&error);assert(child);
+ struct __cwd_context_scope scope={0};
+ assert(__cwd_runtime_context_push(child,&scope));
+ assert(accept_path(b) && "explicit context selection must remain mediated");
+ assert(selected()==3 && "selected context must ignore native directory changes");
+ process.pr_CurrentDir=&db;
+ assert(selected()==3 && "selected context must ignore native directory changes");
+ assert(__cwd_runtime_context_pop(&scope));__cwd_context_release(child);
+ assert(selected()==2 && "leaving selected context must restore native synchronization");
+ process.pr_CurrentDir=&root;
  self=&plain;assert(accept_path(b) && "plain Task must not read a Process extension");self=&process.task;
- root.fl_Access=0;
+ process.pr_CurrentDir=&root;
  assert(selected()==1);
  logical(&other);
  assert(selected()==4 && "unchanged native directory must preserve shared logical chdir");

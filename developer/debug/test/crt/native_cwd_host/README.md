@@ -13,7 +13,9 @@ native Process directory changes, preservation of a shared logical POSIX cwd
 when the native directory has not changed, stable in-flight scopes, ordinary
 Task bounds, root transitions, retry after lock-copy refusal and final binding cleanup.
 The production policy declines unscoped native Process operations with an
-exclusive cwd; an explicit scope or an ordinary Task must remain mediated. Five compiling
+exclusive cwd; an explicit operation or selected-context scope and an ordinary
+Task must remain mediated. Actual context push/pop keeps its selected snapshot
+independent of native directory changes and restores synchronization on exit. Seven compiling
 mutations must fail for named assertions under ASan/UBSan; compilation failure
 or timeout is not a passing negative control.
 
