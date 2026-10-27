@@ -99,6 +99,139 @@ static struct AssignList *deviceproc_nextassignlock(struct AssignList *al, BPTR 
     return al;
 }
 
+/* Deferred assign resolution owns its target text across every handler wait.
+ * Entry/target snapshots are protected by ALL READ plus ENTRY READ; no borrowed
+ * DosList or string survives dropping those guards. */
+static BPTR deviceproc_resolve_target(CONST_STRPTR target, STRPTR expanded,
+    BOOL nonbinding, struct DosLibrary *DOSBase)
+{
+    BPTR result;
+    struct TagItem tags[] = {{secT_BufferSize, USERPATH_MAX}, {TAG_DONE, 0}};
+    if (!nonbinding || !SECURITY_ACTIVE || !strchr(target, '%'))
+        return Lock(target, SHARED_LOCK);
+    if (!secExpandPathA(target, expanded, tags))
+        return IoErr() == ERROR_NOT_IMPLEMENTED ? Lock(target, SHARED_LOCK) : BNULL;
+    result = Lock(expanded, SHARED_LOCK);
+    if (!result && IoErr() == ERROR_OBJECT_NOT_FOUND) {
+        BPTR created = CreateDir(expanded);
+        if (created) {
+            UnLock(created);
+            result = Lock(expanded, SHARED_LOCK);
+        }
+    }
+    return result;
+}
+
+/* Enters and returns with ALL READ held, including failures. A nonbinding
+ * success returns an owned lock and no borrowed DosList node. A late success
+ * promotes the revalidated entry, retaining the resolved lock in the list. */
+static BOOL deviceproc_resolve_deferred(struct DosLibrary *DOSBase,
+    struct DosList **entry, BPTR *owned)
+{
+    ULONG attempt;
+    *owned = BNULL;
+    for (attempt = 0; attempt < 64; ++attempt) {
+        struct DosList *dl = *entry, *current;
+        struct assign_generation before, after;
+        LONG kind, error;
+        size_t name_length, target_length;
+        STRPTR copy, target, expanded;
+        BPTR resolved;
+        BOOL unchanged;
+
+        LockDosList(LDF_ENTRY | LDF_READ);
+        kind = dl->dol_Type;
+        if (kind != DLT_LATE && kind != DLT_NONBINDING) {
+            UnLockDosList(LDF_ENTRY | LDF_READ);
+            return TRUE;
+        }
+        if (kind == DLT_LATE && dl->dol_Lock) {
+            UnLockDosList(LDF_ENTRY | LDF_READ);
+            LockDosList(LDF_ENTRY | LDF_WRITE);
+            if (dl->dol_Type == DLT_LATE) {
+                dl->dol_Task = ((struct FileLock *)BADDR(dl->dol_Lock))->fl_Task;
+                dl->dol_Type = DLT_DIRECTORY;
+                assign_generation_changed(DOSBase);
+            }
+            UnLockDosList(LDF_ENTRY | LDF_WRITE);
+            return TRUE;
+        }
+        if (!dl->dol_misc.dol_assign.dol_AssignName) {
+            UnLockDosList(LDF_ENTRY | LDF_READ);
+            SetIoErr(ERROR_INVALID_LOCK);
+            return FALSE;
+        }
+        name_length = AROS_BSTR_strlen(dl->dol_Name);
+        target_length = strlen(dl->dol_misc.dol_assign.dol_AssignName);
+        if (target_length > __SIZE_MAX__ - USERPATH_MAX - 2 ||
+            name_length > __SIZE_MAX__ - USERPATH_MAX - 2 - target_length) {
+            UnLockDosList(LDF_ENTRY | LDF_READ);
+            SetIoErr(ERROR_NO_FREE_STORE);
+            return FALSE;
+        }
+        /* No expunge/reclaim callbacks may reenter DOS under these guards. */
+        copy = AllocVec(name_length + target_length + USERPATH_MAX + 2,
+            MEMF_PUBLIC | MEMF_NO_EXPUNGE);
+        if (!copy) {
+            UnLockDosList(LDF_ENTRY | LDF_READ);
+            SetIoErr(ERROR_NO_FREE_STORE);
+            return FALSE;
+        }
+        CopyMem(AROS_BSTR_ADDR(dl->dol_Name), copy, name_length);
+        copy[name_length] = 0;
+        target = copy + name_length + 1;
+        CopyMem(dl->dol_misc.dol_assign.dol_AssignName, target, target_length + 1);
+        expanded = target + target_length + 1;
+        before = assign_generation_current(DOSBase);
+        UnLockDosList(LDF_ENTRY | LDF_READ);
+        UnLockDosList(LDF_ALL | LDF_READ);
+
+        resolved = deviceproc_resolve_target(target, expanded,
+            kind == DLT_NONBINDING, DOSBase);
+        error = resolved ? 0 : IoErr();
+
+        dl = LockDosList(LDF_ALL | LDF_READ);
+        LockDosList(LDF_ENTRY | LDF_WRITE);
+        current = FindDosEntry(dl, copy, LDF_ALL);
+        after = assign_generation_current(DOSBase);
+        unchanged = current && current->dol_Type == kind &&
+            before.low == after.low && before.high == after.high;
+        if (unchanged) {
+            *entry = current;
+            if (resolved && kind == DLT_LATE) {
+                current->dol_Lock = resolved;
+                current->dol_Task = ((struct FileLock *)BADDR(resolved))->fl_Task;
+                current->dol_Type = DLT_DIRECTORY;
+                assign_generation_changed(DOSBase);
+            } else if (resolved) {
+                *owned = resolved;
+                *entry = NULL;
+            }
+            UnLockDosList(LDF_ENTRY | LDF_WRITE);
+            FreeVec(copy);
+            if (!resolved) SetIoErr(error ? error : ERROR_BAD_NUMBER);
+            return resolved != BNULL;
+        }
+        UnLockDosList(LDF_ENTRY | LDF_WRITE);
+        UnLockDosList(LDF_ALL | LDF_READ);
+        if (resolved) UnLock(resolved);
+        /* Refetch after releasing a discarded result: UnLock may itself
+         * reenter DOS and change the namespace. No old node is reused. */
+        dl = LockDosList(LDF_ALL | LDF_READ);
+        LockDosList(LDF_ENTRY | LDF_READ);
+        current = FindDosEntry(dl, copy, LDF_ALL);
+        UnLockDosList(LDF_ENTRY | LDF_READ);
+        FreeVec(copy);
+        *entry = current;
+        if (!current) {
+            SetIoErr(ERROR_DEVICE_NOT_MOUNTED);
+            return FALSE;
+        }
+    }
+    SetIoErr(ERROR_OBJECT_IN_USE);
+    return FALSE;
+}
+
 static struct DevProc *deviceproc_internal(struct DosLibrary *DOSBase, CONST_STRPTR name, struct DevProc *dp)
 {
     struct Process *pr = (struct Process *)FindTask(NULL);
@@ -118,8 +251,7 @@ static struct DevProc *deviceproc_internal(struct DosLibrary *DOSBase, CONST_STR
 
         /* if what they passed us is not a multidirectory assign, then there's
          * nothing for us to do */
-        if (dp->dvp_DevNode != NULL &&
-            (dp->dvp_DevNode->dol_Type != DLT_DIRECTORY || !(dp->dvp_Flags & DVPF_ASSIGN))) {
+        if (!(dp->dvp_Flags & DVPF_ASSIGN) || dp->dvp_DevNode == NULL) {
 
             /* cleanup */
             if (dp->dvp_Flags & DVPF_UNLOCK)
@@ -219,134 +351,17 @@ static struct DevProc *deviceproc_internal(struct DosLibrary *DOSBase, CONST_STR
      * locked for read, and we have the entry for the named "volume"
      * (device, assign, etc) in dl and a filename relative to that in name */
 
-    /* late assign. we resolve the target and then promote the doslist entry
-     * to full assign */
-    if (dl->dol_Type == DLT_LATE) {
-        /* AssignAddToList() (Assign PREPEND on a deferred assign) may
-         * already have given the entry its primary lock and left the type
-         * alone; only lock the target name when it has none yet */
-        lock = dl->dol_Lock ? BNULL : Lock(dl->dol_misc.dol_assign.dol_AssignName, SHARED_LOCK);
-
-        /* didn't find the target */
-        if (lock == BNULL && dl->dol_Lock == BNULL) {
-            UnLockDosList(LDF_ALL | LDF_READ);
-            FreeMem(dp, sizeof(struct DevProc));
-            return NULL;
-        }
-
-        /* Directly change assign type without calling AssignXXX(),
-         * mimics AOS behavior, AOS programs assume it is safe to
-         * keep LDF_WRITE lock while calling Lock("late assign:");
-         *
-         * The DosList is only held with a READ lock here, and the Lock()
-         * above blocks on a handler, so several tasks can race this
-         * promotion for the same entry - and each of them used to
-         * FreeVec() the same assign name, corrupting the allocator (the
-         * adjacent DosList nodes were absorbed into the free list while
-         * still linked). Claim the promotion under ENTRY WRITE: the first task
-         * performs it, later ones discard their duplicate target lock
-         * and use the promoted entry. The name string must not be freed
-         * here - a racing task may still be inside Lock() on it - so it
-         * stays attached to the node: every path that frees or replaces
-         * dol_AssignName (AssignLock/AssignPath/AssignLate removal,
-         * AssignAddToList) runs under the WRITE lock, which cannot be
-         * acquired while any promoter still holds READ, so the normal
-         * assign teardown releases it at a safe time.
-         */
-        /* ENTRY excludes other promoters and assign snapshots on SMP. */
-        LockDosList(LDF_ENTRY | LDF_WRITE);
-        if (dl->dol_Type == DLT_LATE) {
-            if (dl->dol_Lock == BNULL) {
-                dl->dol_Lock = lock;
-                lock = BNULL;
-            }
-            dl->dol_Task = ((struct FileLock*)BADDR(dl->dol_Lock))->fl_Task;
-            dl->dol_Type = DLT_DIRECTORY;
-            assign_generation_changed(DOSBase);
-        }
-        UnLockDosList(LDF_ENTRY | LDF_WRITE);
-        if (lock != BNULL)
-            UnLock(lock);
-
-        /* the entry is a plain assign now - possibly a multi-directory one
-         * when directories were added before its first use - so it is
-         * handled below like any other DLT_DIRECTORY: the caller must learn
-         * about the list (DVPF_ASSIGN), or objects in the added directories
-         * are not found on the first access through the assign */
-    }
-
-    /* nonbinding assign. like a late assign, but with no doslist promotion */
-    if (dl->dol_Type == DLT_NONBINDING) {
-        CONST_STRPTR target = dl->dol_misc.dol_assign.dol_AssignName;
-
-        /*
-         * Multi-user: a per-user assign ("Assign T: RAM:T/%u USER") holds
-         * user tokens, which security.library expands for the owner of
-         * this task - each time, so every user gets his own directory. Its
-         * last directory is created on first use, here in the user's
-         * task, so it is his. Without security.library (or on a system
-         * that is not multi-user) the target is used as it is written.
-         */
-        if (SECURITY_ACTIVE && strchr((const char *)target, '%')) {
-            ULONG tlen = strlen((const char *)target) + 1;
-            STRPTR copy = AllocVec(tlen + USERPATH_MAX, MEMF_ANY);
-            STRPTR path = copy ? copy + tlen : NULL;
-            struct TagItem tags[] = { { secT_BufferSize, USERPATH_MAX }, { TAG_DONE, 0 } };
-
-            if (copy == NULL) {
-                UnLockDosList(LDF_ALL | LDF_READ);
-                FreeMem(dp, sizeof(struct DevProc));
-                SetIoErr(ERROR_NO_FREE_STORE);
-                return NULL;
-            }
-            /* the expansion asks the security server: not with the list held */
-            CopyMem((APTR)target, copy, tlen);
-            UnLockDosList(LDF_ALL | LDF_READ);
-
-            if (secExpandPathA(copy, path, tags)) {
-                lock = Lock(path, SHARED_LOCK);
-                if (lock == BNULL && IoErr() == ERROR_OBJECT_NOT_FOUND) {
-                    BPTR dir = CreateDir(path);
-
-                    if (dir != BNULL) {
-                        UnLock(dir);
-                        lock = Lock(path, SHARED_LOCK);
-                    }
-                }
-            } else if (IoErr() == ERROR_NOT_IMPLEMENTED)
-                lock = Lock(copy, SHARED_LOCK);
-            else
-                lock = BNULL;
-            FreeVec(copy);
-
-            if (lock == BNULL) {
-                FreeMem(dp, sizeof(struct DevProc));
-                return NULL;
-            }
-            dp->dvp_Port = ((struct FileLock *) BADDR(lock))->fl_Task;
-            dp->dvp_Lock = lock;
-            dp->dvp_Flags = DVPF_UNLOCK;
-            dp->dvp_DevNode = dl;
-            return dp;
-        }
-
-        lock = Lock(dl->dol_misc.dol_assign.dol_AssignName, SHARED_LOCK);
-
-        /* didn't find the target; Lock() has set IoErr() */
-        if (lock == BNULL) {
-            UnLockDosList(LDF_ALL | LDF_READ);
-            FreeMem(dp, sizeof(struct DevProc));
-            return NULL;
-        }
-
-        /* just fill out the dp and return */
-        dp->dvp_Port = ((struct FileLock *) BADDR(lock))->fl_Task;
-        dp->dvp_Lock = lock;
-        dp->dvp_Flags = DVPF_UNLOCK;   /* remember to unlock in FreeDeviceNode() */
-        dp->dvp_DevNode = dl;
-
+    if (!deviceproc_resolve_deferred(DOSBase, &dl, &lock)) {
         UnLockDosList(LDF_ALL | LDF_READ);
-
+        FreeMem(dp, sizeof(*dp));
+        return NULL;
+    }
+    if (lock) {
+        dp->dvp_Port = ((struct FileLock *)BADDR(lock))->fl_Task;
+        dp->dvp_Lock = lock;
+        dp->dvp_Flags = DVPF_UNLOCK;
+        dp->dvp_DevNode = NULL;
+        UnLockDosList(LDF_ALL | LDF_READ);
         return dp;
     }
 
