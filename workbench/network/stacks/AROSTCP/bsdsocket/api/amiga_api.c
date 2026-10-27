@@ -609,17 +609,21 @@ struct SocketBase *api_hookbase_open(VOID)
 
 VOID api_hookbase_close(struct SocketBase *p)
 {
-    /* As in __UL_Close(), decide and run the expunge under one hold. */
+    /* Unpublish first, but retain the master reference through cleanup.
+       As in __UL_Close(), no timer or base may survive the final release. */
     ObtainSemaphore(&baselist_semaphore);
     Remove((struct Node *)p);
+    ReleaseSemaphore(&baselist_semaphore);
+
+    closeSleepTimer(p);
+    FreeMem(p, sizeof(*p));
+
+    ObtainSemaphore(&baselist_semaphore);
     MasterSocketBase->lib_OpenCnt--;
     if(MasterSocketBase->lib_OpenCnt == 0 &&
             (MasterSocketBase->lib_Flags & LIBF_DELEXP))
         __ELL_Expunge(MasterSocketBase);
     ReleaseSemaphore(&baselist_semaphore);
-
-    closeSleepTimer(p);
-    FreeMem(p, sizeof(*p));
 }
 
 

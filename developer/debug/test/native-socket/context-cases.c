@@ -14,6 +14,7 @@ typedef int BOOL;
 #define SIGBREAKF_CTRL_C 4096
 #define API_SHOWN 1
 #define API_HIDDEN 2
+#define LIBF_DELEXP 8
 struct Node { struct Node *next; };
 struct List { struct Node *first; };
 struct SocketBase {
@@ -24,12 +25,12 @@ struct SocketBase {
     int EventLock;
     struct List EventList;
 };
-struct Library { UWORD lib_OpenCnt; };
+struct Library { UWORD lib_OpenCnt, lib_Flags; };
 static struct Library master;
 static struct Library *MasterSocketBase = &master;
 static struct List socketBaseList;
 static int baselist_semaphore, api_state, allocations, timers;
-static int fail_alloc, fail_timer, held;
+static int fail_alloc, fail_timer, held, closing, expunges;
 static VOID *AllocMem(size_t size, int flags)
 {
     (void)flags;
@@ -40,7 +41,7 @@ static VOID *AllocMem(size_t size, int flags)
     return p;
 }
 static VOID FreeMem(VOID *p, size_t size)
-{ (void)size; allocations--; free(p); }
+{ (void)size; if (closing) assert(master.lib_OpenCnt > 0 && !held); allocations--; free(p); }
 static VOID *FindTask(VOID *unused) { (void)unused; return &master; }
 static VOID InitSemaphore(int *s) { *s = 0; }
 static VOID NewList(struct List *list) { list->first = NULL; }
@@ -48,18 +49,25 @@ static VOID ObtainSemaphore(int *s) { (void)s; assert(!held++); }
 static VOID ReleaseSemaphore(int *s) { (void)s; assert(held-- == 1); }
 static VOID AddTail(struct List *list, struct Node *node)
 { assert(held && !list->first); list->first = node; }
+static VOID Remove(struct Node *node)
+{ assert(held && socketBaseList.first == node); socketBaseList.first = NULL; }
+static VOID __ELL_Expunge(struct Library *base)
+{
+    assert(held && base->lib_OpenCnt == 0);
+    assert(!allocations && !timers && !socketBaseList.first);
+    expunges++;
+}
 static BOOL openSleepTimer(struct SocketBase *p)
 { if (fail_timer) return 0; p->timer = 1; timers++; return 1; }
 static VOID closeSleepTimer(struct SocketBase *p)
-{ if (p->timer) { timers--; p->timer = 0; } }
+{ if (closing) assert(master.lib_OpenCnt > 0 && !held);
+  if (p->timer) { timers--; p->timer = 0; } }
 #include "api_hookbase.c"
 static VOID dispose(struct SocketBase *p)
 {
-    assert(socketBaseList.first == (struct Node *)p);
-    socketBaseList.first = NULL;
-    master.lib_OpenCnt--;
-    closeSleepTimer(p);
-    FreeMem(p, sizeof(*p));
+    closing = 1;
+    api_hookbase_close(p);
+    closing = 0;
 }
 int main(void)
 {
@@ -92,6 +100,14 @@ int main(void)
     assert(!api_hookbase_open());
     assert(master.lib_OpenCnt == 10 && !socketBaseList.first);
     assert(!allocations && !timers && !held);
-    puts("PASS actual context admission: open-count boundary, hidden/shown, absent master, allocation/timer rollback");
+    master.lib_OpenCnt = 0;
+    master.lib_Flags = LIBF_DELEXP;
+    fail_timer = 0;
+    p = api_hookbase_open();
+    assert(p && master.lib_OpenCnt == 1);
+    dispose(p);
+    assert(expunges == 1 && !master.lib_OpenCnt);
+    assert(!allocations && !timers && !held);
+    puts("PASS actual context admission and cleanup-before-final-release: open-count boundary, hidden/shown, absent master, allocation/timer rollback");
     return 0;
 }

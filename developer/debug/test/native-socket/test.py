@@ -67,7 +67,8 @@ subprocess.run(command,check=True)
 subprocess.run([str(binary)],check=True,timeout=30)
 
 context=a.output/'api_hookbase.c'
-context.write_text(function((API/'amiga_api.c').read_text(),'struct SocketBase *api_hookbase_open(VOID)'))
+context.write_text(function((API/'amiga_api.c').read_text(),'struct SocketBase *api_hookbase_open(VOID)') +
+                   function((API/'amiga_api.c').read_text(),'VOID api_hookbase_close(struct SocketBase *p)'))
 context_source=a.output/'context-cases.c'
 context_source.write_text((HERE/'context-cases.c').read_text())
 context_command=['clang','-std=c11','-g','-O1','-Wall','-Wextra','-Werror',
