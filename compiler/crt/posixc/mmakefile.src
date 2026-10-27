@@ -9,6 +9,8 @@ POSIXC := \
     __exec \
     __at \
     __dl \
+    __cwd_context \
+    __fd_namespace \
     __fdesc \
     __reclock \
     __fopen \
