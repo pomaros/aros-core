@@ -2,6 +2,7 @@
  * fat-handler - FAT12/16/32 filesystem handler
  *
  * Copyright (C) 2007-2026 The AROS Development Team
+ * Copyright (C) 2026 John KNIPPER <code@jkn.me>
  * Copyright (C) 2006 Marek Szyprowski
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -1260,6 +1261,36 @@ LONG OpSetFileSize(struct ExtFileLock *lock, LONG offset, LONG whence,
             err = ERROR_UNKNOWN;
             goto rollback;
         }
+    }
+    if (size > lock->gl->size)
+    {
+        static const UBYTE zeros[512];
+        struct IOHandle fill = {0};
+        ULONG position = lock->gl->size;
+
+        /* The chain is allocated, but the larger size is not visible yet.
+         * Clear the old tail as well as newly allocated/reused clusters.
+         * An independent cursor keeps the caller's position/cache intact. */
+        fill.sb = sb;
+        fill.first_cluster = first ? first : added;
+        RESET_HANDLE(&fill);
+        while (position < (ULONG)size)
+        {
+            ULONG length = (ULONG)size - position, written = 0;
+            if (length > sizeof(zeros))
+                length = sizeof(zeros);
+            err = WriteFileChunk(&fill, position, length, (UBYTE *)zeros,
+                &written);
+            if (err != 0 || written == 0 || written > length)
+            {
+                if (err == 0)
+                    err = ERROR_UNKNOWN;
+                RESET_HANDLE(&fill);
+                goto rollback;
+            }
+            position += written;
+        }
+        RESET_HANDLE(&fill);
     }
     if (want == 0)
         tail = first;
