@@ -45,3 +45,17 @@ configuration and identity, selected filesystem and coherent CRT/SDK identities.
 Compilation alone is not a guest result. Real write-clock quality needs its own
 clock-resolution contract: nanosecond fields do not guarantee unique timestamps
 for successive writes.
+
+## Native hard-link admission and rollback
+
+Run `python3 link-host.py --output /absolute/path/outside/source` for the actual
+production link body with modeled DOS calls and path scope. ASan/UBSan cases
+cover conversion, source lookup/examine, directory refusal, destination lookup,
+cross-volume refusal, native creation failure and error preservation when cleanup
+changes errno/IoErr. Two compiling controls remove cross-volume admission or
+error restoration and must fail. No provisional filesystem wire is used.
+
+This checks the wrapper, not real mounted-handler hard links, assign resolution,
+concurrent namespace changes or the path-scope implementation. FilesProbe's
+native identity/link checks remain necessary for product acceptance. The soft-
+link target encoding/resolution contract is separate from hard-link creation.
