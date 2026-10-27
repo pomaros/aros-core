@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2013, The AROS Development Team. All rights reserved.
 
     Desc: Set the owner of a file.
@@ -8,6 +9,7 @@
 #include <dos/dosextens.h>
 #include <proto/dos.h>
 #include "dos_intern.h"
+#include "taskpathresolver.h"
 
 /*****************************************************************************
 
@@ -46,6 +48,7 @@
 *****************************************************************************/
 {
     AROS_LIBFUNC_INIT
+    DOS_PATH_DISPATCH(DOS_PATH_SET_OWNER, LONG, (SIPTR)name, (SIPTR)owner_info);
 
     struct PacketHelperStruct phs;
     LONG status = DOSFALSE;

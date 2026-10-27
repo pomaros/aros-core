@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2013, The AROS Development Team. All rights reserved.
 
     Desc: Rename a file
@@ -7,6 +8,7 @@
 #include <aros/debug.h>
 #include <proto/exec.h>
 #include "dos_intern.h"
+#include "taskpathresolver.h"
 #include <string.h>
 
 /* An empty path component is the AmigaDOS parent operation: a leading '/',
@@ -65,6 +67,7 @@ static BOOL has_parent_reference(CONST_STRPTR name)
 *****************************************************************************/
 {
     AROS_LIBFUNC_INIT
+    DOS_PATH_DISPATCH(DOS_PATH_RENAME, LONG, (SIPTR)oldName, (SIPTR)newName);
 
     struct DevProc *olddvp, *newdvp;
     LONG status, error;

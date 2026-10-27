@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2011, The AROS Development Team. All rights reserved.
 
     Desc: Open a file with the specified mode.
@@ -17,6 +18,7 @@
 #include <string.h>
 
 #include "dos_intern.h"
+#include "taskpathresolver.h"
 
 static LONG InternalOpen(CONST_STRPTR name, LONG accessMode,
     struct FileHandle *handle, LONG soft_nesting, struct DosLibrary *DOSBase);
@@ -64,6 +66,7 @@ static LONG InternalOpen(CONST_STRPTR name, LONG accessMode,
 *****************************************************************************/
 {
     AROS_LIBFUNC_INIT
+    DOS_PATH_DISPATCH(DOS_PATH_OPEN, BPTR, (SIPTR)name, (SIPTR)accessMode);
 
     struct FileHandle *ret;
     LONG error;

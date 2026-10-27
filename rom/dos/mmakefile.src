@@ -61,7 +61,7 @@ FUNCTIONS := abortpkt addbuffers adddosentry addpart addsegment \
 	     matchpatternnocase maxcli namefromfh namefromlock newloadseg nextdosentry nil \
 	     open openfromlock output parentdir parentoffh parsepattern \
 	     parsepatternnocase pathpart printfault putstr read readargs \
-	     readitem relabel readlink remassignlist remdosentry remsegment rename replaceobject \
+	     taskpathresolver runwithcontext readitem relabel readlink remassignlist remdosentry remsegment rename replaceobject \
 	     replypkt runcommand samedevice samelock scanvars seek \
 	     selectinput selectoutput sendpkt setargstr setcomment setconsoletask \
 	     setcurrentdirname setfiledate setfilesize setfilesystask \

@@ -7,6 +7,7 @@
 #include <proto/exec.h>
 #include <proto/dos.h>
 #include "dos_intern.h"
+#include "taskpathresolver.h"
 #include <string.h>
 
 AROS_LH2(BOOL, ReplaceObject,
@@ -15,6 +16,7 @@ AROS_LH2(BOOL, ReplaceObject,
     struct DosLibrary *, DOSBase, 227, Dos)
 {
     AROS_LIBFUNC_INIT
+    DOS_PATH_DISPATCH(DOS_PATH_REPLACE_OBJECT, BOOL, (SIPTR)source, (SIPTR)target);
     struct DevProc *from, *to;
     BSTR source_name, target_name;
     LONG result, error;

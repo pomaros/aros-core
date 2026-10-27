@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2013, The AROS Development Team. All rights reserved.
 
     Desc: Create a new directory.
@@ -12,6 +13,7 @@
 #include <proto/dos.h>
 #include <proto/utility.h>
 #include "dos_intern.h"
+#include "taskpathresolver.h"
 
 /*****************************************************************************
 
@@ -50,6 +52,7 @@
 *****************************************************************************/
 {
     AROS_LIBFUNC_INIT
+    DOS_PATH_DISPATCH(DOS_PATH_CREATE_DIR, BPTR, (SIPTR)name);
 
     BPTR lock = BNULL;
     struct PacketHelperStruct phs;

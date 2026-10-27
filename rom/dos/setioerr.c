@@ -1,10 +1,12 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2013, The AROS Development Team. All rights reserved.
 
     Desc:
 */
 #include <proto/exec.h>
 #include "dos_intern.h"
+#include "taskpathresolver.h"
 
 #include <aros/debug.h>
 
@@ -51,8 +53,12 @@
     struct Process *me = (struct Process *)FindTask(NULL);
 
     /* If this is not a Process, do nothing  */
-    if (!__is_process(me))
-        return 0;
+    if (!__is_process(me)) {
+        struct DosPathResolver *resolver = __dos_task_path_resolver();
+        old = resolver ? resolver->error : 0;
+        if (resolver) resolver->error = result;
+        return old;
+    }
 
     /* Nothing spectacular */
     old = me->pr_Result2;

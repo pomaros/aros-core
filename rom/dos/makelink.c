@@ -1,10 +1,12 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2013, The AROS Development Team. All rights reserved.
 
     Desc: Create a hard or soft link.
 */
 #include <dos/dosextens.h>
 #include "dos_intern.h"
+#include "taskpathresolver.h"
 #include <proto/exec.h>
 
 /*****************************************************************************
@@ -59,6 +61,7 @@
 *****************************************************************************/
 {
     AROS_LIBFUNC_INIT
+    DOS_PATH_DISPATCH(DOS_PATH_MAKE_LINK, BOOL, (SIPTR)name, (SIPTR)dest, (SIPTR)soft);
 
     struct PacketHelperStruct phs;
     LONG status;

@@ -1,9 +1,11 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2010, The AROS Development Team. All rights reserved.
 
     Desc: Read the soft-link information.
 */
 #include "dos_intern.h"
+#include "taskpathresolver.h"
 #include <exec/lists.h>
 #include <proto/exec.h>
 
@@ -63,6 +65,7 @@ struct ReadLinkDeviceUnit
 *****************************************************************************/
 {
     AROS_LIBFUNC_INIT
+    DOS_PATH_DISPATCH(DOS_PATH_READ_LINK, LONG, (SIPTR)port, (SIPTR)lock, (SIPTR)path, (SIPTR)buffer, (SIPTR)size);
 
     LONG status;
 

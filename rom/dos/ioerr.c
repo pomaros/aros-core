@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2011, The AROS Development Team. All rights reserved.
 
     Desc:
@@ -7,6 +8,7 @@
 
 #include <proto/exec.h>
 #include "dos_intern.h"
+#include "taskpathresolver.h"
 
 /*****************************************************************************
 
@@ -45,7 +47,10 @@
     /* Get pointer to process structure */
     struct Process *me=(struct Process *)FindTask(NULL);
 
-    ASSERT_VALID_PROCESS(me);
+    if (!__is_process(me)) {
+        struct DosPathResolver *resolver = __dos_task_path_resolver();
+        return resolver ? resolver->error : 0;
+    }
 
     /* Nothing spectacular */
     return me->pr_Result2;

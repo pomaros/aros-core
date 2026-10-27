@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
 
     Desc: GetDeviceProc() - Find the filesystem for a path.
@@ -10,6 +11,7 @@
 #include <proto/utility.h>
 
 #include "dos_intern.h"
+#include "taskpathresolver.h"
 
 #include <string.h>
 
@@ -68,6 +70,8 @@ static struct MsgPort *start_handler(struct DeviceNode *device, CONST_STRPTR pat
 *****************************************************************************/
 {
     AROS_LIBFUNC_INIT
+    DOS_PATH_DISPATCH(DOS_PATH_GET_DEVICE, struct DevProc *,
+        (SIPTR)name, (SIPTR)dp);
 
     struct DevProc *dp2;
     

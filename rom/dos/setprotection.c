@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
 
     Desc: Set the protection bits of a file.
@@ -8,6 +9,7 @@
 #include <dos/dosextens.h>
 #include <proto/dos.h>
 #include "dos_intern.h"
+#include "taskpathresolver.h"
 
 /*****************************************************************************
 
@@ -46,6 +48,7 @@
 *****************************************************************************/
 {
     AROS_LIBFUNC_INIT
+    DOS_PATH_DISPATCH(DOS_PATH_SET_PROTECTION, LONG, (SIPTR)name, (SIPTR)protect);
     
     LONG status = 0;
     struct PacketHelperStruct phs;

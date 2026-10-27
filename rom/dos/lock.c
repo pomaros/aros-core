@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2011, The AROS Development Team. All rights reserved.
 
     Desc: Locks a file or directory.
@@ -16,6 +17,7 @@
 #include <string.h>
 
 #include "dos_intern.h"
+#include "taskpathresolver.h"
 #include "fs_driver.h"
 
 static LONG InternalLock(CONST_STRPTR name, LONG accessMode,
@@ -60,6 +62,7 @@ static LONG InternalLock(CONST_STRPTR name, LONG accessMode,
 
 {
     AROS_LIBFUNC_INIT
+    DOS_PATH_DISPATCH(DOS_PATH_LOCK, BPTR, (SIPTR)name, (SIPTR)accessMode);
 
     BPTR fl;
 

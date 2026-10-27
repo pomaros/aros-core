@@ -1,4 +1,5 @@
 /*
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     Copyright (C) 1995-2008, The AROS Development Team. All rights reserved.
 
     Desc: Set a filecomment.
@@ -13,6 +14,7 @@
 #include <string.h>
 
 #include "dos_intern.h"
+#include "taskpathresolver.h"
 
 /*****************************************************************************
 
@@ -55,6 +57,7 @@
 *****************************************************************************/
 {
     AROS_LIBFUNC_INIT
+    DOS_PATH_DISPATCH(DOS_PATH_SET_COMMENT, LONG, (SIPTR)name, (SIPTR)comment);
 
     struct PacketHelperStruct phs;
     LONG status = DOSFALSE;
