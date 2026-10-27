@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2017, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
 
     Find out the status of a child task.
 */
@@ -25,7 +26,8 @@
 
     INPUTS
         tid     --  The ID of the task to examine. Note that it is _NOT_
-                    a task pointer.
+                    a task pointer. Zero queries any child; an exited child
+                    takes precedence over an active child.
 
     RESULT
         One of the CHILD_* values.
@@ -73,7 +75,7 @@
         /* Search through the running tasks list */
         ForeachNode(&et->et_Children, child)
         {
-        if (child->et_UniqueID == tid)
+        if (tid == 0 || child->et_UniqueID == tid)
         {
             status = CHILD_ACTIVE;
             break;
@@ -85,7 +87,7 @@
 #endif
         ForeachNode(&et->et_TaskMsgPort.mp_MsgList, child)
         {
-        if (child->et_UniqueID == tid)
+        if (tid == 0 || child->et_UniqueID == tid)
         {
             status = CHILD_EXITED;
             break;

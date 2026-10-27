@@ -1,5 +1,6 @@
 /*
     Copyright (C) 2004-2021, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
 */
 
 #include <aros/debug.h>
@@ -88,7 +89,7 @@
     struct ETask *et;
     ULONG tid = pid;
     pid_t ret = -1;
-    int exchildno;
+    ULONG child_status;
 
     D(bug("waitpid(%d, %p, %d)\n", pid, status, options));
 
@@ -110,13 +111,6 @@
     if (pid == -1)
         tid = 0;
 
-    if(tid != 0 && ChildStatus(tid) == CHILD_NOTFOUND)
-    {
-        /* error if there's no such child */
-        errno = ECHILD;
-        return -1;
-    }
-
     if (options & ~WNOHANG)
     {
         /* option not yet supported */
@@ -124,18 +118,16 @@
         return -1;
     }
     
-    /* not very pretty, perhaps we need a function for counting dead
-       children? */
-    ListLength(&et->et_TaskMsgPort.mp_MsgList, exchildno);
-    if ((options & WNOHANG) && (
-        (tid != 0 && ChildStatus(tid) != CHILD_EXITED) ||
-        (tid == 0 && exchildno == 0)
-    ))
+    /* Exec snapshots both active and exited children under their native
+       locks. Do not inspect its message list from the C runtime. */
+    child_status = ChildStatus(tid);
+    if (child_status == CHILD_NOTFOUND || child_status == CHILD_NOTNEW)
     {
-        D(bug("waitpid: no dead children\n"));
-        /* no dead children atm */
-        return 0;
+        errno = ECHILD;
+        return -1;
     }
+    if ((options & WNOHANG) && child_status != CHILD_EXITED)
+        return 0;
 
     D(bug("waitpid: wait for %d to die\n", tid));
     et = (struct ETask *)ChildWait(tid);
