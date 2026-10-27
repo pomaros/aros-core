@@ -1,5 +1,6 @@
 /*
     Copyright (C) 2015-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER.
 */
 
 #include <aros/debug.h>
@@ -12,12 +13,17 @@
 
 #include "etask.h"
 #include "task_intern.h"
+#include LC_LIBDEFS_FILE
 
 extern APTR AROS_SLIB_ENTRY(NewAddTask, Task, 176)();
 extern void AROS_SLIB_ENTRY(RemTask, Task, 48)();
 
 static LONG taskres_Init(struct TaskResBase *TaskResBase)
 {
+    /* Resource startup initializes only struct Node. This resource exposes
+     * a Library header used by version-admitted public API calls. */
+    TaskResBase->trb_LibNode.lib_Version = VERSION_NUMBER;
+    TaskResBase->trb_LibNode.lib_Revision = REVISION_NUMBER;
 #ifdef TASKRES_ENABLE
     struct TaskStorageFreeSlot *freeTaskStorageSlot;
     struct TaskListEntry *taskEntry = NULL;
