@@ -7,7 +7,8 @@ python3 developer/debug/test/crt/fcb_lifetime_host/run.py --tsan --output /tmp/f
 
 The output directory must not exist. The runner compiles actual production C
 bodies for fcb retain/hold/release, final record metadata release, read, write,
-close, dup, dup2, closedir, fstat, fstat64, fsync, lseek and lseek64. The recursive descriptor table, DOS I/O, registry
+close, dup, dup2, closedir, fstat, fstat64, fsync, lseek, lseek64, ftruncate and ftruncate64 (including their shared resize body).
+The recursive descriptor table, DOS I/O, registry
 allocation and process record-lock removal are modeled boundaries. Final record
 metadata release executes its actual function with a modeled metadata disposer.
 
@@ -27,11 +28,12 @@ the caller must preserve its operation error. Metadata conversion runs without a
 semaphore held because name/time conversion can reenter CRT services. Invalid and overflow admission are
 also checked without foreign fallback.
 
-Twelve compiling controls independently remove operation retention, operation
+Seventeen compiling controls independently remove operation retention, operation
 release, record metadata disposal, duplication rollback, overflow admission,
 metadata retention/error preservation, retaining an I/O lock across metadata
 conversion, sync reference release, seek retention/serialization or ignored
-seek-buffer flush failure.
+seek-buffer flush failure, resize retention/serialization, ignored zero-progress
+writes, lost position restoration or corrupt zero fill.
 They must fail for their exact named assertion; a compilation error or timeout
 does not qualify a control. Both ASan/UBSan and TSan modes are available.
 
@@ -46,3 +48,13 @@ Additional checks cover SET/CUR/END, beyond-EOF without size growth, wide offset
 invalid whence/handle, directory refusal and pending-buffer flush failure/retry.
 The guest `crt/posixc/lseek.c` test independently expects no size change until a
 write; its execution is separate from this modeled-DOS host suite.
+
+Resize cases check both widths under close/reuse, with short buffered writes,
+zero-progress failure, size/position query and resize failures, fill seek/flush
+and restoration failures. They cover preserved positions beyond a shrinking
+EOF, negative lengths, non-writable/invalid/directory descriptors, admission
+overflow, wide sizes, pending-buffer retry and the first error surviving a
+second restoration error. The mock resize exposes dirty bytes deliberately;
+the actual CRT body must clear every added byte while preserving the prefix.
+Native filesystem zero-extension, buffered DOS internals and atomic visibility
+to independently opened handles are outside this fixture's scope.

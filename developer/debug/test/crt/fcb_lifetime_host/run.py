@@ -66,6 +66,9 @@ parts = {
     'FSYNC': syscall('fsync', 'static int ar_fsync(int fd)'),
     'LSEEK': syscall('lseek', 'static off_t ar_lseek(int fd,off_t offset,int whence)').replace('filedes', 'fd'),
     'LSEEK64': syscall('lseek64', 'static int64_t ar_lseek64(int fd,int64_t offset,int whence)').replace('filedes', 'fd').replace('__off64_t', 'int64_t'),
+    'RESIZE': block(read('__ftruncate.h'), 'static int __posixc_resize('),
+    'FTRUNCATE': syscall('ftruncate', 'static int ar_ftruncate(int fd,off_t length)'),
+    'FTRUNCATE64': syscall('ftruncate64', 'static int ar_ftruncate64(int fd,int64_t length)'),
     'CLOSE': syscall('close', 'static int ar_close(int fd)'),
     'DUP': block(source, 'int __dupfd('),
     'DUP2': syscall('dup2', 'static int ar_dup2(int oldfd,int newfd)'),
@@ -114,6 +117,24 @@ controls.update({
         '    __releasefcb(file);', '    /* lost sync reference */'),
         'Assertion failed: (atomic_load(&handle_closes[11])==1 && atomic_load(&block_frees)==1)'),
 })
+controls.update({
+    'resize-unretained': (parts['RESIZE'], parts['RESIZE'].replace(
+        '__holdfcb(fd, &admission_error)',
+        '(admission_error=0,__getfdesc(fd)?__getfdesc(fd)->fcb:NULL)'),
+        'metadata operation owns the admitted file'),
+    'resize-zero-write-ignored': ('written = FWrite(file->handle, zeros, 1, count);',
+        'written = FWrite(file->handle, zeros, 1, count); if (!written) written=count;',
+        'Assertion failed: (r==(failure?-1:0))'),
+    'resize-restore-lost': ('if (__dos64_seek(file, oldpos, OFFSET_BEGINNING) == -1 && !error)',
+        'if (0 && __dos64_seek(file, oldpos, OFFSET_BEGINNING) == -1 && !error)',
+        'Assertion failed: (positions[11]==17)'),
+    'resize-zero-fill-corrupt': ('const unsigned char zeros[512] = {0};',
+        'const unsigned char zeros[512] = {1};',
+        'Assertion failed: (resize_data[i]==0)'),
+    'resize-serialization-lost': ('    size = __dos64_getsize(file);',
+        '    __fcb_unlock(file); size = __dos64_getsize(file);',
+        'Assertion failed: (metadata_file_depth>0)'),
+})
 cases = [('production', text, None)]
 for name, (before, after, expected) in controls.items():
     assert before in text, name
@@ -146,7 +167,7 @@ result = {
     'inputs': {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
                for path in [*inputs, here / 'host.c', Path(__file__)]},
     'scope': ('Actual fcb retain/hold/release, record metadata final release, read, write, '
-              'close, dup, dup2 and closedir bodies. Modeled recursive descriptor table '
+              'close, dup, dup2, closedir, metadata/sync/seek and shared resize bodies. Modeled recursive descriptor table '
               'and DOS/file registry boundary. Concurrent close/reuse before native I/O, '
               'error preservation, overflow and duplicate rollback. No whole fd/cwd '
               'namespace, other local file operations, guest or filesystem acceptance.'),
