@@ -1,0 +1,7 @@
+include $(SRCDIR)/config/aros.cfg
+#MM test-exec-task-exit : includes-copy linklibs
+USER_CFLAGS := -noposixc
+%build_prog mmake=test-exec-task-exit progname=TaskExitProbe \
+    files=probe targetdir=$(AROS_TESTS)/exec
+%build_prog mmake=test-exec-task-exit-negative progname=TaskExitNoObserver \
+    files=negative targetdir=$(AROS_TESTS)/exec
