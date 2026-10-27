@@ -68,6 +68,7 @@ void vfork_longjmp (jmp_buf env, int val);
 #define CHILD_STATE_SETUP_FINISHED          (1L << 1)
 #define CHILD_STATE_EXEC_PREPARE_FINISHED   (1L << 2)
 #define CHILD_STATE_UDATA_NOT_USED          (1L << 3)
+#define CHILD_STATE_EXEC_FAILED_READY       (1L << 4)
 
 #define DSTATE(x)   //x
 

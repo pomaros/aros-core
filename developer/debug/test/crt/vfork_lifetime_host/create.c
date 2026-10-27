@@ -68,7 +68,7 @@ static struct PosixCIntBase base;
 static struct Process parent;
 static struct ETask parent_record;
 static struct Process *running, *pending_exit;
-static int failure, signals, messages, allocations, records, forbidden;
+static int failure, signals, messages, allocations, records, forbidden, final_return;
 static ULONG next_uid=100;
 static struct vfork_data *published;
 #define GET_THIS_TASK (&parent.task)
@@ -120,7 +120,8 @@ ULONG Wait(ULONG mask) {
 }
 void Signal(struct Task *task,ULONG mask) {
  assert(running && task==&running->task&&mask==(1U<<4));
- if(published->parent_state==PARENT_STATE_STOPPED_PRETENDING)pending_exit=running;
+ if(final_return)retire(running);
+ else if(published->parent_state==PARENT_STATE_STOPPED_PRETENDING)pending_exit=running;
  else published->child_state=CHILD_STATE_UDATA_NOT_USED;
 }
 /* CHILD_WAIT */
@@ -155,17 +156,17 @@ int main(void) {
   assert(!records&&!forbidden);
  }
  /* The launcher can finish before the parent returns from vfork. The real
-    controlled-stack tail must return the captured ID after both allocations
-    have been freed, without looking through either dead pointer. */
+    controlled-stack tail must return the captured ID after acknowledgement
+    releases the child and shared data is freed, without either dead pointer. */
  struct vfork_data *u=calloc(1,sizeof(*u));assert(u);allocations++;
  struct Process *p=calloc(1,sizeof(*p));assert(p);
  struct ETask *e=record_new();p->task.tc_UnionETask.tc_ETask=e;
  AddTail(&parent_record.et_Children,&e->node);running=p;
- u->child=&p->task;u->child_pid=GetETaskID(&p->task);u->parent_signal=AllocSignal(-1);
- int expected=u->child_pid;retire(p);ChildFree(expected);
+ u->child=&p->task;u->child_pid=GetETaskID(&p->task);u->parent_signal=AllocSignal(-1);u->child_signal=4;
+ int expected=u->child_pid;published=u;final_return=1;
  jmp_buf env;int result=setjmp(env);
  if(!result) {_VFORK_COPYENV(u->vfork_jmp,env);__vfork_exit_controlled_stack(u);abort();}
- assert(result==expected&&!allocations&&!signals&&!records);
+ assert(result==expected&&!allocations&&!signals&&!running);ChildFree(expected);assert(!records);
  puts("PASS: controlled-stack return after child and shared-data destruction");
  puts("PASS: 640 create attempts; actual Exec child queues/wait/free/status + actual waitpid; no ghosts, unrelated result73 preserved");return 0;
 }

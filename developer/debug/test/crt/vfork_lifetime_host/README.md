@@ -17,8 +17,8 @@ The 640 creation attempts cover parent signal exhaustion, creation failure,
 setup failure before `CreateNewProc` returns, setup failure with delayed exit,
 and successful admission, with and without existing parent flags. An unrelated
 child's exit result must remain available. A separate controlled-stack return
-runs after the child Task is destroyed and frees the shared data before returning
-the saved PID.
+releases the child at final acknowledgement and frees the shared data before
+returning the saved PID.
 
 Six compiling controls independently restore signal leakage, lost parent flags,
 missing reap, missing join, lookup through a dead Task, and lookup after shared
@@ -27,3 +27,27 @@ data is freed. Each must fail for the recorded assertion or sanitizer cause.
 This is host evidence for the extracted paths, not execution of the launcher,
 AROS assembly jumps, library startup, SMP or the linked guest product. Those
 contracts require their corresponding build and runtime qualification.
+
+
+The launcher/proxy protocol has a separate concurrent runner:
+
+```
+python3 developer/debug/test/crt/vfork_lifetime_host/handshake.py --output /tmp/vfork-handshake
+python3 developer/debug/test/crt/vfork_lifetime_host/handshake.py --tsan --output /tmp/vfork-handshake-tsan
+```
+
+It executes the complete production launcher, failed-exec proxy and final parent
+return on two host threads. Modeled signals use mutexes and condition variables;
+library open/close, exec bodies and parent restoration are fixture boundaries.
+The four scenarios check exit status 23, successful exec status 37, 128 failed
+exec attempts followed by exit status 43, and 128 failures followed by successful
+exec. Four launcher setup failures must publish the stable child ID before
+teardown. The scheduler delays the child after each final acknowledgement until
+the parent has freed shared data, making later accesses observable by ASan.
+
+Seven compiling controls check post-publication accesses, premature close,
+post-free PID lookup, missing exit status, missing failure acknowledgement,
+missing failure reset and late child identity publication. Each must fail for its
+named cause; timeouts do not count as successful controls. TSan runs production
+and the five controls that do not deliberately dereference freed memory. These
+checks do not execute CreateNewProc, assembly jumps or a guest runtime.

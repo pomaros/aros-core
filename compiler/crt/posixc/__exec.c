@@ -1,5 +1,6 @@
 /*
     Copyright (C) 2008-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER
 
     Support functions for POSIX exec*() functions.
 */
@@ -262,9 +263,14 @@ static APTR __exec_prepare_pretend_child(char *filename2, char *const argv[], ch
     if (!udata->exec_id)
     {
         D(bug("[__exec_prepare_pretend_child] Continue child immediately on error\n"));
+        udata->child_executed = 0;
         SETPARENTSTATE(PARENT_STATE_EXEC_DO_FINISHED);
-        Signal(udata->child, 1 << udata->child_signal);
-
+        Signal(udata->child, 1UL << udata->child_signal);
+        /* Join consumption of the failed command before reusing its signal
+           bit for another exec or _exit. The pretend child remains alive. */
+        Wait(1UL << udata->parent_signal);
+        ASSERTCHILDSTATE(CHILD_STATE_EXEC_FAILED_READY);
+        errno = udata->child_errno;
         return NULL;
     }
 

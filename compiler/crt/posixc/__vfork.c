@@ -152,7 +152,7 @@ LONG launcher()
         /* Lie */
         udata->child_errno = ENOMEM;
         SETCHILDSTATE(CHILD_STATE_SETUP_FAILED);
-        Signal(udata->parent, 1 << udata->parent_signal);
+        Signal(udata->parent, 1UL << udata->parent_signal);
         return -1;
     }
 
@@ -181,7 +181,7 @@ LONG launcher()
         FreeSignal(child_signal);
         udata->child_errno = ENOMEM;
         SETCHILDSTATE(CHILD_STATE_SETUP_FAILED);
-        Signal(udata->parent, 1 << udata->parent_signal);
+        Signal(udata->parent, 1UL << udata->parent_signal);
         return -1;
     }
     D(bug("launcher: Opened PosixCBase: %x, StdCBase: %x\n",
@@ -195,10 +195,11 @@ LONG launcher()
         /* Setup complete, signal parent */
         D(bug("launcher: Signaling parent that we finished setup\n"));
         SETCHILDSTATE(CHILD_STATE_SETUP_FINISHED);
-        Signal(udata->parent, 1 << udata->parent_signal);
+        Signal(udata->parent, 1UL << udata->parent_signal);
 
+child_wait_command:
         D(bug("launcher: Child waiting for exec or exit\n"));
-        Wait(1 << udata->child_signal);
+        Wait(1UL << udata->child_signal);
         ASSERTPARENTSTATE(PARENT_STATE_EXEC_CALLED | PARENT_STATE_EXIT_CALLED);
         PRINTSTATE;
 
@@ -227,48 +228,53 @@ LONG launcher()
             D(bug("launcher: informing parent that we have run __exec_prepare\n"));
             /* Inform parent that we have run __exec_prepare */
             SETCHILDSTATE(CHILD_STATE_EXEC_PREPARE_FINISHED);
-            Signal(udata->parent, 1 << udata->parent_signal);
+            Signal(udata->parent, 1UL << udata->parent_signal);
 
             /* Wait 'till __exec_do() is called on parent process */
             D(bug("launcher: Waiting parent to get the result\n"));
-            Wait(1 << udata->child_signal);
+            Wait(1UL << udata->child_signal);
             ASSERTPARENTSTATE(PARENT_STATE_EXEC_DO_FINISHED);
             PRINTSTATE;
+
+            if (!exec_id)
+            {
+                /* The failed command is consumed before the proxy may submit
+                   another command using the same signal bit. */
+                SETCHILDSTATE(CHILD_STATE_EXEC_FAILED_READY);
+                Signal(udata->parent, 1UL << udata->parent_signal);
+                goto child_wait_command;
+            }
 
             D(bug("launcher: informing parent that we won't use udata anymore\n"));
             /* Inform parent that we won't use udata anymore */
             SETCHILDSTATE(CHILD_STATE_UDATA_NOT_USED);
-            Signal(udata->parent, 1 << udata->parent_signal);
+            Signal(udata->parent, 1UL << udata->parent_signal);
 
             D(bug("launcher: waiting for parent to be after _exit()\n"));
-            Wait(1 << udata->child_signal);
-            ASSERTPARENTSTATE(PARENT_STATE_STOPPED_PRETENDING);
-            PRINTSTATE;
+            /* Shared data belongs to the parent after publication above.
+               Only child-local state may be accessed from this point. */
+            Wait(1UL << child_signal);
 
-            if (exec_id)
-            {
-                D(bug("launcher: catch _exit()\n"));
-                __stdc_program_startup(exec_exitjmp, &exec_error);
+            D(bug("launcher: catch _exit()\n"));
+            __stdc_program_startup(exec_exitjmp, &exec_error);
 
-D(bug("launcher: executing command\n"));
-                __exec_do(exec_id);
+            D(bug("launcher: executing command\n"));
+            __exec_do(exec_id);
 
-                assert(0); /* Should not be reached */
-            }
-            else
-            {
-                D(bug("launcher: __exec_prepare returned with an error\n"));
-                ret = -1;
-            }
+            assert(0); /* Should not be reached */
         }
         else /* !udata->child_executed */
         {
+            ret = udata->child_error;
             D(bug("launcher: child not executed\n"));
 
             D(bug("launcher: informing parent that we won't use udata anymore\n"));
             /* Inform parent that we won't use udata anymore */
             SETCHILDSTATE(CHILD_STATE_UDATA_NOT_USED);
-            Signal(udata->parent, 1 << udata->parent_signal);
+            Signal(udata->parent, 1UL << udata->parent_signal);
+            /* The proxy still borrows our library bases and path storage.
+               Close them only after it restores its own runtime state. */
+            Wait(1UL << child_signal);
         }
     }
     else
@@ -277,6 +283,14 @@ D(bug("launcher: executing command\n"));
         D(bug("launcher: catched _exit(), errno=%d\n", exec_error));
         /* Return the exec'd program's status to the parent. */
         ret = exec_error;
+    }
+
+    /* Publish from the real child before its Task and library bases vanish.
+       DOS entry return alone does not provide the ETask status for waitpid. */
+    {
+        struct ETask *etask = GetETask(FindTask(NULL));
+        if (etask)
+            etask->et_Result1 = ret;
     }
 
     D(bug("launcher: freeing child_signal\n"));
@@ -308,7 +322,6 @@ pid_t __vfork(jmp_buf env)
     struct PosixCIntBase *PosixCBase =
         (struct PosixCIntBase *)__aros_getbase_PosixCBase();
     struct Task *this = FindTask(NULL);
-    struct ETask *etask = NULL;
     struct vfork_data *udata = AllocMem(sizeof(struct vfork_data), MEMF_ANY | MEMF_CLEAR);
     if (udata == NULL)
     {
@@ -368,22 +381,15 @@ pid_t __vfork(jmp_buf env)
         {
             D(bug("__vfork: ParentPretendingChild: not executed\n"));
 
-            /* et_Result is normally set in startup code but no exec was performed
-               so we have to mimic the startup code
-             */
-            etask = GetETask(udata->child);
-            if (etask)
-                etask->et_Result1 = udata->child_error;
-
             D(bug("__vfork: ParentPretendingChild: Signaling child %p, signal %d\n", udata->child, udata->child_signal));
             SETPARENTSTATE(PARENT_STATE_EXIT_CALLED);
-            Signal(udata->child, 1 << udata->child_signal);
+            Signal(udata->child, 1UL << udata->child_signal);
         }
 
         D(bug("__vfork: ParentPretendingChild: Waiting for child to finish using udata, me=%p, signal %d\n", FindTask(NULL),
                 udata->parent_signal));
         /* Wait for child to finish using udata */
-        Wait(1 << udata->parent_signal);
+        Wait(1UL << udata->parent_signal);
         ASSERTCHILDSTATE(CHILD_STATE_UDATA_NOT_USED);
         PRINTSTATE;
 
@@ -427,12 +433,9 @@ static __attribute__((noinline)) void __vfork_exit_controlled_stack(struct vfork
     */
     parent_leavepretendchild(udata);
 
-    if(udata->child_executed)
-    {
-        D(bug("__vfork: Inform child that we are after _exit()\n"));
-        SETPARENTSTATE(PARENT_STATE_STOPPED_PRETENDING);
-        Signal(udata->child, 1 << udata->child_signal);
-    }
+    /* Both exec and plain _exit keep the child alive until restoration. */
+    SETPARENTSTATE(PARENT_STATE_STOPPED_PRETENDING);
+    Signal(udata->child, 1UL << udata->child_signal);
 
     D(bug("__vfork: Parent: restoring startup buffer\n"));
     /* Restore parent errorptr and startup buffer */
@@ -520,7 +523,7 @@ static void parent_createchild(struct vfork_data *udata)
     D(bug("__vfork: Parent: Child created %p, waiting to finish setup\n", udata->child));
 
     /* Wait for child to finish setup */
-    Wait(1 << udata->parent_signal);
+    Wait(1UL << udata->parent_signal);
     ASSERTCHILDSTATE(CHILD_STATE_SETUP_FAILED | CHILD_STATE_SETUP_FINISHED);
     PRINTSTATE;
 
