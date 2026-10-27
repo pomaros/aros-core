@@ -1,6 +1,8 @@
 /*
     Copyright (C) 2020-2026, The AROS Development Team. All rights reserved.
 
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
+
     Reposition read/write file offset.
 */
 #include <errno.h>
@@ -58,59 +60,65 @@
 
 ******************************************************************************/
 {
-    QUAD cnt;
-    fdesc *fdesc = __getfdesc(filedes);
+    QUAD count = -1;
+    int admission_error, saved_errno;
+    fcb *file = __holdfcb(filedes, &admission_error);
+    if (!file)
+    {
+        errno = admission_error ? admission_error : EBADF;
+        return (__off64_t)-1;
+    }
 
-    if (!fdesc)
+    __fcb_lock(file);
+    if (!file->handle)
     {
         errno = EBADF;
-        return -1;
+        goto done;
     }
-
-    if(fdesc->fcb->privflags & _FCB_ISDIR)
+    if (file->privflags & _FCB_ISDIR)
     {
         errno = EISDIR;
-        return -1;
+        goto done;
     }
-
     switch (whence)
     {
         case SEEK_SET: whence = OFFSET_BEGINNING; break;
         case SEEK_CUR: whence = OFFSET_CURRENT; break;
         case SEEK_END: whence = OFFSET_END; break;
-
-        default:
-            errno = EINVAL;
-            return -1;
+        default: errno = EINVAL; goto done;
     }
 
-    /* A seek changes the position only. In particular, an unsupported
-       beyond-EOF seek must never be converted into writes to the file.
-       Keep the seek and returned-position query atomic for dup'd handles. */
-    __fcb_lock(fdesc->fcb);
-    FLUSHONREADCHECK
-    cnt = __dos64_seek(fdesc->fcb, offset, whence);
-    if (cnt == -1)
-        goto error;
-
-    cnt = __dos64_getpos(fdesc->fcb);
-    if (cnt == -1)
-        goto error;
-    if (cnt != (QUAD)(__off64_t)cnt)
+    /* Hold one file across seek and position query, including dup'd handles.
+       Flush pending DOS buffers without consuming the retry flag on failure. */
+    if (file->privflags & _FCB_FLUSHONREAD)
     {
-        __fcb_unlock(fdesc->fcb);
-        errno = EOVERFLOW;
-        return (__off64_t) -1;
+        SetIoErr(0);
+        if (!Flush(file->handle))
+            goto error;
+        file->privflags &= ~_FCB_FLUSHONREAD;
     }
-
-    __fcb_unlock(fdesc->fcb);
-    return (__off64_t) cnt;
+    if (__dos64_seek(file, offset, whence) == -1)
+        goto error;
+    count = __dos64_getpos(file);
+    if (count == -1)
+        goto error;
+    if (count != (QUAD)(__off64_t)count)
+    {
+        errno = EOVERFLOW;
+        count = -1;
+    }
+    goto done;
 error:
     {
-        LONG ioerr = IoErr ();
-        __fcb_unlock(fdesc->fcb);
-        errno = (ioerr == ERROR_OBJECT_TOO_LARGE)
-            ? EOVERFLOW : __stdc_ioerr2errno (ioerr);
+        LONG ioerr = IoErr();
+        errno = ioerr == ERROR_OBJECT_TOO_LARGE ? EOVERFLOW :
+            ioerr ? __stdc_ioerr2errno(ioerr) : EIO;
+        count = -1;
     }
-    return (__off64_t) -1;
+done:
+    saved_errno = errno;
+    __fcb_unlock(file);
+    __releasefcb(file);
+    errno = saved_errno;
+    return (__off64_t)count;
 } /* lseek64 */

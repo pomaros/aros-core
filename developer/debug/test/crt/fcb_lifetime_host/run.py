@@ -64,6 +64,8 @@ parts = {
     'FSTAT': syscall('fstat', 'static int ar_fstat(int fd,struct stat *sb)'),
     'FSTAT64': syscall('fstat64', 'static int ar_fstat64(int fd,struct stat64 *sb)'),
     'FSYNC': syscall('fsync', 'static int ar_fsync(int fd)'),
+    'LSEEK': syscall('lseek', 'static off_t ar_lseek(int fd,off_t offset,int whence)').replace('filedes', 'fd'),
+    'LSEEK64': syscall('lseek64', 'static int64_t ar_lseek64(int fd,int64_t offset,int whence)').replace('filedes', 'fd').replace('__off64_t', 'int64_t'),
     'CLOSE': syscall('close', 'static int ar_close(int fd)'),
     'DUP': block(source, 'int __dupfd('),
     'DUP2': syscall('dup2', 'static int ar_dup2(int oldfd,int newfd)'),
@@ -97,6 +99,17 @@ controls.update({
     'metadata-lock-held': (parts['FSTAT'], parts['FSTAT'].replace(
         '    __fcb_unlock(file);', '    /* retained metadata lock */'),
         'Assertion failed: (isfile && !metadata_file_depth)'),
+    'seek-unretained': (parts['LSEEK'], parts['LSEEK'].replace(
+        '__holdfcb(fd, &admission_error)',
+        '(admission_error=0,__getfdesc(fd)?__getfdesc(fd)->fcb:NULL)'),
+        'metadata operation owns the admitted file'),
+    'seek-position-unlocked': (parts['LSEEK'], parts['LSEEK'].replace(
+        '    count = __dos64_getpos(file);', '    __fcb_unlock(file); count = __dos64_getpos(file);'),
+        'seek position query retains I/O serialization'),
+    'seek-flush-error-ignored': (parts['LSEEK'], parts['LSEEK'].replace(
+        '        if (!Flush(file->handle))\n            goto error;',
+        '        (void)Flush(file->handle);'),
+        '(file->privflags&_FCB_FLUSHONREAD) && seek_calls==old_seeks'),
     'sync-release-lost': (parts['FSYNC'], parts['FSYNC'].replace(
         '    __releasefcb(file);', '    /* lost sync reference */'),
         'Assertion failed: (atomic_load(&handle_closes[11])==1 && atomic_load(&block_frees)==1)'),

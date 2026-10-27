@@ -7,7 +7,7 @@ python3 developer/debug/test/crt/fcb_lifetime_host/run.py --tsan --output /tmp/f
 
 The output directory must not exist. The runner compiles actual production C
 bodies for fcb retain/hold/release, final record metadata release, read, write,
-close, dup, dup2, closedir, fstat, fstat64 and fsync. The recursive descriptor table, DOS I/O, registry
+close, dup, dup2, closedir, fstat, fstat64, fsync, lseek and lseek64. The recursive descriptor table, DOS I/O, registry
 allocation and process record-lock removal are modeled boundaries. Final record
 metadata release executes its actual function with a modeled metadata disposer.
 
@@ -27,10 +27,11 @@ the caller must preserve its operation error. Metadata conversion runs without a
 semaphore held because name/time conversion can reenter CRT services. Invalid and overflow admission are
 also checked without foreign fallback.
 
-Nine compiling controls independently remove operation retention, operation
+Twelve compiling controls independently remove operation retention, operation
 release, record metadata disposal, duplication rollback, overflow admission,
 metadata retention/error preservation, retaining an I/O lock across metadata
-conversion, or sync reference release.
+conversion, sync reference release, seek retention/serialization or ignored
+seek-buffer flush failure.
 They must fail for their exact named assertion; a compilation error or timeout
 does not qualify a control. Both ASan/UBSan and TSan modes are available.
 
@@ -38,3 +39,10 @@ This does not prove the complete fd/cwd namespace migration, all local file
 operations, record-lock semantics, directory handler behavior or a guest runtime.
 The existing native-file-io and native-socket regressions cover their own
 positioned-I/O, global descriptor allocation and foreign operation lease paths.
+
+Seek cases retain the original object during descriptor close/reuse, preserve
+native seek and position errors, and keep seek/query under one I/O semaphore.
+Additional checks cover SET/CUR/END, beyond-EOF without size growth, wide offsets,
+invalid whence/handle, directory refusal and pending-buffer flush failure/retry.
+The guest `crt/posixc/lseek.c` test independently expects no size change until a
+write; its execution is separate from this modeled-DOS host suite.

@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+typedef int64_t QUAD;
 typedef int BOOL;
 typedef long LONG;
 typedef intptr_t BPTR;
@@ -155,7 +156,8 @@ static int __stat(BPTR h,struct stat *s,BOOL isfile) {
 static int __stat64(BPTR h,struct stat64 *s,BOOL isfile) {
     assert(isfile && !metadata_file_depth);int result=metadata_backend(h);if(!result)s->identity=h;return result;
 }
-static LONG Flush(BPTR h) { return metadata_backend(h)==0; }
+static int flush_calls;
+static LONG Flush(BPTR h) { flush_calls++;return metadata_backend(h)==0; }
 static LONG DoPkt(struct MsgPort *port,LONG action,LONG a,LONG b,LONG c,LONG d,LONG e) {
     assert(action==ACTION_FLUSH && !a&&!b&&!c&&!d&&!e);
     return metadata_backend(port->handle)==0;
@@ -163,6 +165,33 @@ static LONG DoPkt(struct MsgPort *port,LONG action,LONG a,LONG b,LONG c,LONG d,L
 /* FSTAT */
 /* FSTAT64 */
 /* FSYNC */
+#define OFFSET_BEGINNING -1
+#define OFFSET_CURRENT 0
+#define OFFSET_END 1
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
+#define ERROR_OBJECT_TOO_LARGE 223
+#define _FCB_FLUSHONREAD 4
+#define FLUSHONREADCHECK do { if(fdesc->fcb->privflags&_FCB_FLUSHONREAD){fdesc->fcb->privflags&=~_FCB_FLUSHONREAD;Flush(fdesc->fcb->handle);} } while(0);
+static QUAD positions[64], sizes[64];
+static int position_failure, seek_calls;
+static QUAD __dos64_seek(fcb *f,QUAD offset,LONG whence) {
+    if(metadata_pause)pause_metadata();
+    assert(!table_depth && !atomic_load(&handle_closes[f->handle]));
+    seek_calls++;
+    if(io_fail){native_error=777;return -1;}
+    QUAD old=positions[f->handle];
+    positions[f->handle]=(whence==OFFSET_CURRENT?old:whence==OFFSET_END?sizes[f->handle]:0)+offset;
+    return old;
+}
+static QUAD __dos64_getpos(fcb *f) {
+    if(metadata_original)assert(metadata_file_depth>0 && "seek position query retains I/O serialization");
+    if(position_failure){native_error=ERROR_OBJECT_TOO_LARGE;return -1;}
+    return positions[f->handle];
+}
+/* LSEEK */
+/* LSEEK64 */
 /* CLOSE */
 /* DUP */
 /* DUP2 */
@@ -186,11 +215,11 @@ static void *run_io(void *data) {
     struct attempt *a=data;char byte=0;
     a->result=a->write?ar_write(5,&byte,1):ar_read(5,&byte,1);a->error=errno;return NULL;
 }
-struct metadata_attempt { int operation,result,error; fcb *file; };
+struct metadata_attempt { int operation,error; int64_t result; fcb *file; };
 static void *run_metadata(void *data) {
     struct metadata_attempt *a=data;struct stat sb;struct stat64 wide;
     metadata_pause=metadata_cleanup=1;metadata_original=a->file;
-    a->result=a->operation==0?ar_fstat(5,&sb):a->operation==1?ar_fstat64(5,&wide):ar_fsync(5);
+    a->result=a->operation==0?ar_fstat(5,&sb):a->operation==1?ar_fstat64(5,&wide):a->operation==2?ar_fsync(5):a->operation==3?ar_lseek(5,123,SEEK_SET):ar_lseek64(5,INT64_C(0x100000007),SEEK_SET);
     a->error=errno;
     if(!a->result && a->operation<2)assert((a->operation?wide.identity:sb.identity)==11);
     return NULL;
@@ -215,7 +244,7 @@ int main(void) {
         assert(atomic_load(&handle_closes[11])==1&&atomic_load(&block_frees)==1&&atomic_load(&record_puts)==1);
         assert(!ar_close(5));assert(atomic_load(&handle_closes[22])==1&&atomic_load(&record_closes)==2);
     }
-    for(int operation=0;operation<3;operation++)for(int failed=0;failed<2;failed++) {
+    for(int operation=0;operation<5;operation++)for(int failed=0;failed<2;failed++) {
         reset_counts();fcb *admitted=install(5,11,0);io_waiting=io_proceed=0;io_fail=failed;
         metadata_ports[11].handle=11;metadata_handles[11].fh_Type=&metadata_ports[11];
         struct metadata_attempt a={.operation=operation,.file=admitted};pthread_t thread;
@@ -227,7 +256,7 @@ int main(void) {
         install(5,22,0);io_proceed=1;
         assert(!pthread_cond_broadcast(&io_changed));assert(!pthread_mutex_unlock(&io_gate));
         assert(!pthread_join(thread,NULL));
-        assert(a.result==(failed?-1:0));if(failed)assert(a.error==EIO);
+        assert(a.result==(failed?-1:operation<3?0:operation==3?123:INT64_C(0x100000007)));if(failed)assert(a.error==EIO);
         assert(atomic_load(&handle_closes[11])==1 && atomic_load(&block_frees)==1);
         assert(!ar_close(5));
     }
@@ -239,9 +268,13 @@ int main(void) {
     assert(ar_fstat(5,&sb)==-1&&errno==EOVERFLOW);
     assert(ar_fstat64(5,&wide)==-1&&errno==EOVERFLOW);
     assert(ar_fsync(5)==-1&&errno==EOVERFLOW);
+    assert(ar_lseek(5,0,SEEK_SET)==-1&&errno==EOVERFLOW);
+    assert(ar_lseek64(5,0,SEEK_SET)==-1&&errno==EOVERFLOW);
     assert(ar_fstat(-1,&sb)==-1&&errno==EBADF);
     assert(ar_fstat64(-1,&wide)==-1&&errno==EBADF);
     assert(ar_fsync(-1)==-1&&errno==EBADF);
+    assert(ar_lseek(-1,0,SEEK_SET)==-1&&errno==EBADF);
+    assert(ar_lseek64(-1,0,SEEK_SET)==-1&&errno==EBADF);
     assert(atomic_load(&foreign_calls)==before);file->opencount=1;assert(!ar_close(5));
     reset_counts();file=install(5,11,0);assert(__dupfd(5,6,FD_CLOEXEC)==6);
     assert(table[6]->fdflags==FD_CLOEXEC&&file->opencount==2);
@@ -258,6 +291,26 @@ int main(void) {
     assert(!atomic_load(&handle_closes[11])&&atomic_load(&block_frees)==1);
     assert(ar_read(5,&byte,1)==217);assert(ar_write(5,&byte,1)==217);
     assert(atomic_load(&foreign_calls)==before+2);
+    reset_counts();file=install(5,11,_FCB_FLUSHONREAD);
+    io_fail=position_failure=0;flush_calls=seek_calls=0;
+    positions[11]=3;sizes[11]=16;
+    assert(ar_lseek(5,100,SEEK_SET)==100 && sizes[11]==16);
+    assert(flush_calls==1 && seek_calls==1 && !(file->privflags&_FCB_FLUSHONREAD));
+    assert(ar_lseek(5,-7,SEEK_CUR)==93);
+    assert(ar_lseek64(5,-5,SEEK_END)==11);
+    int old_seeks=seek_calls;
+    assert(ar_lseek(5,0,999)==-1&&errno==EINVAL&&seek_calls==old_seeks&&file->opencount==1);
+    file->privflags|=_FCB_FLUSHONREAD;io_fail=1;
+    assert(ar_lseek(5,0,SEEK_SET)==-1&&errno==EIO);
+    assert((file->privflags&_FCB_FLUSHONREAD) && seek_calls==old_seeks);
+    io_fail=0;assert(ar_lseek(5,0,SEEK_SET)==0 && !(file->privflags&_FCB_FLUSHONREAD));
+    position_failure=1;assert(ar_lseek64(5,30,SEEK_SET)==-1&&errno==EOVERFLOW);
+    position_failure=0;
+    assert(ar_lseek64(5,INT64_C(0x100000007),SEEK_SET)==INT64_C(0x100000007)&&sizes[11]==16);
+    file->privflags|=_FCB_ISDIR;assert(ar_lseek(5,0,SEEK_SET)==-1&&errno==EISDIR);
+    file->privflags&=~_FCB_ISDIR;file->handle=0;
+    assert(ar_lseek64(5,0,SEEK_SET)==-1&&errno==EBADF&&file->opencount==1);
+    file->handle=11;assert(!ar_close(5));
     for(int n=0;n<SLOTS;n++)assert(!table[n]);
     assert(!pthread_mutex_destroy(&table_guard.lock));assert(!pthread_mutex_destroy(&reclock_sem.lock));
     puts("PASS: actual read/write/close under close/reuse, errors, dup/dup2 rollback, overflow, directory and borrowed handles");
