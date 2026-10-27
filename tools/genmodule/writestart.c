@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>
 
     Print the library magic and init code in the file modname_start.c.
     This code is partly based on code in CLib37x.lha from Andreas R. Kleinert
@@ -603,8 +604,12 @@ static void writedeclsets(FILE *out, struct config *cfg)
         fprintf(out,
             "THIS_PROGRAM_HANDLES_SYMBOLSET(OPENLIB)\n"
             "THIS_PROGRAM_HANDLES_SYMBOLSET(CLOSELIB)\n"
+            "THIS_PROGRAM_HANDLES_SYMBOLSET(ABORTOPENLIB)\n"
+            "THIS_PROGRAM_HANDLES_SYMBOLSET(CANCLOSELIB)\n"
             "DECLARESET(OPENLIB)\n"
             "DECLARESET(CLOSELIB)\n"
+            "DECLARESET(ABORTOPENLIB)\n"
+            "DECLARESET(CANCLOSELIB)\n"
         );
     if (cfg->modtype == DEVICE)
         fprintf(out,
@@ -1374,6 +1379,7 @@ static void writeopenlib(FILE *out, struct config *cfg)
                 "    }\n"
                 "    else\n"
                 "    {\n"
+                "        set_call_libfuncs(SETNAME(ABORTOPENLIB), -1, 0, LIBBASE);\n"
                 "        if (ioreq->io_Error >= 0)\n"
                 "            ioreq->io_Error = IOERR_OPENFAIL;\n"
                 "    }\n"
@@ -1418,6 +1424,7 @@ static void writeopenlib(FILE *out, struct config *cfg)
                     "        return LIBBASE;\n"
                     "    }\n"
                     "\n"
+                    "    set_call_libfuncs(SETNAME(ABORTOPENLIB), -1, 0, LIBBASE);\n"
                     "    return NULL;\n"
                     "\n"
                     "    AROS_LIBFUNC_EXIT\n"
@@ -1519,9 +1526,20 @@ static void writeopenlib(FILE *out, struct config *cfg)
                     "              && set_call_libfuncs(SETNAME(OPENLIB), 1, 1, newlib)\n"
                     "             )\n"
                     "        )\n"
-                    "        {\n");
+                    "        {\n"
+                    "            /* The failed base is still the current one here: abort\n"
+                    "               functions see it through the offset table and the\n"
+                    "               per-task slot. Then close the relative libraries this\n"
+                    "               base opened (a failed set_open_rellibraries has closed\n"
+                    "               its own and cleared every slot, so nothing is closed\n"
+                    "               twice, and the root's copied pointers are never seen),\n"
+                    "               and only then make the previous base current again. */\n"
+                    "            set_call_libfuncs(SETNAME(ABORTOPENLIB), -1, 0, newlib);\n"
+                    "            set_close_rellibraries(newlib);\n"
+                    "            __aros_setoffsettable((char *)oldbase);\n");
             if (cfg->options & OPTION_PERTASKBASE)
                 fprintf(out,
+                    "            dupbase->task = NULL;\n"
                     "            __GM_SetPerTaskBase(oldpertaskbase);\n");
             fprintf(out,
                     "            __freebase(newlib);\n"
@@ -1583,6 +1601,16 @@ static void writecloselib(FILE *out, struct config *cfg)
             "    AROS_LIBFUNC_INIT\n"
             "\n"
     );
+    if (cfg->modtype != DEVICE)
+        fprintf(out,
+                "    /* CANCLOSELIB may refuse this close before anything changes:\n"
+                "       the reference is then kept, with the open counts, the offset\n"
+                "       table, the task slot, the relative libraries and the base\n"
+                "       untouched. */\n"
+                "    if (!set_call_libfuncs(SETNAME(CANCLOSELIB), 1, 1, LIBBASE))\n"
+                "        return BNULL;\n"
+                "\n"
+        );
     if (cfg->modtype == DEVICE)
         fprintf(out,
                 "    if (!set_call_devfuncs(SETNAME(CLOSEDEV), -1, 1, LIBBASE, ioreq, 0, 0))\n"

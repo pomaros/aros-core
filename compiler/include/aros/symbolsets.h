@@ -3,6 +3,7 @@
 
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>
     $Id$
 
     Desc: Symbol sets support
@@ -110,6 +111,24 @@ const void * const SETNAME(set)[] __attribute__((weak))={0,0};
 #define ADD2EXPUNGELIB(symbol, pri) ADD2SET(symbol, EXPUNGELIB, pri)
 #define ADD2OPENLIB(symbol, pri)    ADD2SET(symbol, OPENLIB, pri)
 #define ADD2CLOSELIB(symbol, pri)   ADD2SET(symbol, CLOSELIB, pri)
+/* ABORTOPENLIB runs, in reverse order, when OpenLib or OpenDevice fails
+   after its OPENLIB functions have started: the base that failed is still
+   the current one (offset table and per-task slot), its relative libraries
+   are still open, and it is freed afterwards. An abort function cannot know
+   how far the open went: an OPENLIB function may have failed half-way, or
+   not run at all, so it must check every field it releases. CLOSELIB
+   functions are not run on this path. Opt-in: a module without ABORTOPENLIB
+   functions behaves as before. */
+#define ADD2ABORTOPENLIB(symbol, pri) ADD2SET(symbol, ABORTOPENLIB, pri)
+/* CANCLOSELIB runs first in a library's CloseLib, in order, with the base
+   being closed: int fn(base) returns TRUE to allow the close, FALSE to
+   refuse it. A refusal returns at once and changes nothing: the open
+   counts, the offset table, the per-task slot, the relative libraries and
+   the base stay as they were, and the caller's reference is kept. The
+   base need not be the current one and the calling Task need not own it,
+   so a guard must not use relative-library services. Libraries only, not
+   devices. Opt-in: an empty set closes as before. */
+#define ADD2CANCLOSELIB(symbol, pri) ADD2SET(symbol, CANCLOSELIB, pri)
 #define ADD2OPENDEV(symbol, pri)    ADD2SET(symbol, OPENDEV, pri)
 #define ADD2CLOSEDEV(symbol, pri)   ADD2SET(symbol, CLOSEDEV, pri)
 
