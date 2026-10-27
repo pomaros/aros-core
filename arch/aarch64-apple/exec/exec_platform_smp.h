@@ -26,11 +26,8 @@
 #define EXEC_SPINLOCK_INIT(lock) AROSAppleExecSMPAPIGet()->spin_init(lock)
 #define EXEC_SPINLOCK_LOCK(lock,hook,mode) AROSAppleExecSMPAPIGet()->spin_lock(lock,hook,mode)
 #define EXEC_SPINLOCK_UNLOCK(lock) AROSAppleExecSMPAPIGet()->spin_unlock(lock)
-/* A message port's lock, taken with IRQ and FIQ masked (PutMsg, ReplyMsg
- * from the timer's FIQ, GetMsg): bounded, see smp_bridge.c. */
-struct MsgPort;
-void AROSAppleExecPortLock(struct MsgPort *port);
-#define EXEC_PORT_LOCK(port) AROSAppleExecPortLock(port)
+/* Message ports use Exec's ordinary spin-lock path. Contention never grants
+ * ownership: an invalid or stuck port must be diagnosed, never stolen. */
 /* The service queue receives self-removal only after the dispatcher has
  * replaced the departing task stack/TLS. UP and other adapters do not claim
  * this capability. Keep it paired with EXEC_DEFER_SELF_EXIT below. */
