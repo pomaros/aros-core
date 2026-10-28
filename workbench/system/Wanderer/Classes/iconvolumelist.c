@@ -661,7 +661,13 @@ IPTR IconVolumeList__MUIM_IconList_Update(struct IClass * CLASS,
                         continue;
                     }
 
-                    if (dvn->dvn_Flags & ICONENTRY_VOL_OFFLINE)
+                    /* The volume and device lists are sampled separately.
+                     * An inhibited or removed device can leave a named volume
+                     * without a matching device name in this snapshot. Keep
+                     * that volume addressable by its own name, just as for an
+                     * offline volume; IconList requires a non-NULL filename. */
+                    if ((dvn->dvn_Flags & ICONENTRY_VOL_OFFLINE) ||
+                        !dvn->dvn_DosName)
                         devname = dvn->dvn_VolName;
                     else
                         devname = dvn->dvn_DosName;
