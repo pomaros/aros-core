@@ -57,8 +57,6 @@
     POSIXC_CWD_SCOPE_OR_RETURN(-1);
     struct PosixCIntBase *PosixCBase =
         __cwd_runtime_base();
-    int res = 0;
-    BPTR lock;
 
     /* check for empty path before potential conversion from "." to "" */
     if (PosixCBase->doupath && path && *path == '\0')
@@ -71,29 +69,5 @@
     if (path == NULL)
         return -1;
 
-    lock = __posixc_lock_entry(path, SHARED_LOCK);
-    if (!lock)
-    {
-        if (   IoErr() == ERROR_IS_SOFT_LINK
-            || IoErr() == ERROR_OBJECT_IN_USE)
-        {
-            /* either the file is already locked exclusively
-               or it is a soft link, in both cases only way
-               to get info about it is to find it in the
-               parent directory with the ExNext() function
-            */
-
-            SetIoErr(0);
-            return __stat_from_path(path, sb);
-        }
-
-        errno = __stdc_ioerr2errno(IoErr());
-        return -1;
-    }
-    else
-        res = __stat(lock, sb, FALSE);
-
-    UnLock(lock);
-
-    return res;
+    return __posixc_lstat_path(path, sb, FALSE);
 }

@@ -15,7 +15,7 @@
 
 #include <dos/dos.h>
 
-BPTR __posixc_lock_entry(const char *path, LONG accessMode);
+int __posixc_lstat_path(const char *path, void *sb, BOOL wide);
 int __stat(BPTR lock, struct stat *sb, BOOL filehandle);
 int __stat64(BPTR lock, struct stat64 *sb, BOOL filehandle);
 int __stat_from_path(const char *path, struct stat *sb);

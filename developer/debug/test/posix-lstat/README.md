@@ -6,7 +6,7 @@
 Build `native-probe.c` with a matching AArch64 AROS C SDK. Run `LstatProbe
 RAM:unique-new-root` with an unused directory name; the probe refuses an existing
 root. It creates its own files, valid and dangling soft links, a raw Latin-1
-link name and a directory. It checks both lstat widths, contrasts stat behavior,
+link name, a directory and a multidirectory assign. It checks both lstat widths, contrasts stat behavior,
 verifies referent contents and removes its test objects. Parent-link support is
 reported separately. A failed cleanup is a test failure.
 
@@ -16,9 +16,10 @@ UNSUPPORTED line does not qualify that case. Record the SDK, resident POSIX
 module and binary identities alongside output. Compilation alone does not
 qualify filesystem behavior.
 
-This probe exercises final-component semantics on a real handler. It does not
-exercise multidirectory assigns, concurrent namespace changes or metadata
-fallback across assign entries. A final-component lookup implementation must
+Require `multiassign result=PASS` for later-entry lookup, final-link metadata,
+missing entries and exclusively locked files in both stat widths. The assign
+name is reserved only for the duration of the probe; an existing assignment is
+refused. This probe does not exercise concurrent namespace changes. A final-component lookup implementation must
 also preserve DOS resolution through intermediate links and later assign
 entries; locking only the first resolved parent is insufficient. No preceding
 Git revision or unintegrated helper is required to build this probe.

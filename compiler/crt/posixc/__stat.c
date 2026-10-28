@@ -16,6 +16,7 @@
 #include <time.h>
 
 #include "__dos64.h"
+#include "__cwd_runtime.h"
 #include "__stat.h"
 #include "__posixc_time.h"
 
@@ -39,54 +40,68 @@ static void __fill_stat64buffer(
     int                  fallback_to_defaults,
     BPTR                 lock);
 
-/* Resolve the parent normally, but leave the final entry to its handler.
-   DOS Lock follows soft links; ACTION_LOCATE_OBJECT reports them instead. */
-BPTR __posixc_lock_entry(const char *path, LONG accessMode)
+/* Use the handler's final-component result, without DOS Lock's automatic
+   soft-link resolution. The DevProc iterator preserves multidirectory assigns. */
+static BPTR stat_locate(struct MsgPort *port, BPTR base, const char *path)
 {
-    STRPTR parent_path = AllocVec(strlen(path) + 1, MEMF_ANY);
-    STRPTR leaf;
-    BSTR name;
-    BPTR parent, result;
+    BSTR name = CreateBSTR((CONST_STRPTR)path);
+    BPTR result;
     LONG error;
+    if (!name) { SetIoErr(ERROR_NO_FREE_STORE); return BNULL; }
+    result = (BPTR)DoPkt(port, ACTION_LOCATE_OBJECT, (SIPTR)base,
+        (SIPTR)name, SHARED_LOCK, 0, 0);
+    error = result ? 0 : IoErr();
+    FreeVec(BADDR(name));
+    SetIoErr(error);
+    return result;
+}
 
-    if (!parent_path)
+/* Keep the selected assign entry. Reopening its named prefix could select
+   an earlier directory. A borrowed root is examined without duplicating it. */
+static BPTR stat_entry_parent(struct DevProc *device, const char *relative,
+    BOOL *owned)
+{
+    char *path = AllocVec(strlen(relative) + 1, MEMF_ANY);
+    BPTR parent = BNULL;
+    LONG error = ERROR_NO_FREE_STORE;
+    *owned = FALSE;
+    if (!path) { SetIoErr(error); return BNULL; }
+    strcpy(path, relative);
+    *FilePart((CONST_STRPTR)path) = '\0';
+    if (!*path && device->dvp_Lock)
     {
-        SetIoErr(ERROR_NO_FREE_STORE);
-        return BNULL;
-    }
-    strcpy(parent_path, path);
-    leaf = FilePart(parent_path);
-    if (!*leaf)
-    {
-        FreeVec(parent_path);
-        return Lock(path, accessMode);
-    }
-    name = CreateBSTR(leaf);
-    if (!name)
-    {
-        FreeVec(parent_path);
-        SetIoErr(ERROR_NO_FREE_STORE);
-        return BNULL;
-    }
-    *leaf = '\0';
-    parent = Lock(parent_path, SHARED_LOCK);
-    if (parent)
-    {
-        result = (BPTR)DoPkt(((struct FileLock *)BADDR(parent))->fl_Task,
-            ACTION_LOCATE_OBJECT, (SIPTR)parent, (SIPTR)name,
-            accessMode, 0, 0);
-        error = result ? 0 : IoErr();
-        UnLock(parent);
+        parent = device->dvp_Lock;
+        error = 0;
     }
     else
     {
-        result = BNULL;
-        error = IoErr();
+        parent = stat_locate(device->dvp_Port, device->dvp_Lock, path);
+        error = parent ? 0 : IoErr();
+        *owned = parent != BNULL;
+        if (!parent && error == ERROR_IS_SOFT_LINK)
+        {
+            BPTR root = device->dvp_Lock;
+            BOOL root_owned = FALSE;
+            if (!root)
+            {
+                root = stat_locate(device->dvp_Port, BNULL, "");
+                root_owned = root != BNULL;
+                if (!root) { error = IoErr(); goto out; }
+            }
+            /* Existing task-local dirfd selection follows intermediate links
+               without changing the caller's native Process directories. */
+            BPTR previous = __cwd_runtime_override(root);
+            parent = Lock(path, SHARED_LOCK);
+            error = parent ? 0 : IoErr();
+            __cwd_runtime_override(previous);
+            if (root_owned) UnLock(root);
+            *owned = parent != BNULL;
+        }
     }
-    FreeVec(BADDR(name));
-    FreeVec(parent_path);
+out:
+    FreeVec(path);
     SetIoErr(error);
-    return result;
+    return parent;
 }
 
 int __stat(BPTR lock, struct stat *sb, BOOL filehandle)
@@ -288,7 +303,8 @@ static void __fill_stat_pathbuffer(void *sb, char *path,
         __fill_statbuffer(sb, path, fib, fallback, lock);
 }
 
-static int __stat_from_path_common(const char *path, void *sb, BOOL wide)
+static int __stat_from_path_common(const char *path, void *sb, BOOL wide,
+    BPTR supplied_parent)
 {
     int                  len;
     char                 *mypath = NULL;
@@ -329,7 +345,7 @@ static int __stat_from_path_common(const char *path, void *sb, BOOL wide)
         errno = ENOMEM;
         goto out;
     }
-    lock = Lock(mypath, SHARED_LOCK);
+    lock = supplied_parent ? supplied_parent : Lock(mypath, SHARED_LOCK);
     if (!lock)
     {
         errno = __stdc_ioerr2errno(IoErr());
@@ -382,7 +398,7 @@ static int __stat_from_path_common(const char *path, void *sb, BOOL wide)
 
 out:
     FreeVec(mypath);
-    if (lock)
+    if (lock && !supplied_parent)
         UnLock(lock);
 
 
@@ -396,12 +412,74 @@ out:
 
 int __stat_from_path(const char *path, struct stat *sb)
 {
-    return __stat_from_path_common(path, sb, FALSE);
+    return __stat_from_path_common(path, sb, FALSE, BNULL);
 }
 
 int __stat64_from_path(const char *path, struct stat64 *sb)
 {
-    return __stat_from_path_common(path, sb, TRUE);
+    return __stat_from_path_common(path, sb, TRUE, BNULL);
+}
+
+
+int __posixc_lstat_path(const char *path, void *sb, BOOL wide)
+{
+    struct DevProc *device = NULL;
+    const char *relative = strchr(path, ':');
+    BPTR lock;
+    int result = -1, saved_errno;
+    LONG error;
+
+    /* A root or trailing directory separator has no final link component. */
+    if (!*FilePart((STRPTR)path))
+    {
+        lock = Lock(path, SHARED_LOCK);
+        if (!lock) { errno = __stdc_ioerr2errno(IoErr()); return -1; }
+        result = wide ? __stat64(lock, sb, FALSE) : __stat(lock, sb, FALSE);
+        saved_errno = errno;
+        UnLock(lock);
+        errno = saved_errno;
+        return result;
+    }
+    relative = relative ? relative + 1 : path;
+    while ((device = GetDeviceProc(path, device)) != NULL)
+    {
+        lock = stat_locate(device->dvp_Port, device->dvp_Lock, relative);
+        if (lock)
+        {
+            result = wide ? __stat64(lock, sb, FALSE) : __stat(lock, sb, FALSE);
+            saved_errno = errno;
+            UnLock(lock);
+            errno = saved_errno;
+            break;
+        }
+        error = IoErr();
+        if (error == ERROR_OBJECT_NOT_FOUND) continue;
+        if (error == ERROR_IS_SOFT_LINK || error == ERROR_OBJECT_IN_USE)
+        {
+            BOOL owned;
+            BPTR parent = stat_entry_parent(device, relative, &owned);
+            if (parent)
+            {
+                result = __stat_from_path_common(path, sb, wide, parent);
+                saved_errno = errno;
+                if (owned) UnLock(parent);
+                errno = saved_errno;
+            }
+            else errno = __stdc_ioerr2errno(IoErr());
+        }
+        else errno = __stdc_ioerr2errno(error);
+        break;
+    }
+    if (!device)
+    {
+        error = IoErr();
+        if (!error || error == ERROR_NO_MORE_ENTRIES) error = ERROR_OBJECT_NOT_FOUND;
+        errno = __stdc_ioerr2errno(error);
+    }
+    saved_errno = errno;
+    if (device) FreeDeviceProc(device);
+    errno = saved_errno;
+    return result;
 }
 
 
