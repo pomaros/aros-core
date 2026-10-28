@@ -42,6 +42,7 @@ int AROSApplePageAllocatorInitialize(uintptr_t start, uint64_t size);
 void *AROSApplePageAllocate(void *requested, uintptr_t length, uint32_t flags);
 void *AROSApplePageTableAllocate(uintptr_t length);
 int AROSApplePageFreeRaw(void *address, uintptr_t length);
+int AROSApplePageFree(void *address, uintptr_t length);
 int AROSApplePageProtect(void *address, uint32_t length, uint32_t flags);
 int AROSAppleGuardedStackCreate(struct AArch64GuardedStack *, size_t size);
 int AROSAppleGuardedStackDestroy(struct AArch64GuardedStack *);

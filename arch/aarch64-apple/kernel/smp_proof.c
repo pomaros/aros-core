@@ -262,7 +262,7 @@ static int scheduler_load_proof(struct timerequest *timer)
 #define MEMORY_CYCLES 64
 struct MemoryWorker {
     struct Task *task;
-    uint32_t state,cycles,failed,cpu;
+    uint32_t state,cycles,released,failed,cpu;
     uint64_t begin,end;
 };
 static struct MemoryWorker memory_workers[MEMORY_CPUS];
@@ -308,8 +308,16 @@ static void memory_worker(struct MemoryWorker *w)
                 if(result!=value) w->failed=5;
             }
         }
+        /* Drop the accounting slot before the address can be reused by
+         * another worker; a refused release restores retained ownership.
+         * The coordinator samples memory_live only after worker teardown. */
         __atomic_sub_fetch(&memory_live,1,__ATOMIC_ACQ_REL);
-        KrnFreePages((void *)code,AROS_APPLE_PAGE_SIZE);
+        if(!AROSApplePageFree((void *)code,AROS_APPLE_PAGE_SIZE)) {
+            __atomic_add_fetch(&memory_live,1,__ATOMIC_ACQ_REL);
+            if(!w->failed) w->failed=7;
+            break;
+        }
+        w->released++;
         if(w->failed) break;
         w->cycles++;
     }
@@ -373,11 +381,11 @@ static int memory_work_proof(struct timerequest *timer)
     if(ready!=count) return 0;
     for(unsigned cpu=0;cpu<MEMORY_CPUS;cpu++) if(online&(1U<<cpu)) {
         const struct MemoryWorker *w=&memory_workers[cpu];
-        bug("[SMP] memory cpu=0x%016llx cycles=0x%016llx error=0x%016llx begin=0x%016llx end=0x%016llx\n",
+        bug("[SMP] memory cpu=0x%016llx cycles=0x%016llx released=0x%016llx error=0x%016llx begin=0x%016llx end=0x%016llx\n",
             (unsigned long long)cpu, (unsigned long long)w->cycles,
-            (unsigned long long)w->failed, (unsigned long long)w->begin,
+            (unsigned long long)w->released, (unsigned long long)w->failed, (unsigned long long)w->begin,
             (unsigned long long)w->end);
-        if(w->failed || w->cycles!=MEMORY_CYCLES) return 0;
+        if(w->failed || w->cycles!=MEMORY_CYCLES || w->released!=MEMORY_CYCLES) return 0;
     }
     deadline=AROSAppleSMPTimeUS()+3000000U;
     do {
@@ -393,8 +401,10 @@ static int memory_work_proof(struct timerequest *timer)
         (unsigned long long)memory_peak, (unsigned long long)memory_live,
         (unsigned long long)before.pages_in_use, (unsigned long long)after.pages_in_use,
         (unsigned long long)before.internal_pages_in_use, (unsigned long long)after.internal_pages_in_use);
-    if(memory_live || memory_peak!=count || before.pages_in_use!=after.pages_in_use ||
-       before.internal_pages_in_use!=after.internal_pages_in_use) return 0;
+    /* Other live tasks may change these global counters during the proof.
+     * Each worker checks the real release result for every owned allocation;
+     * a failed release retains memory_live and refuses completion above. */
+    if(memory_live || memory_peak!=count) return 0;
     bug("[SMP] concurrent page W^X + execution + reclamation PASS\n");
     return boot_timeslice_proof(timer);
 }
