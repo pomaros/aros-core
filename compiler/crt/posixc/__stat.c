@@ -6,6 +6,8 @@
 #include <dos/dos.h>
 #include <proto/dos.h>
 #include <proto/exec.h>
+#include <proto/arossupport.h>
+#include <dos/dosextens.h>
 
 #include <string.h>
 #include <errno.h>
@@ -36,6 +38,56 @@ static void __fill_stat64buffer(
     struct FileInfoBlock64 *fib,
     int                  fallback_to_defaults,
     BPTR                 lock);
+
+/* Resolve the parent normally, but leave the final entry to its handler.
+   DOS Lock follows soft links; ACTION_LOCATE_OBJECT reports them instead. */
+BPTR __posixc_lock_entry(const char *path, LONG accessMode)
+{
+    STRPTR parent_path = AllocVec(strlen(path) + 1, MEMF_ANY);
+    STRPTR leaf;
+    BSTR name;
+    BPTR parent, result;
+    LONG error;
+
+    if (!parent_path)
+    {
+        SetIoErr(ERROR_NO_FREE_STORE);
+        return BNULL;
+    }
+    strcpy(parent_path, path);
+    leaf = FilePart(parent_path);
+    if (!*leaf)
+    {
+        FreeVec(parent_path);
+        return Lock(path, accessMode);
+    }
+    name = CreateBSTR(leaf);
+    if (!name)
+    {
+        FreeVec(parent_path);
+        SetIoErr(ERROR_NO_FREE_STORE);
+        return BNULL;
+    }
+    *leaf = '\0';
+    parent = Lock(parent_path, SHARED_LOCK);
+    if (parent)
+    {
+        result = (BPTR)DoPkt(((struct FileLock *)BADDR(parent))->fl_Task,
+            ACTION_LOCATE_OBJECT, (SIPTR)parent, (SIPTR)name,
+            accessMode, 0, 0);
+        error = result ? 0 : IoErr();
+        UnLock(parent);
+    }
+    else
+    {
+        result = BNULL;
+        error = IoErr();
+    }
+    FreeVec(BADDR(name));
+    FreeVec(parent_path);
+    SetIoErr(error);
+    return result;
+}
 
 int __stat(BPTR lock, struct stat *sb, BOOL filehandle)
 {
@@ -240,7 +292,6 @@ static int __stat_from_path_common(const char *path, void *sb, BOOL wide)
 {
     int                  len;
     char                 *mypath = NULL;
-    char                 *abspath = NULL;
     char                 *filepart = NULL;
     char                 *split;
     struct FileInfoBlock64 *fib = NULL;
@@ -260,12 +311,9 @@ static int __stat_from_path_common(const char *path, void *sb, BOOL wide)
     if (len && mypath[len-1] == '/')
         mypath[len-1] = '\0';
 
-    /* Resolve the parent relative to the retained cwd/dirfd context.
-       Native Process fields are not the logical directory of a worker. */
-    abspath = mypath;
-
-    /* split into path part and file part */
-    split = FilePart(abspath);
+    /* Split the entry from its parent, whose Lock below uses the retained
+       cwd/dirfd context rather than a worker's native Process fields. */
+    split = FilePart(mypath);
     filepart = AllocVec(strlen(split) + 1, MEMF_ANY);
     if (!filepart)
     {
@@ -281,7 +329,7 @@ static int __stat_from_path_common(const char *path, void *sb, BOOL wide)
         errno = ENOMEM;
         goto out;
     }
-    lock = Lock(abspath, SHARED_LOCK);
+    lock = Lock(mypath, SHARED_LOCK);
     if (!lock)
     {
         errno = __stdc_ioerr2errno(IoErr());
@@ -303,7 +351,7 @@ static int __stat_from_path_common(const char *path, void *sb, BOOL wide)
 
     if (*filepart == '\0' || fallback_to_defaults)
     {
-        __fill_stat_pathbuffer(sb, abspath, fib, fallback_to_defaults, lock, wide);
+        __fill_stat_pathbuffer(sb, mypath, fib, fallback_to_defaults, lock, wide);
         res = 0;
     }
     else
@@ -316,7 +364,7 @@ static int __stat_from_path_common(const char *path, void *sb, BOOL wide)
             {
                 if (stricmp(fib->fib_FileName, filepart) == 0)
                 {
-                    __fill_stat_pathbuffer(sb, abspath, fib, 0, lock, wide);
+                    __fill_stat_pathbuffer(sb, mypath, fib, 0, lock, wide);
                     res = 0;
                     break;
                 }
@@ -337,9 +385,6 @@ out:
     if (lock)
         UnLock(lock);
 
-
-    /* if we had absolute path as input, mypath is free'd here */
-    FreeVec(abspath);
 
     FreeVec(filepart);
 

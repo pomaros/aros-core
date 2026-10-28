@@ -13,11 +13,6 @@
 #include "__upath.h"
 #include "__cwd_runtime.h"
 
-/* like Dos_Lock() but no automatic soft link resolution */
-static BPTR __lock(
-    const char* name,
-    LONG        accessMode);
-
 /*****************************************************************************
 
     NAME */
@@ -75,7 +70,7 @@ static BPTR __lock(
     if (path == NULL)
         return -1;
 
-    lock = __lock(path, SHARED_LOCK);
+    lock = __posixc_lock_entry(path, SHARED_LOCK);
     if (!lock)
     {
         if (   IoErr() == ERROR_IS_SOFT_LINK
@@ -100,11 +95,4 @@ static BPTR __lock(
     UnLock(lock);
 
     return res;
-}
-
-static BPTR __lock(
-    const char* name,
-    LONG        accessMode)
-{
-    return Lock(name, accessMode);
 }
