@@ -2902,13 +2902,15 @@ static int desktop_storage_nodes_valid(const struct BootNode *first,
         else if (bstr_equal(device->dn_Name, "WORK")) { bit = 2; unit = 1; }
         else if (bstr_equal(device->dn_Name, "AFSSYS") && expect_afs) {
             bit = 4; unit = 2; dos_type = UINT32_C(0x4146532b);
+        } else if (bstr_equal(device->dn_Name, "DATA") && expect_afs) {
+            bit = 16; unit = 3; dos_type = UINT32_C(0x4146532b);
         } else if (bstr_equal(device->dn_Name, "SYS0")) {
             bit = 8; unit = 0; dos_type = ID_FAT12_DISK;
             driver = "appleboot.device";
             if (node->bn_Node.ln_Pri != 10) return 0;
         } else return 0;
         if (seen & bit) return 0;
-        if ((bit == 1 || bit == 2) && node->bn_Node.ln_Pri != -128)
+        if ((bit == 1 || bit == 2 || bit == 16) && node->bn_Node.ln_Pri != -128)
             return 0;
         seen |= bit;
         startup = BADDR(device->dn_Startup);
@@ -3419,7 +3421,7 @@ static void core_coldstart_el0(struct AROSAppleRuntimeProof *unused)
      * validate the full ordered list, while proving SYS0 as a usable fallback. */
     if (valid)
         valid = (proof->mount_count == 1 ||
-                (desktop_profile_flag && proof->mount_count <= 4 &&
+                (desktop_profile_flag && proof->mount_count <= 5 &&
                  desktop_storage_nodes_valid(
                     (struct BootNode *)expansion->MountList.lh_Head,
                     FindResident("afsplus-handler") != NULL))) &&
