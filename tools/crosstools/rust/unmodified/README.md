@@ -253,3 +253,7 @@ exported. Output must be a new directory outside this SDK repository. The core
 owns OS implementations and its C ABI; this export does not copy or modify
 those sources. Verify the snapshot with the same exporter revision. Runtime
 qualification is separate from export equality.
+
+SDK input paths are resolved before fingerprinting. The installed manifest can
+be verified from another application checkout even when integration was invoked
+with relative paths.

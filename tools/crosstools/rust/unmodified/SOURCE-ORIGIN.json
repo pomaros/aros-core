@@ -1,6 +1,6 @@
 {
   "application_libc": {
-    "origin_sha256": "e38f4b0bb60c6e0a543f6fecdc446dc71c1e0edf3e58cd6ee2220b4ed330a89c",
+    "origin_sha256": "5e001f74bc4cce6f8af4e7d8dd1ec914698d42e7bfe6486fccd20602dc8b9641",
     "patch_sha256": "7b569b5677e4d75ee10b9446ce37159a69cfb84a776ca54e30bc194285cec6e9"
   },
   "core_native_header": "workbench/network/common/include/bsdsocket/native.h",
@@ -11,8 +11,8 @@
       "source_sha256": "1472d6e62ac2aa5757b5a5cfa4e032e422d54c6f1424c4abac88c1b3c9523ac2"
     },
     "ABI/README.md": {
-      "export_sha256": "35086f0b395fbc3634d90baea1278fb5b0466849cef5401dd7244ed625eab4e8",
-      "source_sha256": "35086f0b395fbc3634d90baea1278fb5b0466849cef5401dd7244ed625eab4e8"
+      "export_sha256": "7e455eea3c6f3bfb7bcf1effb79d4156dc8ec8763d2286a8e9102e6e0a2321a7",
+      "source_sha256": "7e455eea3c6f3bfb7bcf1effb79d4156dc8ec8763d2286a8e9102e6e0a2321a7"
     },
     "ABI/libc-exports.py": {
       "export_sha256": "d46143d336a62ef6250c7616e99fd8d3fca85cd831a05f7573d357b0362e17bd",
@@ -23,8 +23,8 @@
       "source_sha256": "bfea8c07d1f2f08fe878e7c5af9565bd738d06ce606f657490f44cff23a625d6"
     },
     "README.md": {
-      "export_sha256": "ff68e44187e26a5df1cb4117aea3d0b4d37d3206733a66ac4f449b6168fcb7c2",
-      "source_sha256": "43f96fd2ac76c924a5347f3fb201f2ac43cedc05596ab16f8a60659264e43f25"
+      "export_sha256": "d824a28a504b9aeae3366c33f35a78e044cbee64a6abf8c0d9e3d2ce18b2f6b2",
+      "source_sha256": "ea6bbb64a9df381573abde512884295fc412799f33393b5ceba8c4215c8d48e5"
     },
     "aarch64-unknown-aros.json": {
       "export_sha256": "e37308bd1cc1cec089bab2965e27aeb6e4cc3d430816eb8dc0c5f9920350065f",
@@ -55,8 +55,8 @@
       "source_sha256": "27f7fbbb5bd8be60e30b0f4da1e6e95d9b02aa82b9c0fd906e5a5248eba42570"
     },
     "integrate.py": {
-      "export_sha256": "04744a5f816f27763826ce0c0202ab4d1f44aac7a2c3be756d7ae59e1b12f466",
-      "source_sha256": "90e103d7fc3c7bf784687f3b6c26bdf4e3f9e9b416b9675f671862d0c18f0eb9"
+      "export_sha256": "331ac798c317d2b7cfc355fa7ff62e307644804b2c67837bf3e71dda80c72d6c",
+      "source_sha256": "78bb66f944477839d7c727bab8889c89cf127b546a72519f018da2b204a9a72a"
     },
     "net/resolver.c": {
       "export_sha256": "55b194b3cb4d6900488a49a9f314502e41c13a62da900a4d3ee45a323d967f50",
@@ -159,8 +159,8 @@
       "source_sha256": "a1bb6a495fbf96e0430da5075798fb3a09154df6acd5689bd40b5653c9ab33ac"
     },
     "rust-src-aros.diff": {
-      "export_sha256": "0ad707386585dd60b15deb47b170bdb89e7e7d4754e1ae077e171e2d70c345bd",
-      "source_sha256": "0ad707386585dd60b15deb47b170bdb89e7e7d4754e1ae077e171e2d70c345bd"
+      "export_sha256": "d357657f0fc650b014ae1dad1d90271b6cf4b650c46211258a5d995584b6eacf",
+      "source_sha256": "d357657f0fc650b014ae1dad1d90271b6cf4b650c46211258a5d995584b6eacf"
     },
     "source-files.json": {
       "export_sha256": "2a0ecfa122df3ad5b036bce6bd1efc03f2b0646c53b20bf0cd65905f1bf06f9e",
@@ -190,6 +190,6 @@
   "schema": 1,
   "source_directory": "toolchain",
   "source_repository": "https://github.com/pomaros/rust-aros.git",
-  "source_revision": "17bc8a6f93877d7d7927ff189d5ab2aabaff8a70",
+  "source_revision": "33325cbf1e271d2df213b65b2bcab0efc02b1a3d",
   "transformations": "APL notices for owned integration files; authoritative core socket header paths; core command paths in documentation"
 }

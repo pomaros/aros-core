@@ -80,6 +80,12 @@ def main():
     p.add_argument('--offline', action='store_true')
     p.add_argument('--jobs', type=int, default=1, help='positive Cargo worker bound (default: 1)')
     a = p.parse_args()
+    # Fingerprints are consumed from application repositories, not this cwd.
+    for name in ('prefix', 'work', 'sdk', 'crosstools', 'collect_aros',
+                 'host_root', 'rust_src', 'std_build', 'posix_stubs'):
+        value = getattr(a, name)
+        if value is not None:
+            setattr(a, name, value.expanduser().resolve())
     if a.jobs < 1:
         p.error('--jobs must be positive')
     if sys.version_info < (3, 12):

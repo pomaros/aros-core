@@ -10,6 +10,6 @@
   "schema": 1,
   "source_file": "crates/libc-0.2.190-aros.diff",
   "source_repository": "https://github.com/pomaros/rust-aros.git",
-  "source_revision": "17bc8a6f93877d7d7927ff189d5ab2aabaff8a70",
+  "source_revision": "33325cbf1e271d2df213b65b2bcab0efc02b1a3d",
   "transformations": "none"
 }

@@ -65,3 +65,8 @@ The layout gate also compares `pthread_condattr_t`, both field offsets/sizes,
 `clockid_t` and the realtime/monotonic clock constants against the actual SDK.
 A stale std libc without the condition-clock field must fail qualification;
 matching socket layouts alone cannot establish thread ABI agreement.
+
+The AArch64 SDK exposes `MSG_NOSIGNAL` as `0x00020000`. The integrated Rust
+libc uses that same value; the object comparison rejects a missing declaration
+or a value from a different operating system. Use `--extended-c-api` when the
+SDK exposes the checked metadata typedefs through its GNU/POSIX.1-2008 profile.

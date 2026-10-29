@@ -787,7 +787,7 @@
          // pub(crate) use hermit_abi::*;
 --- a/library/vendor/libc-0.2.189/src/unix/aros/mod.rs
 +++ b/library/vendor/libc-0.2.189/src/unix/aros/mod.rs
-@@ -0,0 +1,1043 @@
+@@ -0,0 +1,1044 @@
 +//! Bindings for the AROS C library (posixc.library / stdc.library) and
 +//! pthread.library, as shipped in the AROS SDK.
 +//!
@@ -1143,6 +1143,7 @@
 +pub const SOCK_RAW: c_int = 3;
 +pub const SOL_SOCKET: c_int = 0xffff;
 +pub const MSG_PEEK: c_int = 0x2;
++pub const MSG_NOSIGNAL: c_int = 0x00020000;
 +pub const SHUT_RD: c_int = 0;
 +pub const SHUT_WR: c_int = 1;
 +pub const SHUT_RDWR: c_int = 2;
