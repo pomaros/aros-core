@@ -1,8 +1,10 @@
 /*
     Copyright (C) 2009-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER.
 */
 
 #include <string.h>
+#include <proto/exec.h>
 #include <aros/types/sigaction_s.h>
 
 #include "__signal.h"
@@ -37,7 +39,8 @@
 
         When sigaction() has been used to register a handler the following
         flags are honored:
-        SA_SIGINFO  - call sa_sigaction(signum, NULL, NULL) instead of sa_handler
+        SA_SIGINFO  - supply synchronous signal metadata to sa_sigaction;
+                      no interrupted machine context is available
         SA_RESETHAND - reset to SIG_DFL after one delivery
         SA_NODEFER  - don't block the signal during its own handler
 
@@ -89,8 +92,16 @@
         {
             if ((saved_sa_flags & SA_SIGINFO) && saved_sigaction_func)
             {
-                /* SA_SIGINFO mode: call three-argument handler */
-                saved_sigaction_func(signum, NULL, NULL);
+                /* raise() is synchronous, not an interrupted CPU context.
+                 * Supply a distinct, initialized record for this delivery.
+                 * The task ID uses the same native source as getpid(), without
+                 * introducing a dependency from stdc onto posixc. */
+                siginfo_t info;
+                memset(&info, 0, sizeof(info));
+                info.si_signo = signum;
+                info.si_code = SI_USER;
+                info.si_pid = (pid_t)GetETaskID(FindTask(NULL));
+                saved_sigaction_func(signum, &info, NULL);
             }
             else
             {
