@@ -617,7 +617,7 @@ int AROSAppleStage2Main(
             !(AROSAppleStage2ColdStartProof.resident_count >= 54 &&
               AROSAppleStage2ColdStartProof.mount_count >= 2 &&
               AROSAppleStage2ColdStartProof.mount_count <=
-                  (has_afs ? 4U : 3U))) ||
+                  (has_afs ? AROS_APPLE_DESKTOP_STORAGE_NODE_MAX : 3U))) ||
         AROSAppleStage2ColdStartProof.filesystem_entry_count !=
             (has_afs ? 6U : 4U) ||
         AROSAppleStage2ColdStartProof.timer_frequency == 0 ||
