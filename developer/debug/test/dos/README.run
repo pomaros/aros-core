@@ -44,3 +44,21 @@ Exclusive output is changed to SHARED_LOCK only after DupLockFromFH reports
 ERROR_OBJECT_IN_USE. That mode change is not rolled back if a later operation
 fails. Concurrent append atomicity, other filesystems and allocation-failure
 injection across the entire Shell launch are outside this regression.
+
+AArch64 ELF branch placement (host only)
+---------------------------------------
+From the core source root:
+
+    cc -std=c99 -Wall -Wextra -Werror -fsanitize=address,undefined \
+       developer/debug/test/dos/elf_branch_host.c -o /tmp/elf_branch_host
+    /tmp/elf_branch_host
+
+This compiles the production branch-pool and function-entry helpers. It covers
+both signed branch limits, misalignment, arithmetic bounds, exhausted or
+unreachable pools, allocation order, function-entry sorting and exact lookup.
+The loader reserves prefix/suffix veneers inside each executable hunk and
+retains the normal ownership, unload and executable-protection paths. A veneer
+must itself be reachable; oversized sections are refused when no valid slot
+exists. Section-relative references require an exact defined function entry;
+arbitrary intra-section labels do not gain permission to clobber IP0.
+These host checks do not prove runtime instruction execution or cache coherence.

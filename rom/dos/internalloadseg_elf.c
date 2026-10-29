@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER.
 
     Desc: Code to dynamically load ELF executables
 */
@@ -29,8 +30,11 @@
 #include "dos_intern.h"
 #include "include/loadseg.h"
 #include "elf_tls.h"
+#include "elf_branch.h"
 
 #define DATTR(x)
+
+struct KernelBase;
 
 #if (defined(__x86_64__) || defined(__arm__) || defined(__aarch64__)) && \
     !defined(__AROSPLATFORM_WXSEG__)
@@ -47,7 +51,7 @@ struct hunk
 #define BPTR2HUNK(bptr) ((struct hunk *)((char *)bptr - offsetof(struct hunk, next)))
 #define HUNK2BPTR(hunk) MKBADDR(&hunk->next)
 
-#if defined(__AROSPLATFORM_WXSEG__) && AROS_FLAVOUR != AROS_FLAVOUR_STANDALONE
+#if defined(__AROSPLATFORM_WXSEG__)
 /* The host protects mappings, not ELF payload addresses. Include the hunk's
  * entry trampoline even when section alignment puts the payload on a later
  * page. Every W^X hunk owns its mapping; other data hunks stay writable. */
@@ -63,8 +67,15 @@ static BOOL protect_elf_code_hunk(BPTR hunks, APTR section, IPTR size,
         if ((IPTR)section >= start && offset < hunk->size &&
             size <= hunk->size - offset)
         {
+#if AROS_FLAVOUR == AROS_FLAVOUR_STANDALONE
+            intptr_t operation = KernelBase ? KrnGetSystemAttr(KATTR_PageProtect) : -1;
+            if (operation == -1 || operation == 0) return FALSE;
+            return ((KRN_PageProtect)operation)(hunk, hunk->size,
+                MAP_Readable | MAP_Executable);
+#else
             KrnSetProtection(hunk, hunk->size, MAP_Readable | MAP_Executable);
             return TRUE;
+#endif
         }
         hunks = hunk->next;
     }
@@ -283,12 +294,118 @@ static int load_header(BPTR file, struct elfheader *eh, SIPTR *funcarray, struct
     return 1;
 }
 
+#if defined(__aarch64__)
+_Static_assert(sizeof(struct FullJumpVec) == 16, "branch pool slot size");
+
+/* Partial links can canonicalize a local function reference to a section
+ * symbol plus an addend. Retain proof of actual function entry points instead
+ * of treating arbitrary intra-section labels as veneer-safe functions. */
+static BOOL branch_symbols(struct sheader *sh, ULONG count, struct sheader *extended,
+    struct elf_branch_symbols *tables, struct DosLibrary *DOSBase)
+{
+    ULONG i, j;
+    for (i = 0; i < count; ++i) {
+        struct symbol *symbols;
+        ULONG total, functions = 0;
+        if (sh[i].type != SHT_SYMTAB) continue;
+        symbols = sh[i].addr; total = sh[i].size / sizeof(*symbols);
+        for (j = 0; j < total; ++j)
+            if (ELF_ST_TYPE(symbols[j].info) == STT_FUNC) ++functions;
+        if (!functions) continue;
+        if (functions > UINT32_MAX / sizeof(*tables[i].entries) ||
+            !(tables[i].entries = AllocVec(functions * sizeof(*tables[i].entries), MEMF_ANY))) {
+            SetIoErr(ERROR_NO_FREE_STORE);
+            return FALSE;
+        }
+        for (j = 0; j < total; ++j) {
+            ULONG section = symbols[j].shindex;
+            struct elf_branch_function *entry;
+            if (ELF_ST_TYPE(symbols[j].info) != STT_FUNC) continue;
+            if (section == SHN_XINDEX) {
+                if (!extended || j >= extended->size / sizeof(ULONG)) {
+                    SetIoErr(ERROR_BAD_HUNK); return FALSE;
+                }
+                section = ((ULONG *)extended->addr)[j];
+            }
+            if (!section || section >= count || symbols[j].value >= sh[section].size)
+                continue;
+            entry = &tables[i].entries[tables[i].count++];
+            entry->section = section; entry->value = symbols[j].value;
+        }
+        elf_branch_function_sort(&tables[i]);
+    }
+    return TRUE;
+}
+
+/* Reserve only branches that can need veneers. Same-section distances are
+ * already known; cross-section placement is not known until allocation. The
+ * scan retains no relocation array and uses the existing bounded read cache. */
+static BOOL branch_prepare(BPTR file, struct sheader *sh, ULONG count,
+    struct sheader *extended, struct elf_branch_pool *pools,
+    struct elf_branch_symbols *functions, SIPTR *funcarray, struct SRBuffer *srb, struct DosLibrary *DOSBase)
+{
+    ULONG i;
+    for (i = 0; i < count; ++i) {
+        struct sheader *r = &sh[i], *symbols, *code;
+        ULONG n;
+        if (r->type != SHT_RELA || !r->size) continue;
+        if (r->info >= count || r->link >= count) goto invalid;
+        code = &sh[r->info]; symbols = &sh[r->link];
+        if ((code->flags & (SHF_ALLOC | SHF_EXECINSTR)) !=
+            (SHF_ALLOC | SHF_EXECINSTR)) continue;
+        if (r->entsize != sizeof(struct rela) || r->size % r->entsize ||
+            symbols->type != SHT_SYMTAB || !symbols->addr ||
+            symbols->size % sizeof(struct symbol)) goto invalid;
+        for (n = 0; n < r->size / r->entsize; ++n) {
+            struct rela rel;
+            struct symbol *symbol;
+            ULONG type, index, section;
+            uint64_t position = (uint64_t)r->offset + (uint64_t)n * r->entsize;
+            if (position > UINT32_MAX - sizeof(rel) || elf_read_block(file, (ULONG)position,
+                    &rel, sizeof(rel), funcarray, srb, DOSBase)) return FALSE;
+            type = ELF_R_TYPE(rel.info);
+            if (type != R_AARCH64_CALL26 && type != R_AARCH64_JUMP26) continue;
+            index = ELF_R_SYM(rel.info);
+            if (index >= symbols->size / sizeof(struct symbol)) goto invalid;
+            symbol = &((struct symbol *)symbols->addr)[index];
+            section = symbol->shindex;
+            if (section == SHN_UNDEF) continue;
+            if (section == SHN_XINDEX) {
+                if (!extended || index >= extended->size / sizeof(ULONG)) goto invalid;
+                section = ((ULONG *)extended->addr)[index];
+            }
+            if (section != SHN_ABS && section >= count) goto invalid;
+            if (section == r->info && elf_branch_reachable(rel.offset,
+                    symbol->value + rel.addend)) continue;
+            if (ELF_ST_TYPE(symbol->info) != STT_FUNC &&
+                (section == SHN_ABS || section == r->info) &&
+                !(ELF_ST_TYPE(symbol->info) == STT_SECTION &&
+                  elf_branch_function_contains(&functions[r->link], section,
+                      symbol->value + rel.addend))) continue;
+            if (!elf_branch_reserve(&pools[r->info], code->size, rel.offset)) goto invalid;
+        }
+    }
+    return TRUE;
+invalid:
+    SetIoErr(ERROR_BAD_HUNK);
+    return FALSE;
+}
+#endif
+
 /* Room a section needs inside a hunk, mirrored by the arena sizing pass.
    The size of the hunk is the size of the section, plus the size of the
    hunk structure, plus the size of the alignment (if necessary). */
-static ULONG elf_hunk_size(struct sheader *sh, BOOL do_align)
+static ULONG elf_hunk_size(struct sheader *sh, BOOL do_align, struct elf_branch_pool *pool)
 {
     ULONG hunk_size = sh->size + sizeof(struct hunk);
+    if (pool && (pool->before_bytes || pool->after_bytes))
+    {
+        uint64_t alignment = sh->addralign > 16 ? sh->addralign : 16;
+        uint64_t total = (uint64_t)sh->size + sizeof(struct hunk) +
+            sizeof(struct FullJumpVec) + alignment + pool->before_bytes +
+            pool->after_bytes + 15;
+        return total <= UINT32_MAX ? (ULONG)total : 0;
+    }
 
     if (do_align)
     {
@@ -310,6 +427,7 @@ static int __attribute__ ((noinline)) load_hunk
     CONST_STRPTR         strtab,
     SIPTR               *funcarray,
     BOOL                 do_align,
+    struct elf_branch_pool *pool,
     UBYTE              **arena_cur,
     ULONG                extra_memflags,
     struct SRBuffer     *srb,
@@ -323,7 +441,8 @@ static int __attribute__ ((noinline)) load_hunk
     if (!sh->size)
         return 1;
 
-    hunk_size = elf_hunk_size(sh, do_align);
+    hunk_size = elf_hunk_size(sh, do_align, pool);
+    if (!hunk_size) { SetIoErr(ERROR_BAD_HUNK); return 0; }
 
     if (strtab) {
         CONST_STRPTR nameext;
@@ -371,7 +490,16 @@ static int __attribute__ ((noinline)) load_hunk
            executable code, create a trampoline to its beginning, so that even if the
            alignment requirements make the actual code go much after the end of the
            hunk structure, the code can still be reached in the usual way.  */
-        if (do_align)
+        if (pool && (pool->before_bytes || pool->after_bytes))
+        {
+            IPTR alignment = sh->addralign > 16 ? sh->addralign : 16;
+            sh->addr = (char *)AROS_ROUNDUP2((IPTR)hunk->data +
+                sizeof(struct FullJumpVec) + pool->before_bytes, alignment);
+            pool->before = (IPTR)sh->addr - pool->before_bytes;
+            pool->after = AROS_ROUNDUP2((IPTR)sh->addr + sh->size, 16);
+            __AROS_SET_FULLJMP((struct FullJumpVec *)hunk->data, sh->addr);
+        }
+        else if (do_align)
         {
             if (sh->flags & SHF_EXECINSTR)
             {
@@ -486,6 +614,8 @@ static int relocate
     struct sheader    *symtab_shndx,
     BOOL              *reloc_out_of_range,
     struct elf_tls    *tls,
+    struct elf_branch_pool *branches,
+    struct elf_branch_symbols *functions,
     struct DosLibrary *DOSBase
 )
 {
@@ -539,7 +669,7 @@ static int relocate
         struct symbol *sym;
         ULONG *p;
         IPTR s;
-        ULONG shindex;
+        ULONG shindex = 0;
 #if defined(__aarch64__)
         BOOL is_tls = FALSE;
 #endif
@@ -1142,6 +1272,12 @@ static int relocate
             {
                 SIPTR temp = (SIPTR)(s + rel->addend - (IPTR)p);
                 SIPTR imm26;
+                ULONG opcode = ELF_R_TYPE(rel->info) == R_AARCH64_CALL26 ?
+                    0x94000000u : 0x14000000u;
+                if ((*p & 0xfc000000u) != opcode) {
+                    SetIoErr(ERROR_BAD_HUNK);
+                    return 0;
+                }
 
                 /*
                  * A direct branch to an undefined weak symbol: the symbol
@@ -1165,9 +1301,25 @@ static int relocate
 
                 /* signed 26-bit immediate: [-2^25, 2^25 - 1] */
                 if (imm26 < -((SIPTR)1 << 25) || imm26 > (((SIPTR)1 << 25) - 1)) {
-                    D(bug("[ELF Loader] CALL26/JUMP26 target out of range\n"));
-                    SetIoErr(ERROR_BAD_HUNK);
-                    return 0;
+                    IPTR slot = 0;
+                    BOOL eligible = ELF_ST_TYPE(sym->info) == STT_FUNC ||
+                        (sym->shindex != SHN_ABS && shindex < shnum &&
+                         shindex != shrel->info) ||
+                        (functions && ELF_ST_TYPE(sym->info) == STT_SECTION &&
+                         elf_branch_function_contains(&functions[shrel->link],
+                             shindex, sym->value + rel->addend));
+                    if (branches && eligible &&
+                        ((toreloc->flags & (SHF_ALLOC | SHF_EXECINSTR)) ==
+                         (SHF_ALLOC | SHF_EXECINSTR)))
+                        slot = elf_branch_slot(&branches[shrel->info], (IPTR)p,
+                            rel->offset, toreloc->size);
+                    if (!slot) {
+                        SetIoErr(ERROR_BAD_HUNK);
+                        return 0;
+                    }
+                    __AROS_SET_FULLJMP((struct FullJumpVec *)slot, s + rel->addend);
+                    temp = (SIPTR)(slot - (IPTR)p);
+                    imm26 = temp >> 2;
                 }
 
                 *p = (*p & 0xfc000000u) | ((ULONG)imm26 & 0x03ffffffu);
@@ -1847,7 +1999,7 @@ static BOOL tls_load(struct elf_tls *tls, BPTR file, struct sheader *sh, ULONG s
     UBYTE *image;
     ULONG  i;
 
-    if (!load_hunk(file, next_hunk_ptr, &tls->rec, NULL, funcarray, do_align,
+    if (!load_hunk(file, next_hunk_ptr, &tls->rec, NULL, funcarray, do_align, NULL,
                    arena_cur, extra_memflags, srb, DOSBase))
         return FALSE;
 
@@ -1924,6 +2076,8 @@ static BPTR load_seg_elf_int
 #if defined(__aarch64__)
     struct elf_tls  tls_state = { 0 };
     struct elf_tls *tls = NULL;
+    struct elf_branch_pool *branches = NULL;
+    struct elf_branch_symbols *functions = NULL;
 #endif
 
     /* load and validate ELF header */
@@ -2000,6 +2154,18 @@ static BPTR load_seg_elf_int
    }
 
 #if defined(__aarch64__)
+    if (int_shnum > UINT32_MAX / sizeof(*branches) ||
+        !(branches = AllocVec(int_shnum * sizeof(*branches), MEMF_ANY | MEMF_CLEAR))) {
+        SetIoErr(ERROR_NO_FREE_STORE);
+        goto error;
+    }
+    if (int_shnum > UINT32_MAX / sizeof(*functions) ||
+        !(functions = AllocVec(int_shnum * sizeof(*functions), MEMF_ANY | MEMF_CLEAR))) {
+        SetIoErr(ERROR_NO_FREE_STORE); goto error;
+    }
+    if (!branch_symbols(sh, int_shnum, symtab_shndx, functions, DOSBase) ||
+        !branch_prepare(file, sh, int_shnum, symtab_shndx, branches,
+            functions, funcarray, &srb, DOSBase)) goto error;
     if (!tls_prepare(&tls_state, sh, int_shnum, symtab_shndx, DOSBase))
         goto error;
     if (tls_state.offset)
@@ -2040,18 +2206,28 @@ static BPTR load_seg_elf_int
             }
 
             do_align = (exec_hunk_seen && sh[i].addralign >= 2) ? TRUE : FALSE;
-            arena_size += AROS_ROUNDUP2(elf_hunk_size(&sh[i], do_align), AROS_WORSTALIGN) + AROS_WORSTALIGN;
+            arena_size += AROS_ROUNDUP2(elf_hunk_size(&sh[i], do_align,
+#if defined(__aarch64__)
+                &branches[i]
+#else
+                NULL
+#endif
+                ), AROS_WORSTALIGN) + AROS_WORSTALIGN;
         }
     }
 #if defined(__aarch64__)
     /* The TLS record is carved from the arena too, within ADRP reach */
     if (tls)
-        arena_size += AROS_ROUNDUP2(elf_hunk_size(&tls->rec, exec_hunk_seen), AROS_WORSTALIGN) + AROS_WORSTALIGN;
+        arena_size += AROS_ROUNDUP2(elf_hunk_size(&tls->rec, exec_hunk_seen, NULL), AROS_WORSTALIGN) + AROS_WORSTALIGN;
 #endif
     exec_hunk_seen = FALSE;
 
     if (arena_size)
     {
+        if (arena_size > UINT32_MAX - sizeof(struct hunk) - AROS_WORSTALIGN) {
+            SetIoErr(ERROR_BAD_HUNK);
+            goto error;
+        }
         arena_size += sizeof(struct hunk) + AROS_WORSTALIGN;
 
         arena = ilsAllocMem(arena_size,
@@ -2098,6 +2274,11 @@ static BPTR load_seg_elf_int
 
                 do_align = (exec_hunk_seen && sh[i].addralign >= 2) ? TRUE : FALSE;
                 if (!load_hunk(file, &next_hunk_ptr, &sh[i], strtab ? strtab->addr : NULL, funcarray, do_align,
+#if defined(__aarch64__)
+                               &branches[i],
+#else
+                               NULL,
+#endif
                                arena ? &arena_cursor : NULL,
                                force31 ? MEMF_31BIT : 0, &srb, DOSBase))
                     goto error;
@@ -2160,9 +2341,9 @@ static BPTR load_seg_elf_int
             sh[i].addr = load_block(file, sh[i].offset, sh[i].size, funcarray, &srb, DOSBase);
             if (!sh[i].addr || !relocate(&eh, sh, i, int_shnum, symtab_shndx, reloc_out_of_range,
 #if defined(__aarch64__)
-                                         tls,
+                                         tls, branches, functions,
 #else
-                                         NULL,
+                                         NULL, NULL, NULL,
 #endif
                                          DOSBase))
                 goto error;
@@ -2193,7 +2374,6 @@ static BPTR load_seg_elf_int
             SetIoErr(ERROR_NOT_IMPLEMENTED);
             goto error;
         }
-        KRN_PageProtect protect = (KRN_PageProtect)operation;
 #endif
         if (KernelBase)
         {
@@ -2206,9 +2386,8 @@ static BPTR load_seg_elf_int
 #if AROS_FLAVOUR == AROS_FLAVOUR_STANDALONE
                     /* The void legacy API cannot reject a failed rendezvous.
                      * Never register or run a segment lacking executable rights. */
-                    if (sh[i].size > UINT32_MAX ||
-                        !protect(sh[i].addr, (uint32_t)sh[i].size,
-                            MAP_Readable | MAP_Executable))
+                    if (!protect_elf_code_hunk(hunks, sh[i].addr, sh[i].size,
+                            KernelBase))
                     {
                         SetIoErr(ERROR_NOT_EXECUTABLE);
                         goto error;
@@ -2270,6 +2449,11 @@ end:
     }
 
 #if defined(__aarch64__)
+    if (functions) {
+        for (i = 0; i < int_shnum; ++i) FreeVec(functions[i].entries);
+        FreeVec(functions);
+    }
+    FreeVec(branches);
     FreeVec(tls_state.by_sym);
     FreeVec(tls_state.offset);
 #endif
