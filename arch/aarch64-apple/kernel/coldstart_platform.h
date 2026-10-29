@@ -5,6 +5,7 @@
 #ifndef COLDSTART_PLATFORM_H
 #define COLDSTART_PLATFORM_H
 
+#include "desktop_storage.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <exec/types.h>

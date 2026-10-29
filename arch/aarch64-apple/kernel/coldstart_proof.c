@@ -3421,7 +3421,7 @@ static void core_coldstart_el0(struct AROSAppleRuntimeProof *unused)
      * validate the full ordered list, while proving SYS0 as a usable fallback. */
     if (valid)
         valid = (proof->mount_count == 1 ||
-                (desktop_profile_flag && proof->mount_count <= AROS_APPLE_DESKTOP_STORAGE_NODE_MAX &&
+                (desktop_profile_flag && proof->mount_count <= AROS_DESKTOP_STORAGE_NODE_MAX &&
                  desktop_storage_nodes_valid(
                     (struct BootNode *)expansion->MountList.lh_Head,
                     FindResident("afsplus-handler") != NULL))) &&
