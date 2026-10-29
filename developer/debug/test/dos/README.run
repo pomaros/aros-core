@@ -62,3 +62,11 @@ must itself be reachable; oversized sections are refused when no valid slot
 exists. Section-relative references require an exact defined function entry;
 arbitrary intra-section labels do not gain permission to clobber IP0.
 These host checks do not prove runtime instruction execution or cache coherence.
+
+`elf_branch_native.c` is the execution counterpart. Build it as an AArch64 CLI
+command with the selected SDK's startup and libraries, then execute it in an
+isolated guest with sufficient RAM (1 GiB or more). It deliberately creates a
+text section larger than 128 MiB: its forward and backward calls must use
+reachable veneers, preserve the return path and return 42 and 21 respectively.
+Require `ELF-LONG-BRANCH=PASS`, zero command return and continued Shell operation.
+This is a loader regression, not an application or physical-platform acceptance.
