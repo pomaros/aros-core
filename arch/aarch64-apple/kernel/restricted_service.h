@@ -30,6 +30,7 @@ int AROSRestrictedServiceProtect(struct AROSRestrictedService *, unsigned);
 int AROSRestrictedServiceSubmit(struct AROSRestrictedService *,uintptr_t,uintptr_t,size_t);
 int AROSRestrictedServiceCollect(struct AROSRestrictedService *,uint64_t);
 int AROSRestrictedServiceTake(struct Task *,struct AROSRestrictedWork *);
+unsigned AROSRestrictedServiceState(struct Task *,const struct AROSRestrictedWork *);
 int AROSRestrictedServiceComplete(struct Task *,const struct AROSRestrictedWork *);
 /* Cancels requests and returns zero while an acknowledged worker lease is
  * outstanding. Caller keeps service, tables and backing alive and retries

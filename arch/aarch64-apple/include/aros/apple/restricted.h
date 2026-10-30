@@ -19,9 +19,15 @@
 #define AROS_RESTRICTED_FAULT_HANDLER 0xa545
 #define AROS_RESTRICTED_PROTECT_DATA 0xa546
 #define AROS_RESTRICTED_FAULT_RESUME 0xa547
+#define AROS_RESTRICTED_CANCEL 0xa548
+#define AROS_RESTRICTED_STATUS 0xa549
+#define AROS_RESTRICTED_RUNNING 2
+#define AROS_RESTRICTED_CANCELLED 4
 struct AROSRestrictedResult {
     int64_t status;
-    uint64_t value, esr, far, pc, yields, denied, replies, rejected, callbacks, resumed;
+    uint64_t value, esr, far, pc, yields, denied, replies, rejected, callbacks, resumed, cancelled, close_waits, drained;
+    /* Trusted native caller snapshot, taken only after worker leases drain. */
+    unsigned char data[4096];
 };
 struct AROSRestrictedWork {
     uint64_t domain,token,length;
@@ -33,5 +39,6 @@ struct AROSRestrictedAPI {
         struct AROSRestrictedResult *result);
     int (*take)(struct AROSRestrictedWork *);
     int (*complete)(const struct AROSRestrictedWork *);
+    unsigned (*state)(const struct AROSRestrictedWork *);
 };
 #endif

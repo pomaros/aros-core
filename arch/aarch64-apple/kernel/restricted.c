@@ -237,6 +237,21 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
             *frame=r->fault;r->fault_active=0;++r->result.resumed;
             return 1;
         }
+        case AROS_RESTRICTED_CANCEL: {
+            unsigned state=r->service.request.state;
+            int cancelled=KrnBufferServiceCancel(&r->service.request,r->service.principal,frame->x[0]);
+            if (cancelled) {
+                r->callback_pc=0;
+                if (state!=KS_CANCELLED) ++r->result.cancelled;
+            }
+            frame->x[0]=cancelled;
+            return 1;
+        }
+        case AROS_RESTRICTED_STATUS:
+            frame->x[0]=r->service.request.queue && r->service.request.token==frame->x[0] ?
+                r->service.request.state : 0;
+            core_SysCall(SC_SWITCH,frame);cpu_ApplyCurrentTaskMasks(&frame->spsr);
+            return 1;
         case AROS_RESTRICTED_EXIT:
             r_finish(r,execution,frame,(int64_t)frame->x[0]);
             return 1;
@@ -246,10 +261,11 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
             return 1;
         }
     }
-    if (ec == 0x15 && (svc == 0xa532 || svc == 0xa533)) {
+    if (ec == 0x15 && (svc == 0xa532 || svc == 0xa533 || svc == 0xa535)) {
         void *work=(void *)(uintptr_t)frame->x[0];
         frame->x[0]=svc==0xa532 ? AROSRestrictedServiceTake(task,work) :
-            AROSRestrictedServiceComplete(task,work);
+            svc==0xa533 ? AROSRestrictedServiceComplete(task,work) :
+            AROSRestrictedServiceState(task,work);
         return 1;
     }
     if (ec != 0x15 || (svc != R_PREPARE && svc != AROS_RESTRICTED_ENTER && svc != 0xa534)) return 0;
@@ -327,7 +343,6 @@ static int r_run(const void *code, size_t bytes, uint64_t seed,
     argument = (uintptr_t)r;
     __asm__ volatile("svc #0xa530":"+r"(argument)::"x1","memory","cc");
     ok = argument != 0;
-    if (ok) *result = r->result;
 cleanup:
     /* Native task context owns retries. A cancelled running worker retains its
      * output lease and the entire root/backing until it acknowledges completion. */
@@ -335,7 +350,13 @@ cleanup:
         register uintptr_t closing __asm__("x0")=(uintptr_t)r;
         __asm__ volatile("svc #0xa534":"+r"(closing)::"x1","memory","cc");
         if (closing) break;
+        ++r->result.close_waits;
         krnSysCall(SC_SWITCH);
+    }
+    if (ok) {
+        r->result.drained=1;
+        *result=r->result;
+        memcpy(result->data,r->data,R_PAGE);
     }
     /* Single-CPU admission only. The return path has flushed all local
      * translations before these pages can be recycled. */
@@ -360,7 +381,13 @@ static int r_complete(const struct AROSRestrictedWork *work)
     __asm__ volatile("svc #0xa533":"+r"(argument)::"memory","cc");
     return argument!=0;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {4,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete};
+static unsigned r_state(const struct AROSRestrictedWork *work)
+{
+    register uintptr_t argument __asm__("x0")=(uintptr_t)work;
+    __asm__ volatile("svc #0xa535":"+r"(argument)::"memory","cc");
+    return (unsigned)argument;
+}
+const struct AROSRestrictedAPI AROSRestrictedAPI = {5,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

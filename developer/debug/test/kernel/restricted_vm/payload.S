@@ -86,6 +86,45 @@ RestrictedCode:
  b.ne RestrictedFailure
  subs x24, x24, #1
  b.ne 3b
+ /* Running cancellation: worker holds its copied request until cancelled. */
+ mov x9, #0xa5a5
+ movk x9, #0xa5a5, lsl #16
+ movk x9, #0xa5a5, lsl #32
+ movk x9, #0xa5a5, lsl #48
+ str x9, [x19, #512]
+ str x9, [x19, #544]
+ mov x9, #0xe2
+ str x9, [x19, #480]
+ add x0, x19, #480
+ add x1, x19, #512
+ mov x2, #8
+ mov x3, #0
+ svc #0xa542
+ cbz x0, RestrictedFailure
+ mov x25, x0
+8:
+ mov x0, x25
+ svc #0xa549
+ cmp x0, #2
+ b.ne 8b
+ mov x0, x25
+ svc #0xa548
+ cmp x0, #1
+ b.ne RestrictedFailure
+10:
+ mov x0, x25
+ svc #0xa549
+ cbnz x0, 10b
+ mov x0, x25
+ svc #0xa543
+ cbnz x0, RestrictedFailure
+ ldr x9, [x19, #512]
+ mov x10, #0xa5a5
+ movk x10, #0xa5a5, lsl #16
+ movk x10, #0xa5a5, lsl #32
+ movk x10, #0xa5a5, lsl #48
+ cmp x9, x10
+ b.ne RestrictedFailure
  mov x0, #1
  svc #0xa501
  cmn x0, #1
@@ -108,8 +147,27 @@ RestrictedCode:
  svc #0xa544
  cmn x0, #1
  b.ne RestrictedFailure
+ mov x0, #1
+ svc #0xa535
+ cmn x0, #1
+ b.ne RestrictedFailure
  cmp x23, #1, lsl #12
  b.ne 2f
+ /* Terminate while a worker lease is live. Native close must cancel/drain. */
+ mov x9, #0xe3
+ str x9, [x19, #480]
+ add x0, x19, #480
+ add x1, x19, #544
+ mov x2, #8
+ mov x3, #0
+ svc #0xa542
+ cbz x0, RestrictedFailure
+ mov x25, x0
+11:
+ mov x0, x25
+ svc #0xa549
+ cmp x0, #2
+ b.ne 11b
  mov x9, #0x40080000
  ldr x0, [x9]
  b RestrictedFailure
@@ -228,3 +286,43 @@ RestrictedFaultHandler:
  svc #0xa547
  b RestrictedFailure
 RestrictedCodeEnd:
+
+.balign 16
+.global RestrictedQueued, RestrictedQueuedEnd
+RestrictedQueued:
+ mov x19, x1
+ mov x9, #0xe1
+ str x9, [x19, #480]
+ mov x9, #0xa5a5
+ movk x9, #0xa5a5, lsl #16
+ movk x9, #0xa5a5, lsl #32
+ movk x9, #0xa5a5, lsl #48
+ str x9, [x19, #512]
+ add x0, x19, #480
+ add x1, x19, #512
+ mov x2, #8
+ mov x3, #0
+ svc #0xa542
+ cbz x0, QueuedFailure
+ mov x25, x0
+ svc #0xa548
+ cmp x0, #1
+ b.ne QueuedFailure
+ mov x0, x25
+ svc #0xa549
+ cbnz x0, QueuedFailure
+ ldr x9, [x19, #512]
+ mov x10, #0xa5a5
+ movk x10, #0xa5a5, lsl #16
+ movk x10, #0xa5a5, lsl #32
+ movk x10, #0xa5a5, lsl #48
+ cmp x9, x10
+ b.ne QueuedFailure
+ mov x0, #0
+ svc #0xa541
+ b .
+QueuedFailure:
+ mov x0, #9
+ svc #0xa541
+ b .
+RestrictedQueuedEnd:

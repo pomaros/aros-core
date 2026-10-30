@@ -2,6 +2,7 @@
  * Licensed under the AROS Public License (APL) Version 1.1. */
 #include "restricted_service.h"
 #define PAGE 4096U
+_Static_assert(KS_RUNNING==AROS_RESTRICTED_RUNNING && KS_CANCELLED==AROS_RESTRICTED_CANCELLED,"public work states");
 static struct KrnBufferRegistry registry;
 static struct AROSRestrictedService *active[KBUF_SPACES];
 static unsigned char *admit(void *opaque,const struct KrnBufferSpace *space,
@@ -73,6 +74,16 @@ int AROSRestrictedServiceTake(struct Task *worker,struct AROSRestrictedWork *wor
         return 1;
     }
     return 0;
+}
+unsigned AROSRestrictedServiceState(struct Task *worker,const struct AROSRestrictedWork *work)
+{
+    if (!worker || !work) return 0;
+    uint32_t index=(uint32_t)work->domain;
+    if (!index || index>KBUF_SPACES) return 0;
+    struct AROSRestrictedService *s=active[index-1];
+    if (!s || s->handle!=work->domain || s->worker!=worker ||
+        s->request.token!=work->token) return 0;
+    return s->request.state;
 }
 int AROSRestrictedServiceComplete(struct Task *worker,const struct AROSRestrictedWork *work)
 {

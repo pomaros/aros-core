@@ -22,10 +22,10 @@ backing. It implements bounded worker services. It supports one callback frame a
 or SMP reclamation. SMP admission is disabled.
 The source is an integration candidate; a compile is not runtime acceptance.
 
-The API version is 4. Service submit/collect use kernel-derived task identity;
+The API version is 5. Service submit/collect use kernel-derived task identity;
 collection yields when a response is unavailable. Close cancels and drains
-worker leases from native context before reclaiming backing; adversarial
-cancellation/close timing requires separate runtime qualification.
+worker leases from native context before reclaiming backing; the workload covers queued cancellation before worker creation, running
+cancellation and termination while the worker retains a lease.
 
 Callbacks target aligned instructions inside the owned immutable code page.
 The kernel retains the full suspended context and restores it only after the
@@ -45,3 +45,12 @@ before permission repair, a forged PC and a forged token are rejected. The
 outer callback and task continue; an unrelated kernel-memory fault terminates
 only its own domain. This is a bounded resident-page fault-upcall contract,
 not demand paging or general Windows exception support.
+
+Before creating the worker, a separate restricted invocation submits and cancels
+a queued request. Both concurrent payloads then cancel one held running request;
+the faulting payload additionally exits through its fault while another held
+request is live. The worker acknowledges cancellation and attempts duplicate
+completion. The native result includes a data-page snapshot taken after drain
+and before backing release: both cancelled output sentinels must stay unchanged,
+all three domains drain, and close must wait for the faulting domain's worker.
+External task removal remains a separate lifetime requirement.
