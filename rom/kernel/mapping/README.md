@@ -45,7 +45,8 @@ cross-CPU synchronization belong to their platform coordinator.
   is staged before submission; output remains pinned until cancellation is
   acknowledged or completion is collected. Ready responses are discarded if
   publication is no longer valid. Workers present captured tokens so record
-  reuse cannot redirect stale completions. No public pointer/handle ABI or
+  reuse cannot redirect stale completions, even when separate queues reuse the
+  same queue token. Request-record generations survive retirement and never wrap. No public pointer/handle ABI or
   production exception/scheduler integration is supplied by these components.
 
 The coordinator must register fault waiters before releasing its lock, suspend

@@ -215,8 +215,27 @@ static void service_cases(void)
     CHECK(!KrnBufferServiceSubmit(&f.registry,17,f.handle,&q,START,START+2*PAGE-4,8,&f.bufops,&r) && !f.mapping.in_flight,"submit-refusal-drain");
     KrnServiceClose(&q);clean(&f);
 }
+static void cross_queue_reuse(void)
+{
+    struct Fixture a,b;init(&a);init(&b);
+    struct KrnServiceQueue qa={0},qb={0};struct KrnBufferService r={0};
+    CHECK(KrnServiceInitialize(&qa,&a.domain) && KrnServiceInitialize(&qb,&b.domain),"cross-queue-init");
+    CHECK(KrnBufferServiceSubmit(&a.registry,17,a.handle,&qa,START,START,8,&a.bufops,&r),"cross-queue-first");
+    uint64_t stale=r.token,queue_token=r.service_token;
+    CHECK(KrnBufferServiceCancel(&r,17,stale),"cross-queue-cancel");
+    CHECK(KrnBufferServiceSubmit(&b.registry,17,b.handle,&qb,START,START,8,&b.bufops,&r),"cross-queue-second");
+    CHECK(r.service_token==queue_token && r.token!=stale,"cross-queue-generation");
+    unsigned char bytes[8];size_t n=0;
+    CHECK(KrnBufferServiceTake(&r,r.token,bytes,sizeof(bytes),&n),"cross-queue-take");
+    CHECK(!KrnBufferServiceComplete(&r,stale,bytes,n),"cross-queue-stale-worker");
+    uint64_t current=r.token;
+    CHECK(KrnBufferServiceCancel(&r,17,current) && KrnBufferServiceComplete(&r,current,bytes,n),"cross-queue-drain");
+    r.token=UINT64_MAX;
+    CHECK(!KrnBufferServiceSubmit(&b.registry,17,b.handle,&qb,START,START,8,&b.bufops,&r),"record-generation-exhaustion");
+    clean(&a);clean(&b);
+}
 int main(void)
 {
-    copies();refusal();revalidation();domain_lifetime();adjacent_owners();service_cases();
+    copies();refusal();revalidation();domain_lifetime();adjacent_owners();service_cases();cross_queue_reuse();
     puts("PASS owned buffers bounds permissions generations lifetime");return 0;
 }

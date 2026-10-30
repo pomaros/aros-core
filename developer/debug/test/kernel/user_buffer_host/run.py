@@ -40,6 +40,7 @@ def main():
         'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
         'dirty_inputs': dirty, 'input_hashes': hashes, 'records': []}
     mutations = [
+        ('service-reset-generation', 'r->token = generation;', 'r->token = generation - generation;', 'cross-queue-generation'),
         ('service-stale-worker', 'r->token != token || (r->state != KS_RUNNING', '!token || (r->state != KS_RUNNING', 'stale-worker-complete'),
         ('foreign-owner', 'm->owner != s', '0', 'foreign-mapping'),
         ('domain-owner', 's->principal == principal', 'principal != 0', 'domain-owner'),

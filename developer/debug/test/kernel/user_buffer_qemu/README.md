@@ -32,10 +32,14 @@ unmapped and reassigned only after drain; stale completion/collection cannot
 write the reassigned backing. Completion-before-close also refuses publication.
 All request/lease/mapping/domain ownership drains for both domains.
 
+A request record is also reused across the two domains with identical underlying
+queue tokens: its independently retained record generation must reject the old
+worker. Generation counters are never reset while stale references may exist.
+
 The baseline must print exact buffer counts plus the original domain proof
-counts. Six broken variants must fail at their expected assertions: foreign
+counts. Seven broken variants must fail at their expected assertions: foreign
 domain, stale domain, foreign page, omitted ledger permission, early lease
-release on cancellation and stale worker completion. QMP stopped-register
+release on cancellation, stale worker completion and record-generation reset. QMP stopped-register
 preflight occurs before execution; timeouts capture registers and fail. Inputs,
 ELFs, compiler/QEMU versions and commands are recorded in the result receipt.
 Dirty input success is diagnostic-only.

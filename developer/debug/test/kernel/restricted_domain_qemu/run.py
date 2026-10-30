@@ -98,7 +98,8 @@ def main():
     controls = {}
     if args.buffer_proof:
         controls = {
-            'stale-worker': ('user_service.c', 'r->token != token || (r->state != KS_RUNNING', '!token || (r->state != KS_RUNNING', 'FAIL buffer-stale-worker'),
+            'reset-record-generation': ('user_service.c', 'r->token = generation;', 'r->token = generation - generation;', 'FAIL buffer-cross-queue-generation'),
+            'stale-worker': ('user_service.c', 'r->token != token || (r->state != KS_RUNNING', '!token || (r->state != KS_RUNNING', 'FAIL buffer-cross-queue-worker'),
             'foreign-domain': ('user_buffer.c', 's->principal == principal', 'principal != 0', 'FAIL buffer-foreign-domain'),
             'stale-domain': ('user_buffer.c', 's->generation == (uint32_t)(handle >> 32)', 's->generation != 0', 'FAIL buffer-stale-domain'),
             'foreign-page': ('user_buffer.c', 'm->owner != s', '0', 'FAIL buffer-foreign-page'),
@@ -166,7 +167,7 @@ def main():
                     if expected_failure is None:
                         expected_lines = ['READY restricted-domain-probe']
                         if args.buffer_proof:
-                            expected_lines.append('PASS buffers domains=2 copied=2 refused=4 cancelled=4 retired=2')
+                            expected_lines.append('PASS buffers domains=2 copied=2 refused=4 cancelled=4 retired=2 cross_queue=1')
                         expected_lines.append(EXPECTED)
                         passed = proc.returncode == 0 and stdout.splitlines() == expected_lines and not stderr
                     else:

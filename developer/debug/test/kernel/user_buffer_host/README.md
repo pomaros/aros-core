@@ -31,10 +31,12 @@ Every rejected publication leaves output untouched and every case drains both
 request and buffer ownership before final reclamation. Worker completion uses
 its captured token, so reuse of a kernel record cannot redirect a delayed reply.
 
-Eight semantic controls must fail at named assertions: wrong mapping owner,
+Nine semantic controls must fail at named assertions: wrong mapping owner,
 wrong domain owner, stale domain generation, omitted page permission check,
 stale page generation, ignored mapping close, omitted mapping pins and stale
-worker token acceptance. The platform oracle is independent of the mapping
+worker token acceptance and resetting a record generation on retirement.
+A cross-queue test deliberately creates identical queue tokens for different
+domains; the retained record generation must still reject the old worker. The platform oracle is independent of the mapping
 ledger, allowing one check to be broken without another hiding it.
 
 See `rom/kernel/mapping/user_buffer.h` and `user_service.h` for caller contracts.

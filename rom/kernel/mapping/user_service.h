@@ -11,6 +11,9 @@
  * may manipulate this request's underlying service token. The fixed byte
  * operation requires equal input/output length. No guest address reaches a
  * worker: input is copied and output is represented by a retained lease.
+ * token is a RECORD-scoped generation, independent of the queue token. It
+ * survives completion/cancellation; never reset it while stale references may
+ * exist. Exhaustion retires this record. Only initialize before first use.
  * Cancel all outstanding requests when closing a domain; running cancellation
  * retains its output lease until worker acknowledgement. Close/permission
  * changes invalidate publication even if a worker completes before cancellation.
@@ -18,7 +21,7 @@
 struct KrnBufferService {
     struct KrnServiceQueue *queue;
     struct KrnBufferLease output;
-    uint64_t principal, token;
+    uint64_t principal, token, service_token;
     unsigned state;
 };
 int KrnBufferServiceSubmit(struct KrnBufferRegistry *, uint64_t principal,

@@ -6,7 +6,8 @@ _Static_assert(KBUF_BYTES <= KRN_SERVICE_BYTES, "staging capacity");
 static int finish(struct KrnBufferService *r)
 {
     if (!KrnBufferRelease(&r->output)) return 0;
-    *r = (struct KrnBufferService){0}; return 1;
+    uint64_t generation = r->token;
+    *r = (struct KrnBufferService){0}; r->token = generation; return 1;
 }
 int KrnBufferServiceSubmit(struct KrnBufferRegistry *registry, uint64_t principal,
     uint64_t handle, struct KrnServiceQueue *queue, uintptr_t input,
@@ -14,7 +15,7 @@ int KrnBufferServiceSubmit(struct KrnBufferRegistry *registry, uint64_t principa
     struct KrnBufferService *r)
 {
     struct KrnBufferSpace *s = KrnBufferLookup(registry, principal, handle);
-    if (!r || r->queue || r->output.space || !s || !queue || queue->domain != s->domain) return 0;
+    if (!r || r->token == UINT64_MAX || r->queue || r->output.space || !s || !queue || queue->domain != s->domain) return 0;
     struct KrnBufferLease in = {0}; unsigned char bytes[KBUF_BYTES];
     if (!KrnBufferPin(registry, principal, handle, input, length, KMAP_READ, ops, &in)) return 0;
     if (!KrnBufferPin(registry, principal, handle, output, length, KMAP_WRITE, ops, &r->output)) {
@@ -26,13 +27,13 @@ int KrnBufferServiceSubmit(struct KrnBufferRegistry *registry, uint64_t principa
     if (!ok || !KrnServiceSubmit(queue, principal, bytes, length, &token)) {
         (void)KrnBufferRelease(&r->output); return 0;
     }
-    r->queue = queue; r->principal = principal; r->token = token; r->state = KS_QUEUED;
+    r->queue = queue; r->principal = principal; ++r->token; r->service_token = token; r->state = KS_QUEUED;
     return 1;
 }
 int KrnBufferServiceTake(struct KrnBufferService *r, uint64_t token, void *bytes, size_t cap, size_t *length)
 {
     if (!r || !r->queue || r->token != token || r->state != KS_QUEUED ||
-        !KrnServiceTake(r->queue, r->token, bytes, cap, length)) return 0;
+        !KrnServiceTake(r->queue, r->service_token, bytes, cap, length)) return 0;
     r->state = KS_RUNNING; return 1;
 }
 int KrnBufferServiceComplete(struct KrnBufferService *r, uint64_t token, const void *bytes, size_t length)
@@ -40,14 +41,14 @@ int KrnBufferServiceComplete(struct KrnBufferService *r, uint64_t token, const v
     if (!r || !r->queue || r->token != token || (r->state != KS_RUNNING && r->state != KS_CANCELLED)) return 0;
     int discarded = r->state == KS_CANCELLED || r->queue->domain->closing;
     if (!discarded && length != r->output.length) return 0;
-    if (!KrnServiceComplete(r->queue, r->token, bytes, length)) return 0;
+    if (!KrnServiceComplete(r->queue, r->service_token, bytes, length)) return 0;
     if (discarded) return finish(r);
     r->state = KS_READY; return 1;
 }
 int KrnBufferServiceCancel(struct KrnBufferService *r, uint64_t principal, uint64_t token)
 {
     if (!r || !r->queue || r->principal != principal || r->token != token ||
-        !KrnServiceCancel(r->queue, principal, token)) return 0;
+        !KrnServiceCancel(r->queue, principal, r->service_token)) return 0;
     if (r->state == KS_RUNNING || r->state == KS_CANCELLED) {
         r->state = KS_CANCELLED; return 1;
     }
@@ -58,8 +59,8 @@ int KrnBufferServiceCollect(struct KrnBufferService *r, uint64_t principal,
 {
     if (!r || !r->queue || r->principal != principal || r->token != token || r->state != KS_READY) return 0;
     unsigned char bytes[KBUF_BYTES]; size_t length = 0;
-    int collected = KrnServiceCollect(r->queue, principal, token, bytes, sizeof(bytes), &length);
-    if (!collected && !KrnServiceCancel(r->queue, principal, token)) return 0;
+    int collected = KrnServiceCollect(r->queue, principal, r->service_token, bytes, sizeof(bytes), &length);
+    if (!collected && !KrnServiceCancel(r->queue, principal, r->service_token)) return 0;
     int copied = collected && KrnBufferWrite(&r->output, principal, bytes, length, ops);
     return finish(r) && copied;
 }

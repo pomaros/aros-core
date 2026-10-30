@@ -25,7 +25,7 @@ struct Space {
 };
 static struct Space spaces[2];
 static unsigned char memory[2][2][PAGE] __attribute__((aligned(PAGE)));
-static unsigned copied,refused,cancelled,retired;
+static unsigned copied,refused,cancelled,retired,cross_queue;
 static int install(void *context,uintptr_t va,uintptr_t pa,unsigned permissions)
 { struct Space *s=context;return ProbeMap(s->id,va,pa,permissions); }
 static int remove_page(void *context,uintptr_t va,uintptr_t pa)
@@ -64,6 +64,19 @@ void ProbeBufferInit(void)
   for(unsigned i=0;i<2;++i)populate(s,&s->temp,i,(uintptr_t)memory[id][i]);
   CHECK(KrnServiceInitialize(&s->queue,&s->domain),"buffer-service-init");
  }
+ /* Distinct queues start at the same queue token: record generation must
+    distinguish a delayed worker after cross-domain request-record reuse. */
+ struct KrnBufferService r={0};unsigned char bytes[8];size_t n=0;
+ CHECK(KrnBufferServiceSubmit(&registry,1,spaces[0].handle,&spaces[0].queue,TEMP,TEMP,8,&spaces[0].bufops,&r),"buffer-cross-queue-first");
+ uint64_t old=r.token,queue_token=r.service_token;
+ CHECK(KrnBufferServiceCancel(&r,1,old),"buffer-cross-queue-cancel");
+ CHECK(KrnBufferServiceSubmit(&registry,2,spaces[1].handle,&spaces[1].queue,TEMP,TEMP,8,&spaces[1].bufops,&r),"buffer-cross-queue-second");
+ CHECK(r.service_token==queue_token && r.token!=old,"buffer-cross-queue-generation");
+ uint64_t token=r.token;
+ CHECK(KrnBufferServiceTake(&r,token,bytes,sizeof(bytes),&n),"buffer-cross-queue-take");
+ CHECK(!KrnBufferServiceComplete(&r,old,bytes,n),"buffer-cross-queue-worker");
+ CHECK(KrnBufferServiceCancel(&r,2,token) && KrnBufferServiceComplete(&r,token,bytes,n),"buffer-cross-queue-drain");
+ cross_queue=1;
 }
 int ProbeBufferService(unsigned id,uint64_t ptr,uint64_t len,unsigned mask)
 {
@@ -140,6 +153,6 @@ void ProbeBufferFinish(unsigned id)
 }
 const char *ProbeBufferSummary(void)
 {
- CHECK(copied==2 && refused==4 && cancelled==4 && retired==2,"buffer-final-counts");
- return "PASS buffers domains=2 copied=2 refused=4 cancelled=4 retired=2\n";
+ CHECK(copied==2 && refused==4 && cancelled==4 && retired==2 && cross_queue==1,"buffer-final-counts");
+ return "PASS buffers domains=2 copied=2 refused=4 cancelled=4 retired=2 cross_queue=1\n";
 }
