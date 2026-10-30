@@ -11,7 +11,7 @@
 #include <stdint.h>
 #include <aros/apple/runtime_local.h>
 
-#define AROS_APPLE_RUNTIME_FRAME_SIZE UINT32_C(848)
+#define AROS_APPLE_RUNTIME_FRAME_SIZE UINT32_C(864)
 #define AROS_APPLE_DISPATCH_CONTEXT_SIZE UINT32_C(816)
 #define AROS_APPLE_DISPATCH_SIMD_OFFSET UINT32_C(288)
 #define AROS_APPLE_EXCEPTION_CONTEXT_SIZE UINT32_C(280)
@@ -67,8 +67,11 @@ struct __attribute__((aligned(16))) AROSAppleRuntimeFrame {
     uint64_t vector;
     uint64_t service;
     uint64_t status;
-    uint64_t reserved;
+    uint64_t task_tls;
     uint64_t simd[66];
+    /* Entry is evidence; return is selected by the kernel dispatcher. */
+    uint64_t return_ttbr0;
+    uint64_t entry_ttbr0;
 };
 
 struct __attribute__((aligned(16))) AROSAppleRuntimeProof {
@@ -151,6 +154,12 @@ _Static_assert(offsetof(struct AROSAppleRuntimeFrame, status) == 304,
     "runtime frame status offset");
 _Static_assert(offsetof(struct AROSAppleRuntimeFrame, simd) == 320,
     "runtime frame SIMD offset");
+_Static_assert(offsetof(struct AROSAppleRuntimeFrame, task_tls) == 312,
+    "runtime task TLS offset");
+_Static_assert(offsetof(struct AROSAppleRuntimeFrame, return_ttbr0) == 848,
+    "runtime destination root offset");
+_Static_assert(offsetof(struct AROSAppleRuntimeFrame, entry_ttbr0) == 856,
+    "runtime entry root offset");
 _Static_assert(sizeof(struct AROSAppleRuntimeFrame) ==
     AROS_APPLE_RUNTIME_FRAME_SIZE, "runtime frame size");
 _Static_assert(sizeof(struct AROSAppleRuntimeProof) == 144,

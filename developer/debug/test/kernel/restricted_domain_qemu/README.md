@@ -106,3 +106,23 @@ The snapshot's kernel mappings are static in this fixture. Production module
 mapping changes, exception-entry root/TLS transition and scheduler integration
 are not qualified. The host root-clone suite also covers 16 KiB tables;
 this runtime remains a 4 KiB, single-CPU, caches-disabled fixture.
+
+## Production exception entry
+
+`--runtime-entry-proof --root-clone-proof` links the actual shared guest
+`runtime_vectors.S` and runtime frame headers. The fixture C handler checks the
+trusted root and kernel TLS before handling each guest trap, triggers a nested
+EL1 SVC, and selects the destination root/TLS in the production return frame.
+The existing two-domain workload checks 2,000 switches, SIMD/x18, permission
+faults and service refusals. Semantic mutations omit the entry root switch,
+entry TLS switch or return TLS restoration and must fail the matching check.
+This covers production assembly with a fixture C scheduler, not an AROS boot,
+native worker, preemption or SMP. Do not combine it with `--buffer-proof`.
+
+The runtime frame is 864 bytes; the existing register and SIMD offsets remain
+fixed. The former reserved word at 312 carries the interrupted/destination TLS;
+root fields at 848/856 carry the destination and observed entry TTBR0. CPU-owned
+trusted-root state is initialized at CPU binding. Admission must pin the vector
+section, exception stack and CPU record in every root before selecting it.
+The production scheduler selects the trusted root for native dispatch and idle;
+restricted task admission and classification are separate integration work.

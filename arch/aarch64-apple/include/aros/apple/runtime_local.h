@@ -5,6 +5,8 @@
 #define AROS_APPLE_RUNTIME_LOCAL_H
 #define AROS_CPU_TRANSITION_OFFSET 4
 #define AROS_CPU_RETURN_PC_OFFSET 24
+#define AROS_CPU_TRUSTED_ROOT_OFFSET 104
+#define AROS_CPU_KERNEL_TLS_OFFSET 112
 #ifndef __ASSEMBLER__
 #include <stdint.h>
 #include <stddef.h>
@@ -27,11 +29,21 @@ struct AROSAppleRuntimeLocal {
     uint64_t irq_mask_started;
     uint64_t irq_mask_max_ticks;
     const void *exec_smp_api;
+    /* EL1-owned transition state. The entry island, exception stack and this
+     * record must be mapped privileged in every admitted root. Zero root
+     * disables transitions during early bootstrap. Publication is CPU-local
+     * with exceptions masked, before any restricted return. */
+    uint64_t trusted_ttbr0;
+    uint64_t kernel_tls;
 };
 _Static_assert(offsetof(struct AROSAppleRuntimeLocal, transition_active)==AROS_CPU_TRANSITION_OFFSET,
     "CPU transition assembly offset");
 _Static_assert(offsetof(struct AROSAppleRuntimeLocal, return_pc)==AROS_CPU_RETURN_PC_OFFSET,
     "CPU return PC assembly offset");
+_Static_assert(offsetof(struct AROSAppleRuntimeLocal, trusted_ttbr0)==AROS_CPU_TRUSTED_ROOT_OFFSET,
+    "CPU trusted root assembly offset");
+_Static_assert(offsetof(struct AROSAppleRuntimeLocal, kernel_tls)==AROS_CPU_KERNEL_TLS_OFFSET,
+    "CPU kernel TLS assembly offset");
 /* CPU-local exclusion never overrides Disable or interrupt-controller readiness. */
 static inline uint64_t AROSAppleRequiredTaskMasks(
     const struct AROSAppleRuntimeLocal *local, int nesting)

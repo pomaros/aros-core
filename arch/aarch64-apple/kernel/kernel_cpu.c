@@ -214,6 +214,9 @@ static void enter_idle(regs_t *regs)
 
     /* Idle is not the last sleeping task and must not retain its TCB. */
     AROSAArch64WriteTaskPointer(0);
+    regs->task_tls = 0;
+    if (AROSAppleRuntimeLocal()->trusted_ttbr0)
+        regs->return_ttbr0 = AROSAppleRuntimeLocal()->trusted_ttbr0;
     /* No task owns an idle core's EL0 JIT write permission. A task that
      * yielded inside its write scope regains it only on its own dispatch. */
     AROSAppleJitRestore(NULL);
@@ -408,6 +411,9 @@ dispatch_after_self_exit:
     /* core_Dispatch has selected this task on this CPU: its TLS anchor's
      * address, the same on every CPU for the task's whole life. */
     AROSAppleTaskTLSRestore(context);
+    regs->task_tls = AROSAArch64ReadTaskPointer();
+    if (AROSAppleRuntimeLocal()->trusted_ttbr0)
+        regs->return_ttbr0 = AROSAppleRuntimeLocal()->trusted_ttbr0;
 #if defined(__AROSEXEC_SMP__)
     if (!AROSAppleSelfExitDetached(departing))
         dispatch_contract_halt();

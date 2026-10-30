@@ -17,7 +17,11 @@ _start:
 2: mov x0, #0x300000
  msr cpacr_el1, x0
  isb
+#if RUNTIME_ENTRY
+ adr x0, AROSAppleRuntimeVectors
+#else
  adr x0, vectors
+#endif
  msr vbar_el1, x0
  isb
  bl main
@@ -90,10 +94,19 @@ lower_sync:
  mrs x0, fpsr
  str x0, [sp, #808]
  mov x0, sp
+#if RUNTIME_ENTRY
+ bl mechanism_handle
+#else
  bl handle_exception
+#endif
  b restore
+#if RUNTIME_ENTRY
+.global fixture_enter_guest
+fixture_enter_guest:
+#else
 .global enter_guest
 enter_guest:
+#endif
  sub sp, sp, #816
  mov x1, x0
  mov x0, sp

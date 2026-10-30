@@ -8,7 +8,9 @@
 
 #include <aros/apple/runtime_local.h>
 
-#define FRAME_SIZE 848
+.arch armv8-a+simd
+
+#define FRAME_SIZE 864
 #define FRAME_SP 248
 #define FRAME_ELR 256
 #define FRAME_SPSR 264
@@ -17,6 +19,9 @@
 #define FRAME_VECTOR 288
 #define FRAME_SERVICE 296
 #define FRAME_STATUS 304
+#define FRAME_TLS 312
+#define FRAME_ROOT 848
+#define FRAME_ENTRY_ROOT 856
 #define FRAME_SIMD 320
 #define FRAME_FPCR 832
 #define FRAME_FPSR 840
@@ -53,7 +58,9 @@ AROSAppleRuntimeVectors:
     .balign 128
     .size AROSAppleRuntimeVectors, . - AROSAppleRuntimeVectors
 
-    .text
+    /* Keep entry and return in the same pinnable executable section as the
+     * vectors. No C, dynamic module or user pointer is accessed before the
+     * trusted root is active. */
     .balign 16
 .Lruntime_exception_common:
     stp     x2, x3, [sp, #16]
@@ -109,7 +116,30 @@ AROSAppleRuntimeVectors:
     str     x1, [sp, #FRAME_FAR]
     str     x0, [sp, #FRAME_VECTOR]
     stp     xzr, xzr, [sp, #FRAME_SERVICE]
-    str     xzr, [sp, #312]
+    mrs     x1, tpidr_el0
+    str     x1, [sp, #FRAME_TLS]
+    mrs     x1, ttbr0_el1
+    str     x1, [sp, #FRAME_ROOT]
+    str     x1, [sp, #FRAME_ENTRY_ROOT]
+    mrs     x2, tpidrro_el0
+    cbz     x2, .Lruntime_trusted_ready
+    ldr     x3, [x2, #AROS_CPU_TRUSTED_ROOT_OFFSET]
+    cbz     x3, .Lruntime_trusted_ready
+    cmp     x1, x3
+    b.eq    .Lruntime_trusted_ready
+    /* ASID zero first implementation: invalidate local translations after
+     * each root switch, including global entries inherited from native RAM.
+     * Other CPUs independently select their roots; reclamation is separate. */
+    dsb     ish
+    msr     ttbr0_el1, x3
+    isb
+    tlbi    vmalle1
+    dsb     ish
+    isb
+    ldr     x1, [x2, #AROS_CPU_KERNEL_TLS_OFFSET]
+    msr     tpidr_el0, x1
+    isb
+.Lruntime_trusted_ready:
     mov     x0, sp
     bl      AROSAppleRuntimeHandleException
     cbz     w0, .Lruntime_exception_halt
@@ -143,6 +173,22 @@ AROSAppleRuntimeVectors:
     ldp     q26, q27, [sp, #FRAME_SIMD + 416]
     ldp     q28, q29, [sp, #FRAME_SIMD + 448]
     ldp     q30, q31, [sp, #FRAME_SIMD + 480]
+    /* All remaining loads use the pinned exception stack. The frame belongs
+     * to EL1; guest registers never select a root or kernel metadata pointer. */
+    ldr     x1, [sp, #FRAME_ROOT]
+    mrs     x2, ttbr0_el1
+    cmp     x1, x2
+    b.eq    .Lruntime_return_root_ready
+    dsb     ish
+    msr     ttbr0_el1, x1
+    isb
+    tlbi    vmalle1
+    dsb     ish
+    isb
+.Lruntime_return_root_ready:
+    ldr     x1, [sp, #FRAME_TLS]
+    msr     tpidr_el0, x1
+    isb
     ldp     x0, x1, [sp, #0]
     ldp     x2, x3, [sp, #16]
     ldp     x4, x5, [sp, #32]

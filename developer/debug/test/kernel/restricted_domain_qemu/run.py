@@ -62,12 +62,15 @@ class Monitor:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--runtime-entry-proof', action='store_true', help='execute actual production exception vectors with the two-root fixture')
     parser.add_argument('--root-clone-proof', action='store_true', help='derive private EL1 kernel mappings from an immutable trusted template')
     parser.add_argument('--buffer-proof', action='store_true', help='link the actual owned-buffer/service boundary')
     parser.add_argument('--cc', required=True)
     parser.add_argument('--qemu', default='qemu-system-aarch64')
     parser.add_argument('--allow-dirty-diagnostic', action='store_true')
     args = parser.parse_args()
+    if args.runtime_entry_proof and (not args.root_clone_proof or args.buffer_proof):
+        parser.error('runtime entry proof requires root-clone mode without buffer mode')
     out = args.out.resolve()
     if out.exists() or out == ROOT or ROOT in out.parents:
         parser.error('output must be a fresh directory outside the source checkout')
@@ -78,6 +81,8 @@ def main():
     portable = ROOT / 'rom/kernel/mapping'
     fixture = HERE.parent / 'user_buffer_qemu'
     extra_scope = ['rom/kernel/mapping', str(fixture.relative_to(ROOT))] if args.buffer_proof else []
+    if args.runtime_entry_proof:
+        extra_scope += ['arch/aarch64-apple/kernel/runtime_vectors.S', 'arch/aarch64-apple/include/aros/apple']
     dirty = bool(subprocess.check_output(['git', 'status', '--porcelain', '--',
                  str(HERE.relative_to(ROOT)), str(KERNEL.relative_to(ROOT)), *extra_scope], cwd=ROOT))
     if dirty and not args.allow_dirty_diagnostic:
@@ -87,6 +92,9 @@ def main():
     if args.buffer_proof:
         inputs += [fixture/'fixture.c', fixture/'freestanding/string.h']
         inputs += [portable/x for x in ('mapping.c','mapping.h','domain.c','domain.h','service.c','service.h','user_buffer.c','user_buffer.h','user_service.c','user_service.h')]
+    runtime = ROOT/'arch/aarch64-apple'
+    if args.runtime_entry_proof:
+        inputs += [HERE/'runtime_entry.c', runtime/'kernel/runtime_vectors.S', runtime/'include/aros/apple/runtime.h', runtime/'include/aros/apple/runtime_local.h']
     before = {str(p.relative_to(ROOT)): digest(p) for p in inputs}
     out.mkdir(parents=True)
     result = {'result': 'FAIL', 'scope': 'single-CPU freestanding QEMU MMU diagnostic; not production AROS or full W2',
@@ -112,6 +120,14 @@ def main():
     if args.root_clone_proof:
         variants = [('baseline', 0, None), ('clone-keeps-user', 0, 'FAIL guest-kernel-access')]
         result['scope'] = 'freestanding cloned private roots; not production scheduler integration'
+    entry_controls = {
+        'entry-keeps-root': ('msr     ttbr0_el1, x3', 'nop', 'FAIL runtime-trusted-root'),
+        'entry-keeps-tls': ('msr     tpidr_el0, x1', 'nop', 'FAIL runtime-kernel-tls'),
+        'return-keeps-tls': ('msr     tpidr_el0, x1', 'nop', 'FAIL runtime-task-tls'),
+    }
+    if args.runtime_entry_proof:
+        variants = [('baseline', 0, None)] + [(n, 0, v[2]) for n,v in entry_controls.items()]
+        result['scope'] = 'actual production vector assembly, fixture C scheduler, single CPU with nested EL1 traps'
     try:
         for name, mutant, expected_failure in variants:
             elf = out/(name+'.elf')
@@ -120,6 +136,17 @@ def main():
                    '-nostdlib', '-fuse-ld=lld', '-Wl,--build-id=none', '-Wl,-T,'+str(HERE/'link.ld'),
                    '-I'+str(KERNEL), '-DMUTANT='+str(mutant), str(HERE/'entry.S'), str(HERE/'probe.c'),
                    str(KERNEL/'mapping.c'), str(KERNEL/'setprotection.c'), '-o', str(elf)]
+            if args.runtime_entry_proof:
+                cmd[cmd.index(str(HERE/'probe.c'))] = str(HERE/'runtime_entry.c')
+                vectors = runtime/'kernel/runtime_vectors.S'
+                if name in entry_controls:
+                    old, new, _ = entry_controls[name]
+                    original = vectors.read_text()
+                    index = original.rfind(old) if name == 'return-keeps-tls' else original.find(old)
+                    if index < 0: raise RuntimeError('entry mutation mismatch')
+                    vectors = out/(name+'-vectors.S')
+                    vectors.write_text(original[:index]+original[index:].replace(old,new,1))
+                cmd += ['-DRUNTIME_ENTRY=1', '-I'+str(runtime/'include'), str(vectors)]
             if args.root_clone_proof:
                 cmd += ['-DROOT_CLONE=1']
                 if name == 'clone-keeps-user':

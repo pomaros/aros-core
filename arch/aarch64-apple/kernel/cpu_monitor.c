@@ -77,6 +77,8 @@ int AROSCPUBindCurrent(void)
     uint64_t id=affinity();
     for (unsigned i=0;i<topology.count;i++)
         if (topology.cpu[i].affinity==id && topology.cpu[i].enabled) {
+            __asm__ volatile("mrs %0,ttbr0_el1" : "=r"(records[i].runtime.trusted_ttbr0));
+            records[i].runtime.kernel_tls = 0;
             __asm__ volatile("msr tpidrro_el0,%0\n\tisb"::"r"(&records[i]):"memory");
             return 1;
         }
