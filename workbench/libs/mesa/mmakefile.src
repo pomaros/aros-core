@@ -28,7 +28,7 @@ include $(SRCDIR)/$(CURDIR)/mesa.cfg
 #MM- mesa3dgl-library-yes : mesa3dgl-library
 #MM- workbench-libs-mesa : mesa3dgl-library
 
-#MM mesa3dgl-library : includes workbench-libs-dxtn-includes linklibs-galliumauxiliary workbench-libs-gallium-linklib mesa3dgl-linklibs mesa3dgl-library-env
+#MM mesa3dgl-library : includes workbench-libs-dxtn-includes linklibs-galliumauxiliary workbench-libs-gallium-linklib mesa3dgl-linklibs mesa3dgl-library-env workbench-libs-z-linklib linklibs-libatomic
 
 # Per-arch gallium core linklibs, mirroring MESA3DGL_GALLIUMCORE in
 # mesa.cfg. Declare each one's build-order dependency so mmake builds the
