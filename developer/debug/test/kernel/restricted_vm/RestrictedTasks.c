@@ -58,7 +58,7 @@ int main(void)
     intptr_t address = KrnGetSystemAttr(AROS_RESTRICTED_KATTR_API);
     CHECK(address != -1 && address != 0);
     api = (const void *)address;
-    CHECK(api->version == 2 && api->size == sizeof(*api));
+    CHECK(api->version == 3 && api->size == sizeof(*api));
     pthread_t clients[2], heart, service;
     CHECK(!pthread_create(&heart,NULL,heartbeat,NULL));
     CHECK(!pthread_create(&service,NULL,worker,NULL));
@@ -79,10 +79,10 @@ int main(void)
         CHECK(results[id].value == (id+1)*5120);
         CHECK(results[id].yields == (id+1)*1024);
         CHECK(results[id].denied == 3);
-        CHECK(results[id].replies == 100 && results[id].rejected == 4);
+        CHECK(results[id].replies == 200 && results[id].rejected == 5 && results[id].callbacks == 100);
     }
-    CHECK(worker_replies == 200);
+    CHECK(worker_replies == 400);
     CHECK(beats > 0 && after_fault > 0);
-    bug("[ISOVM] PASS restricted=2 yields=3072 denied=6 faulted=1 survived=1 heartbeat=%u after_fault=%u joined=4 replies=200 rejected=8\n",beats,after_fault);
+    bug("[ISOVM] PASS restricted=2 yields=3072 denied=6 faulted=1 survived=1 heartbeat=%u after_fault=%u joined=4 replies=400 rejected=10 callbacks=200\n",beats,after_fault);
     return 0;
 }

@@ -15,9 +15,10 @@
 #define AROS_RESTRICTED_EXIT 0xa541
 #define AROS_RESTRICTED_SUBMIT 0xa542
 #define AROS_RESTRICTED_COLLECT 0xa543
+#define AROS_RESTRICTED_CALLBACK_RETURN 0xa544
 struct AROSRestrictedResult {
     int64_t status;
-    uint64_t value, esr, far, pc, yields, denied, replies, rejected;
+    uint64_t value, esr, far, pc, yields, denied, replies, rejected, callbacks;
 };
 struct AROSRestrictedWork {
     uint64_t domain,token,length;

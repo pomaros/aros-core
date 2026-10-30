@@ -44,6 +44,13 @@ RestrictedCode:
  mov x2, #8
  svc #0xa542
  cbnz x0, 9f
+ /* Callback PC must belong to this immutable code allocation. */
+ add x0, x19, #256
+ add x1, x19, #288
+ mov x2, #8
+ mov x3, x19
+ svc #0xa542
+ cbnz x0, 9f
  mov x24, #100
  mov x26, #0x5a5a
  movk x26, #0x5a5a, lsl #16
@@ -52,6 +59,7 @@ RestrictedCode:
 3:
  add x27, x23, x24
  str x27, [x19, #256]
+ adr x3, RestrictedCallback
  add x0, x19, #256
  add x1, x19, #288
  mov x2, #8
@@ -92,4 +100,30 @@ RestrictedCode:
  mov x0, #9
  svc #0xa541
  b .
+RestrictedCallback:
+ mov x19, x1
+ add x27, x0, #73
+ str x27, [x19, #320]
+ add x0, x19, #320
+ add x1, x19, #352
+ mov x2, #8
+ mov x3, #0
+ svc #0xa542
+ cbz x0, 9f
+ mov x25, x0
+5:
+ mov x0, x25
+ svc #0xa543
+ cbz x0, 5b
+ ldr x9, [x19, #352]
+ mov x26, #0x5a5a
+ movk x26, #0x5a5a, lsl #16
+ movk x26, #0x5a5a, lsl #32
+ movk x26, #0x5a5a, lsl #48
+ eor x9, x9, x26
+ cmp x9, x27
+ b.ne 9f
+ mov x0, #0
+ svc #0xa544
+ b 9f
 RestrictedCodeEnd:

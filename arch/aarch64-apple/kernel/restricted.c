@@ -29,6 +29,10 @@ struct Restricted {
     void *native_lower, *native_upper;
     unsigned used;
     uint64_t root, seed;
+    size_t code_bytes;
+    uint64_t callback_pc;
+    unsigned callback_active;
+    struct AROSAppleRuntimeFrame callback;
     struct AROSAppleRuntimeFrame native;
     struct AROSRestrictedResult result;
     struct AROSRestrictedService service;
@@ -94,6 +98,7 @@ static int r_prepare(struct Restricted *r, uint64_t source)
 static void r_finish(struct Restricted *r, struct AROSAppleTaskExecution *execution,
     struct AROSAppleRuntimeFrame *frame, int64_t status)
 {
+    r->callback_active=0;
     r->result.status = status;
     r->result.value = *(uint64_t *)r->data;
     r->result.esr = frame->esr;
@@ -150,17 +155,41 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
             cpu_ApplyCurrentTaskMasks(&frame->spsr);
             return 1;
         case AROS_RESTRICTED_SUBMIT:
+            /* Callback authority is bounded by this immutable executable
+             * allocation. An active callback may call the worker again, but
+             * cannot recursively install another callback frame. */
+            if (frame->x[3] && (r->callback_active ||
+                frame->x[3]<AROS_RESTRICTED_CODE ||
+                frame->x[3]-AROS_RESTRICTED_CODE>=r->code_bytes || (frame->x[3]&3))) {
+                ++r->result.rejected;frame->x[0]=0;return 1;
+            }
             if (AROSRestrictedServiceSubmit(&r->service,frame->x[0],frame->x[1],frame->x[2]))
+                {
+                r->callback_pc=frame->x[3];
                 frame->x[0]=r->service.request.token;
+            }
             else { ++r->result.rejected;frame->x[0]=0; }
             return 1;
         case AROS_RESTRICTED_COLLECT:
             if (AROSRestrictedServiceCollect(&r->service,frame->x[0])) {
                 ++r->result.replies;frame->x[0]=1;
+                if (r->callback_pc) {
+                    r->callback=*frame;r->callback_active=1;
+                    frame->elr=r->callback_pc;r->callback_pc=0;
+                    frame->x[0]=r->seed;frame->x[1]=AROS_RESTRICTED_DATA;
+                    frame->x[30]=0;
+                }
             } else {
                 frame->x[0]=0;core_SysCall(SC_SWITCH,frame);
                 cpu_ApplyCurrentTaskMasks(&frame->spsr);
             }
+            return 1;
+        case AROS_RESTRICTED_CALLBACK_RETURN:
+            if (!r->callback_active || r->service.request.queue) {
+                ++r->result.denied;frame->x[0]=UINT64_MAX;return 1;
+            }
+            if (frame->x[0]) { r_finish(r,execution,frame,-4);return 1; }
+            *frame=r->callback;r->callback_active=0;++r->result.callbacks;
             return 1;
         case AROS_RESTRICTED_EXIT:
             r_finish(r,execution,frame,(int64_t)frame->x[0]);
@@ -235,7 +264,7 @@ static int r_run(const void *code, size_t bytes, uint64_t seed,
     struct Restricted *r = AllocMem(sizeof(*r),MEMF_PUBLIC|MEMF_CLEAR);
     if (!r) return 0;
     int ok = 0;
-    r->cookie = R_COOKIE; r->owner = FindTask(NULL); r->seed = seed;
+    r->cookie = R_COOKIE; r->owner = FindTask(NULL); r->seed = seed; r->code_bytes=bytes;
     r->pool = AROSApplePageTableAllocate(R_TABLES * R_PAGE);
     r->code = AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
     r->data = AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
@@ -285,7 +314,7 @@ static int r_complete(const struct AROSRestrictedWork *work)
     __asm__ volatile("svc #0xa533":"+r"(argument)::"memory","cc");
     return argument!=0;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {2,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {3,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"
