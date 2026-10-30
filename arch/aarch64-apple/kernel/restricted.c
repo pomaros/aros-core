@@ -64,9 +64,13 @@ static void r_clean(void *unused, const void *address, size_t bytes)
 }
 static void r_invalidate(void *unused)
 { (void)unused; __asm__ volatile("dsb ish; tlbi vmalle1is; dsb ish; isb":::"memory"); }
-static void r_sync(void *opaque, uint64_t pa, size_t bytes)
+static void r_sync(void *opaque, uint64_t va, size_t bytes)
 {
-    r_clean(opaque, (void *)(uintptr_t)pa, bytes);
+    struct Restricted *r = opaque;
+    /* The new root is not installed while constructing its sole executable
+     * mapping. Clean the owned native backing, not the inactive guest VA. */
+    (void)va;
+    r_clean(opaque, r->code, bytes);
     __asm__ volatile("ic iallu; dsb ish; isb":::"memory");
 }
 /* Source tables are frozen by the native caller's mapping lock. Every table
