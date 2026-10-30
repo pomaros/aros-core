@@ -49,3 +49,9 @@ HOST callback traces do not execute a real MMU, TLB, cache, scheduler or SMP
 rendezvous. No native Apple backend, context, DOS API, build registration, SDK,
 QEMU or M1 path is activated by these tests. Those require separate source and
 runtime qualification.
+
+The inactive-root user-page admission query checks EL0 permissions, access flag,
+normal-memory index, valid leaf and parent descriptors without mutating tables
+or switching roots. Both page sizes are exercised; deliberate removal of EL0
+and write-permission checks must fail their corresponding assertions. This
+query does not prove backing ownership, lifetime or native hardware behavior.

@@ -57,6 +57,18 @@ int AArch64MappingPhysical(const struct AArch64ProtectionOps *, uint64_t ttbr0,
 int AArch64TranslateResident(const struct AArch64ProtectionOps *, uint64_t ttbr0,
     uint64_t tcr, uint64_t virtual_address, uint64_t *physical);
 
+/* Read-only admission of one aligned resident EL0 page in an inactive root.
+ * Requires AF, explicit user read/write permission and the platform-asserted
+ * normal-memory MAIR index. Refuses blocks, guarded/contiguous descriptors,
+ * unsupported geometry and ALL parent restrictions (conservative refusal).
+ * Only resolve is required; no root switch, allocation or cache/TLB mutation.
+ * Caller serializes mutations and independently verifies ownership, full page
+ * size and expected backing. This proves access, not lifetime or ownership.
+ * Output is unchanged on refusal. Execute access is outside this interface. */
+int AArch64UserPagePhysical(const struct AArch64ProtectionOps *, uint64_t ttbr0,
+    uint64_t tcr, uint64_t virtual_address, unsigned access,
+    unsigned normal_index, uint64_t *physical);
+
 /* Build an unpublished private table tree from an immutable trusted template.
  * Preserves physical mappings/cache attributes and EL1 read/write restrictions,
  * removes EL0 data access and forces UXN on all leaves. Implicit EL1 execute

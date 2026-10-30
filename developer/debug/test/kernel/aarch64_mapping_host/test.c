@@ -359,12 +359,48 @@ static void address_widths(unsigned page)
         finish(&f);
     }
 }
+static void user_admission(unsigned page)
+{
+    struct Fixture f;init(&f,page,48);struct AArch64ProtectionOps o=ops(&f);
+    assert(AArch64MapPage(&o,f.root,f.tcr,f.va,DATA_PA,11,1));
+    struct AArch64ProtectionOps query={.context=&f,.resolve=resolve};
+    uint64_t pa=SENTINEL,*entry=slot_at(&f,f.va,3),original=*entry;
+    unsigned allocations=f.allocate_calls, cleans=f.clean_calls, invalidations=f.invalidations;
+    assert(AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,1,1,&pa) && pa==DATA_PA);
+    assert(AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,2,1,&pa) && pa==DATA_PA);
+    *entry=original & ~(UINT64_C(1)<<6);pa=SENTINEL;
+    assert(!AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,1,1,&pa) && pa==SENTINEL);
+    *entry=original | (UINT64_C(1)<<7);pa=SENTINEL;
+    assert(!AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,2,1,&pa) && pa==SENTINEL);
+    assert(AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,1,1,&pa) && pa==DATA_PA);
+    const uint64_t malformed[]={original & ~UINT64_C(1),original & ~(UINT64_C(1)<<10),
+        original | GUARD,original | CONTIG,original | PA_HIGH,original & ~UINT64_C(0x1c)};
+    for(unsigned i=0;i<sizeof(malformed)/sizeof(*malformed);++i) {
+        *entry=malformed[i];pa=SENTINEL;
+        assert(!AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,1,1,&pa) && pa==SENTINEL);
+    }
+    *entry=original;
+    for(unsigned bit=59;bit<=63;++bit) {
+        uint64_t *parent=slot_at(&f,f.va,0),saved=*parent;
+        *parent|=UINT64_C(1)<<bit;pa=SENTINEL;
+        assert(!AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,1,1,&pa) && pa==SENTINEL);
+        *parent=saved;
+    }
+    pa=SENTINEL;
+    assert(!AArch64UserPagePhysical(&query,f.root,f.tcr,f.va+1,1,1,&pa) && pa==SENTINEL);
+    assert(!AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,4,1,&pa) && pa==SENTINEL);
+    assert(!AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,1,8,&pa) && pa==SENTINEL);
+    assert(!AArch64UserPagePhysical(NULL,f.root,f.tcr,f.va,1,1,&pa));
+    assert(!AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,1,1,NULL));
+    assert(f.allocate_calls==allocations && f.clean_calls==cleans && f.invalidations==invalidations);
+    finish(&f);
+}
 int main(void)
 {
     const unsigned widths[]={25,30,32,39,42,48};
     for (unsigned page=12;page<=14;page+=2) {
         for (unsigned i=0;i<sizeof(widths)/sizeof(*widths);++i) basic(page,widths[i]);
-        permissions(page);allocation_failures(page);invalid_geometry(page);corruption(page);parent_and_blocks(page);callback_contract(page);address_widths(page);
+        user_admission(page);permissions(page);allocation_failures(page);invalid_geometry(page);corruption(page);parent_and_blocks(page);callback_contract(page);address_widths(page);
     }
     printf("[AARCH64-MAPPING-HOST] result=PASS cases=%u granules=4K,16K actual-production-walks=1 native=NOT_RUN\n",cases);
     return 0;

@@ -192,6 +192,25 @@ int AArch64MappingPhysical(const struct AArch64ProtectionOps *ops,
     return 1;
 }
 
+int AArch64UserPagePhysical(const struct AArch64ProtectionOps *ops,
+    uint64_t ttbr0, uint64_t tcr, uint64_t va, unsigned access,
+    unsigned normal_index, uint64_t *physical)
+{
+    struct MappingWalk walk;
+    if (!ops || !ops->resolve || !physical || normal_index > 7 ||
+        (access != AARCH64_PROTECT_READ && access != AARCH64_PROTECT_WRITE) ||
+        !geometry(tcr,va,0,&walk)) return 0;
+    uint64_t *slot = leaf(ops,ttbr0,&walk,va,0);
+    if (!slot || !descriptor_address_valid(&walk,*slot) ||
+        (*slot & (M_GUARDED | M_CONTIGUOUS)) || (*slot & M_TABLE) != M_TABLE ||
+        !(*slot & (UINT64_C(1) << 10)) ||
+        !(*slot & (UINT64_C(1) << 6)) ||
+        (access == AARCH64_PROTECT_WRITE && (*slot & (UINT64_C(1) << 7))) ||
+        ((*slot >> 2) & 7) != normal_index) return 0;
+    *physical = *slot & walk.mask;
+    return 1;
+}
+
 int AArch64RemapPage(const struct AArch64ProtectionOps *ops, uint64_t ttbr0,
     uint64_t tcr, uint64_t va, uint64_t expected_physical, unsigned permissions)
 {
