@@ -91,7 +91,7 @@ static void prove_worker_retirement(void)
     struct Task *task=AllocMem(sizeof(*task),MEMF_PUBLIC|MEMF_CLEAR);
     void *stack=AllocMem(256*1024,MEMF_PUBLIC|MEMF_CLEAR);
     CHECK(task && stack);
-    task->tc_Node.ln_Type=NT_TASK;task->tc_Node.ln_Name=(STRPTR)"restricted removable worker";
+    task->tc_Node.ln_Type=NT_TASK;task->tc_Node.ln_Name="restricted removable worker";
     task->tc_Node.ln_Pri=retirement_parent->tc_Node.ln_Pri;
     task->tc_SPLower=stack;task->tc_SPUpper=(unsigned char *)stack+256*1024;task->tc_SPReg=task->tc_SPUpper;
     NEWLIST(&task->tc_MemEntry);
