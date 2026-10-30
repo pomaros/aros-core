@@ -8,7 +8,7 @@ int main(void)
 {
     /* Startup must exit before the desktop starts the secondary CPU. This
      * runner is launched asynchronously and waits for that public barrier. */
-    char accepted[8];
+    UBYTE accepted[8];
     unsigned attempt;
     for (attempt=0;attempt<200;++attempt) {
         if (GetVar((CONST_STRPTR)"Sys/DesktopAccepted",accepted,sizeof(accepted),
