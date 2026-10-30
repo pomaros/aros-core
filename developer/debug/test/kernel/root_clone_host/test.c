@@ -48,6 +48,8 @@ static void refusals(void)
  CHECK(AArch64ClonePrivilegedRoot(&ops,(uintptr_t)pages[0],tcr(39),8,&result),"privileged-rw-nx");
  reset(12);pages[0][0]=(uintptr_t)pages[1]|3|(UINT64_C(1)<<61);result=99;
  CHECK(!AArch64ClonePrivilegedRoot(&ops,(uintptr_t)pages[0],tcr(39),8,&result) && result==99,"table-restriction-refusal");
+ reset(12);pages[0][0]=(uintptr_t)pages[1]|3|4;result=99;
+ CHECK(!AArch64ClonePrivilegedRoot(&ops,(uintptr_t)pages[0],tcr(39),8,&result) && result==99,"table-reserved-refusal");
  reset(14);pages[0][2]=(uintptr_t)pages[1]|3;
  CHECK(!AArch64ClonePrivilegedRoot(&ops,(uintptr_t)pages[0],tcr(48),8,&result) && result==99,"unused-root-entry");
 }

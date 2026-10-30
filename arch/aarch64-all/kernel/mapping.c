@@ -263,7 +263,7 @@ static int clone_privileged(const struct AArch64ProtectionOps *ops,
             (desc & (M_GUARDED | M_CONTIGUOUS))) return 0;
         if (level < 3 && (desc & 3) == M_TABLE) {
             uint64_t child;
-            if ((desc & M_TABLE_RESTRICTIONS) ||
+            if ((desc & ~(walk->mask | M_TABLE)) ||
                 !clone_privileged(ops, walk, desc & walk->mask, level + 1,
                     walk->count, budget, &child)) return 0;
             output[i] = child | M_TABLE;

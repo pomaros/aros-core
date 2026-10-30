@@ -61,7 +61,7 @@ int AArch64TranslateResident(const struct AArch64ProtectionOps *, uint64_t ttbr0
  * Preserves physical mappings/cache attributes and EL1 read/write restrictions,
  * removes EL0 data access and forces UXN on all leaves. Implicit EL1 execute
  * denial on writable user pages becomes explicit PXN. Privileged RWX leaves,
- * guarded/contiguous descriptors and hierarchical table restrictions are refused.
+ * guarded/contiguous descriptors and non-address table attributes are refused.
  * Uses the same 4K/16K <=48-bit geometry as the leaf helpers. Full root pages
  * are required; unused entries outside the configured VA range must be zero.
  *
