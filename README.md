@@ -26,6 +26,10 @@ Use separate source and build directories from private native development. Build
 
 Keep the official AROS remote fetch-only and review generic changes in this fork before proposing upstream contributions. A source pin identifies source inputs; build manifests and product runtime checks identify and qualify binaries separately. Changing a pin does not qualify an existing image.
 
+## Generic diagnostics
+
+- [Restricted AArch64 domain mechanism](developer/debug/test/kernel/restricted_domain_qemu/README.md): real-MMU QEMU checks with semantic negative controls; independent of product boot qualification.
+
 ## Licences
 
 AROS is a collection of components under different licences. Preserve each file's notices and consult [LEGAL](LEGAL), [LICENSE](LICENSE), [LICENSE.GPL](LICENSE.GPL), [LICENSE.LGPL](LICENSE.LGPL) and component-specific licence files. This fork does not relicense the upstream code.
