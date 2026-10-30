@@ -13,6 +13,7 @@
 #include <aros/apple/startup.h>
 #include <aros/apple/jit.h>
 #include "jit_protect.h"
+#include "restricted.h"
 
 #include <kernel_base.h>
 #include "kernel_intern.h"
@@ -41,6 +42,8 @@ AROS_LH1(intptr_t, KrnGetSystemAttr,
 
     switch (id)
     {
+    case AROS_RESTRICTED_KATTR_API:
+        return (intptr_t)&AROSRestrictedAPI;
     case KATTR_PageProtect:
         return (intptr_t)(KRN_PageProtect)AROSApplePageProtect;
     case AROS_APPLE_KATTR_JIT_MODE:

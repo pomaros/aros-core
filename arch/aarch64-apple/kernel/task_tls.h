@@ -12,7 +12,7 @@
 #include <aros/apple/runtime.h>
 
 /* et_RegFrame names registers at offset zero. The old alignment gap,
- * keeping the public 280-byte prefix, SIMD offset 288 and allocation 816,
+ * keeping the public 280-byte prefix, SIMD offset 288,
  * holds the task's TLS anchor: TPIDR_EL0 is its address for the task's
  * whole life, set on every dispatch, so compiled TLS descriptor code may
  * keep the thread pointer in a register across accesses and calls. The
@@ -33,9 +33,25 @@ _Static_assert(offsetof(struct AROSAppleTaskContext, tls_anchor) == 280,
 _Static_assert(sizeof(struct AROSAppleTaskContext) ==
     AROS_APPLE_DISPATCH_SIMD_OFFSET, "private state precedes SIMD");
 
+/* Kernel-owned execution metadata follows the unchanged SIMD block. */
+struct AROSAppleTaskExecution {
+    uint64_t root;
+    uint64_t user_tls;
+    void *domain;
+    uint64_t reserved;
+};
+_Static_assert(816 + sizeof(struct AROSAppleTaskExecution) ==
+    AROS_APPLE_DISPATCH_CONTEXT_SIZE, "owned execution metadata allocation");
+static inline struct AROSAppleTaskExecution *AROSAppleTaskExecution(
+    struct ExceptionContext *context)
+{
+    return (void *)((unsigned char *)context + 816);
+}
+
 static inline void AROSAppleTaskTLSInit(struct ExceptionContext *context)
 {
     ((struct AROSAppleTaskContext *)context)->tls_anchor = 0;
+    *AROSAppleTaskExecution(context) = (struct AROSAppleTaskExecution){0};
 }
 
 static inline void AROSAppleTaskTLSRestore(struct ExceptionContext *context)

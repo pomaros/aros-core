@@ -55,11 +55,11 @@ def main():
  native_apple=a.out/'native-include/aros/apple';native_apple.mkdir(parents=True)
  (native_apple/'runtime.h').symlink_to(ROOT/'arch/aarch64-apple/include/aros/apple/runtime.h')
  (native_apple/'runtime_local.h').symlink_to(ROOT/'arch/aarch64-apple/include/aros/apple/runtime_local.h')
- fixture=a.out/'register-access.c';fixture.write_text('#include <stdint.h>\ntypedef uint64_t UQUAD;typedef uint32_t ULONG;typedef void *APTR;\n#include "task_tls.h"\n_Static_assert(AROS_APPLE_DISPATCH_CONTEXT_SIZE == 816, "owned size");\nvoid roundtrip(struct ExceptionContext *v){AROSAppleTaskTLSInit(v);AROSAppleTaskTLSRestore(v);}\n')
+ fixture=a.out/'register-access.c';fixture.write_text('#include <stdint.h>\ntypedef uint64_t UQUAD;typedef uint32_t ULONG;typedef void *APTR;\n#include "task_tls.h"\n_Static_assert(AROS_APPLE_DISPATCH_CONTEXT_SIZE == 848, "owned size");\nvoid roundtrip(struct ExceptionContext *v){AROSAppleTaskTLSInit(v);AROSAppleTaskTLSRestore(v);}\n')
  run('aarch64-compile',[a.aarch64_cc,'--target=aarch64-none-elf','-ffreestanding','-std=c11','-O1','-Wall','-Wextra','-Werror','-I',a.out/'native-include','-I',ROOT/'arch/aarch64-apple/kernel','-c',fixture,'-o',a.out/'register-access.o'])
  assembly=run('aarch64-disassembly',[a.objdump,'-d',a.out/'register-access.o']).lower();assert re.search(r'msr\s+tpidr_el0',assembly) and not re.search(r'mrs\s+\w+, tpidr_el0',assembly) and re.search(r'add\s+x\d+, x0, #0x118',assembly) and 'isb' in assembly
  run('vectors-assemble',[a.aarch64_cc,'--target=aarch64-none-elf','-I',ROOT/'arch/aarch64-apple/include','-x','assembler-with-cpp','-c',ROOT/'arch/aarch64-apple/kernel/runtime_vectors.S','-o',a.out/'runtime-vectors.o'])
  run('secondary-assemble',[a.aarch64_cc,'--target=aarch64-none-elf','-x','assembler-with-cpp','-c',ROOT/'arch/aarch64-apple/kernel/smp_entry.S','-o',a.out/'smp-entry.o'])
  secondary=run('secondary-disassembly',[a.objdump,'-d',a.out/'smp-entry.o']).lower();assert len(re.findall(r'msr\s+tpidr_el0, xzr',secondary))==1
- (a.out/'result.json').write_text(json.dumps(dict(result='PASS_HOST_AND_AARCH64_ASSEMBLY_ONLY',public_context_bytes=280,private_prefix_bytes=288,simd_offset=288,allocation_bytes=816,records=records,native_execution='NOT_RUN',sdk_mutation=False),indent=2)+'\n')
+ (a.out/'result.json').write_text(json.dumps(dict(result='PASS_HOST_AND_AARCH64_ASSEMBLY_ONLY',public_context_bytes=280,private_prefix_bytes=288,simd_offset=288,allocation_bytes=848,records=records,native_execution='NOT_RUN',sdk_mutation=False),indent=2)+'\n')
 if __name__=='__main__':main()

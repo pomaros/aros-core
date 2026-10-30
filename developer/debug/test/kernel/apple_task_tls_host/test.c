@@ -19,9 +19,10 @@ unsigned host_cpu;
 struct owned {
     struct AROSAppleTaskContext context;
     uint64_t simd[66];
+    struct AROSAppleTaskExecution execution;
 };
 _Static_assert(sizeof(struct owned) == AROS_APPLE_DISPATCH_CONTEXT_SIZE,
-    "private task pointer does not grow owned context");
+    "owned context includes execution metadata");
 _Static_assert(offsetof(struct owned, simd) == AROS_APPLE_DISPATCH_SIMD_OFFSET,
     "SIMD offset is preserved");
 
@@ -35,6 +36,8 @@ int main(void)
     memcpy(prefix,&a.context.registers,sizeof(prefix));
     AROSAppleTaskTLSInit(&a.context.registers);
     assert(a.context.tls_anchor==0);
+    assert(a.execution.root==0 && a.execution.user_tls==0 && !a.execution.domain);
+    assert(AROSAppleTaskExecution(&a.context.registers)==&a.execution);
     assert(!memcmp(prefix,&a.context.registers,sizeof(prefix)));
     assert(a.simd[0]==UINT64_C(0xa5a5a5a5a5a5a5a5));
     memset(&b,0x5a,sizeof(b));

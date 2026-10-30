@@ -20,9 +20,10 @@ scheduling or SMP acceptance.
 
 `TPIDR_EL0` holds the address of a task-owned runtime anchor. The context uses the
 eight alignment bytes following the public 280-byte ExceptionContext. The
-private prefix is 288 bytes, SIMD starts at 288, and the allocation stays 816
+private prefix is 288 bytes, SIMD starts at 288, and the allocation is 848
 bytes. No public ExceptionContext or vector-frame field is added. The native
-TLS runtime reads the anchor through the register, never a private context offset.
+TLS runtime reads the anchor through the register, never a private context offset. Restricted root/TLS/owner metadata occupies the 32-byte
+trailer after SIMD; creation clears it without changing the public prefix.
 TPIDRRO_EL0 remains
 the kernel's CPU anchor. x18 remains ordinary saved task state.
 

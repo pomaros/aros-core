@@ -24,6 +24,7 @@
 #include "platform_timer_kernel.h"
 #include "guard_proof.h"
 #include "jit_protect.h"
+#include "restricted.h"
 #include <aros/apple/jit.h>
 
 #define ESR_EC_SHIFT 26U
@@ -419,6 +420,10 @@ int AROSAppleRuntimeHandleException(struct AROSAppleRuntimeFrame *frame)
         }
         goto unhandled;
     }
+    /* Restricted synchronous traps never reach pointer-bearing native SVCs
+     * or native crash unwinding. IRQ/FIQ retain the normal scheduler path. */
+    if (AROSAppleRestrictedTrap(frame))
+        return 1;
     if (AROSAppleGuardProofFault(frame))
         return 1;
     if (frame == NULL ||

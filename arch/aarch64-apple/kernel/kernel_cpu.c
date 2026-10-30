@@ -26,6 +26,7 @@
 #include <etask.h>
 #include "task_accounting.h"
 #include "task_tls.h"
+#include "restricted.h"
 
 extern int AROSAppleKernelDebugPutDirect(int chr);
 
@@ -111,6 +112,7 @@ int cpu_SaveContext(regs_t *regs, struct Task *task)
 
     if (regs == NULL || context == NULL || context->fpuContext == NULL)
         return 0;
+    AROSAppleRestrictedCheckStack(regs, task);
     /* x0-x28, x18 included: native x18 is ordinary task state. */
     for (index = 0; index < 29; ++index)
         context->x[index] = regs->x[index];
@@ -122,6 +124,8 @@ int cpu_SaveContext(regs_t *regs, struct Task *task)
     context->Flags |= ECF_FPU;
     for (index = 0; index < 66; ++index)
         ((volatile uint64_t *)context->fpuContext)[index] = regs->simd[index];
+    if (AROSAppleTaskExecution(context)->root)
+        AROSAppleTaskExecution(context)->user_tls = regs->task_tls;
     task->tc_SPReg = (APTR)(uintptr_t)regs->sp;
     return 1;
 }
@@ -215,6 +219,7 @@ static void enter_idle(regs_t *regs)
     /* Idle is not the last sleeping task and must not retain its TCB. */
     AROSAArch64WriteTaskPointer(0);
     regs->task_tls = 0;
+    AROSAppleRuntimeLocal()->kernel_tls = 0;
     if (AROSAppleRuntimeLocal()->trusted_ttbr0)
         regs->return_ttbr0 = AROSAppleRuntimeLocal()->trusted_ttbr0;
     /* No task owns an idle core's EL0 JIT write permission. A task that
@@ -412,8 +417,13 @@ dispatch_after_self_exit:
      * address, the same on every CPU for the task's whole life. */
     AROSAppleTaskTLSRestore(context);
     regs->task_tls = AROSAArch64ReadTaskPointer();
+    AROSAppleRuntimeLocal()->kernel_tls = regs->task_tls;
     if (AROSAppleRuntimeLocal()->trusted_ttbr0)
         regs->return_ttbr0 = AROSAppleRuntimeLocal()->trusted_ttbr0;
+    if (AROSAppleTaskExecution(context)->root) {
+        regs->return_ttbr0 = AROSAppleTaskExecution(context)->root;
+        regs->task_tls = AROSAppleTaskExecution(context)->user_tls;
+    }
 #if defined(__AROSEXEC_SMP__)
     if (!AROSAppleSelfExitDetached(departing))
         dispatch_contract_halt();
