@@ -11,6 +11,7 @@
 
 #include "kernel_base.h"
 #include "kernel_cpu.h"
+#include "task_tls.h"
 #include "page_allocator.h"
 
 _Static_assert(offsetof(struct KernelBase, kb_ContextSize) +
@@ -19,7 +20,7 @@ _Static_assert(offsetof(struct KernelBase, kb_ContextSize) +
 _Static_assert(((sizeof(struct ExceptionContext) + 15U) & ~15U) ==
     AROS_APPLE_DISPATCH_SIMD_OFFSET, "Apple SIMD context offset");
 _Static_assert(AROS_APPLE_DISPATCH_SIMD_OFFSET +
-    sizeof(struct AROSAppleSIMDContext) ==
+    sizeof(struct AROSAppleSIMDContext) + sizeof(struct AROSAppleTaskExecution) ==
     AROS_APPLE_DISPATCH_CONTEXT_SIZE, "Apple task context size");
 
 static int cpu_InitContextSize(struct KernelBase *KernelBase)
