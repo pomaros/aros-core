@@ -78,11 +78,11 @@ int main(void)
     for (unsigned id=0; id<2; ++id) {
         CHECK(results[id].value == (id+1)*5120);
         CHECK(results[id].yields == (id+1)*1024);
-        CHECK(results[id].denied == 3);
-        CHECK(results[id].replies == 200 && results[id].rejected == 5 && results[id].callbacks == 100);
+        CHECK(results[id].denied == 6);
+        CHECK(results[id].replies == 200 && results[id].rejected == 6 && results[id].callbacks == 100);
     }
     CHECK(worker_replies == 400);
     CHECK(beats > 0 && after_fault > 0);
-    bug("[ISOVM] PASS restricted=2 yields=3072 denied=6 faulted=1 survived=1 heartbeat=%u after_fault=%u joined=4 replies=400 rejected=10 callbacks=200\n",beats,after_fault);
+    bug("[ISOVM] PASS restricted=2 yields=3072 denied=12 faulted=1 survived=1 heartbeat=%u after_fault=%u joined=4 replies=400 rejected=12 callbacks=200\n",beats,after_fault);
     return 0;
 }

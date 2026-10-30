@@ -87,6 +87,17 @@ RestrictedCode:
  svc #0xa530
  cmn x0, #1
  b.ne RestrictedFailure
+ mov x0, #1
+ svc #0xa532
+ cmn x0, #1
+ b.ne RestrictedFailure
+ svc #0xa533
+ cmn x0, #1
+ b.ne RestrictedFailure
+ mov x0, #0
+ svc #0xa544
+ cmn x0, #1
+ b.ne RestrictedFailure
  cmp x23, #1, lsl #12
  b.ne 2f
  mov x9, #0x40080000
@@ -102,6 +113,16 @@ RestrictedFailure:
  b .
 RestrictedCallback:
  mov x19, x1
+ cmp x24, #100
+ b.ne 6f
+ add x0, x19, #320
+ add x1, x19, #352
+ mov x2, #8
+ adr x3, RestrictedCallback
+ svc #0xa542
+ cbnz x0, RestrictedFailure
+6:
+ mov x0, x23
  add x27, x0, #73
  str x27, [x19, #320]
  add x0, x19, #320

@@ -3,10 +3,10 @@
 This experimental single-CPU workload invokes the native restricted control
 API from two pthread tasks. Each payload runs at the same code/data/stack
 addresses with separate backing, validates TLS/x18 across explicit yields,
-and tries three forbidden SVCs. A fourth native worker receives only bounded
+and tries six forbidden SVCs. A fourth native worker receives only bounded
 staging copies through the production W-BUF service boundary. Each payload
 checks 100 outer replies and 100 callback replies, rejecting four invalid
-input/output ranges and one invalid callback PC; the worker
+input/output ranges and one invalid callback PC plus a nested callback installation; the worker
 checks duplicate-completion refusal. One then faults on kernel memory; its native
 wrapper receives a fault result while the other payload completes and a third
 native task continues its heartbeat. The parent observes the command's exit.
@@ -32,3 +32,7 @@ The kernel retains the full suspended context and restores it only after the
 callback returns with no outstanding request. Callback code may issue a nested
 worker operation, but nested callback frames are refused. Arbitrary callback
 exception handling and malicious continuation tests remain separate gates.
+
+The denied-call checks include the trusted worker take/complete interfaces and
+a forged callback return without an active callback. Recursive callback setup
+is refused once per domain while an ordinary nested worker call succeeds.

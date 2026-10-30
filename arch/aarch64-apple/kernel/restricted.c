@@ -160,7 +160,7 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
              * cannot recursively install another callback frame. */
             if (frame->x[3] && (r->callback_active ||
                 frame->x[3]<AROS_RESTRICTED_CODE ||
-                frame->x[3]-AROS_RESTRICTED_CODE>=r->code_bytes || (frame->x[3]&3))) {
+                r->code_bytes<4 || frame->x[3]-AROS_RESTRICTED_CODE>r->code_bytes-4 || (frame->x[3]&3))) {
                 ++r->result.rejected;frame->x[0]=0;return 1;
             }
             if (AROSRestrictedServiceSubmit(&r->service,frame->x[0],frame->x[1],frame->x[2]))
