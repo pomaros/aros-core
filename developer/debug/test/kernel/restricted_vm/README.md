@@ -22,7 +22,7 @@ backing. It implements bounded worker services. It supports one callback frame a
 or SMP reclamation. SMP admission is disabled.
 The source is an integration candidate; a compile is not runtime acceptance.
 
-The API version is 5. Service submit/collect use kernel-derived task identity;
+The API version is 6. Service submit/collect use kernel-derived task identity;
 collection yields when a response is unavailable. Close cancels and drains
 worker leases from native context before reclaiming backing; the workload covers queued cancellation before worker creation, running
 cancellation and termination while the worker retains a lease.
@@ -54,3 +54,10 @@ completion. The native result includes a data-page snapshot taken after drain
 and before backing release: both cancelled output sentinels must stay unchanged,
 all three domains drain, and close must wait for the faulting domain's worker.
 External task removal remains a separate lifetime requirement.
+
+A final restricted client submits a request to a raw Exec worker. The worker
+claims its lease, signals its parent and parks. The parent verifies TS_WAIT
+and calls RemTask; the architecture context-deletion hook cancels and retires
+that lease before freeing the worker context. The client drains without output
+publication and returns a checked snapshot. This proves parked-worker removal,
+not arbitrary restricted-owner removal or SMP quiescence.

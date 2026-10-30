@@ -6,13 +6,20 @@
 #include <stdlib.h>
 #include <string.h>
 #include <proto/exec.h>
+#include <exec/memory.h>
+#include <exec/tasks.h>
+#include <exec/lists.h>
 #include <aros/debug.h>
 #include <aros/apple/restricted.h>
 APTR KernelBase;
 extern const unsigned char RestrictedCode[], RestrictedCodeEnd[];
 extern const unsigned char RestrictedQueued[], RestrictedQueuedEnd[];
+extern const unsigned char RestrictedWorkerDeath[], RestrictedWorkerDeathEnd[];
 static const struct AROSRestrictedAPI *api;
-static struct AROSRestrictedResult results[2];
+static struct AROSRestrictedResult results[2], retired_result;
+static struct Task *retirement_parent;
+static ULONG retirement_signal;
+static unsigned retirement_taken;
 static unsigned worker_replies, worker_ack;
 static unsigned stop, done[2], beats, after_fault;
 static struct Task *identities[4];
@@ -61,6 +68,42 @@ static void *client(void *argument)
     __atomic_store_n(&done[id],1,__ATOMIC_RELEASE);
     return NULL;
 }
+static void retired_worker(void)
+{
+    struct AROSRestrictedWork work;
+    while (!api->take(&work)) KrnSwitch();
+    CHECK(work.length==8);
+    SetTaskPri(FindTask(NULL),retirement_parent->tc_Node.ln_Pri+1);
+    __atomic_store_n(&retirement_taken,1,__ATOMIC_RELEASE);
+    Signal(retirement_parent,retirement_signal);
+    for (;;) Wait(0);
+}
+static void *retirement_client(void *unused)
+{
+    (void)unused;
+    CHECK(api->run(RestrictedWorkerDeath,(size_t)(RestrictedWorkerDeathEnd-RestrictedWorkerDeath),16384,&retired_result));
+    return NULL;
+}
+static void prove_worker_retirement(void)
+{
+    retirement_parent=FindTask(NULL);
+    BYTE bit=AllocSignal(-1);CHECK(bit>=0);retirement_signal=1UL<<bit;
+    struct Task *task=AllocMem(sizeof(*task),MEMF_PUBLIC|MEMF_CLEAR);
+    void *stack=AllocMem(256*1024,MEMF_PUBLIC|MEMF_CLEAR);
+    CHECK(task && stack);
+    task->tc_Node.ln_Type=NT_TASK;task->tc_Node.ln_Name=(STRPTR)"restricted removable worker";
+    task->tc_Node.ln_Pri=retirement_parent->tc_Node.ln_Pri;
+    task->tc_SPLower=stack;task->tc_SPUpper=(unsigned char *)stack+256*1024;task->tc_SPReg=task->tc_SPUpper;
+    NEWLIST(&task->tc_MemEntry);
+    pthread_t client;CHECK(!pthread_create(&client,NULL,retirement_client,NULL));
+    CHECK(AddTask(task,retired_worker,NULL));
+    while (!__atomic_load_n(&retirement_taken,__ATOMIC_ACQUIRE)) Wait(retirement_signal);
+    Forbid();CHECK(task->tc_State==TS_WAIT);RemTask(task);Permit();
+    FreeMem(stack,256*1024);FreeMem(task,sizeof(*task));FreeSignal(bit);
+    CHECK(!pthread_join(client,NULL));
+    CHECK(retired_result.status==0 && retired_result.worker_retirements==1 && retired_result.drained==1);
+    for (unsigned i=0;i<8;++i) CHECK(retired_result.data[512+i]==0xa5);
+}
 int main(void)
 {
     KernelBase = OpenResource((CONST_STRPTR)"kernel.resource");
@@ -68,7 +111,7 @@ int main(void)
     intptr_t address = KrnGetSystemAttr(AROS_RESTRICTED_KATTR_API);
     CHECK(address != -1 && address != 0);
     api = (const void *)address;
-    CHECK(api->version == 5 && api->size == sizeof(*api));
+    CHECK(api->version == 6 && api->size == sizeof(*api));
     /* No worker exists: queued cancellation is deterministic. */
     static struct AROSRestrictedResult queued;
     CHECK(api->run(RestrictedQueued,(size_t)(RestrictedQueuedEnd-RestrictedQueued),12288,&queued));
@@ -92,7 +135,7 @@ int main(void)
     for (unsigned id=0; id<2; ++id) {
         CHECK(results[id].value == (id+1)*5120);
         CHECK(results[id].yields == (id+1)*1024);
-        CHECK(results[id].denied == 10);
+        CHECK(results[id].denied == 11);
         CHECK(results[id].cancelled==1 && results[id].drained==1);
         for (unsigned byte=0;byte<8;++byte) {
             CHECK(results[id].data[512+byte]==0xa5);
@@ -104,6 +147,7 @@ int main(void)
     CHECK(results[0].close_waits>0 && results[1].close_waits==0);
     CHECK(results[0].resumed == 1 && results[1].resumed == 1);
     CHECK(beats > 0 && after_fault > 0);
-    bug("[ISOVM] PASS restricted=2 yields=3072 denied=20 faulted=1 survived=1 heartbeat=%u after_fault=%u joined=4 replies=402 rejected=16 callbacks=200 resumed=2 cancelled=3 worker_ack=3 close_pending=1 drained=3\n",beats,after_fault);
+    prove_worker_retirement();
+    bug("[ISOVM] PASS restricted=2 yields=3072 denied=22 faulted=1 survived=1 heartbeat=%u after_fault=%u joined=5 replies=402 rejected=16 callbacks=200 resumed=2 cancelled=3 worker_ack=3 close_pending=1 drained=4 removed_worker=1\n",beats,after_fault);
     return 0;
 }

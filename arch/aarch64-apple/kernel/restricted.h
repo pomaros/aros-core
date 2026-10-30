@@ -8,4 +8,5 @@ extern const struct AROSRestrictedAPI AROSRestrictedAPI;
 struct Task;
 void AROSAppleRestrictedCheckStack(struct AROSAppleRuntimeFrame *, struct Task *);
 int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *);
+void AROSAppleRestrictedContextRetired(void *context);
 #endif

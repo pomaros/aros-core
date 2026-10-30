@@ -151,6 +151,10 @@ RestrictedCode:
  svc #0xa535
  cmn x0, #1
  b.ne RestrictedFailure
+ mov x0, #1
+ svc #0xa536
+ cmn x0, #1
+ b.ne RestrictedFailure
  cmp x23, #1, lsl #12
  b.ne 2f
  /* Terminate while a worker lease is live. Native close must cancel/drain. */
@@ -326,3 +330,34 @@ QueuedFailure:
  svc #0xa541
  b .
 RestrictedQueuedEnd:
+
+.balign 16
+.global RestrictedWorkerDeath, RestrictedWorkerDeathEnd
+RestrictedWorkerDeath:
+ mov x19, x1
+ mov x9, #0xe4
+ str x9, [x19, #480]
+ mov x9, #0xa5a5
+ movk x9, #0xa5a5, lsl #16
+ movk x9, #0xa5a5, lsl #32
+ movk x9, #0xa5a5, lsl #48
+ str x9, [x19, #512]
+ add x0, x19, #480
+ add x1, x19, #512
+ mov x2, #8
+ mov x3, #0
+ svc #0xa542
+ cbz x0, WorkerDeathFailure
+ mov x25, x0
+12:
+ mov x0, x25
+ svc #0xa549
+ cbnz x0, 12b
+ mov x0, #0
+ svc #0xa541
+ b .
+WorkerDeathFailure:
+ mov x0, #9
+ svc #0xa541
+ b .
+RestrictedWorkerDeathEnd:

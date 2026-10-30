@@ -54,7 +54,7 @@ endif
 
 %build_archspecific \
   mainmmake=kernel-kernel maindir=rom/kernel modname=kernel \
-  files="_bug allocpages code_window code_window_kernel mapglobal cli coldstart_proof cpu_init createcontext dispatch_proof \
+  files="_bug allocpages code_window code_window_kernel mapglobal cli coldstart_proof cpu_init createcontext deletecontext dispatch_proof \
   kernel_libc cpu_monitor cpu_probe cpu_topology cpu_accounting early_fdt fdt fdt_ro fdt_check \
   freepages getsystemattr guarded_stack guard_proof issuper jit_protect kernel_cpu kernel_debug memory_plan_contract page_allocator screen_log \
   platform_timer platform_timer_core restricted restricted_service runtime task_crash setprotection startup_contract startup_prepare sti virtualtophysical vm_irq modifyirq $(VM_SHARED_FILES) $(NATIVE_PLATFORM_FILES) $(SMP_FILES)" \

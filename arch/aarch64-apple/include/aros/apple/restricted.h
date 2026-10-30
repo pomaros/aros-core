@@ -25,7 +25,7 @@
 #define AROS_RESTRICTED_CANCELLED 4
 struct AROSRestrictedResult {
     int64_t status;
-    uint64_t value, esr, far, pc, yields, denied, replies, rejected, callbacks, resumed, cancelled, close_waits, drained;
+    uint64_t value, esr, far, pc, yields, denied, replies, rejected, callbacks, resumed, cancelled, close_waits, drained, worker_retirements;
     /* Trusted native caller snapshot, taken only after worker leases drain. */
     unsigned char data[4096];
 };

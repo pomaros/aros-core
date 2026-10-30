@@ -62,15 +62,15 @@ int AROSRestrictedServiceCollect(struct AROSRestrictedService *s,uint64_t token)
 {
     return KrnBufferServiceCollect(&s->request,s->principal,token,&s->bufferops);
 }
-int AROSRestrictedServiceTake(struct Task *worker,struct AROSRestrictedWork *work)
+int AROSRestrictedServiceTake(struct Task *worker,void *context,struct AROSRestrictedWork *work)
 {
-    if (!worker || !work) return 0;
+    if (!worker || !context || !work) return 0;
     for (unsigned i=0;i<KBUF_SPACES;++i) {
         struct AROSRestrictedService *s=active[i];
         if (!s || s->worker || s->domain.closing || s->request.state!=KS_QUEUED) continue;
         size_t length;
         if (!KrnBufferServiceTake(&s->request,s->request.token,work->bytes,sizeof(work->bytes),&length)) return 0;
-        s->worker=worker;work->domain=s->handle;work->token=s->request.token;work->length=length;
+        s->worker=worker;s->worker_context=context;work->domain=s->handle;work->token=s->request.token;work->length=length;
         return 1;
     }
     return 0;
@@ -93,7 +93,23 @@ int AROSRestrictedServiceComplete(struct Task *worker,const struct AROSRestricte
     struct AROSRestrictedService *s=active[index-1];
     if (!s || s->handle!=work->domain || s->worker!=worker ||
         !KrnBufferServiceComplete(&s->request,work->token,work->bytes,work->length)) return 0;
-    s->worker=NULL;return 1;
+    s->worker=NULL;s->worker_context=NULL;return 1;
+}
+int AROSRestrictedServiceRetireWorker(void *context)
+{
+    /* Exec has made this task terminal before deleting its context. Cancel
+     * and acknowledge its retained staging lease without reading its stack or
+     * publishing a reply. The native caller frees context storage afterward. */
+    if (!context) return 1;
+    for (unsigned i=0;i<KBUF_SPACES;++i) {
+        struct AROSRestrictedService *s=active[i];
+        if (!s || s->worker_context!=context) continue;
+        uint64_t token=s->request.token;
+        if (!KrnBufferServiceCancel(&s->request,s->principal,token) ||
+            !KrnBufferServiceComplete(&s->request,token,NULL,0)) return 0;
+        s->worker=NULL;s->worker_context=NULL;++s->worker_retirements;
+    }
+    return 1;
 }
 int AROSRestrictedServiceClose(struct AROSRestrictedService *s)
 {

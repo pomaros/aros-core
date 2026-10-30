@@ -263,9 +263,13 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
     }
     if (ec == 0x15 && (svc == 0xa532 || svc == 0xa533 || svc == 0xa535)) {
         void *work=(void *)(uintptr_t)frame->x[0];
-        frame->x[0]=svc==0xa532 ? AROSRestrictedServiceTake(task,work) :
+        frame->x[0]=svc==0xa532 ? AROSRestrictedServiceTake(task,context,work) :
             svc==0xa533 ? AROSRestrictedServiceComplete(task,work) :
             AROSRestrictedServiceState(task,work);
+        return 1;
+    }
+    if (ec==0x15 && svc==0xa536) {
+        frame->x[0]=AROSRestrictedServiceRetireWorker((void *)(uintptr_t)frame->x[0]);
         return 1;
     }
     if (ec != 0x15 || (svc != R_PREPARE && svc != AROS_RESTRICTED_ENTER && svc != 0xa534)) return 0;
@@ -355,6 +359,7 @@ cleanup:
     }
     if (ok) {
         r->result.drained=1;
+        r->result.worker_retirements=r->service.worker_retirements;
         *result=r->result;
         memcpy(result->data,r->data,R_PAGE);
     }
@@ -368,6 +373,13 @@ cleanup:
     FreeMem(r,sizeof(*r));
     return ok;
 #endif
+}
+void AROSAppleRestrictedContextRetired(void *context)
+{
+    if (!context || !AROSAppleRuntimeLocal()->active || !r_current()) return;
+    register uintptr_t argument __asm__("x0")=(uintptr_t)context;
+    __asm__ volatile("svc #0xa536":"+r"(argument)::"memory","cc");
+    if (!argument) for (;;) __asm__ volatile("wfe");
 }
 static int r_take(struct AROSRestrictedWork *work)
 {
@@ -387,7 +399,7 @@ static unsigned r_state(const struct AROSRestrictedWork *work)
     __asm__ volatile("svc #0xa535":"+r"(argument)::"memory","cc");
     return (unsigned)argument;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {5,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {6,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

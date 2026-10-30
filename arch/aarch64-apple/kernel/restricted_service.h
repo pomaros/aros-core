@@ -18,6 +18,8 @@ struct AROSRestrictedService {
     struct KrnMappingOps mapops;
     struct KrnBufferOps bufferops;
     struct Task *worker;
+    void *worker_context;
+    uint64_t worker_retirements;
     uint64_t root,tcr,principal,handle;
     uintptr_t backing;
 };
@@ -29,7 +31,8 @@ int AROSRestrictedServiceInit(struct AROSRestrictedService *, struct Task *,
 int AROSRestrictedServiceProtect(struct AROSRestrictedService *, unsigned);
 int AROSRestrictedServiceSubmit(struct AROSRestrictedService *,uintptr_t,uintptr_t,size_t);
 int AROSRestrictedServiceCollect(struct AROSRestrictedService *,uint64_t);
-int AROSRestrictedServiceTake(struct Task *,struct AROSRestrictedWork *);
+int AROSRestrictedServiceTake(struct Task *,void *,struct AROSRestrictedWork *);
+int AROSRestrictedServiceRetireWorker(void *);
 unsigned AROSRestrictedServiceState(struct Task *,const struct AROSRestrictedWork *);
 int AROSRestrictedServiceComplete(struct Task *,const struct AROSRestrictedWork *);
 /* Cancels requests and returns zero while an acknowledged worker lease is
