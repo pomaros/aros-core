@@ -15,6 +15,7 @@
 #include "exec_intern.h"
 #include "exec_util.h"
 #include "exec_debug.h"
+#include "freeze_smp.h"
 
 #if defined(EXEC_DEFER_SELF_EXIT)
 /* Called on the kernel stack after the dispatch destination is installed.
@@ -86,6 +87,20 @@ static void publish_self_exit(void *task, void *base)
         (task->tc_State != TS_REMOVED))
     {
 #if defined(__AROSEXEC_SMP__)
+#if defined(EXEC_EXTERNAL_EXIT_FENCE)
+        if (task != suicide && GetIntETask(task) != NULL)
+        {
+            /* Terminal freeze cannot be undone by ThawTask(s). A remote CPU
+             * must replace its outgoing frame/TLS before storage disappears. */
+            __atomic_fetch_or(&GetIntETask(task)->iet_FreezeFlags,
+                IETF_RETIRE_PENDING, __ATOMIC_ACQ_REL);
+            if (!exec_FreezeOneSMP(task) || !EXEC_EXTERNAL_EXIT_FENCE(task))
+            {
+                bug("[Exec] external task retirement could not quiesce task=%p\n", task);
+                for (;;) __asm__ volatile("yield" ::: "memory");
+            }
+        }
+#endif
         /* Stop publishing the task before its context/ETask can disappear. */
         Exec_RetireTask(task, SysBase);
 #endif

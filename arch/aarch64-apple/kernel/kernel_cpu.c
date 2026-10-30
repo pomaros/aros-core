@@ -22,6 +22,7 @@
 #include "kernel_intern.h"
 #if defined(__AROSEXEC_SMP__)
 #include "../exec/tls.h"
+#include "smp.h"
 #endif
 #include <etask.h>
 #include "task_accounting.h"
@@ -134,6 +135,7 @@ void cpu_Switch(regs_t *regs)
 {
     struct Task *task = SysBase != NULL ? GET_THIS_TASK : NULL;
 #if defined(__AROSEXEC_SMP__)
+    AROSAppleDispatchTransition(1);
     BOOL wait_lock_held = task != NULL && task->tc_State == TS_WAIT;
 #endif
 
@@ -350,6 +352,7 @@ void cpu_Dispatch(regs_t *regs)
     struct Task *task;
     uint32_t index;
 #if defined(__AROSEXEC_SMP__)
+    AROSAppleDispatchTransition(1);
     void *departing = TLS_GET(ThisTask);
     unsigned self_exit_rescanned = 0;
 #endif
@@ -376,6 +379,7 @@ dispatch_after_self_exit:
             departing = NULL;
             goto dispatch_after_self_exit;
         }
+        AROSAppleDispatchTransition(0);
 #endif
         return;
     }
@@ -427,5 +431,6 @@ dispatch_after_self_exit:
 #if defined(__AROSEXEC_SMP__)
     if (!AROSAppleSelfExitDetached(departing))
         dispatch_contract_halt();
+    AROSAppleDispatchTransition(0);
 #endif
 }

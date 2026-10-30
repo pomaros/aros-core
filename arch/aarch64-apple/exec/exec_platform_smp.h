@@ -35,4 +35,7 @@
 /* RemTask retains ownership until cpu_Dispatch has abandoned its EL0 stack. */
 #define EXEC_DEFER_SELF_EXIT(task, base, publish) \
     AROSAppleExecSMPAPIGet()->self_exit_queue((task), (base), (publish))
+/* Caller has terminally frozen the task before the cross-CPU barrier. */
+#define EXEC_EXTERNAL_EXIT_FENCE(task) \
+    AROSAppleExecSMPAPIGet()->external_exit_fence(task)
 #endif

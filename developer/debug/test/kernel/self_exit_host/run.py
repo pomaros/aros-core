@@ -28,7 +28,7 @@ rem = (CORE / 'rom/exec/remtask.c').read_text()
 assert rem.index('Disable();', rem.index('Sending to Exec service task')) < rem.index('EXEC_DEFER_SELF_EXIT(task, SysBase, publish_self_exit)') < rem.index('KrnDispatch();')
 assert '#if !defined(EXEC_DEFER_SELF_EXIT)\n            InternalPutMsg' in rem
 api = (CORE / 'arch/aarch64-apple/exec/smp_api.h').read_text()
-assert 'table->version==4' in api and 'table->bytes==sizeof(*table)' in api
+assert 'table->version==5' in api and 'table->bytes==sizeof(*table)' in api
 assert api.index('(*spin_trylock)') < api.index('(*self_exit_queue)')
 assert 'AROSAppleExecSMPAPIValid(AROSAppleRuntimeLocal()->exec_smp_api)' in (include/'startup_prepare.c').read_text()
 assert 'schedulecpu smp self_exit smp_proof' in (include/'mmakefile.src').read_text()
@@ -70,15 +70,17 @@ struct Hook; struct CallIPIEntry;
 DEFINITION
 VALIDATOR
 static spinlock_t *trylock(spinlock_t *x, ULONG mode) { (void)mode; return x; }
+static int fence(void *t) { return t!=0; }
 static int queue(void *t,void *b,void (*f)(void *,void *)) { (void)t;(void)b;(void)f;return 1; }
 int main(void) {
  struct AROSAppleExecSMPAPI x={0};
  assert(!AROSAppleExecSMPAPIValid(0));
- x.version=4; x.bytes=sizeof(x); x.spin_trylock=trylock; x.self_exit_queue=queue;
+ x.version=5; x.bytes=sizeof(x); x.spin_trylock=trylock; x.self_exit_queue=queue; x.external_exit_fence=fence;
  assert(AROSAppleExecSMPAPIValid(&x));
- x.version=3; assert(!AROSAppleExecSMPAPIValid(&x)); x.version=4;
+ x.version=4; assert(!AROSAppleExecSMPAPIValid(&x)); x.version=5;
  --x.bytes; assert(!AROSAppleExecSMPAPIValid(&x)); ++x.bytes;
  x.self_exit_queue=0; assert(!AROSAppleExecSMPAPIValid(&x)); x.self_exit_queue=queue;
+ x.external_exit_fence=0; assert(!AROSAppleExecSMPAPIValid(&x)); x.external_exit_fence=fence;
  x.spin_trylock=0; assert(!AROSAppleExecSMPAPIValid(&x));
 }
 """.replace('DEFINITION',definition).replace('VALIDATOR',valid)
@@ -88,6 +90,13 @@ case('mutant-wrongcpu',(HERE/'test.c').read_text(),e.replace('slot->cpu != cpu',
 early=body.replace('    task = core_Dispatch();','    if (!AROSAppleSelfExitDetached(departing)) dispatch_contract_halt();\n    task = core_Dispatch();')
 case('mutant-early-publication',fixture.replace('/* ACTUAL_DISPATCH_BODY */',early),e,False)
 case('mutant-post-publication-read',(HERE/'test.c').read_text(),e.replace('    publish(task, base);','    publish(task, base);\n    *(volatile unsigned char *)task = 0;'),False)
-inputs=[engine,include/'self_exit.h',include/'kernel_cpu.c',HERE/'test.c',HERE/'dispatch_fixture.c',HERE/'adapter_fixture.c',include/'smp.c',Path(__file__).resolve()]
+retire=smp[smp.index('static uintptr_t retirement_fence(void)'):smp.index('static int api_external_exit_fence(void *task)\n{')]
+retire=retire.replace('__asm__ volatile("dsb ish; tlbi vmalle1is; dsb ish; isb" ::: "memory")','record_tlbi()')
+retire_fixture=(HERE/'retirement_fixture.c').read_text()
+case('retirement',retire_fixture.replace('/* ACTUAL_RETIREMENT */',retire),e,True)
+case('mutant-retire-during-dispatch',retire_fixture.replace('/* ACTUAL_RETIREMENT */',retire.replace('memory_dispatch_snapshot[cpu] ||','')),e,False)
+case('mutant-retire-live-task',retire_fixture.replace('/* ACTUAL_RETIREMENT */',retire.replace('memory_task_snapshot[cpu]==retiring_task','0')),e,False)
+case('mutant-retire-without-tlbi',retire_fixture.replace('/* ACTUAL_RETIREMENT */',retire.replace('if(detached) record_tlbi();','if(0) record_tlbi();')),e,False)
+inputs=[engine,include/'self_exit.h',include/'kernel_cpu.c',HERE/'test.c',HERE/'dispatch_fixture.c',HERE/'adapter_fixture.c',include/'smp.c',HERE/'retirement_fixture.c',CORE/'rom/exec/remtask.c',CORE/'rom/exec/freeze_smp.c',CORE/'arch/aarch64-apple/exec/smp_api.h',Path(__file__).resolve()]
 (a.out/'result.json').write_text(json.dumps(dict(result='PASS',scope='HOST actual slot/extracted dispatch only; no native/SMP scheduler claim',elapsed=time.monotonic()-start,cases=rows,inputs=[dict(path=str(x),sha256=hashlib.sha256(x.read_bytes()).hexdigest()) for x in inputs]),indent=2)+'\n')
 print('PASS',len(rows),'actual-body HOST cases')

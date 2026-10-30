@@ -24,6 +24,7 @@ static spinlock_t *api_spin_lock(spinlock_t *lock,struct Hook *hook,ULONG mode)
 static void api_spin_unlock(spinlock_t *lock) { Kernel_53_KrnSpinUnLock(lock,NULL); }
 static spinlock_t *api_spin_trylock(spinlock_t *lock,ULONG mode)
 { return Kernel_51_KrnSpinTryLock(lock,mode,NULL); }
+static int api_external_exit_fence(void *task);
 static struct AppleSelfExit self_exit[AROS_APPLE_SMP_MAX_CPUS];
 static int api_self_exit_queue(void *task, void *base, AppleExitPublish publish)
 {
@@ -40,13 +41,13 @@ int AROSAppleSelfExitDetached(void *departing)
      AppleSelfExitDetached(&self_exit[cpu],cpu,departing);
 }
 const struct AROSAppleExecSMPAPI AROSAppleExecSMPAPI = {
- 4,sizeof(struct AROSAppleExecSMPAPI),
+ 5,sizeof(struct AROSAppleExecSMPAPI),
  AROSAppleRuntimeIRQSave,AROSAppleRuntimeIRQRestore,
  api_spin_init,api_spin_lock,api_spin_unlock,
  core_ClaimCallIPI,core_CommitCallIPI,core_AbortCallIPI,core_CancelCallIPIs,
  core_TryClaimCallIPI,
  api_spin_trylock,
- api_self_exit_queue
+ api_self_exit_queue,api_external_exit_fence
 };
 struct AROSSMPSharedState AROSSMPState;
 uint64_t AROSAppleSMPBootTicks(void)
@@ -71,11 +72,22 @@ uint64_t AROSAppleSMPTimeUS(void)
 #define AROS_APPLE_MEMORY_IPI (1U << 21)
 #define MEMORY_RENDEZVOUS_TIMEOUT_US UINT64_C(100000)
 static struct AROSAppleMemoryRendezvous memory_rendezvous;
+static uint32_t dispatch_transition[AROS_APPLE_SMP_MAX_CPUS];
+static uint32_t memory_dispatch_snapshot[AROS_APPLE_SMP_MAX_CPUS];
+static void *memory_task_snapshot[AROS_APPLE_SMP_MAX_CPUS];
+void AROSAppleDispatchTransition(unsigned busy)
+{
+ unsigned cpu=AROSCPUCurrentIndex();
+ if(cpu>=AROS_APPLE_SMP_MAX_CPUS) for(;;) __asm__ volatile("yield");
+ __atomic_store_n(&dispatch_transition[cpu],busy,__ATOMIC_RELEASE);
+}
 static uintptr_t memory_participate(void)
 {
  unsigned cpu=AROSCPUCurrentIndex();
  uint64_t token;
  while((token=AROSAppleMemoryRendezvousRequest(&memory_rendezvous,cpu))) {
+  memory_dispatch_snapshot[cpu]=__atomic_load_n(&dispatch_transition[cpu],__ATOMIC_ACQUIRE);
+  memory_task_snapshot[cpu]=(void *)TLS_GET(ThisTask);
   __asm__ volatile("dsb ish" ::: "memory");
   if(!AROSAppleMemoryRendezvousEnter(&memory_rendezvous,cpu,token)) continue;
   while(AROSAppleMemoryRendezvousHeld(&memory_rendezvous,token))
@@ -135,6 +147,40 @@ void AROSApplePageMutationEnd(uint64_t token)
   __asm__ volatile("yield" ::: "memory");
  }
  AROSAppleMemoryRendezvousEnd(&memory_rendezvous);
+}
+/* PageMapLock serializes the rendezvous and this target. Terminal freeze
+ * prevents redispatch; no task storage is released until all peers detach. */
+static void *retiring_task;
+static uintptr_t retirement_fence(void)
+{
+ uint64_t token=AROSApplePageMutationBegin();
+ if(!token) return 0;
+ unsigned current=AROSCPUCurrentIndex();
+ uint32_t peers=AROSAppleSMPOnlineMask() & ~(UINT32_C(1)<<current);
+ int detached=(void *)TLS_GET(ThisTask)!=retiring_task;
+ for(unsigned cpu=0;cpu<AROS_APPLE_SMP_MAX_CPUS;++cpu)
+  if((peers&(UINT32_C(1)<<cpu)) &&
+     (memory_dispatch_snapshot[cpu] || memory_task_snapshot[cpu]==retiring_task)) detached=0;
+ if(detached) __asm__ volatile("dsb ish; tlbi vmalle1is; dsb ish; isb" ::: "memory");
+ AROSApplePageMutationEnd(token);
+ return detached;
+}
+static int api_external_exit_fence(void *task)
+{
+ if(!task || task==(void *)TLS_GET(ThisTask)) return 0;
+ uint64_t start=AROSAppleSMPTimeUS();
+ do {
+  uint64_t saved=AROSApplePageMapAcquire();
+  retiring_task=task;
+  int detached=AROSAppleRuntimeSupervisor(retirement_fence)!=0;
+  retiring_task=NULL;
+  AROSAppleMemoryLockRelease(&AROSApplePageMapLock,saved);
+  if(detached) return 1;
+  /* A cooperative participant may have paused during dispatch. Release it
+   * to finish and retry; no task memory has been reclaimed. */
+  __asm__ volatile("yield" ::: "memory");
+ } while(AROSAppleSMPTimeUS()-start<UINT64_C(1000000));
+ return 0;
 }
 static uintptr_t notify_ipi(void)
 {

@@ -9,6 +9,7 @@ void AROSAppleSMPSendIPI(uint32_t message, uint32_t data, uint32_t mask);
 uint64_t AROSAppleSMPTimeUS(void);
 /* Cooperate with mapping rendezvous while waiting with local IRQs masked. */
 void AROSAppleMemoryRendezvousPoll(void);
+void AROSAppleDispatchTransition(unsigned busy);
 int AROSAppleSMPHandleIPI(uint32_t id);
 int AROSAppleSMPTick(void);
 uint64_t AROSAppleSMPTimerTicks(void);

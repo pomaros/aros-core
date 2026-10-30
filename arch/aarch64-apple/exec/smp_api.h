@@ -23,12 +23,13 @@ struct AROSAppleExecSMPAPI {
     struct CallIPIEntry *(*try_claim)(int);
     spinlock_t *(*spin_trylock)(spinlock_t *, ULONG);
     int (*self_exit_queue)(void *, void *, void (*)(void *, void *));
+    int (*external_exit_fence)(void *);
 };
 extern const struct AROSAppleExecSMPAPI AROSAppleExecSMPAPI;
 static inline int AROSAppleExecSMPAPIValid(const struct AROSAppleExecSMPAPI *table)
 {
-    return table && table->version==4 && table->bytes==sizeof(*table) &&
-        table->spin_trylock && table->self_exit_queue;
+    return table && table->version==5 && table->bytes==sizeof(*table) &&
+        table->spin_trylock && table->self_exit_queue && table->external_exit_fence;
 }
 static inline const struct AROSAppleExecSMPAPI *AROSAppleExecSMPAPIGet(void)
 {

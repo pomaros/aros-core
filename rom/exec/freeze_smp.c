@@ -248,7 +248,9 @@ ULONG exec_ThawAllSMP(void)
         EXEC_SPINLOCK_LOCK(&PrivExecBase(SysBase)->TaskWaitSpinLock, NULL, SPINLOCK_MODE_WRITE);
         ForeachNode(&SysBase->TaskWait, task)
         {
-            if (task->tc_State != TS_FROZEN)
+            if (task->tc_State != TS_FROZEN ||
+                (GetIntETask(task) && (__atomic_load_n(&GetIntETask(task)->iet_FreezeFlags,
+                    __ATOMIC_ACQUIRE) & IETF_RETIRE_PENDING)))
                 continue;
             if (!freeze_trylock(&task->tc_SpinLock))
             {
@@ -387,6 +389,13 @@ BOOL exec_ThawOneSMP(struct Task *task)
 
     __if = EXEC_IRQFIQ_DISABLE();
     EXEC_SPINLOCK_LOCK(&task->tc_SpinLock, NULL, SPINLOCK_MODE_WRITE);
+    if (GetIntETask(task) && (__atomic_load_n(&GetIntETask(task)->iet_FreezeFlags,
+        __ATOMIC_ACQUIRE) & IETF_RETIRE_PENDING))
+    {
+        EXEC_SPINLOCK_UNLOCK(&task->tc_SpinLock);
+        EXEC_IRQFIQ_RESTORE(__if);
+        return FALSE;
+    }
     if (task->tc_State == TS_FROZEN)
     {
         thawed = TRUE;

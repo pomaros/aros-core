@@ -36,3 +36,9 @@ safe. Context/ETask cleanup ordering is inherited; Task and its MemEntry stack
 are retained until publication. Non-Apple and UP RemTask keep their existing
 path. The normal task JIT and TLS restore sequence is retained; idle explicitly
 neutralizes the outgoing task's EL0 JIT write permission.
+
+The retirement fixture extracts the actual SMP retirement barrier callback. It
+rejects live remote task references, dispatch transitions, self-retirement and
+a failed rendezvous; offline CPUs do not block. Semantic mutations omit the
+remote task check, dispatch check and TLBI. This HOST evidence does not qualify
+real IPI arrival or scheduler removal; use remote_retire_vm on two CPUs.

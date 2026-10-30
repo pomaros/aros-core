@@ -11,16 +11,23 @@ typedef void *APTR;
 #define TASK_SPSR_ALLOWED UINT64_MAX
 #define AROS_CPU_BUSY 1
 #define TLS_GET(field) (current)
+struct Execution { uint64_t root,user_tls; };
 struct ExceptionContext {
     uint64_t x[29], fp, lr, sp, pc, cpsr, Flags;
     void *fpuContext;
+    struct Execution execution;
 };
 struct IntETask { int iet_CpuNumber; };
 struct Task { int tc_IDNestCnt; void *tc_SPReg; struct IntETask et; struct ExceptionContext ctx; };
-typedef struct { uint64_t x[31], sp, elr, spsr, simd[66]; } regs_t;
+typedef struct { uint64_t x[31], sp, elr, spsr, simd[66],task_tls,return_ttbr0; } regs_t;
 static struct Task *current, *destination;
 static struct AppleSelfExit slot;
-static struct { unsigned idle_active; } local;
+static struct { unsigned idle_active; uint64_t kernel_tls,trusted_ttbr0; } local;
+static unsigned transition;
+static uint64_t task_pointer;
+static void AROSAppleDispatchTransition(unsigned busy) { transition=busy; }
+static uint64_t AROSAArch64ReadTaskPointer(void) { return task_pointer; }
+#define AROSAppleTaskExecution(context) (&(context)->execution)
 static uint64_t AROSAppleKernelLastDispatchSPSR;
 static unsigned phase, published, dispatches, wake_service;
 static struct Task *service;
@@ -40,7 +47,7 @@ static void AROSCPUCurrentState(int state) { assert(state==AROS_CPU_BUSY); }
 static struct ExceptionContext *task_context(struct Task *task) { return &task->ctx; }
 static void cpu_ApplyTaskMasks(uint64_t *mask, int nesting) { (void)mask; (void)nesting; }
 static void AROSAppleJitRestore(struct Task *task) { assert(task==destination && phase==1); phase=2; }
-static void AROSAppleTaskTLSRestore(struct ExceptionContext *ctx) { assert(ctx==&destination->ctx && phase==2); phase=3; }
+static void AROSAppleTaskTLSRestore(struct ExceptionContext *ctx) { assert(ctx==&destination->ctx && phase==2); phase=3; task_pointer=(uintptr_t)ctx; }
 static int AROSAppleSelfExitDetached(void *departing) { assert(phase==3); return AppleSelfExitDetached(&slot,0,departing); }
 /* ACTUAL_DISPATCH_BODY */
 static void publish(void *task, void *context)
@@ -72,6 +79,7 @@ int main(void)
         destination=mode==0 ? &next : 0;
         phase=0; dispatches=0; wake_service=mode==2;
         cpu_Dispatch(&regs);
+        assert(!transition);
         assert(published==before+(mode!=3));
         if (mode==1 || mode==3) assert(local.idle_active && !current);
         else assert(current==&next && !local.idle_active && regs.sp==4096 && regs.elr==8192);

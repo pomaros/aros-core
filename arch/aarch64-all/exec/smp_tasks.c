@@ -50,6 +50,7 @@ void Exec_ReschedTask(struct Task *task, ULONG newState)
             fromLock = &PrivExecBase(SysBase)->TaskReadySpinLock;
             break;
         case TS_WAIT:
+        case TS_FROZEN:
             fromLock = &PrivExecBase(SysBase)->TaskWaitSpinLock;
             break;
         default:
