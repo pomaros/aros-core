@@ -311,6 +311,7 @@ static inline const void *gallium_core_get_api(void) { return (const void *)0; }
         goto error_out;
     }
     ctx->own.driver = ctx->driver;
+    ctx->own.shared = ctx->shared;
 
     /* The state tracker is the current Mesa object; glAGetCurrentContext
      * answers with its frontend owner, this context (codex's fix). */
