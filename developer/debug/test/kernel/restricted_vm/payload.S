@@ -9,6 +9,16 @@ RestrictedCode:
  mov x23, x0
  lsr x22, x0, #2
  mrs x20, tpidr_el0
+ mov x0, x19
+ svc #0xa545
+ cbnz x0, RestrictedFailure
+ adr x0, RestrictedFaultHandler
+ svc #0xa545
+ cbz x0, RestrictedFailure
+ sub x0, x19, #1, lsl #12
+ mov x1, #3
+ svc #0xa546
+ cbnz x0, RestrictedFailure
 1:
  ldr x9, [x19]
  cmp x9, x21
@@ -115,6 +125,17 @@ RestrictedCallback:
  mov x19, x1
  cmp x24, #100
  b.ne 6f
+ mov x0, x19
+ mov x1, #1
+ svc #0xa546
+ cbz x0, RestrictedFailure
+ mov x9, #0x1234
+RestrictedWriteProbe:
+ str x9, [x19, #384]
+ ldr x9, [x19, #384]
+ mov x10, #0x1234
+ cmp x9, x10
+ b.ne RestrictedFailure
  add x0, x19, #320
  add x1, x19, #352
  mov x2, #8
@@ -146,5 +167,64 @@ RestrictedCallback:
  b.ne RestrictedFailure
  mov x0, #0
  svc #0xa544
+ b RestrictedFailure
+RestrictedFaultHandler:
+ add x9, x19, #384
+ cmp x0, x9
+ b.ne RestrictedFailure
+ ubfx x9, x1, #26, #6
+ cmp x9, #0x24
+ b.ne RestrictedFailure
+ tbz x1, #6, RestrictedFailure
+ adr x9, RestrictedWriteProbe
+ cmp x2, x9
+ b.ne RestrictedFailure
+ mov x24, x2
+ mov x25, x3
+ /* Valid PC/token cannot resume until the page is writable again. */
+ mov x0, x24
+ mov x1, x25
+ svc #0xa547
+ cmn x0, #1
+ b.ne RestrictedFailure
+ mov x0, x19
+ mov x1, #3
+ svc #0xa546
+ cbz x0, RestrictedFailure
+ /* Neither a forged PC nor token may replace the saved continuation. */
+ mov x0, x19
+ mov x1, x25
+ svc #0xa547
+ cmn x0, #1
+ b.ne RestrictedFailure
+ mov x0, x24
+ add x1, x25, #1
+ svc #0xa547
+ cmn x0, #1
+ b.ne RestrictedFailure
+ add x27, x23, #911
+ str x27, [x19, #416]
+ add x0, x19, #416
+ add x1, x19, #448
+ mov x2, #8
+ mov x3, #0
+ svc #0xa542
+ cbz x0, RestrictedFailure
+ mov x28, x0
+7:
+ mov x0, x28
+ svc #0xa543
+ cbz x0, 7b
+ ldr x9, [x19, #448]
+ mov x26, #0x5a5a
+ movk x26, #0x5a5a, lsl #16
+ movk x26, #0x5a5a, lsl #32
+ movk x26, #0x5a5a, lsl #48
+ eor x9, x9, x26
+ cmp x9, x27
+ b.ne RestrictedFailure
+ mov x0, x24
+ mov x1, x25
+ svc #0xa547
  b RestrictedFailure
 RestrictedCodeEnd:

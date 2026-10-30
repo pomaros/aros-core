@@ -18,11 +18,11 @@ locked QEMU profile with register access qualified before execution.
 
 The experimental API admits one page of code, data and stack per invocation.
 It restores the native wrapper after completion/fault and releases its owned
-backing. It implements bounded worker services. It supports one callback frame and worker reentry, but does not implement resumable fault
-upcalls, external task removal or SMP reclamation. SMP admission is disabled.
+backing. It implements bounded worker services. It supports one callback frame and worker reentry, and owned-page fault resumption. It does not implement external task removal
+or SMP reclamation. SMP admission is disabled.
 The source is an integration candidate; a compile is not runtime acceptance.
 
-The API version is 3. Service submit/collect use kernel-derived task identity;
+The API version is 4. Service submit/collect use kernel-derived task identity;
 collection yields when a response is unavailable. Close cancels and drains
 worker leases from native context before reclaiming backing; adversarial
 cancellation/close timing requires separate runtime qualification.
@@ -36,3 +36,12 @@ exception handling and malicious continuation tests remain separate gates.
 The denied-call checks include the trusted worker take/complete interfaces and
 a forged callback return without an active callback. Recursive callback setup
 is refused once per domain while an ordinary nested worker call succeeds.
+
+The first callback in each domain protects its owned data page read-only and
+faults on a store. An executable owned handler receives the fault PC/address,
+ESR and kernel-issued generation, restores write permission, calls the worker,
+and resumes the original instruction using a kernel-retained frame. Resume
+before permission repair, a forged PC and a forged token are rejected. The
+outer callback and task continue; an unrelated kernel-memory fault terminates
+only its own domain. This is a bounded resident-page fault-upcall contract,
+not demand paging or general Windows exception support.

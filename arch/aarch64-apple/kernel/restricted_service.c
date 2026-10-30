@@ -46,6 +46,12 @@ int AROSRestrictedServiceInit(struct AROSRestrictedService *s,struct Task *owner
         KrnMappingComplete(&request,backing,0,&s->mapops) &&
         KrnMappingFault(&s->mapping,AROS_RESTRICTED_DATA,KMAP_WRITE,1,&request,&s->mapops)==KMAP_FAULT_RETRY;
 }
+int AROSRestrictedServiceProtect(struct AROSRestrictedService *s,unsigned access)
+{
+    if (access!=KMAP_READ && access!=(KMAP_READ|KMAP_WRITE)) return 0;
+    return s->handle && !s->domain.closing &&
+        KrnMappingProtectPage(&s->mapping,0,access,&s->mapops);
+}
 int AROSRestrictedServiceSubmit(struct AROSRestrictedService *s,uintptr_t input,uintptr_t output,size_t length)
 {
     return KrnBufferServiceSubmit(&registry,s->principal,s->handle,&s->queue,

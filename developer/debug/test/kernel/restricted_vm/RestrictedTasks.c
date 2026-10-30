@@ -58,7 +58,7 @@ int main(void)
     intptr_t address = KrnGetSystemAttr(AROS_RESTRICTED_KATTR_API);
     CHECK(address != -1 && address != 0);
     api = (const void *)address;
-    CHECK(api->version == 3 && api->size == sizeof(*api));
+    CHECK(api->version == 4 && api->size == sizeof(*api));
     pthread_t clients[2], heart, service;
     CHECK(!pthread_create(&heart,NULL,heartbeat,NULL));
     CHECK(!pthread_create(&service,NULL,worker,NULL));
@@ -78,11 +78,12 @@ int main(void)
     for (unsigned id=0; id<2; ++id) {
         CHECK(results[id].value == (id+1)*5120);
         CHECK(results[id].yields == (id+1)*1024);
-        CHECK(results[id].denied == 6);
-        CHECK(results[id].replies == 200 && results[id].rejected == 6 && results[id].callbacks == 100);
+        CHECK(results[id].denied == 9);
+        CHECK(results[id].replies == 201 && results[id].rejected == 8 && results[id].callbacks == 100);
     }
-    CHECK(worker_replies == 400);
+    CHECK(worker_replies == 402);
+    CHECK(results[0].resumed == 1 && results[1].resumed == 1);
     CHECK(beats > 0 && after_fault > 0);
-    bug("[ISOVM] PASS restricted=2 yields=3072 denied=12 faulted=1 survived=1 heartbeat=%u after_fault=%u joined=4 replies=400 rejected=12 callbacks=200\n",beats,after_fault);
+    bug("[ISOVM] PASS restricted=2 yields=3072 denied=18 faulted=1 survived=1 heartbeat=%u after_fault=%u joined=4 replies=402 rejected=16 callbacks=200 resumed=2\n",beats,after_fault);
     return 0;
 }

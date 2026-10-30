@@ -26,6 +26,7 @@ struct AROSRestrictedService {
  * SMP admission remains disabled until a shared lock/quiescence protocol. */
 int AROSRestrictedServiceInit(struct AROSRestrictedService *, struct Task *,
     uint64_t root,uint64_t tcr,uintptr_t backing,const struct AArch64ProtectionOps *);
+int AROSRestrictedServiceProtect(struct AROSRestrictedService *, unsigned);
 int AROSRestrictedServiceSubmit(struct AROSRestrictedService *,uintptr_t,uintptr_t,size_t);
 int AROSRestrictedServiceCollect(struct AROSRestrictedService *,uint64_t);
 int AROSRestrictedServiceTake(struct Task *,struct AROSRestrictedWork *);
