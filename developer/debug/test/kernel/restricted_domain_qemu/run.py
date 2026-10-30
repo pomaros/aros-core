@@ -104,7 +104,7 @@ def main():
             'stale-domain': ('user_buffer.c', 's->generation == (uint32_t)(handle >> 32)', 's->generation != 0', 'FAIL buffer-stale-domain'),
             'foreign-page': ('user_buffer.c', 'm->owner != s', '0', 'FAIL buffer-foreign-page'),
             'readonly-ledger': ('user_buffer.c', '(p->protection & access) == access', '1', 'FAIL buffer-readonly-ledger'),
-            'cancel-early-release': ('user_service.c', 'if (r->state == KS_RUNNING || r->state == KS_CANCELLED)', 'if (r->state == KS_CANCELLED)', 'FAIL buffer-unmap-retained'),
+            'cancel-early-release': ('user_service.c', 'if (r->state == KS_RUNNING || r->state == KS_CANCELLED)', 'if (r->state == KS_CANCELLED)', 'FAIL buffer-cross-queue-pinned'),
         }
         variants = [('baseline', 0, None)] + [(n, 0, v[3]) for n,v in controls.items()]
         result['scope'] = 'single-CPU freestanding real-MMU owned-buffer/service boundary; not production AROS restricted scheduling'

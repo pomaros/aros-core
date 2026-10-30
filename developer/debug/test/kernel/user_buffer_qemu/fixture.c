@@ -75,7 +75,9 @@ void ProbeBufferInit(void)
  uint64_t token=r.token;
  CHECK(KrnBufferServiceTake(&r,token,bytes,sizeof(bytes),&n),"buffer-cross-queue-take");
  CHECK(!KrnBufferServiceComplete(&r,old,bytes,n),"buffer-cross-queue-worker");
- CHECK(KrnBufferServiceCancel(&r,2,token) && KrnBufferServiceComplete(&r,token,bytes,n),"buffer-cross-queue-drain");
+ CHECK(KrnBufferServiceCancel(&r,2,token),"buffer-cross-queue-cancel-running");
+ CHECK(spaces[1].temp.in_flight==1,"buffer-cross-queue-pinned");
+ CHECK(KrnBufferServiceComplete(&r,token,bytes,n),"buffer-cross-queue-drain");
  cross_queue=1;
 }
 int ProbeBufferService(unsigned id,uint64_t ptr,uint64_t len,unsigned mask)
