@@ -24,6 +24,16 @@ cross-CPU synchronization belong to their platform coordinator.
   admission does not stop CPUs or establish that their memory accesses ended.
   Reclamation also requires withdrawing every external reference.
 
+- `service.c` owns a bounded copied-byte request queue under the same caller-held
+  domain lock. Owner-bound generation tokens reject stale request reuse; each
+  live request retains a domain member. Cancellation of a running worker waits
+  for its completion acknowledgement before releasing retention, and discards
+  the reply. Queued/ready requests retire immediately on close. Queue drain
+  does not imply domain reclamation or CPU quiescence. Buffers are trusted
+  staging storage: domain-handle lookup, user-memory validation, scheduling,
+  callback delivery and locking are integration responsibilities. See
+  `service.h` for the complete lifetime and buffer contract.
+
 The coordinator must register fault waiters before releasing its lock, suspend
 and resume them through the scheduler, retain all backing and metadata through
 completion, and provide actual filesystem coherence and persistence. Waiting on
@@ -35,5 +45,6 @@ the synchronization contract in that directory's `protection.h`. Their callback
 traces exercise descriptor mechanics, not real MMU/cache/TLB behavior.
 
 The host regressions and their limits are described in
+`developer/debug/test/kernel/service_host/README.md`,
 `developer/debug/test/kernel/mapping_host/README.md` and
 `developer/debug/test/kernel/aarch64_mapping_host/README.md`.

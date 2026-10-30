@@ -30,6 +30,8 @@ Keep the official AROS remote fetch-only and review generic changes in this fork
 
 - [Restricted AArch64 domain mechanism](developer/debug/test/kernel/restricted_domain_qemu/README.md): real-MMU QEMU checks with semantic negative controls; independent of product boot qualification.
 
+- [Service coordinator ownership](developer/debug/test/kernel/service_host/README.md): sanitized HOST checks for copied requests, cancellation, generation reuse and domain retention.
+
 ## Licences
 
 AROS is a collection of components under different licences. Preserve each file's notices and consult [LEGAL](LEGAL), [LICENSE](LICENSE), [LICENSE.GPL](LICENSE.GPL), [LICENSE.LGPL](LICENSE.LGPL) and component-specific licence files. This fork does not relicense the upstream code.
