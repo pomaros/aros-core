@@ -34,6 +34,8 @@ Keep the official AROS remote fetch-only and review generic changes in this fork
 
 - [AROS task service proof](developer/debug/test/kernel/service_vm/README.md): two clients, worker, native heartbeat, deterministic cancellation and joined teardown on a guest SDK.
 
+- [Owned-buffer boundary](developer/debug/test/kernel/user_buffer_host/README.md) and [real-MMU service fixture](developer/debug/test/kernel/user_buffer_qemu/README.md): retained copying, permission/identity validation and cancellation without late writes.
+
 ## Licences
 
 AROS is a collection of components under different licences. Preserve each file's notices and consult [LEGAL](LEGAL), [LICENSE](LICENSE), [LICENSE.GPL](LICENSE.GPL), [LICENSE.LGPL](LICENSE.LGPL) and component-specific licence files. This fork does not relicense the upstream code.

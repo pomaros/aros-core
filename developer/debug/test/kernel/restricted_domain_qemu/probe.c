@@ -64,6 +64,43 @@ static uint64_t backing(unsigned id){return (uintptr_t)data[(MUTANT==1)?0:id];}
 static void switch_root(unsigned id){
  __asm__ volatile("dsb ish; msr ttbr0_el1,%0; isb; tlbi vmalle1is; dsb ish; isb"::"r"(roots[id]):"memory");
 }
+/* Optional linked mechanism fixture; the default retains this test's scope. */
+__attribute__((weak)) void ProbeBufferInit(void) {}
+__attribute__((weak)) void ProbeBufferFinish(unsigned id) { (void)id; }
+__attribute__((weak)) const char *ProbeBufferSummary(void) { return NULL; }
+__attribute__((weak)) int ProbeBufferService(unsigned id, uint64_t ptr, uint64_t len, unsigned mask)
+{
+ if(ptr<DATA || len>PAGE || ptr-DATA>PAGE-len)return 0;
+ unsigned char *p=(unsigned char *)(uintptr_t)backing(id)+(ptr-DATA);
+ for(uint64_t i=0;i<len;i++)p[i]^=(unsigned char)mask;
+ return 1;
+}
+void ProbeFail(const char *message) { fail(message); }
+uintptr_t ProbeBacking(unsigned id) { return backing(id); }
+int ProbeMap(unsigned id, uintptr_t va, uintptr_t pa, unsigned permissions)
+{
+ uint64_t existing;
+ if(AArch64MappingPhysical(&ops,roots[id],TCR,va,&existing))
+  return existing==pa && AArch64RemapPage(&ops,roots[id],TCR,va,pa,permissions|AARCH64_PROTECT_USER);
+ return AArch64MapPage(&ops,roots[id],TCR,va,pa,permissions|AARCH64_PROTECT_USER,1);
+}
+int ProbeUnmap(unsigned id, uintptr_t va, uintptr_t pa)
+{ return AArch64UnmapPage(&ops,roots[id],TCR,va,pa); }
+unsigned char *ProbeAdmit(unsigned id, uintptr_t va, uintptr_t pa, size_t size, unsigned access)
+{
+ if(size!=PAGE || (va&(PAGE-1)) || (pa&(PAGE-1)))return NULL;
+ uint64_t saved,par;
+ __asm__ volatile("mrs %0,ttbr0_el1":"=r"(saved));
+ switch_root(id);
+ if(access==AARCH64_PROTECT_WRITE)
+  __asm__ volatile("at s1e0w,%0; isb"::"r"(va):"memory");
+ else if(access==AARCH64_PROTECT_READ)
+  __asm__ volatile("at s1e0r,%0; isb"::"r"(va):"memory");
+ else { fail("probe-admit-access"); }
+ __asm__ volatile("mrs %0,par_el1":"=r"(par));
+ __asm__ volatile("dsb ish; msr ttbr0_el1,%0; isb; tlbi vmalle1is; dsb ish; isb"::"r"(saved):"memory");
+ return !(par&1) && (par&UINT64_C(0x0000fffffffff000))==pa ? (unsigned char *)pa : NULL;
+}
 void handle_exception(struct Frame *f){
  unsigned id=current;uint64_t ec=f->esr>>26;
  if(ec==0x20){
@@ -103,19 +140,18 @@ void handle_exception(struct Frame *f){
   f->x[0]=0;return;
  }
  if(svc==4){
-  uint64_t ptr=f->x[0],len=f->x[1];
-  if(ptr<DATA || len>PAGE || ptr-DATA>PAGE-len){f->x[0]=UINT64_MAX;bridge_bad[id]++;return;}
-  // Fixture has one fixed, resident, owned page and serialized admission.
-  // No generic copyin, async worker or mapping-lifetime claim is made here.
-  unsigned char *p=(unsigned char *)(uintptr_t)backing(id)+(ptr-DATA);
-  for(uint64_t i=0;i<len;i++)p[i]^=(unsigned char)f->x[2];
+  if(!ProbeBufferService(id,f->x[0],f->x[1],(unsigned)f->x[2])){
+   f->x[0]=UINT64_MAX;bridge_bad[id]++;return;
+  }
   bridge_ok[id]++;f->x[0]=0;return;
  }
  if(svc==3){
   if(yields[id]!=1000 || faults[id]!=1 || denials[id]!=3 || data[id][0]!=(uint64_t)(id+1)*4096+1001 || bridge_ok[id]!=1 || bridge_bad[id]!=2)fail("completion-counts");
   if(kernel_faults[id]!=2 || guard_faults[id]!=1 || nx_faults[id]!=1 || kernel_secret!=UINT64_C(0xdefaced))fail("isolation-counts");
+  ProbeBufferFinish(id);
   done[id]=1;
   if(done[0]&&done[1]){
+   const char *summary=ProbeBufferSummary();if(summary)text(summary);
    text("PASS domains=2 switches=2000 faults=2 denied=6 bridge=2 rejected_buffers=4 kernel_faults=4 guard_faults=2 nx_faults=2\n");stop(0);
   }
   current=1-id;switch_root(current);memcpy(f,&frames[current],sizeof(*f));return;
@@ -148,5 +184,6 @@ void main(void){
  uint64_t sctlr=UINT64_C(0x30d00801);
  __asm__ volatile("msr sctlr_el1,%0; isb"::"r"(sctlr):"memory");
  text("READY restricted-domain-probe\n");
+ ProbeBufferInit();
  enter_guest(&frames[0]);
 }

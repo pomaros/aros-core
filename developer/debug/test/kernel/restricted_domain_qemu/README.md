@@ -79,3 +79,11 @@ reentry, validated fault return, cancellation, drain and reclamation. SMP,
 cache coherency, stale translations after reuse, native-task coexistence and
 resource cleanup are outside this fixture. Static allocations live until QEMU
 exits; a passing run does not establish leak-free domain teardown.
+
+
+## Optional owned-buffer fixture
+
+`--buffer-proof` links the actual generic buffer/service boundary via the shared
+harness hooks. See [its contract and controls](../user_buffer_qemu/README.md).
+Default invocation retains the original four controls and synchronous bounded
+page transform; its result does not imply the additional buffer proof ran.

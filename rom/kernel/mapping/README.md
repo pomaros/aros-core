@@ -34,6 +34,20 @@ cross-CPU synchronization belong to their platform coordinator.
   callback delivery and locking are integration responsibilities. See
   `service.h` for the complete lifetime and buffer contract.
 
+- `user_buffer.c` selects kernel-owned domain identities through generation
+  handles and retains anonymous resident pages through the existing mapping
+  `in_flight` counts and domain membership. Every range is preflighted before
+  copying, and every copy rechecks ledger ownership/permissions/generations plus
+  a mandatory platform translation/access callback. Close invalidates copying
+  immediately; backing cannot be released until leases drain. Shared/file-backed
+  pages and faulting admission are deliberately refused.
+- `user_service.c` connects those leases to the copied-byte service queue. Input
+  is staged before submission; output remains pinned until cancellation is
+  acknowledged or completion is collected. Ready responses are discarded if
+  publication is no longer valid. Workers present captured tokens so record
+  reuse cannot redirect stale completions. No public pointer/handle ABI or
+  production exception/scheduler integration is supplied by these components.
+
 The coordinator must register fault waiters before releasing its lock, suspend
 and resume them through the scheduler, retain all backing and metadata through
 completion, and provide actual filesystem coherence and persistence. Waiting on
@@ -45,6 +59,10 @@ the synchronization contract in that directory's `protection.h`. Their callback
 traces exercise descriptor mechanics, not real MMU/cache/TLB behavior.
 
 The host regressions and their limits are described in
+`developer/debug/test/kernel/user_buffer_host/README.md`,
 `developer/debug/test/kernel/service_host/README.md`,
 `developer/debug/test/kernel/mapping_host/README.md` and
 `developer/debug/test/kernel/aarch64_mapping_host/README.md`.
+
+The real-MMU buffer fixture and its platform-access oracle are described in
+`developer/debug/test/kernel/user_buffer_qemu/README.md`.
