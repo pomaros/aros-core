@@ -214,10 +214,12 @@ LLVM_TBLGEN_CMAKEOPTIONS := \
     cmakeinstallcmd="true" extraoptions="$(LLVM_TBLGEN_CMAKEOPTIONS)"
 
 # STATIC_LIBRARY try-compiles never link, so check_library_exists() always
-# says yes. AROS has no libdl/librt - answer them rather than probe.
+# says yes. AROS has no libdl/librt or native Unix shared-object loader;
+# answer these checks rather than enabling LLVM's dladdr/Dl_info paths.
 LLVM_NO_PROBE_LIBS := \
     -DHAVE_LIBDL:INTERNAL=0 \
-    -DHAVE_LIBRT:INTERNAL=0
+    -DHAVE_LIBRT:INTERNAL=0 \
+    -DHAVE_DLOPEN:INTERNAL=0
 
 LLVM_TARGET_CMAKEOPTIONS := \
     $(LLVM_COMMON_CMAKEOPTIONS) \
