@@ -239,3 +239,65 @@ int AArch64TranslateResident(const struct AArch64ProtectionOps *ops,
     }
     return 0;
 }
+
+/* Snapshot into unpublished, separately owned tables. No live descriptor is
+ * changed here. The allocator's ledger owns every page even on failure. */
+static int clone_privileged(const struct AArch64ProtectionOps *ops,
+    const struct MappingWalk *walk, uint64_t source, unsigned level,
+    uint64_t entries, size_t *budget, uint64_t *destination)
+{
+    if (!*budget) return 0;
+    uint64_t *input = ops->resolve(ops->context, source);
+    if (!input) return 0;
+    uint64_t physical = ops->allocate(ops->context, walk->page_bits);
+    if (!physical || !physical_valid(walk, physical)) return 0;
+    --*budget;
+    uint64_t *output = ops->resolve(ops->context, physical);
+    if (!output) return 0;
+    for (uint64_t i = 0; i < walk->count; ++i) {
+        uint64_t desc = input[i];
+        output[i] = 0;
+        if (!desc) continue;
+        if (i >= entries || !(desc & M_VALID) ||
+            !descriptor_address_valid(walk, desc) ||
+            (desc & (M_GUARDED | M_CONTIGUOUS))) return 0;
+        if (level < 3 && (desc & 3) == M_TABLE) {
+            uint64_t child;
+            if ((desc & M_TABLE_RESTRICTIONS) ||
+                !clone_privileged(ops, walk, desc & walk->mask, level + 1,
+                    walk->count, budget, &child)) return 0;
+            output[i] = child | M_TABLE;
+        } else {
+            unsigned shift = walk->page_bits + walk->stride * (3 - level);
+            uint64_t block_mask = (UINT64_C(1) << shift) - 1;
+            if (!level || (desc & 3) != (level == 3 ? M_TABLE : M_VALID) ||
+                ((desc & walk->mask) & block_mask)) return 0;
+            /* Writable EL0 mappings are implicitly non-executable at EL1.
+             * Preserve that restriction when removing EL0 permission. Refuse
+             * already privileged writable/executable mappings: a restricted
+             * kernel template must have an explicit W^X policy. */
+            if (!(desc & (UINT64_C(1) << 7))) {
+                if (!(desc & (UINT64_C(1) << 6)) && !(desc & M_PXN)) return 0;
+                desc |= M_PXN;
+            }
+            output[i] = (desc & ~(UINT64_C(1) << 6)) | M_UXN;
+        }
+    }
+    ops->clean(ops->context, output, (size_t)walk->size);
+    *destination = physical;
+    return 1;
+}
+
+int AArch64ClonePrivilegedRoot(const struct AArch64ProtectionOps *ops,
+    uint64_t ttbr0, uint64_t tcr, size_t table_budget, uint64_t *output_root)
+{
+    struct MappingWalk walk;
+    if (!ops || !ops->resolve || !ops->allocate || !ops->clean || !output_root ||
+        !table_budget || !geometry(tcr, 0, 0, &walk) || !root_valid(&walk, ttbr0)) return 0;
+    unsigned shift = walk.page_bits + walk.stride * (3 - walk.first);
+    uint64_t entries = UINT64_C(1) << (walk.va_bits - shift), root;
+    if (!clone_privileged(ops, &walk, ttbr0 & walk.mask, walk.first,
+        entries, &table_budget, &root)) return 0;
+    *output_root = root;
+    return 1;
+}

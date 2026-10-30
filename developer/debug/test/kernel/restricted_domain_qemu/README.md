@@ -87,3 +87,22 @@ exits; a passing run does not establish leak-free domain teardown.
 harness hooks. See [its contract and controls](../user_buffer_qemu/README.md).
 Default invocation retains the original four controls and synchronous bounded
 page transform; its result does not imply the additional buffer proof ran.
+
+
+## Trusted-template root clone proof
+
+`--root-clone-proof` constructs a trusted template with user-accessible normal
+RAM and read-only shared kernel text, then derives two private roots using the
+actual `AArch64ClonePrivilegedRoot` helper. Kernel text is EL1 RX; kernel data
+is EL1 RW/NX. A fingerprint checks that root creation and private user mappings
+did not change the source tables. The ordinary EL0 switch/fault/kernel-access
+suite runs through these roots. A deliberately broken clone retaining user
+access must fail `guest-kernel-access`.
+
+This option can be combined with `--buffer-proof` to run the owned-buffer
+baseline on cloned roots. In this mode the runner selects the root-clone
+negative control; run `--buffer-proof` separately for all buffer controls.
+The snapshot's kernel mappings are static in this fixture. Production module
+mapping changes, exception-entry root/TLS transition and scheduler integration
+are not qualified. The host root-clone suite also covers 16 KiB tables;
+this runtime remains a 4 KiB, single-CPU, caches-disabled fixture.

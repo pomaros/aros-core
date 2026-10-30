@@ -5,6 +5,7 @@ ENTRY(_start)
 SECTIONS {
  . = 0x40080000;
  .text : { KEEP(*(.text.boot)) *(.text .text.*) }
+ __kernel_text_end = .;
  . = ALIGN(4096);
  .guest : { *(.guest) }
  .rodata : { *(.rodata .rodata.*) }

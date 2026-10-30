@@ -8,6 +8,9 @@
 #ifndef MUTANT
 #define MUTANT 0
 #endif
+#ifndef ROOT_CLONE
+#define ROOT_CLONE 0
+#endif
 #define PAGE 4096U
 #define CODE UINT64_C(0x10000000)
 #define DATA UINT64_C(0x10001000)
@@ -23,6 +26,9 @@ static uint64_t data[2][512] __attribute__((aligned(PAGE)));
 static uint64_t stacks[2][512] __attribute__((aligned(PAGE)));
 static struct Frame frames[2];
 static uint64_t roots[2];
+static uint64_t trusted_template, template_hash;
+static unsigned template_tables;
+extern unsigned char _start[], __kernel_text_end[];
 static unsigned used, current, yields[2], faults[2], denials[2], done[2];
 static unsigned protections[2], bridge_ok[2], bridge_bad[2];
 static unsigned kernel_faults[2], guard_faults[2], nx_faults[2];
@@ -110,7 +116,7 @@ void handle_exception(struct Frame *f){
  if(ec==0x24){
   if(f->far==(uintptr_t)&kernel_secret){
    unsigned write=(f->esr&64)!=0;
-   if((f->esr&63)!=13 || kernel_faults[id]!=write || f->pc!=guest_pc(write?kernel_write_probe:kernel_read_probe))fail("kernel-fault-context");
+   if((f->esr&63)!=(ROOT_CLONE?15:13) || kernel_faults[id]!=write || f->pc!=guest_pc(write?kernel_write_probe:kernel_read_probe))fail("kernel-fault-context");
    kernel_faults[id]++;f->pc+=4;return;
   }
   if(f->far==DATA+PAGE){
@@ -161,16 +167,38 @@ void handle_exception(struct Frame *f){
  denials[id]++;
  f->x[0]=(MUTANT==2 && svc==0xa501)?0:UINT64_MAX;
 }
+static uint64_t template_fingerprint(void)
+{
+ uint64_t hash=0;
+ for(unsigned t=0;t<template_tables;t++)
+  for(unsigned i=0;i<512;i++)hash=(hash<<7)^(hash>>57)^tables[t][i];
+ return hash;
+}
+static void prepare_template(void)
+{
+ trusted_template=allocate(0,12);
+ ((uint64_t *)(uintptr_t)trusted_template)[1]=UINT64_C(0x40000000)|1|4|64|(3U<<8)|(1U<<10)|(UINT64_C(1)<<53)|(UINT64_C(1)<<54);
+ if(!AArch64MapPage(&ops,trusted_template,TCR,0x09000000,0x09000000,AARCH64_PROTECT_READ|AARCH64_PROTECT_WRITE,0))fail("template-uart");
+ for(uintptr_t p=(uintptr_t)_start;p<(uintptr_t)__kernel_text_end;p+=PAGE)
+  if(!AArch64ProtectPage(&ops,trusted_template,TCR,p,AARCH64_PROTECT_READ|AARCH64_PROTECT_EXEC|AARCH64_PROTECT_USER|AARCH64_PROTECT_EXEC_BOTH))fail("template-text");
+ if(((uintptr_t)&kernel_secret>>21)!=((uintptr_t)_start>>21))fail("template-fault-level");
+ template_tables=used;template_hash=template_fingerprint();
+}
 void main(void){
  uint64_t el;__asm__ volatile("mrs %0,CurrentEL":"=r"(el));
  if(el!=4)fail("entry-not-el1");
  if((uintptr_t)guest_start%PAGE || (size_t)(guest_end-guest_start)>PAGE)fail("guest-layout");
+ if(ROOT_CLONE)prepare_template();
  for(unsigned id=0;id<2;id++){
+  if(ROOT_CLONE){
+   if(!AArch64ClonePrivilegedRoot(&ops,trusted_template,TCR,16,&roots[id]))fail("root-clone");
+  }else{
   roots[id]=allocate(0,12);
   // Permanent identity RAM map is privileged only. Diagnostic EL1 code/data
   // share a RWX block; production alias-wide W^X is explicitly outside scope.
   ((uint64_t *)(uintptr_t)roots[id])[1]=UINT64_C(0x40000000)|1|4|(3U<<8)|(1U<<10)|(UINT64_C(1)<<54);
   if(!AArch64MapPage(&ops,roots[id],TCR,0x09000000,0x09000000,AARCH64_PROTECT_READ|AARCH64_PROTECT_WRITE,0))fail("uart-map");
+  }
   if(!AArch64MapPage(&ops,roots[id],TCR,CODE,(uintptr_t)guest_start,AARCH64_PROTECT_READ|AARCH64_PROTECT_EXEC|AARCH64_PROTECT_USER,1))fail("code-map");
   if(!AArch64MapPage(&ops,roots[id],TCR,DATA,backing(id),RW,1))fail("data-map");
   if(!AArch64MapPage(&ops,roots[id],TCR,STACK,(uintptr_t)stacks[id],RW,1))fail("stack-map");
@@ -178,12 +206,14 @@ void main(void){
   data[id][0]=(id+1)*4096;
   frames[id].pc=CODE;frames[id].sp=STACK+PAGE;frames[id].x[0]=id;frames[id].x[1]=(id+1)*4096;frames[id].x[2]=(uintptr_t)&kernel_secret;
  }
+ if(ROOT_CLONE && template_hash!=template_fingerprint())fail("template-modified");
  __asm__ volatile("msr mair_el1,%0; msr tcr_el1,%1; msr ttbr0_el1,%2; isb; tlbi vmalle1; dsb sy; isb"::"r"(UINT64_C(0xff00)),"r"(TCR),"r"(roots[0]):"memory");
  // MMU on, caches off: table stores are visible with DSB. Real TLB and
  // instruction fetch permissions are exercised without claiming cache tests.
  uint64_t sctlr=UINT64_C(0x30d00801);
  __asm__ volatile("msr sctlr_el1,%0; isb"::"r"(sctlr):"memory");
  text("READY restricted-domain-probe\n");
+ if(ROOT_CLONE)text("PASS private-roots clones=2 template=unchanged\n");
  ProbeBufferInit();
  enter_guest(&frames[0]);
 }

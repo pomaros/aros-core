@@ -62,6 +62,7 @@ class Monitor:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--root-clone-proof', action='store_true', help='derive private EL1 kernel mappings from an immutable trusted template')
     parser.add_argument('--buffer-proof', action='store_true', help='link the actual owned-buffer/service boundary')
     parser.add_argument('--cc', required=True)
     parser.add_argument('--qemu', default='qemu-system-aarch64')
@@ -108,6 +109,9 @@ def main():
         }
         variants = [('baseline', 0, None)] + [(n, 0, v[3]) for n,v in controls.items()]
         result['scope'] = 'single-CPU freestanding real-MMU owned-buffer/service boundary; not production AROS restricted scheduling'
+    if args.root_clone_proof:
+        variants = [('baseline', 0, None), ('clone-keeps-user', 0, 'FAIL guest-kernel-access')]
+        result['scope'] = 'freestanding cloned private roots; not production scheduler integration'
     try:
         for name, mutant, expected_failure in variants:
             elf = out/(name+'.elf')
@@ -116,6 +120,15 @@ def main():
                    '-nostdlib', '-fuse-ld=lld', '-Wl,--build-id=none', '-Wl,-T,'+str(HERE/'link.ld'),
                    '-I'+str(KERNEL), '-DMUTANT='+str(mutant), str(HERE/'entry.S'), str(HERE/'probe.c'),
                    str(KERNEL/'mapping.c'), str(KERNEL/'setprotection.c'), '-o', str(elf)]
+            if args.root_clone_proof:
+                cmd += ['-DROOT_CLONE=1']
+                if name == 'clone-keeps-user':
+                    original = (KERNEL/'mapping.c').read_text()
+                    old = '(desc & ~(UINT64_C(1) << 6)) | M_UXN'
+                    if original.count(old) != 1: raise RuntimeError('clone mutation mismatch')
+                    mutated = out/'clone-keeps-user-mapping.c'
+                    mutated.write_text(original.replace(old, 'desc | M_UXN'))
+                    cmd[cmd.index(str(KERNEL/'mapping.c'))] = str(mutated)
             if args.buffer_proof:
                 cmd += ['-I'+str(portable), '-I'+str(fixture/'freestanding'), str(fixture/'fixture.c')]
                 for filename in ('mapping.c','domain.c','service.c','user_buffer.c','user_service.c'):
@@ -166,12 +179,18 @@ def main():
                     record.update(exit=proc.returncode, output=stdout, stderr=stderr)
                     if expected_failure is None:
                         expected_lines = ['READY restricted-domain-probe']
+                        if args.root_clone_proof:
+                            expected_lines.append('PASS private-roots clones=2 template=unchanged')
                         if args.buffer_proof:
                             expected_lines.append('PASS buffers domains=2 copied=2 refused=4 cancelled=4 retired=2 cross_queue=1')
                         expected_lines.append(EXPECTED)
                         passed = proc.returncode == 0 and stdout.splitlines() == expected_lines and not stderr
                     else:
-                        passed = proc.returncode == 1 and stdout.splitlines() == ['READY restricted-domain-probe', expected_failure] and not stderr
+                        expected_lines = ['READY restricted-domain-probe']
+                        if args.root_clone_proof:
+                            expected_lines.append('PASS private-roots clones=2 template=unchanged')
+                        expected_lines.append(expected_failure)
+                        passed = proc.returncode == 1 and stdout.splitlines() == expected_lines and not stderr
                     record['result'] = 'PASS' if passed and not record.get('timeout') else 'FAIL'
                     if record['result'] != 'PASS':
                         raise RuntimeError(name+': unexpected runtime result')

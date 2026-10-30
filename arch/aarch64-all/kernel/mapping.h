@@ -57,4 +57,24 @@ int AArch64MappingPhysical(const struct AArch64ProtectionOps *, uint64_t ttbr0,
 int AArch64TranslateResident(const struct AArch64ProtectionOps *, uint64_t ttbr0,
     uint64_t tcr, uint64_t virtual_address, uint64_t *physical);
 
+/* Build an unpublished private table tree from an immutable trusted template.
+ * Preserves physical mappings/cache attributes and EL1 read/write restrictions,
+ * removes EL0 data access and forces UXN on all leaves. Implicit EL1 execute
+ * denial on writable user pages becomes explicit PXN. Privileged RWX leaves,
+ * guarded/contiguous descriptors and hierarchical table restrictions are refused.
+ * Uses the same 4K/16K <=48-bit geometry as the leaf helpers. Full root pages
+ * are required; unused entries outside the configured VA range must be zero.
+ *
+ * Caller freezes source mutations and pins ALL source tables/backing. allocate
+ * must return fresh, unique pages disjoint from source storage, and ledger each
+ * allocation for cleanup, INCLUDING partial failure. table_budget bounds total
+ * newly allocated pages; recursion is limited by the architecture's four levels.
+ * Output remains unchanged on refusal. This never installs TTBR, invalidates a
+ * live root, or establishes a domain's lifetime. Caller must publish with the
+ * platform's barriers/TLB protocol and keep template mappings coherent; this
+ * snapshot is not a live mirror of subsequent trusted-root changes.
+ */
+int AArch64ClonePrivilegedRoot(const struct AArch64ProtectionOps *, uint64_t ttbr0,
+    uint64_t tcr, size_t table_budget, uint64_t *output_root);
+
 #endif
