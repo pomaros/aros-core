@@ -11,7 +11,8 @@ AROS_LH1(void, KrnDeleteContext,
     struct KernelBase *, KernelBase, 19, Kernel)
 {
     AROS_LIBFUNC_INIT
-    /* RemTask has detached the task; SMP Exec retires/quiesces it first.
+    /* RemTask has detached the UP task. SMP restricted admission stays disabled
+     * until remote dispatch references are quiesced before context deletion.
      * No wait or allocation on the exception stack. Owner backing remains
      * retained until worker leases drain, then native-context reaping frees it. */
     if (context) AROSAppleRestrictedContextRetired(context);

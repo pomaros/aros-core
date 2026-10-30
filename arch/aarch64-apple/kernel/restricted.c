@@ -16,6 +16,9 @@
 #include "kernel_intr.h"
 #include "kernel_syscall.h"
 #include "page_allocator.h"
+#if defined(__AROSEXEC_SMP__)
+#include "smp.h"
+#endif
 #include "../../aarch64-all/kernel/mapping.h"
 
 #define R_PAGE 4096U
@@ -146,7 +149,7 @@ void AROSAppleRestrictedCheckStack(struct AROSAppleRuntimeFrame *frame,
         r_finish(r,execution,frame,-3);
     }
 }
-int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
+static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
 {
     if (!frame || frame->vector != 8 || (frame->spsr & 31)) return 0;
     struct Task *task = r_current();
@@ -346,6 +349,34 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
     frame->return_ttbr0 = r->root;
     return 1;
 #endif
+}
+/* Exception entry already masks local IRQ/FIQ. Do not use the native IRQ
+ * nesting API here: admission must inspect the interrupted task's real mask
+ * depth, and generic Exec IRQ SVCs must never enter this coordinator lock.
+ * Lock order is PageMapLock -> coordinator -> scheduler/task locks. No native
+ * page allocator, blocking Exec operation or PageMutationBegin while held. */
+static uint32_t coordinator_lock;
+int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
+{
+    if (!frame || frame->vector!=8 || (frame->spsr&31)) return 0;
+    struct ExceptionContext *context=r_context(r_current());
+    if (!context) return 0;
+    unsigned ec=(unsigned)(frame->esr>>26)&63,svc=(unsigned)frame->esr&65535;
+    if (!AROSAppleTaskExecution(context)->root &&
+        (ec!=0x15 || svc<AROS_RESTRICTED_ENTER || svc>0xa537)) return 0;
+    for (;;) {
+#if defined(__AROSEXEC_SMP__)
+        /* A mapping owner may hold PageMapLock and wait for this lock. A
+         * masked contender must acknowledge its rendezvous instead of
+         * preventing the owner from making progress. */
+        AROSAppleMemoryRendezvousPoll();
+#endif
+        if (!__atomic_exchange_n(&coordinator_lock,1,__ATOMIC_ACQUIRE)) break;
+        __asm__ volatile("yield" ::: "memory");
+    }
+    int handled=r_trap_locked(frame);
+    __atomic_store_n(&coordinator_lock,0,__ATOMIC_RELEASE);
+    return handled;
 }
 static void r_release(struct Restricted *r)
 {

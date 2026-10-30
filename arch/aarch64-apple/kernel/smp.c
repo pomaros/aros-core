@@ -87,12 +87,16 @@ static uintptr_t memory_participate(void)
  }
  return 1;
 }
+void AROSAppleMemoryRendezvousPoll(void)
+{
+ if(AROSAppleMemoryRendezvousRequest(&memory_rendezvous,AROSCPUCurrentIndex()))
+  AROSAppleRuntimeSupervisor(memory_participate);
+}
 uint64_t AROSApplePageMapAcquire(void)
 {
  uint64_t saved=AROSAppleRuntimeIRQSave();
  for(;;) {
-  if(AROSAppleMemoryRendezvousRequest(&memory_rendezvous,AROSCPUCurrentIndex()))
-   AROSAppleRuntimeSupervisor(memory_participate);
+  AROSAppleMemoryRendezvousPoll();
   if(!__atomic_exchange_n(&AROSApplePageMapLock.held,1,__ATOMIC_ACQUIRE))
    return saved;
   __asm__ volatile("yield" ::: "memory");
