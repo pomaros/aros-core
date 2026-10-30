@@ -173,7 +173,9 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
         frame->x[0] = r_prepare(r,frame->entry_ttbr0);
         return 1;
     }
-    if (!r->root || task->tc_IDNestCnt >= 0 || task->tc_TDNestCnt >= 0 ||
+    /* The task fields are saved scheduling snapshots. Admission must inspect
+     * the live UP Exec nesting state, as the native interrupt path does. */
+    if (!r->root || SysBase->IDNestCnt >= 0 || SysBase->TDNestCnt >= 0 ||
         AROSAppleRuntimeLocal()->irq_mask_depth) return 1;
     r->native = *frame;
     r->native_lower = task->tc_SPLower;
