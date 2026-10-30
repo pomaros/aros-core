@@ -20,6 +20,9 @@
 
 #include <stdlib.h>
 #include <errno.h>
+#ifdef __AROS__
+#include <aros/autoinit.h>
+#endif
 
 #include "conf.h"
 
@@ -114,7 +117,9 @@ extern STRPTR _ProgramName;	/* startup module defines this :-) */
  */
 LONG STDARGS CONSTRUCTOR _STI_200_openSockets(void)
 {
+#ifndef __AROS__
   struct Library *IntuitionBase;
+#endif
 
   /*
    * Open bsdsocket.library
@@ -134,6 +139,10 @@ LONG STDARGS CONSTRUCTOR _STI_200_openSockets(void)
     return 0;
   }
 
+#ifdef __AROS__
+  /* Use the Shell output for unattended callers instead of a requester. */
+  __showerror("%s", "Unable to open bsdsocket.library version 4 or later");
+#else
   IntuitionBase = OpenLibrary("intuition.library", 36);
 
   if (IntuitionBase != NULL) {
@@ -149,6 +158,7 @@ LONG STDARGS CONSTRUCTOR _STI_200_openSockets(void)
 
     CloseLibrary(IntuitionBase);
   }
+#endif
   exit(20);
 }
 

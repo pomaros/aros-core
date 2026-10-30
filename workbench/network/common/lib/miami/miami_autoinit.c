@@ -14,6 +14,7 @@
 #ifdef __AROS__
 
 #include <aros/symbolsets.h>
+#include <aros/autoinit.h>
 
 #undef CONSTRUCTOR
 #define CONSTRUCTOR
@@ -25,12 +26,18 @@ struct Library *MiamiBase = NULL;
 
 LONG STDARGS CONSTRUCTOR _STI_200_openMiami(void)
 {
+#ifndef __AROS__
   struct Library *IntuitionBase;
+#endif
 
   MiamiBase = OpenLibrary("miami.library", 0);
   if (MiamiBase)
     return 0;
 
+#ifdef __AROS__
+  /* A Shell diagnostic must not wait for a graphical acknowledgement. */
+  __showerror("%s", "Unable to open miami.library");
+#else
   IntuitionBase = OpenLibrary("intuition.library", 36);
   if (IntuitionBase) {
     struct EasyStruct libraryES;
@@ -45,6 +52,7 @@ LONG STDARGS CONSTRUCTOR _STI_200_openMiami(void)
 
     CloseLibrary(IntuitionBase);
   }
+#endif
   exit(20);
 }
 
