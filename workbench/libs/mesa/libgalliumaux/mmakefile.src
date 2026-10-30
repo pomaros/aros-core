@@ -63,9 +63,9 @@ GALLIUM_AUXILIARY_GENERATED_HEADERS := \
 endif
 
 #MM- mesa3dgl-linklibs : mesa3d-linklib-galliumauxiliary
-#MM mesa3d-linklib-galliumauxiliary : workbench-libs-dxtn-includes mesa3d-linklib-compiler mesa3d-linklib-galliumauxiliary-genobs mesa3d-linklib-galliumauxiliary-$(AROS_TOOLCHAIN)
-# The gallivm draw paths above need the target side LLVM installed first.
-#MM- mesa3d-linklib-galliumauxiliary-llvm : workbench-libs-llvm
+#MM mesa3d-linklib-galliumauxiliary : workbench-libs-dxtn-includes mesa3d-linklib-compiler mesa3d-linklib-galliumauxiliary-genobs
+# LLVM draw objects have their own archive and dependency below. Hardware
+# drivers and softpipe use the common archive without target-side LLVM.
 #MM mesa3d-linklib-galliumauxiliary-quick : mesa3d-linklib-galliumauxiliary-genobs
 #MM- mesa3d-linklib-galliumauxiliary-genobs : mesa3d-linklib-galliumauxiliary-generated
 
@@ -199,7 +199,6 @@ $(GALLDRAWLLVMOFILES) $(GALLDRAWLLVMDFILES): mesa3d-linklib-galliumdrawllvm_MC_E
 # mmake reads #MM out of the .src text, so the ifeq above cannot hide these.
 # Route through $(AROS_TOOLCHAIN) instead: on gnu the -gnu spelling is never
 # declared, and an undeclared metatarget is simply empty.
-#MM- mesa3dgl-linklibs : mesa3d-linklib-galliumdrawllvm-$(AROS_TOOLCHAIN)
 #MM- mesa3d-linklib-galliumdrawllvm-llvm : mesa3d-linklib-galliumdrawllvm
 #MM mesa3d-linklib-galliumdrawllvm : workbench-libs-llvm mesa3d-linklib-compiler mesa3d-linklib-galliumauxiliary-genobs
 
@@ -218,7 +217,6 @@ endif
 ifeq ($(AROS_TOOLCHAIN),llvm)
 GALLIUM_TESS_CXX := $(wildcard $(addprefix $(top_srcdir)/$(CUR_MESADIR)/tessellator/,p_tessellator.cpp tessellator.cpp))
 
-#MM- mesa3dgl-linklibs : mesa3d-linklib-galliumtess-$(AROS_TOOLCHAIN)
 #MM- mesa3d-linklib-galliumtess-llvm : mesa3d-linklib-galliumtess
 #MM mesa3d-linklib-galliumtess : includes
 
