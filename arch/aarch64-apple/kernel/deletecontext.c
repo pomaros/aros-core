@@ -12,8 +12,8 @@ AROS_LH1(void, KrnDeleteContext,
 {
     AROS_LIBFUNC_INIT
     /* RemTask has detached the task; SMP Exec retires/quiesces it first.
-     * No wait or allocation on the exception stack. This currently retires
-     * worker leases only; abandoned restricted owners need deferred cleanup. */
+     * No wait or allocation on the exception stack. Owner backing remains
+     * retained until worker leases drain, then native-context reaping frees it. */
     if (context) AROSAppleRestrictedContextRetired(context);
     FreeMem(context,KernelBase->kb_ContextSize);
     AROS_LIBFUNC_EXIT

@@ -152,6 +152,9 @@ RestrictedCode:
  cmn x0, #1
  b.ne RestrictedFailure
  mov x0, #1
+ svc #0xa537
+ cmn x0, #1
+ b.ne RestrictedFailure
  svc #0xa536
  cmn x0, #1
  b.ne RestrictedFailure

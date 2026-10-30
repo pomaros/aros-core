@@ -25,6 +25,8 @@
 struct Restricted {
     uint64_t cookie;
     struct Task *owner;
+    void *owner_context;
+    unsigned abandoned;
     void *pool, *code, *data, *stack;
     void *native_lower, *native_upper;
     unsigned used;
@@ -39,6 +41,12 @@ struct Restricted {
     struct AROSRestrictedResult result;
     struct AROSRestrictedService service;
 };
+/* Bounded kernel-owned slots publish all backing even when the native owner
+ * disappears. UP Forbid protects native allocation/reaping; SVC handlers run
+ * with interrupts masked. SMP admission stays disabled until shared locking. */
+static struct Restricted restricted_slots[KBUF_SPACES];
+static uint64_t owners_retired, owners_reaped;
+static void r_reap(void);
 static int r_code_pc(const struct Restricted *r,uint64_t pc)
 {
     return pc>=AROS_RESTRICTED_CODE && !(pc&3) && r->code_bytes>=4 &&
@@ -269,7 +277,27 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
         return 1;
     }
     if (ec==0x15 && svc==0xa536) {
-        frame->x[0]=AROSRestrictedServiceRetireWorker((void *)(uintptr_t)frame->x[0]);
+        void *retired=(void *)(uintptr_t)frame->x[0];
+        frame->x[0]=AROSRestrictedServiceRetireWorker(retired);
+        for (unsigned i=0;i<KBUF_SPACES;++i) {
+            struct Restricted *owned=&restricted_slots[i];
+            if (!owned->cookie || owned->owner_context!=retired) continue;
+            owned->owner_context=NULL;owned->abandoned=1;++owners_retired;
+            /* Never dereference the removed Task after this hook. Service
+             * principal/member identities are opaque until their drain. */
+            owned->owner=NULL;
+            AROSRestrictedServiceClose(&owned->service);
+        }
+        return 1;
+    }
+    if (ec==0x15 && svc==0xa537) {
+        frame->x[0]=0;
+        for (unsigned i=0;i<KBUF_SPACES;++i) {
+            struct Restricted *owned=&restricted_slots[i];
+            if (owned->cookie && owned->abandoned && AROSRestrictedServiceClose(&owned->service)) {
+                frame->x[0]=(uintptr_t)owned;break;
+            }
+        }
         return 1;
     }
     if (ec != 0x15 || (svc != R_PREPARE && svc != AROS_RESTRICTED_ENTER && svc != 0xa534)) return 0;
@@ -319,6 +347,41 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
     return 1;
 #endif
 }
+static void r_release(struct Restricted *r)
+{
+    /* Native stack only, with scheduling excluded. Local root return completed
+     * before this call; worker/domain pins have drained. */
+    if ((r->code && !AROSApplePageFree(r->code,R_PAGE)) ||
+        (r->data && !AROSApplePageFree(r->data,R_PAGE)) ||
+        (r->stack && !AROSApplePageFree(r->stack,R_PAGE)) ||
+        (r->pool && !AROSApplePageFreeRaw(r->pool,R_TABLES*R_PAGE)))
+        for (;;) __asm__ volatile("wfe");
+    memset(r,0,sizeof(*r));
+}
+static void r_reap(void)
+{
+    Forbid();
+    for (;;) {
+        register uintptr_t ready __asm__("x0")=0;
+        __asm__ volatile("svc #0xa537":"+r"(ready)::"memory","cc");
+        if (!ready) break;
+        r_release((void *)ready);++owners_reaped;
+    }
+    Permit();
+}
+static void r_lifetime(struct AROSRestrictedLifetime *state)
+{
+    if (!state) return;
+    r_reap();Forbid();
+    *state=(struct AROSRestrictedLifetime){.retired=owners_retired,.reaped=owners_reaped};
+    for (unsigned i=0;i<KBUF_SPACES;++i) {
+        struct Restricted *r=&restricted_slots[i];
+        if (!r->cookie) continue;
+        ++state->live;state->pending+=r->abandoned!=0;
+        state->pages+=(r->pool ? R_TABLES : 0)+(r->code!=NULL)+(r->data!=NULL)+(r->stack!=NULL);
+    }
+    Permit();
+}
 static int r_run(const void *code, size_t bytes, uint64_t seed,
     struct AROSRestrictedResult *result)
 {
@@ -327,34 +390,48 @@ static int r_run(const void *code, size_t bytes, uint64_t seed,
     return 0;
 #else
     if (!code || !bytes || bytes > R_PAGE || !result) return 0;
-    struct Restricted *r = AllocMem(sizeof(*r),MEMF_PUBLIC|MEMF_CLEAR);
-    if (!r) return 0;
+    r_reap();
+    /* Page arena allocation/protection never waits. The static control slot
+     * avoids Exec AllocMem's low-memory callbacks, which may temporarily Wait.
+     * Keep allocation and publication indivisible against external UP RemTask. */
+    Forbid();
+    struct Restricted *r = NULL;
+    for (unsigned i=0;i<KBUF_SPACES;++i)
+        if (!restricted_slots[i].cookie) { r=&restricted_slots[i];break; }
+    if (!r) { Permit();return 0; }
     int ok = 0;
     r->cookie = R_COOKIE; r->owner = FindTask(NULL); r->seed = seed; r->code_bytes=bytes;
+    r->owner_context=r_context(r->owner);
     r->pool = AROSApplePageTableAllocate(R_TABLES * R_PAGE);
     r->code = AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
     r->data = AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
     r->stack = AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
-    if (!r->pool || !r->code || !r->data || !r->stack) goto cleanup;
+    if (!r->pool || !r->code || !r->data || !r->stack) goto prepared;
     memcpy(r->code,code,bytes);
     *(uint64_t *)r->data = seed;
-    if (!AROSApplePageProtect(r->code,R_PAGE,MAP_Readable|MAP_Executable)) goto cleanup;
+    if (!AROSApplePageProtect(r->code,R_PAGE,MAP_Readable|MAP_Executable)) goto prepared;
     uint64_t saved = AROSApplePageMapAcquire();
     register uintptr_t argument __asm__("x0") = (uintptr_t)r;
     __asm__ volatile("svc #0xa531":"+r"(argument)::"x1","memory","cc");
     AROSAppleMemoryLockRelease(&AROSApplePageMapLock,saved);
-    if (!argument) goto cleanup;
+    if (!argument) goto prepared;
+    Permit();
     argument = (uintptr_t)r;
     __asm__ volatile("svc #0xa530":"+r"(argument)::"x1","memory","cc");
     ok = argument != 0;
+    goto cleanup;
+prepared:
+    Permit();
 cleanup:
     /* Native task context owns retries. A cancelled running worker retains its
      * output lease and the entire root/backing until it acknowledges completion. */
     for (;;) {
+        Forbid();
         register uintptr_t closing __asm__("x0")=(uintptr_t)r;
         __asm__ volatile("svc #0xa534":"+r"(closing)::"x1","memory","cc");
         if (closing) break;
         ++r->result.close_waits;
+        Permit();
         krnSysCall(SC_SWITCH);
     }
     if (ok) {
@@ -363,26 +440,23 @@ cleanup:
         *result=r->result;
         memcpy(result->data,r->data,R_PAGE);
     }
-    /* Single-CPU admission only. The return path has flushed all local
-     * translations before these pages can be recycled. */
-    if (r->code && !AROSApplePageFree(r->code,R_PAGE)) ok = 0;
-    if (r->data && !AROSApplePageFree(r->data,R_PAGE)) ok = 0;
-    if (r->stack && !AROSApplePageFree(r->stack,R_PAGE)) ok = 0;
-    if (r->pool && !AROSApplePageFreeRaw(r->pool,R_TABLES*R_PAGE)) ok = 0;
-    r->cookie = 0;
-    FreeMem(r,sizeof(*r));
+    r_release(r);
+    Permit();
     return ok;
 #endif
 }
+
 void AROSAppleRestrictedContextRetired(void *context)
 {
     if (!context || !AROSAppleRuntimeLocal()->active || !r_current()) return;
     register uintptr_t argument __asm__("x0")=(uintptr_t)context;
     __asm__ volatile("svc #0xa536":"+r"(argument)::"memory","cc");
     if (!argument) for (;;) __asm__ volatile("wfe");
+    r_reap();
 }
 static int r_take(struct AROSRestrictedWork *work)
 {
+    r_reap();
     register uintptr_t argument __asm__("x0")=(uintptr_t)work;
     __asm__ volatile("svc #0xa532":"+r"(argument)::"memory","cc");
     return argument!=0;
@@ -391,7 +465,8 @@ static int r_complete(const struct AROSRestrictedWork *work)
 {
     register uintptr_t argument __asm__("x0")=(uintptr_t)work;
     __asm__ volatile("svc #0xa533":"+r"(argument)::"memory","cc");
-    return argument!=0;
+    int completed=argument!=0;r_reap();
+    return completed;
 }
 static unsigned r_state(const struct AROSRestrictedWork *work)
 {
@@ -399,7 +474,7 @@ static unsigned r_state(const struct AROSRestrictedWork *work)
     __asm__ volatile("svc #0xa535":"+r"(argument)::"memory","cc");
     return (unsigned)argument;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {6,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {7,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

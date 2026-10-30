@@ -61,3 +61,11 @@ and calls RemTask; the architecture context-deletion hook cancels and retires
 that lease before freeing the worker context. The client drains without output
 publication and returns a checked snapshot. This proves parked-worker removal,
 not arbitrary restricted-owner removal or SMP quiescence.
+
+External owner retirement uses eight remove/complete cycles, exceeding the four
+domain slots. Each raw Exec owner is removed while the native parent holds a
+request: the domain closes but retains 1,027 pages until acknowledgement, then
+all slots/backing drain and stale completions fail. The removed native caller's
+result storage stays untouched. Static kernel control slots and non-waiting
+page allocation publish backing under UP Forbid; cleanup executes on native
+stacks after service drain. This remains a UP proof, not SMP qualification.

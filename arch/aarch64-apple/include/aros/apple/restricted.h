@@ -33,6 +33,9 @@ struct AROSRestrictedWork {
     uint64_t domain,token,length;
     unsigned char bytes[256];
 };
+struct AROSRestrictedLifetime {
+    uint64_t retired,reaped,live,pending,pages;
+};
 struct AROSRestrictedAPI {
     uint32_t version, size;
     int (*run)(const void *code, size_t bytes, uint64_t seed,
@@ -40,5 +43,6 @@ struct AROSRestrictedAPI {
     int (*take)(struct AROSRestrictedWork *);
     int (*complete)(const struct AROSRestrictedWork *);
     unsigned (*state)(const struct AROSRestrictedWork *);
+    void (*lifetime)(struct AROSRestrictedLifetime *);
 };
 #endif
