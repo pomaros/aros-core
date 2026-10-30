@@ -32,6 +32,8 @@ Keep the official AROS remote fetch-only and review generic changes in this fork
 
 - [Service coordinator ownership](developer/debug/test/kernel/service_host/README.md): sanitized HOST checks for copied requests, cancellation, generation reuse and domain retention.
 
+- [AROS task service proof](developer/debug/test/kernel/service_vm/README.md): two clients, worker, native heartbeat, deterministic cancellation and joined teardown on a guest SDK.
+
 ## Licences
 
 AROS is a collection of components under different licences. Preserve each file's notices and consult [LEGAL](LEGAL), [LICENSE](LICENSE), [LICENSE.GPL](LICENSE.GPL), [LICENSE.LGPL](LICENSE.LGPL) and component-specific licence files. This fork does not relicense the upstream code.
