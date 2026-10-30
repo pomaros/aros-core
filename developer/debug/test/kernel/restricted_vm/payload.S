@@ -23,6 +23,51 @@ RestrictedCode:
  b.ne 9f
  subs x22, x22, #1
  b.ne 1b
+ /* Reject invalid input, read-only code output, overflow and guard page. */
+ mov x0, #0x40080000
+ add x1, x19, #288
+ mov x2, #8
+ svc #0xa542
+ cbnz x0, 9f
+ add x0, x19, #256
+ sub x1, x19, #1, lsl #12
+ mov x2, #8
+ svc #0xa542
+ cbnz x0, 9f
+ mov x0, #-4
+ add x1, x19, #288
+ mov x2, #8
+ svc #0xa542
+ cbnz x0, 9f
+ add x0, x19, #1, lsl #12
+ add x1, x19, #288
+ mov x2, #8
+ svc #0xa542
+ cbnz x0, 9f
+ mov x24, #100
+ mov x26, #0x5a5a
+ movk x26, #0x5a5a, lsl #16
+ movk x26, #0x5a5a, lsl #32
+ movk x26, #0x5a5a, lsl #48
+3:
+ add x27, x23, x24
+ str x27, [x19, #256]
+ add x0, x19, #256
+ add x1, x19, #288
+ mov x2, #8
+ svc #0xa542
+ cbz x0, 9f
+ mov x25, x0
+4:
+ mov x0, x25
+ svc #0xa543
+ cbz x0, 4b
+ ldr x9, [x19, #288]
+ eor x9, x9, x26
+ cmp x9, x27
+ b.ne 9f
+ subs x24, x24, #1
+ b.ne 3b
  mov x0, #1
  svc #0xa501
  cmn x0, #1

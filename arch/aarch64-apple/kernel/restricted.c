@@ -10,6 +10,7 @@
 #include <proto/exec.h>
 #include <string.h>
 #include "restricted.h"
+#include "restricted_service.h"
 #include "task_tls.h"
 #include "kernel_cpu.h"
 #include "kernel_intr.h"
@@ -30,6 +31,7 @@ struct Restricted {
     uint64_t root, seed;
     struct AROSAppleRuntimeFrame native;
     struct AROSRestrictedResult result;
+    struct AROSRestrictedService service;
 };
 static struct ExceptionContext *r_context(struct Task *task)
 {
@@ -85,10 +87,9 @@ static int r_prepare(struct Restricted *r, uint64_t source)
     unsigned rw = AARCH64_PROTECT_READ|AARCH64_PROTECT_WRITE|AARCH64_PROTECT_USER;
     if (!AArch64MapPage(&ops,root,tcr,AROS_RESTRICTED_CODE,(uintptr_t)r->code,
             AARCH64_PROTECT_READ|AARCH64_PROTECT_EXEC|AARCH64_PROTECT_USER,1) ||
-        !AArch64MapPage(&ops,root,tcr,AROS_RESTRICTED_DATA,(uintptr_t)r->data,rw,1) ||
         !AArch64MapPage(&ops,root,tcr,AROS_RESTRICTED_STACK,(uintptr_t)r->stack,rw,1)) return 0;
     r->root = root;
-    return 1;
+    return AROSRestrictedServiceInit(&r->service,r->owner,root,tcr,(uintptr_t)r->data,&ops);
 }
 static void r_finish(struct Restricted *r, struct AROSAppleTaskExecution *execution,
     struct AROSAppleRuntimeFrame *frame, int64_t status)
@@ -148,6 +149,19 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
             core_SysCall(SC_SWITCH,frame);
             cpu_ApplyCurrentTaskMasks(&frame->spsr);
             return 1;
+        case AROS_RESTRICTED_SUBMIT:
+            if (AROSRestrictedServiceSubmit(&r->service,frame->x[0],frame->x[1],frame->x[2]))
+                frame->x[0]=r->service.request.token;
+            else { ++r->result.rejected;frame->x[0]=0; }
+            return 1;
+        case AROS_RESTRICTED_COLLECT:
+            if (AROSRestrictedServiceCollect(&r->service,frame->x[0])) {
+                ++r->result.replies;frame->x[0]=1;
+            } else {
+                frame->x[0]=0;core_SysCall(SC_SWITCH,frame);
+                cpu_ApplyCurrentTaskMasks(&frame->spsr);
+            }
+            return 1;
         case AROS_RESTRICTED_EXIT:
             r_finish(r,execution,frame,(int64_t)frame->x[0]);
             return 1;
@@ -157,7 +171,13 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
             return 1;
         }
     }
-    if (ec != 0x15 || (svc != R_PREPARE && svc != AROS_RESTRICTED_ENTER)) return 0;
+    if (ec == 0x15 && (svc == 0xa532 || svc == 0xa533)) {
+        void *work=(void *)(uintptr_t)frame->x[0];
+        frame->x[0]=svc==0xa532 ? AROSRestrictedServiceTake(task,work) :
+            AROSRestrictedServiceComplete(task,work);
+        return 1;
+    }
+    if (ec != 0x15 || (svc != R_PREPARE && svc != AROS_RESTRICTED_ENTER && svc != 0xa534)) return 0;
     frame->x[1] = 0;
 #if defined(__AROSEXEC_SMP__)
     /* Admission stays disabled until task removal and root reclamation are
@@ -169,6 +189,10 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
     frame->x[0] = 0;
     if (!r || r->cookie != R_COOKIE || r->owner != task ||
         frame->entry_ttbr0 != AROSAppleRuntimeLocal()->trusted_ttbr0) return 1;
+    if (svc == 0xa534) {
+        frame->x[0]=AROSRestrictedServiceClose(&r->service);
+        return 1;
+    }
     if (svc == R_PREPARE) {
         frame->x[0] = r_prepare(r,frame->entry_ttbr0);
         return 1;
@@ -230,6 +254,14 @@ static int r_run(const void *code, size_t bytes, uint64_t seed,
     ok = argument != 0;
     if (ok) *result = r->result;
 cleanup:
+    /* Native task context owns retries. A cancelled running worker retains its
+     * output lease and the entire root/backing until it acknowledges completion. */
+    for (;;) {
+        register uintptr_t closing __asm__("x0")=(uintptr_t)r;
+        __asm__ volatile("svc #0xa534":"+r"(closing)::"x1","memory","cc");
+        if (closing) break;
+        krnSysCall(SC_SWITCH);
+    }
     /* Single-CPU admission only. The return path has flushed all local
      * translations before these pages can be recycled. */
     if (r->code && !AROSApplePageFree(r->code,R_PAGE)) ok = 0;
@@ -241,7 +273,19 @@ cleanup:
     return ok;
 #endif
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {1,sizeof(struct AROSRestrictedAPI),r_run};
+static int r_take(struct AROSRestrictedWork *work)
+{
+    register uintptr_t argument __asm__("x0")=(uintptr_t)work;
+    __asm__ volatile("svc #0xa532":"+r"(argument)::"memory","cc");
+    return argument!=0;
+}
+static int r_complete(const struct AROSRestrictedWork *work)
+{
+    register uintptr_t argument __asm__("x0")=(uintptr_t)work;
+    __asm__ volatile("svc #0xa533":"+r"(argument)::"memory","cc");
+    return argument!=0;
+}
+const struct AROSRestrictedAPI AROSRestrictedAPI = {2,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

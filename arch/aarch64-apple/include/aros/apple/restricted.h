@@ -13,13 +13,21 @@
 #define AROS_RESTRICTED_ENTER 0xa530
 #define AROS_RESTRICTED_YIELD 0xa540
 #define AROS_RESTRICTED_EXIT 0xa541
+#define AROS_RESTRICTED_SUBMIT 0xa542
+#define AROS_RESTRICTED_COLLECT 0xa543
 struct AROSRestrictedResult {
     int64_t status;
-    uint64_t value, esr, far, pc, yields, denied;
+    uint64_t value, esr, far, pc, yields, denied, replies, rejected;
+};
+struct AROSRestrictedWork {
+    uint64_t domain,token,length;
+    unsigned char bytes[256];
 };
 struct AROSRestrictedAPI {
     uint32_t version, size;
     int (*run)(const void *code, size_t bytes, uint64_t seed,
         struct AROSRestrictedResult *result);
+    int (*take)(struct AROSRestrictedWork *);
+    int (*complete)(const struct AROSRestrictedWork *);
 };
 #endif
