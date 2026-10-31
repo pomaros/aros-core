@@ -103,7 +103,7 @@ LONG OpCopyLock(struct ExtFileLock *lock, struct ExtFileLock **copy,
 LONG OpLockParent(struct ExtFileLock *lock, struct ExtFileLock **parent,
     struct Globals *glob);
 LONG OpOpenFile(struct ExtFileLock *dirlock, UBYTE *name, ULONG namelen,
-    LONG action, struct ExtFileLock **filelock, struct Globals *glob);
+    LONG action, struct ExtFileLock **filelock, ULONG *information, struct Globals *glob);
 LONG OpDeleteFile(struct ExtFileLock *dirlock, UBYTE *name, ULONG namelen,
     struct Globals *glob);
 LONG OpRenameFile(struct ExtFileLock *sdirlock, UBYTE *sname, ULONG snamelen,

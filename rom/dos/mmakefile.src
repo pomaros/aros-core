@@ -59,7 +59,7 @@ FUNCTIONS := abortpkt addbuffers adddosentry addpart addsegment \
 	     isinteractive loadseg lock lockdoslist lockrecord lockrecords \
 	     makedosentry makelink matchend matchfirst matchnext matchpattern \
 	     matchpatternnocase maxcli namefromfh namefromlock newloadseg nextdosentry nil \
-	     open openfromlock output parentdir parentoffh parsepattern \
+	     open openwithinfo openfromlock output parentdir parentoffh parsepattern \
 	     parsepatternnocase pathpart printfault putstr read readargs \
 	     taskpathresolver runwithcontext readitem relabel readlink remassignlist remdosentry remsegment rename replaceobject \
 	     replypkt runcommand samedevice samelock scanvars seek \

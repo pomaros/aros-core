@@ -411,6 +411,10 @@ struct InfoData32
   /* A new file is created, even if a file with the supplied name does
      already exist. */
 #define MODE_NEWFILE   1006
+
+/* Handler-atomic OpenWithInfo outcomes. */
+#define OPENINFO_CREATED    1
+#define OPENINFO_TRUNCATED  2
   /* An old file is opened. If it does not exist, a new one is created. */
 #define MODE_READWRITE 1004
 

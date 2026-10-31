@@ -49,6 +49,7 @@ void ProcessPackets(struct Globals *glob)
             switch (pkt->dp_Type)
             {
             case ACTION_FINDOUTPUT:
+            case ACTION_FINDOUTPUT_INFO:
             case ACTION_FINDUPDATE:
             case ACTION_WRITE:
             case ACTION_SET_FILE_SIZE:
@@ -330,11 +331,15 @@ void ProcessPackets(struct Globals *glob)
 
         case ACTION_FINDINPUT:
         case ACTION_FINDOUTPUT:
+        case ACTION_FINDOUTPUT_INFO:
         case ACTION_FINDUPDATE:
             {
                 struct FileHandle *fh = BADDR(pkt->dp_Arg1);
                 struct ExtFileLock *fl = BADDR(pkt->dp_Arg2);
                 struct ExtFileLock *lock;
+                ULONG information = 0;
+                LONG action = pkt->dp_Type == ACTION_FINDOUTPUT_INFO ?
+                    ACTION_FINDOUTPUT : pkt->dp_Type;
 
                 D(
                     bug("[fat] %s: lock 0x%08x (dir %ld/%ld) path '",
@@ -353,14 +358,14 @@ void ProcessPackets(struct Globals *glob)
                     break;
 
                 if ((err = OpOpenFile(fl, AROS_BSTR_ADDR(pkt->dp_Arg3),
-                    AROS_BSTR_strlen(pkt->dp_Arg3), pkt->dp_Type,
-                    &lock, glob)) != 0)
+                    AROS_BSTR_strlen(pkt->dp_Arg3), action,
+                    &lock, &information, glob)) != 0)
                     break;
 
                 fh->fh_Arg1 = (IPTR) MKBADDR(lock);
                 fh->fh_Port = DOSFALSE;
 
-                res = DOSTRUE;
+                res = pkt->dp_Type == ACTION_FINDOUTPUT_INFO ? (SIPTR)information : DOSTRUE;
 
                 break;
             }

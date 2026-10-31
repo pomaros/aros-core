@@ -27,7 +27,7 @@ LONG fs_LocateObject(BPTR *ret, struct MsgPort *port, BPTR parent, CONST_STRPTR 
     return (*ret) ? 0 : error;
 }
 
-LONG fs_Open(struct FileHandle *handle, struct MsgPort *port, BPTR lock, LONG mode, CONST_STRPTR name, struct DosLibrary *DOSBase)
+static LONG fs_open(struct FileHandle *handle, struct MsgPort *port, BPTR lock, LONG mode, CONST_STRPTR name, ULONG *information, struct DosLibrary *DOSBase)
 {
     ULONG action;
     BSTR bstrname;
@@ -51,6 +51,8 @@ LONG fs_Open(struct FileHandle *handle, struct MsgPort *port, BPTR lock, LONG mo
     else
         return ERROR_NOT_IMPLEMENTED;
 
+    if (information) action = ACTION_FINDOUTPUT_INFO;
+
     bstrname = C2BSTR(name);
     if (!bstrname)
         return ERROR_NO_FREE_STORE;
@@ -68,7 +70,27 @@ LONG fs_Open(struct FileHandle *handle, struct MsgPort *port, BPTR lock, LONG mo
      */
     if (!handle->fh_Type)
         handle->fh_Type = port;
-    return status ? 0 : error;
+    if (status && information) {
+        if (status != OPENINFO_CREATED && status != OPENINFO_TRUNCATED) {
+            /* Release backing, not the caller-owned FileHandle allocation. */
+            dopacket1(DOSBase, NULL, handle->fh_Type, ACTION_END, handle->fh_Arg1);
+            return ERROR_BAD_NUMBER;
+        }
+        *information = status;
+    }
+    return status ? 0 : (error ? error : ERROR_ACTION_NOT_KNOWN);
+}
+
+LONG fs_Open(struct FileHandle *handle, struct MsgPort *port, BPTR lock,
+    LONG mode, CONST_STRPTR name, struct DosLibrary *DOSBase)
+{
+    return fs_open(handle, port, lock, mode, name, NULL, DOSBase);
+}
+
+LONG fs_OpenWithInfo(struct FileHandle *handle, struct MsgPort *port, BPTR lock,
+    CONST_STRPTR name, ULONG *information, struct DosLibrary *DOSBase)
+{
+    return fs_open(handle, port, lock, MODE_NEWFILE, name, information, DOSBase);
 }
 
 LONG fs_ReadLink(BPTR parent, struct DevProc *dvp, CONST_STRPTR path, STRPTR buffer, ULONG size, struct DosLibrary *DOSBase)

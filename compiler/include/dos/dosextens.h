@@ -598,6 +598,9 @@ struct DosPacket
 /* Atomic regular-file replacement; lock/BSTR arguments as RENAME.
  * A missing destination is created. Failures preserve both names. */
 #define ACTION_REPLACE_OBJECT           1037
+/* FINDOUTPUT arguments; Res1 is OPENINFO_CREATED/TRUNCATED, or zero with
+ * Res2 error. Unsupported handlers refuse without opening/truncating. */
+#define ACTION_FINDOUTPUT_INFO          1038
 
 #define ACTION_LOCK_RECORD              2008
 #define ACTION_FREE_RECORD              2009

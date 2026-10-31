@@ -22,7 +22,7 @@ enum {
     DOS_PATH_GET_DEVICE = 1, DOS_PATH_LOCK, DOS_PATH_OPEN, DOS_PATH_CREATE_DIR,
     DOS_PATH_DELETE, DOS_PATH_RENAME, DOS_PATH_MAKE_LINK, DOS_PATH_READ_LINK,
     DOS_PATH_SET_PROTECTION, DOS_PATH_SET_DATE, DOS_PATH_SET_COMMENT,
-    DOS_PATH_SET_OWNER, DOS_PATH_REPLACE_OBJECT
+    DOS_PATH_SET_OWNER, DOS_PATH_REPLACE_OBJECT, DOS_PATH_OPEN_WITH_INFO
 };
 /* Each Task registers a distinct caller-owned instance. Data may refer to a
  * shared, independently retained path context. error and active are private

@@ -217,7 +217,7 @@ LONG OpLockParent(struct ExtFileLock *lock, struct ExtFileLock **parent,
  * may only return a lock on a file, never on a dir.
  */
 LONG OpOpenFile(struct ExtFileLock *dirlock, UBYTE *name, ULONG namelen,
-    LONG action, struct ExtFileLock **filelock, struct Globals *glob)
+    LONG action, struct ExtFileLock **filelock, ULONG *information, struct Globals *glob)
 {
     LONG err;
     struct ExtFileLock *lock;
@@ -233,6 +233,8 @@ LONG OpOpenFile(struct ExtFileLock *dirlock, UBYTE *name, ULONG namelen,
             action == ACTION_FINDOUTPUT ? "FINDOUTPUT" :
             action == ACTION_FINDUPDATE ? "FINDUPDATE" : "[unknown]");
     )
+
+    if (information) *information = 0;
 
     /* Explicitly mark the dirhandle as uninitialised */
     dh.ioh.sb = NULL;
@@ -337,6 +339,7 @@ LONG OpOpenFile(struct ExtFileLock *dirlock, UBYTE *name, ULONG namelen,
 
         /* File is empty, go */
         *filelock = lock;
+        if (information) *information = OPENINFO_TRUNCATED;
 
         return 0;
     }
@@ -404,6 +407,7 @@ LONG OpOpenFile(struct ExtFileLock *dirlock, UBYTE *name, ULONG namelen,
     if (err == 0)
     {
         (*filelock)->do_notify = TRUE;
+        if (information) *information = OPENINFO_CREATED;
         D(bug("[fat] returning lock on new file\n"));
     }
 
