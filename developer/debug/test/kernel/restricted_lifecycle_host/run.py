@@ -26,14 +26,16 @@ def main():
     if out.exists() or ROOT in out.parents:p.error('use a fresh output outside source')
     out.mkdir(parents=True)
     source=SOURCE.read_text()
-    actual=''.join(body(source,name) for name in ['r_slot(uintptr_t','r_lifecycle(struct','r_claim_reap(struct','r_stack_sp(const','r_stack_bounds(struct'])
+    actual=''.join(body(source,name) for name in ['r_slot(uintptr_t','r_lifecycle(struct','r_close(struct','r_claim_reap(struct','r_stack_sp(const','r_stack_bounds(struct'])
     variants=[('actual',actual)]
     for name,old,new in [
         ('wrong-active-stack','r->fault_active ? r->fault_address : r->stack_address','r->stack_address'),
         ('guard-stack-bound','sp>base &&','sp>=base &&'),
         ('wrong-native-bounds','fault ? r->fault_address : r->stack_address','r->stack_address'),
         ('shared-tls-address','AROS_RESTRICTED_TLS+i*AROS_RESTRICTED_THREAD_STRIDE','AROS_RESTRICTED_TLS'),
-        ('shared-domain-release','r->domain->threads!=1','0'),
+        ('shared-domain-release','r->domain->state!=R_REAPING || r->domain->threads!=1','r->domain->state!=R_REAPING'),
+        ('shared-domain-close','if (!r->domain || r->domain->threads!=1) return 0;','if (!r->domain) return 0;'),
+        ('undrained-space','!AROSRestrictedSpaceClose(&r->domain->space)','0'),
         ('duplicate-reap','owned->state=R_REAPING;',''),
         ('wrong-publisher','r->owner!=task','0'),
         ('wrong-context','r->owner_context!=context','0'),

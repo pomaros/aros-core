@@ -17,11 +17,17 @@
 struct Task { int id; void *tc_SPLower,*tc_SPUpper; };
 struct ExceptionContext { int id; };
 struct AROSAppleRuntimeFrame { uintptr_t x[31]; };
+struct AROSRestrictedSpace { unsigned stopped,drained,closes; };
+static void AROSRestrictedSpaceStop(struct AROSRestrictedSpace *s)
+{ ++s->stopped; }
+static int AROSRestrictedSpaceClose(struct AROSRestrictedSpace *s)
+{ ++s->closes;return s->drained; }
 struct AROSRestrictedService { unsigned drained,closes; };
 static int AROSRestrictedServiceClose(struct AROSRestrictedService *s)
 { ++s->closes;return s->drained; }
 enum RestrictedState { R_FREE,R_ALLOCATING,R_LIVE,R_REAPING };
 struct RestrictedDomain {
+    struct AROSRestrictedSpace space;
     enum RestrictedState state;
     void *pool,*code,*data;
     unsigned threads;
@@ -49,9 +55,6 @@ struct RestrictedPublication {
 static struct Restricted restricted_slots[AROS_RESTRICTED_CHANNELS];
 static struct RestrictedDomain restricted_domains[KBUF_SPACES];
 static uint64_t owners_retired,owners_reaped;
-static int r_close(struct Restricted *r)
-{ if (!AROSRestrictedServiceClose(&r->service)) return 0;
-  r->domain->state=R_REAPING;return 1; }
 #include "actual.inc"
 static struct Task owner,other;
 static struct ExceptionContext context,foreign;
@@ -105,6 +108,17 @@ int main(void)
     struct AROSRestrictedLifetime shared_life;
     assert(call(R_LIFETIME,(uintptr_t)&shared_life,&owner,&context));
     assert(shared_life.live==2 && shared_life.pages==1030);
+    restricted_slots[0].service.drained=1;restricted_domains[0].space.drained=1;
+    assert(!r_close(&restricted_slots[0]));
+    assert(!restricted_domains[0].space.stopped && !restricted_domains[0].space.closes);
+    assert(!restricted_slots[0].service.closes && restricted_domains[0].state==R_LIVE);
+    /* Channel acknowledgement alone cannot authorize domain release while
+     * its mappings still retain backing. Exercise the actual close helper. */
+    restricted_domains[0].threads=1;restricted_domains[0].space.drained=0;
+    assert(!r_close(&restricted_slots[0]));
+    assert(restricted_domains[0].state==R_LIVE);
+    restricted_domains[0].space.drained=1;
+    assert(r_close(&restricted_slots[0]) && restricted_domains[0].state==R_REAPING);
     memset(restricted_slots,0,sizeof(restricted_slots));
     memset(restricted_domains,0,sizeof(restricted_domains));
 
@@ -140,6 +154,7 @@ int main(void)
         assert(slots[i]->state==R_LIVE && slots[i]->seed==i);
         assert(slots[i]->domain==&restricted_domains[i] && slots[i]->domain->state==R_LIVE);
         assert(!call(R_RELEASED,(uintptr_t)slots[i],&owner,&context));
+        slots[i]->domain->space.drained=1;
         slots[i]->abandoned=1;++owners_retired;
     }
     assert(!r_claim_reap(&foreign)); /* Outstanding worker lease. */
