@@ -1021,6 +1021,23 @@ RestrictedDynamicCodeEnd:
 RestrictedDynamicContinuation:
  mov x19, x1
  mov x23, x0
+ mov x22, x23
+ cmp x23, #6
+ b.ne 1f
+ mov x22, #4
+1:
+ cmp x23, #7
+ b.ne 1f
+ mov x22, #2
+1:
+ cmp x23, #8
+ b.ne 1f
+ mov x22, #1
+1:
+ cmp x23, #9
+ b.ne 1f
+ mov x22, #5
+1:
  movz x20, #2, lsl #32
  adr x9, ContinuationBody
  adr x10, ContinuationBodyEnd
@@ -1051,9 +1068,9 @@ RestrictedDynamicContinuation:
  add x0, x20, #1, lsl #12
  svc #0xa545
  cbz x0, ContinuationFailure
- cmp x23, #3
+ cmp x22, #3
  b.hs 2f
- cmp x23, #2
+ cmp x22, #2
  b.ne 1f
  mov x27, #1
  bl ContinuationRequest
@@ -1086,7 +1103,7 @@ ContinuationFailure:
 
 .balign 16
 ContinuationBody:
- cmp x23, #3
+ cmp x22, #3
  b.hs 1f
  str xzr, [x19]
  mov x0, #0
@@ -1121,7 +1138,7 @@ ContinuationHandler:
  mov x1, #3
  svc #0xa546
  cbz x0, ContinuationHandlerFailure
- cmp x23, #1
+ cmp x22, #1
  b.ne 2f
  mov x27, #2
  stp x27, x23, [x19]
@@ -1142,7 +1159,7 @@ ContinuationHandler:
  mov x1, x25
  svc #0xa547
  /* Only the deliberately stale continuation may return from RESUME. */
- cmp x23, #1
+ cmp x22, #1
  b.ne ContinuationHandlerFailure
  cmn x0, #1
  b.ne ContinuationHandlerFailure
@@ -1156,7 +1173,7 @@ ContinuationHandlerEnd:
 
 .balign 16
 ContinuationCallback:
- cmp x23, #5
+ cmp x22, #5
  b.ne 2f
  mov x27, #4
  stp x27, x23, [x19]

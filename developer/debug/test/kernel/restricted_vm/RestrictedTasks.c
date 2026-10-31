@@ -743,19 +743,24 @@ extern const unsigned char RestrictedDynamicContinuation[],RestrictedDynamicCont
 static void prove_dynamic_continuations(void)
 {
     const uintptr_t address=UINT64_C(0x200000000);
+    const unsigned kinds[]={0,1,2,3,4,5,4,2,1,5};
     const unsigned requests[]={1,2,2,2,2,3};
     const int statuses[]={0,0,-2,0,-4,-4};
-    for (unsigned mode=0;mode<6;++mode) {
+    for (unsigned mode=0;mode<10;++mode) {
+        unsigned kind=kinds[mode];
         struct DynamicCodeClient client={.seed=mode};pthread_t thread;
         client.domain=api->create_domain(RestrictedDynamicContinuation,
             RestrictedDynamicContinuationEnd-RestrictedDynamicContinuation,0);
-        CHECK(client.domain && api->reserve_memory(client.domain,address,3*4096));
-        for (unsigned page=0;page<3;++page) CHECK(api->commit_memory(client.domain,address+page*4096,3));
+        CHECK(client.domain);
+        for (unsigned page=0;page<3;++page) {
+            CHECK(api->reserve_memory(client.domain,address+page*4096,4096));
+            CHECK(api->commit_memory(client.domain,address+page*4096,3));
+        }
         CHECK(!pthread_create(&thread,NULL,dynamic_code_client,&client));
-        for (unsigned step=0;step<requests[mode];) {
+        for (unsigned step=0;step<requests[kind];) {
             struct AROSRestrictedWork work;if (!api->take(&work)) { KrnSwitch();continue; }
             uint64_t words[2];CHECK(work.length==sizeof(words));memcpy(words,work.bytes,sizeof(words));
-            unsigned phase=step==0 ? 0 : mode==1 ? 2 : mode==2 ? 1 : step==1 ? 3 : 4;
+            unsigned phase=step==0 ? 0 : kind==1 ? 2 : kind==2 ? 1 : step==1 ? 3 : 4;
             CHECK(words[0]==phase && words[1]==mode);
             if (!phase) {
                 for (unsigned page=0;page<3;++page) CHECK(api->protect_memory(client.domain,address+page*4096,5));
@@ -763,17 +768,25 @@ static void prove_dynamic_continuations(void)
                 struct Task *task=__atomic_load_n(&client.task,__ATOMIC_ACQUIRE);CHECK(task);
                 CHECK(SetTaskAffinity(task,cpu_masks[1]));
 #endif
-            } else if (mode==1 || mode==2 || mode==4 || (mode==5 && phase==4)) {
-                unsigned page=mode==2 ? 1 : mode==4 ? 2 : 0;
-                CHECK(api->protect_memory(client.domain,address+page*4096,3));
-                CHECK(api->protect_memory(client.domain,address+page*4096,5));
+            } else if (kind==1 || kind==2 || kind==4 || (kind==5 && phase==4)) {
+                unsigned page=kind==2 ? 1 : kind==4 ? 2 : 0;
+                uintptr_t target=address+page*4096;
+                if (mode==7 || mode==9) {
+                    CHECK(api->release_memory(client.domain,target));
+                    CHECK(api->reserve_memory(client.domain,target,4096));
+                    CHECK(api->commit_memory(client.domain,target,3));
+                } else if (mode==6 || mode==8) {
+                    CHECK(api->decommit_memory(client.domain,target));
+                    CHECK(api->commit_memory(client.domain,target,3));
+                } else CHECK(api->protect_memory(client.domain,target,3));
+                CHECK(api->protect_memory(client.domain,target,5));
             }
             CHECK(api->complete(&work));++step;
         }
         CHECK(!pthread_join(thread,NULL));
-        CHECK(client.result.status==statuses[mode] && client.result.drained);
-        CHECK(client.result.resumed==(mode==0) && client.result.callbacks==(mode==3));
-        CHECK(client.result.denied==(mode==1));
+        CHECK(client.result.status==statuses[kind] && client.result.drained);
+        CHECK(client.result.resumed==(kind==0) && client.result.callbacks==(kind==3));
+        CHECK(client.result.denied==(kind==1));
 #if defined(__AROSEXEC_SMP__)
         CHECK(client.result.cpus==3 && client.result.migrations);
 #endif
@@ -781,7 +794,7 @@ static void prove_dynamic_continuations(void)
     }
     struct AROSRestrictedLifetime life;api->lifetime(&life);
     CHECK(!life.pages && !life.live && !life.domains);
-    bug("[ISOVM] dynamic-continuations cases=6 repaired=1 callbacks=1 stale_fault=1 stale_handler=1 stale_entry=1 stale_return=1 retained_pages=0 PASS\n");
+    bug("[ISOVM] dynamic-continuations cases=10 repaired=1 callbacks=1 stale_fault=2 stale_handler=2 stale_entry=2 stale_return=2 retained_pages=0 PASS\n");
 }
 int main(void)
 {
