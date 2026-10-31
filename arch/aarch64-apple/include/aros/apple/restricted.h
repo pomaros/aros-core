@@ -82,5 +82,10 @@ struct AROSRestrictedAPI {
     int (*attach_shared)(uint64_t domain,uintptr_t address,uint64_t object);
     int (*commit_shared)(uint64_t domain,uintptr_t address,unsigned protection);
     int (*close_shared)(uint64_t object);
+    /* Explicit eager stack backing, each nonzero and page-aligned. Both stacks
+     * have unmapped guards; their VA intervals remain owned until release ACK.
+     * Failure returns 0. Other run entry points select one page per stack. */
+    int (*run_domain_stacks)(uint64_t handle,uint64_t seed,size_t stack_bytes,
+        size_t fault_bytes,struct AROSRestrictedResult *result);
 };
 #endif

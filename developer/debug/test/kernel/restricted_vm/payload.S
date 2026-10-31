@@ -820,3 +820,82 @@ RestrictedThreadGrowthFailure:
  svc #0xa541
  b RestrictedThreadGrowthFailure
 RestrictedThreadGrowthEnd:
+
+.balign 16
+.global RestrictedLargeStacks, RestrictedLargeStacksEnd
+RestrictedLargeStacks:
+ mov x19, x1
+ mov x20, x0
+ mov x21, sp
+ sub sp, sp, #16, lsl #12
+ sub sp, sp, #4080
+ mov x9, sp
+ mov x10, #17
+1:
+ str x10, [x9]
+ add x9, x9, #1, lsl #12
+ subs x10, x10, #1
+ b.ne 1b
+ svc #0xa540
+ ldr x9, [sp]
+ cmp x9, #17
+ b.ne LargeStacksFailure
+ cmp x20, #1
+ b.eq LargeStacksLower
+ cmp x20, #2
+ b.eq LargeStacksUpper
+ adr x0, LargeStacksHandler
+ svc #0xa545
+ cbz x0, LargeStacksFailure
+ mov x0, x19
+ mov x1, #1
+ svc #0xa546
+ cbz x0, LargeStacksFailure
+ str x20, [x19]
+ ldr x9, [sp]
+ cmp x9, #17
+ b.ne LargeStacksFailure
+ mov x0, #0
+ svc #0xa541
+LargeStacksLower:
+ sub x9, sp, #24
+ ldr x9, [x9]
+ b LargeStacksFailure
+LargeStacksUpper:
+ ldr x9, [x21]
+ b LargeStacksFailure
+LargeStacksHandler:
+ mov x22, x2
+ mov x23, x3
+ mov x24, sp
+ sub sp, sp, #2, lsl #12
+ sub sp, sp, #4080
+ mov x9, #123
+ str x9, [sp]
+ svc #0xa540
+ ldr x9, [sp]
+ cmp x9, #123
+ b.ne LargeStacksFailure
+ cmp x20, #3
+ b.eq LargeStacksHandlerLower
+ cmp x20, #4
+ b.eq LargeStacksHandlerUpper
+ mov x0, x19
+ mov x1, #3
+ svc #0xa546
+ cbz x0, LargeStacksFailure
+ mov x0, x22
+ mov x1, x23
+ svc #0xa547
+ b LargeStacksFailure
+LargeStacksHandlerLower:
+ sub x9, sp, #24
+ ldr x9, [x9]
+ b LargeStacksFailure
+LargeStacksHandlerUpper:
+ ldr x9, [x24]
+LargeStacksFailure:
+ mov x0, #-9
+ svc #0xa541
+ b LargeStacksFailure
+RestrictedLargeStacksEnd:

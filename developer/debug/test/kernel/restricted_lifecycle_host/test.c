@@ -91,6 +91,7 @@ struct Restricted {
     unsigned abandoned, fault_active, snapshot_data;
     void *stack,*fault_stack,*tls;
     uint64_t stack_address,fault_address,tls_address;
+    size_t stack_bytes,fault_bytes,address_span;
     uint64_t seed;
     struct AROSRestrictedService service;
 };
@@ -133,6 +134,7 @@ static struct RestrictedDomain *new_domain(void)
 static struct Restricted *new_thread(void)
 {
     for (unsigned i=0;i<R_THREADS;++i) if (thread_storage[i].state==R_FREE) {
+        thread_storage[i].stack_bytes=R_PAGE;thread_storage[i].fault_bytes=R_PAGE;
         thread_storage[i].storage_bytes=R_PAGE;return &thread_storage[i];
     }
     return NULL;
@@ -336,10 +338,43 @@ static void table_growth(void)
     assert(domain_call(R_DOMAIN_RELEASED,(uintptr_t)d,&context,NULL));
     assert(call(R_LIFETIME,(uintptr_t)&life,&owner,&context) && !life.pages && !life.table_pages);
 }
+static void variable_stacks(void)
+{
+    struct RestrictedDomain d={0},other_domain={0};
+    struct Restricted a={.domain=&d,.owner=&owner,.stack_bytes=17*R_PAGE,.fault_bytes=3*R_PAGE};
+    struct Restricted b={.domain=&d,.stack_bytes=R_PAGE,.fault_bytes=R_PAGE};
+    assert(r_thread_addresses(&a,&d));
+    assert(a.stack_address==AROS_RESTRICTED_STACK && a.address_span==2*AROS_RESTRICTED_THREAD_STRIDE);
+    assert(a.fault_address==a.stack_address+18*R_PAGE && a.tls_address==a.fault_address+4*R_PAGE);
+    restricted_slots=&a;a.state=R_REAPING;
+    a.stack=&owner;a.fault_stack=&owner;a.tls=&owner;
+    struct AROSRestrictedLifetime life;
+    assert(call(R_LIFETIME,(uintptr_t)&life,&owner,&context));
+    assert(life.pages==21);
+    assert(r_thread_addresses(&b,&d) && b.stack_address==a.stack_address+a.address_span);
+    assert(r_thread_addresses(&b,&other_domain) && b.stack_address==a.stack_address);
+    assert(r_stack_sp(&a,a.stack_address+a.stack_bytes));
+    assert(!r_stack_sp(&a,a.stack_address+a.stack_bytes+16));
+    r_stack_bounds(&a,0);assert((uintptr_t)owner.tc_SPUpper==a.stack_address+a.stack_bytes);
+    a.fault_active=1;r_stack_bounds(&a,1);
+    assert((uintptr_t)owner.tc_SPUpper==a.fault_address+a.fault_bytes);
+    assert(r_stack_sp(&a,a.fault_address+a.fault_bytes));
+    assert(!r_stack_sp(&a,a.fault_address+a.fault_bytes+16));
+    b.stack_bytes=SIZE_MAX;assert(!r_thread_addresses(&b,&d));
+    b.stack_bytes=0;assert(!r_thread_addresses(&b,&d));
+    b.stack_bytes=R_PAGE+1;assert(!r_thread_addresses(&b,&d));
+    b.stack_bytes=R_PAGE;b.fault_bytes=SIZE_MAX;assert(!r_thread_addresses(&b,&d));
+    restricted_slots=NULL;b.fault_bytes=R_PAGE;
+    assert(r_thread_addresses(&b,&d) && b.stack_address==AROS_RESTRICTED_STACK);
+    assert(r_range_tables(0x1ff000,2*R_PAGE)==4);
+    assert(r_range_tables(0x3ffff000,2*R_PAGE)==5);
+    assert(r_range_tables(0x7ffffff000ULL,2*R_PAGE)==6);
+}
 int main(void)
 {
     struct Restricted stack_owner={.owner=&owner,.stack_address=AROS_RESTRICTED_STACK,
-        .fault_address=AROS_RESTRICTED_FAULT_STACK,.tls_address=AROS_RESTRICTED_TLS};
+        .fault_address=AROS_RESTRICTED_FAULT_STACK,.tls_address=AROS_RESTRICTED_TLS,
+        .stack_bytes=R_PAGE,.fault_bytes=R_PAGE};
     assert(r_stack_sp(&stack_owner,AROS_RESTRICTED_STACK+R_PAGE));
     assert(!r_stack_sp(&stack_owner,AROS_RESTRICTED_STACK));
     assert(!r_stack_sp(&stack_owner,AROS_RESTRICTED_STACK+1));
@@ -372,7 +407,7 @@ int main(void)
     restricted_domains=&domain_storage[0];
     for (unsigned i=0;i<2;++i)
         thread_storage[i]=(struct Restricted){.state=R_LIVE,.domain=&domain_storage[0],
-            .stack=&owner,.fault_stack=&owner};
+            .stack=&owner,.fault_stack=&owner,.stack_bytes=R_PAGE,.fault_bytes=R_PAGE};
     restricted_slots=&thread_storage[0];thread_storage[0].next=&thread_storage[1];
     struct AROSRestrictedLifetime shared_life;
     assert(call(R_LIFETIME,(uintptr_t)&shared_life,&owner,&context));
@@ -453,6 +488,7 @@ int main(void)
     assert(owners_reaped==R_DOMAINS);
     managed_tests();
     thread_growth();
+    variable_stacks();
     shared_tests();
     domain_growth();
     table_growth();

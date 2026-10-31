@@ -26,11 +26,14 @@ def main():
     if out.exists() or ROOT in out.parents:p.error('use a fresh output outside source')
     out.mkdir(parents=True)
     source=SOURCE.read_text()
-    actual=''.join(body(source,name) for name in ['r_domain_slot(uintptr_t','r_domain_link(struct','r_domain_forget(struct','r_domain_lookup(uint64_t','r_shared_operation(struct','r_domain_retire(struct','r_domain_lifecycle(struct','r_slot(uintptr_t','r_allocate(void','r_tables_need(struct','r_table_transfer(struct','r_thread_addresses(struct','r_thread_forget(struct','r_lifecycle(struct','r_close(struct','r_claim_reap(struct','r_stack_sp(const','r_stack_bounds(struct'])
+    actual=''.join(body(source,name) for name in ['r_domain_slot(uintptr_t','r_domain_link(struct','r_domain_forget(struct','r_domain_lookup(uint64_t','r_shared_operation(struct','r_domain_retire(struct','r_domain_lifecycle(struct','r_slot(uintptr_t','r_allocate(void','r_tables_need(struct','r_table_transfer(struct','r_range_tables(uint64_t','r_thread_addresses(struct','r_thread_forget(struct','r_lifecycle(struct','r_close(struct','r_claim_reap(struct','r_stack_sp(const','r_stack_bounds(struct'])
     adapter=SOURCE.with_name('restricted_service.h')
     actual=next(line for line in adapter.read_text().splitlines() if line.startswith('#define AROS_RESTRICTED_DYNAMIC_BASE '))+'\n'+actual
     variants=[('actual',actual)]
     for name,old,new in [
+        ('fixed-stack-limit','sp<=base+bytes','sp<=base+R_PAGE'),
+        ('short-thread-interval','r->address_span=span','r->address_span=AROS_RESTRICTED_THREAD_STRIDE'),
+        ('reaping-interval-reuse','p->domain==domain && base<','p->state!=R_REAPING && p->domain==domain && base<'),
         ('foreign-table-transfer','d->owner_context!=context)) d=NULL;','0)) d=NULL;'),
         ('table-overlap','(uintptr_t)c->pages<(uintptr_t)old->pages+old->count*R_PAGE','0'),
         ('wrong-table-shortage','count-available : 0','count : 0'),
@@ -42,7 +45,7 @@ def main():
         ('wrong-active-stack','r->fault_active ? r->fault_address : r->stack_address','r->stack_address'),
         ('guard-stack-bound','sp>base &&','sp>=base &&'),
         ('wrong-native-bounds','fault ? r->fault_address : r->stack_address','r->stack_address'),
-        ('shared-tls-address','AROS_RESTRICTED_TLS+offset','AROS_RESTRICTED_TLS'),
+        ('shared-tls-address','r->fault_address+r->fault_bytes+R_PAGE','AROS_RESTRICTED_TLS'),
         ('shared-domain-release','r->domain->state!=R_REAPING || r->domain->threads!=1','r->domain->state!=R_REAPING'),
         ('shared-domain-close','(!r->domain->managed && r->domain->threads!=1)','0'),
         ('undrained-space','!AROSRestrictedSpaceClose(&r->domain->space)','0'),

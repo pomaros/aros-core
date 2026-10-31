@@ -634,6 +634,25 @@ static void prove_task_list_churn(void)
         task_list_concurrent[0],task_list_concurrent[1]);
 }
 #endif
+extern const unsigned char RestrictedLargeStacks[],RestrictedLargeStacksEnd[];
+static void prove_large_stacks(void)
+{
+    for (unsigned mode=0;mode<5;++mode) {
+        uint64_t domain=api->create_domain(RestrictedLargeStacks,
+            RestrictedLargeStacksEnd-RestrictedLargeStacks,0);CHECK(domain);
+        struct AROSRestrictedResult result={0};
+        CHECK(!api->run_domain_stacks(domain,mode,0,4096,&result));
+        CHECK(!api->run_domain_stacks(domain,mode,4097,4096,&result));
+        CHECK(!api->run_domain_stacks(domain,mode,SIZE_MAX,4096,&result));
+        CHECK(api->run_domain_stacks(domain,mode,17*4096,3*4096,&result));
+        CHECK(result.drained && result.status==(mode ? -2 : 0));
+        CHECK(result.resumed==(mode ? 0 : 1));
+        CHECK(api->close_domain(domain)==1);
+        struct AROSRestrictedLifetime life;api->lifetime(&life);
+        CHECK(!life.pages && !life.live && !life.domains);
+    }
+    bug("[ISOVM] large-stacks stack_pages=17 fault_pages=3 repaired=1 guards=4 drained=5 PASS\n");
+}
 int main(void)
 {
     KernelBase = OpenResource((CONST_STRPTR)"kernel.resource");
@@ -649,7 +668,7 @@ int main(void)
     intptr_t address = KrnGetSystemAttr(AROS_RESTRICTED_KATTR_API);
     CHECK(address != -1 && address != 0);
     api = (const void *)address;
-    CHECK(api->version == 19 && api->size == sizeof(*api));
+    CHECK(api->version == 20 && api->size == sizeof(*api));
     /* No worker exists: queued cancellation is deterministic. */
     static struct AROSRestrictedResult queued;
     CHECK(api->run(RestrictedQueued,(size_t)(RestrictedQueuedEnd-RestrictedQueued),12288,&queued));
@@ -724,6 +743,7 @@ int main(void)
     prove_domain_growth();
     prove_thread_growth();
     prove_table_growth();
+    prove_large_stacks();
     prove_domain_close();
 #if defined(__AROSEXEC_SMP__)
     prove_task_list_churn();
