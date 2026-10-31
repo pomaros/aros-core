@@ -33,6 +33,12 @@ def main():
    'm->start+index*m->page_size,physical,protection&~KMAP_WRITE)','eager-write-permission'),
   ('guard-readonly','mapping','(p->state==KMAP_DIRTY || anonymous) ? protection',
    'p->state==KMAP_DIRTY ? protection','guard-to-write'),
+  ('shared-early-close','adapter','b->closing=1;if (b->views) return 0;','b->closing=1;','shared-close-retained'),
+  ('shared-unretained','adapter','r->shared=b;++b->views;','r->shared=b;','shared-view-count'),
+  ('shared-owned-decommit','adapter','if (r->shared) *released=0;','','shared-decommit-retains-object'),
+  ('shared-owned-detach','adapter','r->backing[i]=0;','r->backing[i]=r->shared->pages[i];','shared-detach-no-ownership'),
+  ('shared-closing-attach','adapter','!shared_registered(b) || b->closing ||','!shared_registered(b) ||','shared-close-stops-attach'),
+  ('shared-untracked-pa','adapter','if (b->pages[i]==pa) return 1;','if (b->pages[i]==pa) return 0;','shared-duplicate-pa'),
   ('recommit-zero','pager','bytes[i]=0;','bytes[i]=0xa5;','region-recommit-zero')]
  try:
   for name,target,before,after,oracle in cases:

@@ -38,6 +38,15 @@ Eight additional semantic controls cover duplicate ownership, private aliases,
 unowned installation, pinned backing, attached-region destruction, eager write
 permissions, guard-to-write permission and skipped zeroing (eleven total).
 
-This adapter accepts private read/write/no-access pages only. Executable pages
-and shared aliases require a separate backing/publication contract. No guest
-allocation syscall is supplied by this component test.
+The shared-backing ledger owns registered anonymous pages independently of any
+space. Attached views retain the whole backing object until acknowledged detach;
+decommit returns no owned page and shared recommit preserves contents. Closing
+the object blocks new views and returns ownership only after all views detach.
+Six additional controls reject early close, missing view retention, borrowed-page
+ownership transfer, closing-object admission and untracked physical aliases
+(seventeen adapter controls total). Two synthetic roots share one PA with
+independent permissions; held service output is cancelled without late writes.
+
+Executable pages require the native code-publication protocol and are refused.
+This component suite does not supply guest allocation syscalls or prove SMP
+cache/TLB maintenance. Native API integration and guest qualification are separate.

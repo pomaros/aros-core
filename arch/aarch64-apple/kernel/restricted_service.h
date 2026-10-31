@@ -7,6 +7,12 @@
 #include "../../../rom/kernel/mapping/user_service.h"
 struct Task;
 struct AROSRestrictedRegion;
+struct AROSRestrictedSharedBacking {
+    struct AROSRestrictedSharedBacking *next;
+    uintptr_t *pages;
+    size_t count,views;
+    unsigned closing;
+};
 #define AROS_RESTRICTED_DYNAMIC_BASE UINT64_C(0x200000000)
 #define AROS_RESTRICTED_DYNAMIC_END UINT64_C(0x400000000)
 struct AROSRestrictedSpace {
@@ -28,7 +34,18 @@ struct AROSRestrictedRegion {
     struct AROSRestrictedRegion *next;
     struct KrnMappingObject mapping;
     uintptr_t *backing;
+    struct AROSRestrictedSharedBacking *shared;
 };
+/* Shared anonymous backing is registered once, independently of any space.
+ * Initialize transfers ownership of fresh zeroed pages; close stops admission
+ * and returns ownership only after every attached view has detached. A region
+ * retains the whole object even when its pages are decommitted. These are
+ * anonymous views, not file-backed mappings with writeback semantics.
+ * Shared pages remain RW/RO/no-access; executable aliases are not admitted. */
+int AROSRestrictedSharedInitialize(struct AROSRestrictedSharedBacking *,uintptr_t *,size_t);
+int AROSRestrictedSharedClose(struct AROSRestrictedSharedBacking *);
+int AROSRestrictedRegionAttachShared(struct AROSRestrictedRegion *,struct AROSRestrictedSharedBacking *);
+int AROSRestrictedRegionCommitShared(struct AROSRestrictedRegion *,size_t,unsigned);
 /* Native owned-page adapter. The caller supplies zeroed record/backing arrays,
  * then freshly allocated and zero-filled pages; no guest PA is accepted.
  * Reservation/commit/decommit/protection are coordinator-only and nonblocking.
@@ -40,8 +57,10 @@ struct AROSRestrictedRegion {
  * and retry until success; it is not an ownership-transfer acknowledgement.
  * Record/page/backing arrays stay alive through detach. SpaceClose refuses
  * attached regions: the domain coordinator must detach/free its owned list.
- * Only private RW/RO/no-access pages are supported until executable/shared
- * backing acquires an alias ledger and native code-publication protocol. */
+ * Shared views never transfer page ownership on decommit/detach: decommit
+ * returns zero and successful detach clears borrowed backing entries. Close
+ * the backing object separately to reclaim its pages. Executable permissions
+ * require a native code-publication protocol and remain refused. */
 int AROSRestrictedRegionReserve(struct AROSRestrictedSpace *,struct AROSRestrictedRegion *,
     uintptr_t,size_t,struct KrnMappingPage *,uintptr_t *,size_t);
 int AROSRestrictedRegionCommit(struct AROSRestrictedRegion *,size_t,uintptr_t,unsigned);

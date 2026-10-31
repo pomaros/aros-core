@@ -126,6 +126,59 @@ static void region_tests(void)
     for (unsigned i=0;i<5;++i) free(pages[i]);
     for (unsigned i=0;i<2;++i) { free(data[i]);free(f[i]); }
 }
+static void shared_tests(void)
+{
+    struct Fixture *f[2];unsigned char *data[2],*page=aligned_alloc(PAGE,PAGE);
+    CHECK(page,"shared-allocation");zero_page(page);uintptr_t backing[1]={(uintptr_t)page};
+    struct AROSRestrictedSharedBacking object={0},duplicate={0};
+    CHECK(AROSRestrictedSharedInitialize(&object,backing,1),"shared-register");
+    CHECK(!AROSRestrictedSharedInitialize(&duplicate,backing,1),"shared-duplicate-pa");
+    struct AROSRestrictedSpace spaces[2]={{0}};struct AROSRestrictedRegion regions[2]={{0}};
+    struct KrnMappingPage metadata[2][1];uintptr_t ledger[2][1]={{0}};
+    uint64_t tcr=25|(UINT64_C(5)<<32),va=AROS_RESTRICTED_DYNAMIC_BASE;
+    for (unsigned i=0;i<2;++i) {
+        f[i]=aligned_alloc(PAGE,sizeof(*f[i]));data[i]=aligned_alloc(PAGE,PAGE);
+        CHECK(f[i] && data[i],"shared-fixture");memset(f[i],0,sizeof(*f[i]));memset(data[i],0,PAGE);f[i]->used=1;
+        struct AArch64ProtectionOps ops={f[i],resolve,allocate,clean,invalidate,sync_code,NULL};
+        CHECK(AROSRestrictedSpaceInit(&spaces[i],51+i,(uintptr_t)f[i]->tables[0],tcr,(uintptr_t)data[i],&ops),"shared-space");
+        CHECK(AROSRestrictedRegionReserve(&spaces[i],&regions[i],va,PAGE,metadata[i],ledger[i],1),"shared-reserve");
+        CHECK(!AROSRestrictedRegionCommit(&regions[i],0,(uintptr_t)page,3),"shared-cannot-private-commit");
+        CHECK(AROSRestrictedRegionAttachShared(&regions[i],&object),"shared-attach");
+        CHECK(!AROSRestrictedRegionAttachShared(&regions[i],&object),"shared-duplicate-view");
+        CHECK(!AROSRestrictedRegionCommitShared(&regions[i],0,5),"shared-no-exec");
+        CHECK(AROSRestrictedRegionCommitShared(&regions[i],0,i ? 1 : 3),"shared-commit");
+    }
+    CHECK(object.views==2,"shared-view-count");
+    uint64_t pa0,pa1;
+    CHECK(AArch64UserPagePhysical(&spaces[0].hardware,spaces[0].root,tcr,va,2,1,&pa0) &&
+        AArch64UserPagePhysical(&spaces[1].hardware,spaces[1].root,tcr,va,1,1,&pa1) &&
+        pa0==pa1 && pa0==(uintptr_t)page,"shared-same-pa");
+    CHECK(!AArch64UserPagePhysical(&spaces[1].hardware,spaces[1].root,tcr,va,2,1,&pa1),"shared-ro-view");
+    struct AROSRestrictedService channel={0};struct Task worker={1};int context;
+    CHECK(AROSRestrictedServiceInit(&channel,&spaces[0],71),"shared-channel");
+    memset(page,0x31,8);CHECK(AROSRestrictedServiceSubmit(&channel,va,va+32,8),"shared-service");
+    struct AROSRestrictedWork work;CHECK(AROSRestrictedServiceTake(&worker,&context,&work),"shared-work");
+    CHECK(!AROSRestrictedRegionDetach(&regions[0]) && object.views==2,"shared-held-view");
+    CHECK(AROSRestrictedServiceComplete(&worker,&work) && !AROSRestrictedServiceCollect(&channel,work.token) && !page[32],"shared-no-late-write");
+    CHECK(AROSRestrictedServiceClose(&channel),"shared-channel-close");
+    CHECK(AROSRestrictedRegionDetach(&regions[0]) && object.views==1 && !ledger[0][0],"shared-detach-no-ownership");
+    CHECK(AROSRestrictedSpaceClose(&spaces[0]),"shared-first-space-close");
+    uintptr_t released=123;
+    CHECK(AROSRestrictedRegionDecommit(&regions[1],0,&released) && !released && object.views==1 && page[0]==0x31,"shared-decommit-retains-object");
+    CHECK(AROSRestrictedRegionCommitShared(&regions[1],0,3) && page[0]==0x31,"shared-recommit-preserves-data");
+    CHECK(!AROSRestrictedSharedClose(&object) && object.views==1 && object.pages==backing,"shared-close-retained");
+    struct AROSRestrictedRegion late={0};struct KrnMappingPage latepage;uintptr_t latebacking=0;
+    CHECK(AROSRestrictedRegionReserve(&spaces[1],&late,va+PAGE,PAGE,&latepage,&latebacking,1),"shared-late-reserve");
+    CHECK(!AROSRestrictedRegionAttachShared(&late,&object),"shared-close-stops-attach");
+    CHECK(AROSRestrictedRegionDetach(&late),"shared-late-detach");
+    int (*remove)(void *,uintptr_t,uintptr_t)=spaces[1].mapops.remove;spaces[1].mapops.remove=deny_remove;
+    CHECK(!AROSRestrictedRegionDetach(&regions[1]) && object.views==1 && ledger[1][0],"shared-unmap-ack");
+    spaces[1].mapops.remove=remove;
+    CHECK(AROSRestrictedRegionDetach(&regions[1]) && !object.views && !ledger[1][0],"shared-final-detach");
+    CHECK(AROSRestrictedSpaceClose(&spaces[1]),"shared-second-space-close");
+    CHECK(AROSRestrictedSharedClose(&object) && !object.pages && !AROSRestrictedSharedClose(&object),"shared-final-close");
+    free(page);for (unsigned i=0;i<2;++i) { free(data[i]);free(f[i]); }
+}
 int main(void)
 {
     struct Fixture *f=aligned_alloc(PAGE,sizeof(*f));
@@ -172,5 +225,5 @@ int main(void)
     CHECK(AROSRestrictedSpaceInit(&space,11,root,tcr,(uintptr_t)data,&ops),"space-reuse");
     CHECK(space.handle!=first_handle,"space-generation");
     CHECK(AROSRestrictedSpaceClose(&space),"reused-space-close");
-    free(data);free(f);region_tests();puts("PASS restricted space and channel ownership");return 0;
+    free(data);free(f);region_tests();shared_tests();puts("PASS restricted space and channel ownership");return 0;
 }
