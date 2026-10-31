@@ -110,6 +110,22 @@ int KrnMappingCommitRange(struct KrnMappingObject *m,uintptr_t address,
     }
     return 1;
 }
+int KrnMappingCommitResidentPage(struct KrnMappingObject *m,size_t index,
+    uintptr_t physical,unsigned protection,const struct KrnMappingOps *ops)
+{
+    if (!m || !m->virtual_reservation || m->shared || m->closing ||
+        index>=m->page_count || !physical || !m->page_size ||
+        (physical&(m->page_size-1)) || (protection&~7U) ||
+        ((protection&(KMAP_WRITE|KMAP_EXEC))==(KMAP_WRITE|KMAP_EXEC)) ||
+        ((protection&(KMAP_WRITE|KMAP_EXEC)) && !(protection&KMAP_READ)) ||
+        !ops || !ops->install || m->resident>=m->page_count) return 0;
+    struct KrnMappingPage *p=&m->pages[index];
+    if (p->state!=KMAP_RESERVED || p->physical || p->generation==UINT64_MAX ||
+        !ops->install(ops->context,m->start+index*m->page_size,physical,protection)) return 0;
+    *p=(struct KrnMappingPage){physical,p->generation+1,
+        (protection&KMAP_WRITE) ? KMAP_DIRTY : KMAP_CLEAN,0,protection};
+    ++m->resident;return 1;
+}
 int KrnMappingDecommitPage(struct KrnMappingObject *m,size_t index,
     const struct KrnMappingOps *ops,uintptr_t *released)
 {
@@ -440,10 +456,15 @@ int KrnMappingProtectPage(struct KrnMappingObject *m, size_t index,
         return 0;
     struct KrnMappingPage *p=&m->pages[index];
     if (p->state==KMAP_RESERVED) return 0;
-    unsigned actual=p->state==KMAP_DIRTY ? protection : protection&~KMAP_WRITE;
+    /* Anonymous committed pages have no file writeback contract. Eagerly
+     * grant write so native buffer output does not depend on a user fault. */
+    unsigned anonymous=m->virtual_reservation && !m->shared && p->physical &&
+        (p->state==KMAP_CLEAN || p->state==KMAP_DIRTY);
+    unsigned actual=(p->state==KMAP_DIRTY || anonymous) ? protection : protection&~KMAP_WRITE;
     if (p->physical && !ops->install(ops->context,m->start+index*m->page_size,
             p->physical,actual))
         return 0;
+    if (anonymous && (protection&KMAP_WRITE)) p->state=KMAP_DIRTY;
     p->protection=protection;
     return 1;
 }

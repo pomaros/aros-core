@@ -6,6 +6,9 @@
 #include "../../aarch64-all/kernel/mapping.h"
 #include "../../../rom/kernel/mapping/user_service.h"
 struct Task;
+struct AROSRestrictedRegion;
+#define AROS_RESTRICTED_DYNAMIC_BASE UINT64_C(0x200000000)
+#define AROS_RESTRICTED_DYNAMIC_END UINT64_C(0x400000000)
 struct AROSRestrictedSpace {
     struct KrnMappingDomain domain;
     struct KrnMappingDomainMember creator;
@@ -18,7 +21,33 @@ struct AROSRestrictedSpace {
     uint64_t root,tcr,principal,handle;
     uintptr_t backing;
     unsigned channels;
+    struct AROSRestrictedRegion *regions;
 };
+struct AROSRestrictedRegion {
+    struct AROSRestrictedSpace *space;
+    struct AROSRestrictedRegion *next;
+    struct KrnMappingObject mapping;
+    uintptr_t *backing;
+};
+/* Native owned-page adapter. The caller supplies zeroed record/backing arrays,
+ * then freshly allocated and zero-filled pages; no guest PA is accepted.
+ * Reservation/commit/decommit/protection are coordinator-only and nonblocking.
+ * Commit transfers backing on success, retains caller ownership on failure.
+ * Decommit returns a page only after acknowledged unmap. Detach closes and
+ * drains the whole region, removes translations and returns ownership of ALL
+ * nonzero backing entries, without freeing any native memory itself. A zero
+ * detach result may follow partial unmapping: retain ALL backing and metadata
+ * and retry until success; it is not an ownership-transfer acknowledgement.
+ * Record/page/backing arrays stay alive through detach. SpaceClose refuses
+ * attached regions: the domain coordinator must detach/free its owned list.
+ * Only private RW/RO/no-access pages are supported until executable/shared
+ * backing acquires an alias ledger and native code-publication protocol. */
+int AROSRestrictedRegionReserve(struct AROSRestrictedSpace *,struct AROSRestrictedRegion *,
+    uintptr_t,size_t,struct KrnMappingPage *,uintptr_t *,size_t);
+int AROSRestrictedRegionCommit(struct AROSRestrictedRegion *,size_t,uintptr_t,unsigned);
+int AROSRestrictedRegionDecommit(struct AROSRestrictedRegion *,size_t,uintptr_t *);
+int AROSRestrictedRegionProtect(struct AROSRestrictedRegion *,size_t,unsigned);
+int AROSRestrictedRegionDetach(struct AROSRestrictedRegion *);
 #define AROS_RESTRICTED_CHANNELS 16U
 struct AROSRestrictedService {
     struct AROSRestrictedSpace *space;

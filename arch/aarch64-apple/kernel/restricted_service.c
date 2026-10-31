@@ -4,6 +4,7 @@
 #define PAGE 4096U
 _Static_assert(KS_RUNNING==AROS_RESTRICTED_RUNNING && KS_CANCELLED==AROS_RESTRICTED_CANCELLED,"public work states");
 static struct KrnBufferRegistry registry;
+static struct AROSRestrictedSpace *spaces[KBUF_SPACES];
 /* Generation storage outlives every service object and never resets on close. */
 static struct {
     struct AROSRestrictedService *service;
@@ -16,19 +17,38 @@ static struct AROSRestrictedService *channel_lookup(uint64_t handle)
     return active[index-1].generation==(uint32_t)(handle>>32) ?
         active[index-1].service : NULL;
 }
+static int physical_in_use(uintptr_t pa)
+{
+    for (unsigned i=0;i<KBUF_SPACES;++i) {
+        struct AROSRestrictedSpace *s=spaces[i];if (!s) continue;
+        if (s->backing==pa) return 1;
+        for (struct AROSRestrictedRegion *r=s->regions;r;r=r->next)
+            for (size_t page=0;page<r->mapping.page_count;++page)
+                if (r->backing[page]==pa) return 1;
+    }
+    return 0;
+}
+static int owns_page(struct AROSRestrictedSpace *s,uintptr_t va,uintptr_t pa)
+{
+    if (!pa || (va&(PAGE-1))) return 0;
+    if (va==AROS_RESTRICTED_DATA) return pa==s->backing;
+    for (struct AROSRestrictedRegion *r=s->regions;r;r=r->next)
+        if (va>=r->mapping.start && va-r->mapping.start<r->mapping.length)
+            return r->space==s && r->backing[(va-r->mapping.start)/PAGE]==pa;
+    return 0;
+}
 static unsigned char *admit(void *opaque,const struct KrnBufferSpace *space,
     uintptr_t va,uintptr_t pa,size_t size,unsigned access)
 {
     struct AROSRestrictedSpace *s=opaque;uint64_t actual;
-    if (space->domain!=&s->domain || size!=PAGE || va!=AROS_RESTRICTED_DATA ||
-        pa!=s->backing || !AArch64UserPagePhysical(&s->hardware,s->root,s->tcr,
+    if (space->domain!=&s->domain || size!=PAGE || !owns_page(s,va,pa) || !AArch64UserPagePhysical(&s->hardware,s->root,s->tcr,
             va,access,1,&actual) || actual!=pa) return NULL;
     return (unsigned char *)pa;
 }
 static int install(void *opaque,uintptr_t va,uintptr_t pa,unsigned protection)
 {
     struct AROSRestrictedSpace *s=opaque;uint64_t actual;
-    if (va!=AROS_RESTRICTED_DATA || pa!=s->backing) return 0;
+    if (!owns_page(s,va,pa)) return 0;
     unsigned access=protection|AARCH64_PROTECT_USER;
     if (AArch64MappingPhysical(&s->hardware,s->root,s->tcr,va,&actual))
         return actual==pa && AArch64RemapPage(&s->hardware,s->root,s->tcr,va,pa,access);
@@ -37,19 +57,21 @@ static int install(void *opaque,uintptr_t va,uintptr_t pa,unsigned protection)
 static int remove_page(void *opaque,uintptr_t va,uintptr_t pa)
 {
     struct AROSRestrictedSpace *s=opaque;
-    return va==AROS_RESTRICTED_DATA && pa==s->backing &&
+    return owns_page(s,va,pa) &&
         AArch64UnmapPage(&s->hardware,s->root,s->tcr,va,pa);
 }
 int AROSRestrictedSpaceInit(struct AROSRestrictedSpace *s,uint64_t principal,
     uint64_t root,uint64_t tcr,uintptr_t backing,const struct AArch64ProtectionOps *hardware)
 {
-    if (!s || !principal || !root || !backing || !hardware || s->root) return 0;
+    if (!s || !principal || !root || !backing || !hardware || s->root || physical_in_use(backing)) return 0;
     s->root=root;s->tcr=tcr;s->principal=principal;s->backing=backing;s->hardware=*hardware;
     s->mapops=(struct KrnMappingOps){s,install,remove_page};
     s->bufferops=(struct KrnBufferOps){s,admit};
     if (!KrnMappingDomainJoin(&s->domain,&s->creator,s) ||
-        !KrnMappingArenaInitialize(&s->arena,AROS_RESTRICTED_DATA,PAGE,PAGE) ||
+        !KrnMappingArenaInitialize(&s->arena,AROS_RESTRICTED_DATA,
+            AROS_RESTRICTED_DYNAMIC_END-AROS_RESTRICTED_DATA,PAGE) ||
         !KrnBufferRegister(&registry,s->principal,&s->domain,&s->arena,&s->handle)) return 0;
+    spaces[(uint32_t)s->handle-1]=s;
     void *identity=KrnBufferLookup(&registry,s->principal,s->handle);
     if (!KrnMappingReserve(&s->arena,&s->mapping,PAGE,0,KMAP_READ|KMAP_WRITE,0,
         identity,&s->page,1)) return 0;
@@ -57,6 +79,52 @@ int AROSRestrictedSpaceInit(struct AROSRestrictedSpace *s,uint64_t principal,
     return KrnMappingFault(&s->mapping,AROS_RESTRICTED_DATA,KMAP_WRITE,1,&request,&s->mapops)==KMAP_FAULT_QUEUE &&
         KrnMappingComplete(&request,backing,0,&s->mapops) &&
         KrnMappingFault(&s->mapping,AROS_RESTRICTED_DATA,KMAP_WRITE,1,&request,&s->mapops)==KMAP_FAULT_RETRY;
+}
+int AROSRestrictedRegionReserve(struct AROSRestrictedSpace *s,struct AROSRestrictedRegion *r,
+    uintptr_t address,size_t length,struct KrnMappingPage *pages,uintptr_t *backing,size_t capacity)
+{
+    if (!s || !r || !pages || !backing || !s->handle || s->domain.closing ||
+        r->space || r->next || address<AROS_RESTRICTED_DYNAMIC_BASE ||
+        address>=AROS_RESTRICTED_DYNAMIC_END || !length || (length&(PAGE-1)) ||
+        length>AROS_RESTRICTED_DYNAMIC_END-address || length/PAGE>capacity) return 0;
+    for (size_t i=0;i<length/PAGE;++i) if (backing[i]) return 0;
+    void *identity=KrnBufferLookup(&registry,s->principal,s->handle);
+    if (!identity || !KrnMappingReserveVirtual(&s->arena,&r->mapping,address,length,
+        identity,pages,capacity)) return 0;
+    r->space=s;r->backing=backing;r->next=s->regions;s->regions=r;return 1;
+}
+int AROSRestrictedRegionCommit(struct AROSRestrictedRegion *r,size_t page,uintptr_t pa,unsigned access)
+{
+    if (!r || !r->space || r->space->domain.closing || page>=r->mapping.page_count ||
+        !pa || (pa&(PAGE-1)) || (access&~(KMAP_READ|KMAP_WRITE)) ||
+        r->backing[page] || physical_in_use(pa)) return 0;
+    r->backing[page]=pa;
+    if (KrnMappingCommitResidentPage(&r->mapping,page,pa,access,&r->space->mapops)) return 1;
+    r->backing[page]=0;return 0;
+}
+int AROSRestrictedRegionDecommit(struct AROSRestrictedRegion *r,size_t page,uintptr_t *released)
+{
+    if (!r || !r->space || r->space->domain.closing || page>=r->mapping.page_count || !released) return 0;
+    if (!KrnMappingDecommitPage(&r->mapping,page,&r->space->mapops,released)) return 0;
+    r->backing[page]=0;return 1;
+}
+int AROSRestrictedRegionProtect(struct AROSRestrictedRegion *r,size_t page,unsigned access)
+{
+    return r && r->space && !r->space->domain.closing && !(access&~(KMAP_READ|KMAP_WRITE)) &&
+        KrnMappingProtectPage(&r->mapping,page,access,&r->space->mapops);
+}
+int AROSRestrictedRegionDetach(struct AROSRestrictedRegion *r)
+{
+    if (!r || !r->space) return 0;
+    struct AROSRestrictedSpace *s=r->space;
+    struct AROSRestrictedRegion **link=&s->regions;
+    while (*link && *link!=r) link=&(*link)->next;
+    if (!*link || !KrnMappingBeginClose(&r->mapping)) return 0;
+    for (size_t i=0;i<r->mapping.page_count;++i)
+        if (r->mapping.pages[i].physical &&
+            KrnMappingReleasePage(&r->mapping,i,&s->mapops)!=r->backing[i]) return 0;
+    if (!KrnMappingRelease(&s->arena,&r->mapping)) return 0;
+    *link=r->next;r->next=NULL;r->space=NULL;return 1;
 }
 int AROSRestrictedSpaceProtect(struct AROSRestrictedSpace *s,unsigned access)
 {
@@ -163,6 +231,7 @@ int AROSRestrictedSpaceClose(struct AROSRestrictedSpace *s)
 {
     AROSRestrictedSpaceStop(s);
     if (s->channels) return 0;
+    if (s->regions) return 0;
     if (s->handle) {
         if (s->arena.first) {
             if (!KrnMappingBeginClose(&s->mapping)) return 0;
@@ -170,6 +239,7 @@ int AROSRestrictedSpaceClose(struct AROSRestrictedSpace *s)
             if (!KrnMappingRelease(&s->arena,&s->mapping)) return 0;
         }
         if (!KrnBufferUnregister(&registry,s->principal,s->handle)) return 0;
+        spaces[(uint32_t)s->handle-1]=NULL;
         s->handle=0;
     }
     if (s->creator.domain && !KrnMappingDomainLeave(&s->creator)) return 0;

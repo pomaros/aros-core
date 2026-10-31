@@ -100,6 +100,14 @@ int KrnMappingReserveVirtual(struct KrnMappingArena *, struct KrnMappingObject *
     uintptr_t address, size_t length, void *owner, struct KrnMappingPage *, size_t capacity);
 int KrnMappingCommitRange(struct KrnMappingObject *, uintptr_t address,
     size_t length, unsigned protection);
+/* Eager anonymous commit of a previously RESERVED page. The caller supplies
+ * newly owned, zero-filled backing and retains it on failure. Successful
+ * installation transfers backing to the mapping and advances its generation.
+ * No transient LOADING state is exposed; RW pages are published DIRTY, so
+ * native output leases work without requiring a preliminary user write fault.
+ * install failure must leave the target translation unchanged. */
+int KrnMappingCommitResidentPage(struct KrnMappingObject *, size_t page,
+    uintptr_t physical, unsigned protection, const struct KrnMappingOps *);
 int KrnMappingDecommitPage(struct KrnMappingObject *, size_t page,
     const struct KrnMappingOps *, uintptr_t *released);
 struct KrnMappingObject *KrnMappingLookup(struct KrnMappingArena *, uintptr_t);

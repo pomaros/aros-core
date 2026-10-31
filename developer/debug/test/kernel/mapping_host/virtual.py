@@ -11,14 +11,14 @@ def main():
  if out.exists() or ROOT in out.parents:p.error('fresh output outside source required')
  dirty=bool(subprocess.check_output(['git','status','--porcelain'],cwd=ROOT))
  if dirty and not a.allow_dirty_diagnostic:p.error('commit inputs or select diagnostic mode')
- paths=[SRC/'mapping.c',SRC/'mapping.h',SRC/'pager.c',SRC/'pager.h',HERE/'virtual_test.c',Path(__file__)]
+ paths=[SRC/'mapping.c',SRC/'mapping.h',SRC/'pager.c',SRC/'pager.h',HERE/'virtual_test.c',Path(__file__).resolve()]
  hashes={str(x.relative_to(ROOT)):sha(x) for x in paths};out.mkdir(parents=True)
  result={'result':'FAIL','scope':__doc__,'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),'dirty_inputs':dirty,'input_hashes':hashes,'records':[]}
  cases=[('baseline',None,None,None,None),
  ('decommit-pins','mapping.c','m->closing || m->in_flight ||\n        index>=m->page_count || !released','m->closing ||\n        index>=m->page_count || !released','decommit-pinned'),
  ('decommit-remove','mapping.c','!ops->remove(ops->context,m->start+index*m->page_size,physical)','0','decommit-remove-refusal'),
  ('decommit-demand','mapping.c','*p=(struct KrnMappingPage){0,p->generation+1,KMAP_RESERVED,0,p->protection};','*p=(struct KrnMappingPage){0,p->generation+1,KMAP_ABSENT,0,p->protection};','decommit-no-demand-reload'),
- ('commit-preflight','mapping.c','p->physical || p->generation==UINT64_MAX','p->physical || 0','commit-preflight'),
+ ('commit-preflight','mapping.c','p->state==KMAP_RESERVED && (p->physical || p->generation==UINT64_MAX)','p->state==KMAP_RESERVED && (p->physical || 0)','commit-preflight'),
  ('zero-fill','pager.c','bytes[i]=0;','bytes[i]=0xa5;','zero-bytes')]
  try:
   for name,file,before,after,oracle in cases:
