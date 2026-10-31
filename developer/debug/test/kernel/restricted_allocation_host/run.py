@@ -14,7 +14,7 @@ def main():
  if out.exists() or ROOT in out.parents:p.error('fresh output outside source required')
  out.mkdir(parents=True);source=ROOT/'arch/aarch64-apple/kernel/restricted.c';text=source.read_text()
  records=''.join(extract(text,'struct '+n+' {') for n in ['RestrictedTableChunk','RestrictedTableTransfer','RestrictedAllocation','RestrictedShared','RestrictedMemoryOperation','RestrictedSharedOperation','RestrictedDomain'])
- actual=''.join(extract(text,'static '+n) for n in ['int r_supply_tables(','size_t r_record_size(','int r_reserve_memory(','uint64_t r_create_shared(','void r_free_allocation(','void r_release_shared(','void r_free_domain_backing('])
+ actual=''.join(extract(text,'static '+n) for n in ['size_t r_code_storage(','int r_supply_tables(','size_t r_record_size(','int r_reserve_memory(','uint64_t r_create_shared(','void r_free_allocation(','void r_release_shared(','void r_free_domain_backing('])
  actual=actual.replace('__asm__ volatile("wfe")','abort()')
  actual=actual.replace('register uintptr_t argument __asm__("x0")=(uintptr_t)&p;','uintptr_t argument=(uintptr_t)&p;').replace('__asm__ volatile("svc #0xa569":"+r"(argument)::"memory","cc");','argument=table_publish((void *)argument);')
  (out/'records.inc').write_text(records);(out/'actual.inc').write_text(actual)

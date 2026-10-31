@@ -18,9 +18,10 @@ def main():
     text=source.read_text()
     # Select the unmap definition, not its forward declaration.
     text=text.replace('static int r_unmap_thread(struct Restricted *);','')
-    actual=''.join(extract(text,n) for n in ['r_tables_need(struct','r_range_tables(uint64_t','r_prepare(struct','r_unmap_thread(struct'])
+    actual=''.join(extract(text,n) for n in ['r_code_storage(size_t','r_tables_need(struct','r_range_tables(uint64_t','r_prepare_domain(struct RestrictedDomain *d','r_prepare(struct','r_unmap_thread(struct'])
+    actual=actual.replace('__asm__ volatile("mrs %0,tcr_el1":"=r"(tcr));','tcr=16;')
     (out/'actual.inc').write_text(actual)
-    command=['clang','-std=c11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-I'+str(out),str(HERE/'test.c'),'-o',str(out/'test')]
+    command=['clang','-std=c11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-I'+str(out),'-I'+str(ROOT/'arch/aarch64-all/kernel'),'-I'+str(ROOT/'arch/aarch64-apple/include'),str(HERE/'test.c'),'-o',str(out/'test')]
     result={'result':'FAIL','scope':__doc__,'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),'dirty_inputs':bool(subprocess.check_output(['git','status','--porcelain'],cwd=ROOT)),'inputs':{str(x.relative_to(ROOT)):hashlib.sha256(x.read_bytes()).hexdigest() for x in [source,HERE/'test.c',HERE/'run.py']},'command':command}
     b=subprocess.run(command,capture_output=True,text=True);(out/'build.log').write_text(b.stdout+b.stderr)
     if not b.returncode:

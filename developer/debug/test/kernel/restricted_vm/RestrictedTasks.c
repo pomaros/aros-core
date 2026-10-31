@@ -653,6 +653,31 @@ static void prove_large_stacks(void)
     }
     bug("[ISOVM] large-stacks stack_pages=17 fault_pages=3 repaired=1 guards=4 drained=5 PASS\n");
 }
+extern const unsigned char RestrictedLargeCode[],RestrictedLargeCodeEnd[];
+static void prove_large_code(void)
+{
+    size_t bytes=RestrictedLargeCodeEnd-RestrictedLargeCode;
+    CHECK(bytes>8192 && bytes<=12288);
+    CHECK(!api->create_domain(RestrictedLargeCode,0,0));
+    CHECK(!api->create_domain(RestrictedLargeCode,SIZE_MAX,0));
+    uint64_t domains[2];
+    for (unsigned i=0;i<2;++i) {
+        domains[i]=api->create_domain(RestrictedLargeCode,bytes,0);CHECK(domains[i]);
+    }
+    struct AROSRestrictedLifetime life;api->lifetime(&life);
+    CHECK(life.domains==2 && life.pages-life.metadata_pages-life.table_pages==8);
+    for (unsigned i=0;i<2;++i) {
+        struct AROSRestrictedResult result={0};
+        CHECK(api->run_domain(domains[i],77+i,&result));
+        CHECK(!result.status && result.resumed==1 && result.drained);
+    }
+    struct AROSRestrictedResult refused={0};
+    CHECK(api->run_domain(domains[0],1,&refused));
+    CHECK(refused.status==-2 && refused.drained && !refused.resumed);
+    for (unsigned i=0;i<2;++i) CHECK(api->close_domain(domains[i])==1);
+    api->lifetime(&life);CHECK(!life.pages && !life.domains && !life.live);
+    bug("[ISOVM] large-code pages=3 domains=2 repaired=2 write_refused=1 retained_pages=0 PASS\n");
+}
 int main(void)
 {
     KernelBase = OpenResource((CONST_STRPTR)"kernel.resource");
@@ -668,7 +693,7 @@ int main(void)
     intptr_t address = KrnGetSystemAttr(AROS_RESTRICTED_KATTR_API);
     CHECK(address != -1 && address != 0);
     api = (const void *)address;
-    CHECK(api->version == 20 && api->size == sizeof(*api));
+    CHECK(api->version == 21 && api->size == sizeof(*api));
     /* No worker exists: queued cancellation is deterministic. */
     static struct AROSRestrictedResult queued;
     CHECK(api->run(RestrictedQueued,(size_t)(RestrictedQueuedEnd-RestrictedQueued),12288,&queued));
@@ -744,6 +769,7 @@ int main(void)
     prove_thread_growth();
     prove_table_growth();
     prove_large_stacks();
+    prove_large_code();
     prove_domain_close();
 #if defined(__AROSEXEC_SMP__)
     prove_task_list_churn();

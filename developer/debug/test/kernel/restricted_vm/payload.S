@@ -899,3 +899,44 @@ LargeStacksFailure:
  svc #0xa541
  b LargeStacksFailure
 RestrictedLargeStacksEnd:
+
+.balign 4096
+.global RestrictedLargeCode, RestrictedLargeCodeEnd
+RestrictedLargeCode:
+ b LargeCodeBody
+.balign 4096
+LargeCodeBody:
+ mov x19, x1
+ mov x20, x0
+ cmp x20, #1
+ b.eq LargeCodeWrite
+ adr x0, LargeCodeHandler
+ svc #0xa545
+ cbz x0, LargeCodeFailure
+ mov x0, x19
+ mov x1, #1
+ svc #0xa546
+ cbz x0, LargeCodeFailure
+ str x20, [x19]
+ mov x0, #0
+ svc #0xa541
+LargeCodeWrite:
+ adr x9, RestrictedLargeCode
+ str xzr, [x9]
+ b LargeCodeFailure
+.balign 4096
+LargeCodeHandler:
+ mov x22, x2
+ mov x23, x3
+ mov x0, x19
+ mov x1, #3
+ svc #0xa546
+ cbz x0, LargeCodeFailure
+ mov x0, x22
+ mov x1, x23
+ svc #0xa547
+LargeCodeFailure:
+ mov x0, #-9
+ svc #0xa541
+ b LargeCodeFailure
+RestrictedLargeCodeEnd:

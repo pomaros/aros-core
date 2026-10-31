@@ -370,6 +370,24 @@ static void variable_stacks(void)
     assert(r_range_tables(0x3ffff000,2*R_PAGE)==5);
     assert(r_range_tables(0x7ffffff000ULL,2*R_PAGE)==6);
 }
+static void code_images(void)
+{
+    unsigned char image[3*R_PAGE];
+    struct RestrictedDomain d={.state=R_LIVE,.code=image,.code_bytes=2*R_PAGE+4};
+    struct Restricted r={.domain=&d};
+    assert(r_code_storage(d.code_bytes)==3*R_PAGE);
+    assert(!r_code_storage(0) && !r_code_storage(SIZE_MAX) && !r_code_storage(UINT32_MAX));
+    assert(r_code_alias(&d,AROS_RESTRICTED_CODE+R_PAGE,R_PAGE)==image+R_PAGE);
+    assert(r_code_alias(&d,AROS_RESTRICTED_CODE+2*R_PAGE,R_PAGE)==image+2*R_PAGE);
+    assert(!r_code_alias(&d,AROS_RESTRICTED_CODE-1,R_PAGE));
+    assert(!r_code_alias(&d,AROS_RESTRICTED_CODE+3*R_PAGE,R_PAGE));
+    assert(r_code_pc(&r,AROS_RESTRICTED_CODE+2*R_PAGE));
+    assert(!r_code_pc(&r,AROS_RESTRICTED_CODE+2*R_PAGE+4));
+    assert(!r_code_pc(&r,AROS_RESTRICTED_CODE+1));
+    restricted_domains=&d;
+    struct AROSRestrictedLifetime life;assert(call(R_LIFETIME,(uintptr_t)&life,&owner,&context));
+    assert(life.pages==3);restricted_domains=NULL;
+}
 int main(void)
 {
     struct Restricted stack_owner={.owner=&owner,.stack_address=AROS_RESTRICTED_STACK,
@@ -403,7 +421,7 @@ int main(void)
     memset(domain_storage,0,sizeof(domain_storage));restricted_domains=NULL;
 
     domain_storage[0]=(struct RestrictedDomain){.state=R_LIVE,
-        .table_pages=1024,.code=&owner,.data=&owner,.threads=2};
+        .table_pages=1024,.code=&owner,.data=&owner,.code_bytes=32,.threads=2};
     restricted_domains=&domain_storage[0];
     for (unsigned i=0;i<2;++i)
         thread_storage[i]=(struct Restricted){.state=R_LIVE,.domain=&domain_storage[0],
@@ -489,6 +507,7 @@ int main(void)
     managed_tests();
     thread_growth();
     variable_stacks();
+    code_images();
     shared_tests();
     domain_growth();
     table_growth();

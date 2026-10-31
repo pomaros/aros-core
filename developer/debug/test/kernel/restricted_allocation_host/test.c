@@ -1,6 +1,7 @@
 /* Copyright (C) 2026 John KNIPPER.
  * Licensed under the AROS Public License (APL) Version 1.1. */
 #include "restricted_service.h"
+#include <aros/apple/restricted.h>
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
@@ -73,6 +74,11 @@ int main(void)
     assert(r_supply_tables(77,NULL,NULL,3) && live==4);
     struct RestrictedTableChunk *second=owned;second->next=c;second->used=1;c->used=2048;
     struct RestrictedDomain domain={.tables=second};r_free_domain_backing(&domain);owned=NULL;
+    assert(!live);
+    domain=(struct RestrictedDomain){.code_bytes=2*R_PAGE+4};
+    domain.code=AROSApplePageAllocate(NULL,r_code_storage(domain.code_bytes),MEMF_CLEAR);
+    domain.data=AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);assert(live==2);
+    r_free_domain_backing(&domain);
     Permit();assert(!live && !exclusion);
     assert(!r_record_size(SIZE_MAX,1,1));
     assert(!r_record_size(16,SIZE_MAX,8));

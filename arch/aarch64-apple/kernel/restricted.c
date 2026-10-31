@@ -178,6 +178,14 @@ static struct Restricted *r_slot(uintptr_t address)
         if ((uintptr_t)r==address) return r;
     return NULL;
 }
+static size_t r_code_storage(size_t bytes)
+{
+    /* The native protection entry accepts a 32-bit byte length. Round only
+     * after checking both that limit and the dedicated image VA window. */
+    if (!bytes || bytes>UINT32_MAX-(R_PAGE-1) ||
+        bytes>AROS_RESTRICTED_CODE_END-AROS_RESTRICTED_CODE) return 0;
+    return (bytes+R_PAGE-1)&~(size_t)(R_PAGE-1);
+}
 static int r_thread_addresses(struct Restricted *r,struct RestrictedDomain *domain)
 {
     /* Include the guards between stacks/TLS and after TLS. Round the owned
@@ -286,7 +294,7 @@ static int r_lifecycle(struct AROSAppleRuntimeFrame *frame,struct Task *task,
         for (struct RestrictedDomain *d=restricted_domains;d;d=d->next) {
             if (d->state!=R_FREE) {
                 ++state->domains;state->table_pages+=d->table_pages;
-                state->pages+=d->table_pages+d->table_metadata_pages+(d->code!=NULL)+(d->data!=NULL)+d->memory_pages+d->storage_bytes/R_PAGE;
+                state->pages+=d->table_pages+d->table_metadata_pages+(d->code ? r_code_storage(d->code_bytes)/R_PAGE : 0)+(d->data!=NULL)+d->memory_pages+d->storage_bytes/R_PAGE;
                 state->metadata_pages+=d->storage_bytes/R_PAGE+d->memory_metadata_pages+d->table_metadata_pages;
             }
         }
@@ -376,13 +384,20 @@ static void r_clean(void *unused, const void *address, size_t bytes)
 }
 static void r_invalidate(void *unused)
 { (void)unused; __asm__ volatile("dsb ish; tlbi vmalle1is; dsb ish; isb":::"memory"); }
+static const void *r_code_alias(struct RestrictedDomain *d,uint64_t va,size_t bytes)
+{
+    size_t storage=r_code_storage(d->code_bytes);
+    if (!d->code || va<AROS_RESTRICTED_CODE || va-AROS_RESTRICTED_CODE>storage ||
+        bytes>storage-(va-AROS_RESTRICTED_CODE)) return NULL;
+    return (const unsigned char *)d->code+(va-AROS_RESTRICTED_CODE);
+}
 static void r_sync(void *opaque, uint64_t va, size_t bytes)
 {
-    struct RestrictedDomain *domain = opaque;
-    /* The new root is not installed while constructing its sole executable
-     * mapping. Clean the owned native backing, not the inactive guest VA. */
-    (void)va;
-    r_clean(opaque, domain->code, bytes);
+    /* The root is inactive. Clean the native alias of this particular page,
+     * including a zero-padded last page, before granting execution. */
+    const void *alias=r_code_alias(opaque,va,bytes);
+    if (!alias) for (;;) __asm__ volatile("wfe");
+    r_clean(opaque,alias,bytes);
     __asm__ volatile("ic ialluis; dsb ish; isb":::"memory");
 }
 /* Source tables are frozen by the native caller's mapping lock. Preflight
@@ -394,21 +409,6 @@ static int r_tables_need(struct RestrictedDomain *d,size_t count)
     d->table_shortage=count>available ? count-available : 0;
     return !d->table_shortage;
 }
-static int r_prepare_domain(struct RestrictedDomain *d,uint64_t source)
-{
-    uint64_t tcr,root=0;
-    struct AArch64ProtectionOps ops={d,r_resolve,r_allocate,r_clean,r_invalidate,r_sync,0};
-    __asm__ volatile("mrs %0,tcr_el1":"=r"(tcr));
-    size_t count;d->table_shortage=0;
-    if (d->root || !d->code || !d->data || ((tcr>>14)&3) ||
-        !AArch64CountPrivilegedRoot(&ops,source,tcr,SIZE_MAX,&count) || count>SIZE_MAX-6 ||
-        !r_tables_need(d,count+6) ||
-        !AArch64ClonePrivilegedRoot(&ops,source,tcr,count,&root)) return 0;
-    d->root=root;
-    return AArch64MapPage(&ops,root,tcr,AROS_RESTRICTED_CODE,(uintptr_t)d->code,
-        AARCH64_PROTECT_READ|AARCH64_PROTECT_EXEC|AARCH64_PROTECT_USER,1) &&
-        AROSRestrictedSpaceInit(&d->space,(uintptr_t)d,root,tcr,(uintptr_t)d->data,&ops);
-}
 /* Upper bound on new table pages for a range in a four-level 4K root.
  * Existing shared ancestors only reduce this count. No allocation occurs in
  * the mapping critical section, including when a stack crosses a table edge. */
@@ -418,6 +418,24 @@ static size_t r_range_tables(uint64_t address,size_t bytes)
     for (unsigned shift=21;shift<=39;shift+=9)
         count+=((address+bytes-1)>>shift)-(address>>shift)+1;
     return count;
+}
+static int r_prepare_domain(struct RestrictedDomain *d,uint64_t source)
+{
+    uint64_t tcr,root=0;
+    struct AArch64ProtectionOps ops={d,r_resolve,r_allocate,r_clean,r_invalidate,r_sync,0};
+    __asm__ volatile("mrs %0,tcr_el1":"=r"(tcr));
+    size_t count,storage=r_code_storage(d->code_bytes);
+    size_t additional=storage ? r_range_tables(AROS_RESTRICTED_CODE,storage)+3 : 0;
+    d->table_shortage=0;
+    if (d->root || !d->code || !d->data || !storage || ((tcr>>14)&3) ||
+        !AArch64CountPrivilegedRoot(&ops,source,tcr,SIZE_MAX,&count) || count>SIZE_MAX-additional ||
+        !r_tables_need(d,count+additional) ||
+        !AArch64ClonePrivilegedRoot(&ops,source,tcr,count,&root)) return 0;
+    d->root=root;
+    for (size_t offset=0;offset<storage;offset+=R_PAGE)
+        if (!AArch64MapPage(&ops,root,tcr,AROS_RESTRICTED_CODE+offset,(uintptr_t)d->code+offset,
+            AARCH64_PROTECT_READ|AARCH64_PROTECT_EXEC|AARCH64_PROTECT_USER,1)) return 0;
+    return AROSRestrictedSpaceInit(&d->space,(uintptr_t)d,root,tcr,(uintptr_t)d->data,&ops);
 }
 static int r_prepare(struct Restricted *r,uint64_t source)
 {
@@ -972,7 +990,7 @@ static void r_free_domain_backing(struct RestrictedDomain *d)
     while (a) {
         struct RestrictedAllocation *next=a->next;r_free_allocation(a);a=next;
     }
-    if ((d->code && !AROSApplePageFree(d->code,R_PAGE)) ||
+    if ((d->code && !AROSApplePageFree(d->code,r_code_storage(d->code_bytes))) ||
         (d->data && !AROSApplePageFree(d->data,R_PAGE)))
         for (;;) __asm__ volatile("wfe");
     struct RestrictedTableChunk *c=d->tables;
@@ -1095,7 +1113,7 @@ static int r_run_internal(uint64_t handle,const void *code, size_t bytes, uint64
     size_t stack_bytes,size_t fault_bytes,
     struct AROSRestrictedResult *result)
 {
-    if ((!handle && (!code || !bytes || bytes>R_PAGE)) || !result) return 0;
+    if ((!handle && (!code || !r_code_storage(bytes))) || !result) return 0;
     /* Validate sizes without consulting the mutable published list. */
     const size_t limit=AROS_RESTRICTED_DYNAMIC_BASE-AROS_RESTRICTED_STACK;
     if (!stack_bytes || !fault_bytes || ((stack_bytes|fault_bytes)&(R_PAGE-1)) ||
@@ -1130,7 +1148,7 @@ static int r_run_internal(uint64_t handle,const void *code, size_t bytes, uint64
     int ok = 0;
     struct RestrictedPublication publication={.slot=r,.seed=seed,.code_bytes=bytes};
     if (!handle) {
-        publication.code = AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
+        publication.code = AROSApplePageAllocate(NULL,r_code_storage(bytes),MEMF_CLEAR);
         publication.data = AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
     }
     publication.stack = AROSApplePageAllocate(NULL,stack_bytes,MEMF_CLEAR);
@@ -1143,7 +1161,7 @@ static int r_run_internal(uint64_t handle,const void *code, size_t bytes, uint64
     if (!handle) {
         memcpy(r->domain->code,code,bytes);
         *(uint64_t *)r->domain->data = seed;
-        if (!AROSApplePageProtect(r->domain->code,R_PAGE,MAP_Readable|MAP_Executable)) goto prepared;
+        if (!AROSApplePageProtect(r->domain->code,r_code_storage(bytes),MAP_Readable|MAP_Executable)) goto prepared;
     }
     register uintptr_t argument __asm__("x0")=r_prepare_native(NULL,r);
     if (!argument) goto prepared;
@@ -1187,7 +1205,7 @@ static int r_run_domain_stacks(uint64_t handle,uint64_t seed,size_t stack_bytes,
 { return handle && r_run_internal(handle,NULL,0,seed,stack_bytes,fault_bytes,result); }
 static uint64_t r_create_domain(const void *code,size_t bytes,uint64_t seed)
 {
-    if (!code || !bytes || bytes>R_PAGE) return 0;
+    if (!code || !r_code_storage(bytes)) return 0;
     r_reap();Forbid();
     struct RestrictedDomain *d=r_new_domain();
     if (!d) { Permit();return 0; }
@@ -1198,7 +1216,7 @@ static uint64_t r_create_domain(const void *code,size_t bytes,uint64_t seed)
         Permit();return 0;
     }
     struct RestrictedDomainPublication publication={.domain=d,.code_bytes=bytes};
-    publication.code=AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
+    publication.code=AROSApplePageAllocate(NULL,r_code_storage(bytes),MEMF_CLEAR);
     publication.data=AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
     register uintptr_t argument __asm__("x0")=(uintptr_t)&publication;
     __asm__ volatile("svc #0xa561":"+r"(argument)::"x1","memory","cc");
@@ -1206,7 +1224,7 @@ static uint64_t r_create_domain(const void *code,size_t bytes,uint64_t seed)
     uint64_t handle=0;
     if (d->code && d->data) {
         memcpy(d->code,code,bytes);*(uint64_t *)d->data=seed;
-        if (AROSApplePageProtect(d->code,R_PAGE,MAP_Readable|MAP_Executable)) {
+        if (AROSApplePageProtect(d->code,r_code_storage(bytes),MAP_Readable|MAP_Executable)) {
             handle=r_prepare_native(d,NULL);
         }
     }
@@ -1357,7 +1375,7 @@ static unsigned r_state(const struct AROSRestrictedWork *work)
     __asm__ volatile("svc #0xa535":"+r"(argument)::"memory","cc");
     return (unsigned)argument;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {20,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {21,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

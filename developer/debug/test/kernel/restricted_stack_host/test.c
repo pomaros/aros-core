@@ -6,12 +6,12 @@
 #include <stdio.h>
 #include <string.h>
 #define R_PAGE 4096U
-#define AARCH64_PROTECT_READ 1
-#define AARCH64_PROTECT_WRITE 2
-#define AARCH64_PROTECT_USER 4
+#include "protection.h"
+#include <aros/apple/restricted.h>
 struct Space { int hardware; uint64_t handle,root,tcr; };
 struct RestrictedDomain {
     unsigned closing,managed;
+    void *code,*data;size_t code_bytes;
     uint64_t root;
     struct Space space;
     size_t table_shortage,table_pages,table_used;
@@ -25,11 +25,20 @@ struct Restricted {
 };
 static struct { uint64_t va,pa; } maps[32];
 static unsigned mapped,attempts,fail_after=~0U,unmap_fail,service_calls;
-static int r_prepare_domain(struct RestrictedDomain *d,uint64_t source)
-{ (void)d;(void)source;assert(0);return 0; }
-static int AArch64MapPage(int *ops,uint64_t root,uint64_t tcr,uint64_t va,uint64_t pa,unsigned protection,int fresh)
+static uint64_t *r_resolve(void *c,uint64_t pa) { (void)c;(void)pa;return NULL; }
+static uint64_t r_allocate(void *c,unsigned b) { (void)c;(void)b;return 0; }
+static void r_clean(void *c,const void *p,size_t n) { (void)c;(void)p;(void)n; }
+static void r_invalidate(void *c) { (void)c; }
+static void r_sync(void *c,uint64_t va,size_t n) { (void)c;(void)va;(void)n; }
+static int AArch64CountPrivilegedRoot(const struct AArch64ProtectionOps *o,uint64_t root,uint64_t tcr,size_t budget,size_t *count)
+{ (void)o;(void)root;(void)tcr;assert(budget==SIZE_MAX);*count=4;return 1; }
+static int AArch64ClonePrivilegedRoot(const struct AArch64ProtectionOps *o,uint64_t root,uint64_t tcr,size_t budget,uint64_t *result)
+{ (void)o;(void)root;(void)tcr;assert(budget==4);*result=1;return 1; }
+static int AROSRestrictedSpaceInit(struct Space *s,uintptr_t owner,uint64_t root,uint64_t tcr,uintptr_t data,const struct AArch64ProtectionOps *o)
+{ (void)owner;(void)data;(void)o;s->root=root;s->handle=1;s->tcr=tcr;return 1; }
+static int AArch64MapPage(void *ops,uint64_t root,uint64_t tcr,uint64_t va,uint64_t pa,unsigned protection,int fresh)
 {
-    (void)ops;(void)tcr;assert(root==1 && protection==7 && fresh);
+    (void)ops;(void)tcr;assert(root==1 && (protection==11 || protection==13) && fresh);
     if (attempts++==fail_after) return 0;
     for (unsigned i=0;i<mapped;++i) assert(maps[i].va!=va);
     assert(mapped<32);maps[mapped].va=va;maps[mapped++].pa=pa;return 1;
@@ -76,5 +85,17 @@ int main(void)
     }
     attempts=0;d.table_pages=0;
     assert(!r_prepare(&r,0) && !attempts && d.table_shortage==10);
+    for (unsigned failure=0;failure<=3;++failure) {
+        d=(struct RestrictedDomain){.managed=1,.code=(void *)0x800000,.data=(void *)0x900000,.code_bytes=2*R_PAGE+4,.table_pages=10};
+        mapped=attempts=0;fail_after=failure;
+        assert(r_prepare_domain(&d,123)==(failure==3));
+        assert(d.root==1 && mapped==failure);
+        for (unsigned i=0;i<mapped;++i)
+            assert(maps[i].va==AROS_RESTRICTED_CODE+i*R_PAGE && maps[i].pa==0x800000+i*R_PAGE);
+        /* Published clone and partial maps remain domain-owned on failure. */
+        assert(d.space.handle==(failure==3));
+    }
+    d=(struct RestrictedDomain){.managed=1,.code=(void *)0x800000,.data=(void *)0x900000,.code_bytes=2*R_PAGE+4};
+    attempts=0;assert(!r_prepare_domain(&d,123) && !attempts && !d.root && d.table_shortage==10);
     puts("PASS variable stack maps, guards, shortage and partial rollback");
 }

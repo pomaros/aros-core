@@ -7,7 +7,9 @@
 /* Experimental native control API. Payloads use the scalar SVC ABI only;
  * native libraries and this control table are inaccessible in their root. */
 #define AROS_RESTRICTED_KATTR_API UINT32_C(0x83f10021)
-#define AROS_RESTRICTED_CODE UINT64_C(0x100000000)
+/* Immutable image window, disjoint from data, thread stacks and dynamic regions. */
+#define AROS_RESTRICTED_CODE UINT64_C(0x400000000)
+#define AROS_RESTRICTED_CODE_END UINT64_C(0x500000000)
 #define AROS_RESTRICTED_DATA UINT64_C(0x100001000)
 #define AROS_RESTRICTED_STACK UINT64_C(0x100003000)
 #define AROS_RESTRICTED_FAULT_STACK UINT64_C(0x100005000)
@@ -60,6 +62,9 @@ struct AROSRestrictedAPI {
      * -1 stale/foreign handle. A controller's retirement initiates cancellation.
      * Managed run results have no bulk data snapshot while peers can write;
      * snapshot_valid identifies the last closing context after all writers drain. */
+    /* Copy an immutable image into the dedicated CODE window. Storage rounds
+     * up to pages and zero-fills padding; callback/handler PCs stay within bytes.
+     * Sizes exceeding the native protection length or available arena fail. */
     uint64_t (*create_domain)(const void *code,size_t bytes,uint64_t seed);
     int (*run_domain)(uint64_t handle,uint64_t seed,struct AROSRestrictedResult *);
     int (*close_domain)(uint64_t handle);
