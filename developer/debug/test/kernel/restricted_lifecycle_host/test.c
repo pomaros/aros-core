@@ -22,6 +22,7 @@
 #define R_DOMAIN_REAP 0xa565
 #define R_DOMAIN_ABORT 0xa566
 #define R_SHARED 0xa568
+#define R_TABLE_GROW 0xa569
 struct Task { int id; void *tc_SPLower,*tc_SPUpper; };
 struct ExceptionContext { int id; };
 struct AROSAppleRuntimeFrame { uintptr_t x[31],entry_ttbr0; };
@@ -64,15 +65,18 @@ static int AROSRestrictedRegionDetach(struct AROSRestrictedRegion *r)
 { if (!r->drained) return 0;r->space=NULL;return 1; }
 struct RestrictedAllocation { struct RestrictedAllocation *next; struct AROSRestrictedRegion region; };
 enum RestrictedState { R_FREE,R_ALLOCATING,R_LIVE,R_REAPING };
+struct RestrictedTableChunk { struct RestrictedTableChunk *next; void *pages; size_t count,used; };
 struct RestrictedDomain {
     struct RestrictedDomain *next;
     size_t storage_bytes;
     struct AROSRestrictedSpace space;
     enum RestrictedState state;
-    void *pool,*code,*data;
+    void *code,*data;
     unsigned threads,managed,closing;
     void *owner_context,*releaser_context;
     size_t code_bytes,memory_pages,memory_metadata_pages;
+    struct RestrictedTableChunk *tables;
+    size_t table_pages,table_used,table_metadata_pages,table_shortage;
     struct RestrictedAllocation *allocations;
 };
 struct Restricted {
@@ -92,7 +96,7 @@ struct Restricted {
 };
 struct RestrictedPublication {
     struct Restricted *slot;
-    void *pool,*code,*data,*stack,*fault_stack,*tls;
+    void *code,*data,*stack,*fault_stack,*tls;
     uint64_t seed;
     size_t code_bytes;
 };
@@ -103,7 +107,7 @@ static struct RestrictedDomain domain_storage[64];
 static uint64_t owners_retired,owners_reaped;
 struct RestrictedDomainPublication {
     struct RestrictedDomain *domain;
-    void *pool,*code,*data;
+    void *code,*data;
     size_t code_bytes;
 };
 static int unmap_allowed=1;
@@ -111,10 +115,11 @@ static int r_unmap_thread(struct Restricted *r) { (void)r;return unmap_allowed; 
 static uint64_t handle_generation;
 static int r_prepare_domain(struct RestrictedDomain *d,uint64_t root)
 {
-    assert(root==123 && !d->space.handle);
+    assert(root==123 && !d->space.handle);d->table_pages=1024;
     d->space.handle=(++handle_generation<<32)|1;d->space.drained=1;return 1;
 }
 static void r_shared_lifetime(struct AROSRestrictedLifetime *state) { (void)state; }
+struct RestrictedTableTransfer { uint64_t handle; struct RestrictedDomain *domain; struct Restricted *thread; struct RestrictedTableChunk *chunk; };
 #include "actual.inc"
 static struct Task owner,other;
 static struct ExceptionContext context,foreign;
@@ -153,7 +158,7 @@ static uint64_t managed_create(void)
 {
     struct RestrictedDomain *d=(void *)domain_call(R_DOMAIN_CLAIM,0,&context,NULL);
     assert(d && d->managed && d->state==R_ALLOCATING && !d->threads);
-    struct RestrictedDomainPublication p={d,&owner,&owner,&owner,32};
+    struct RestrictedDomainPublication p={d,&owner,&owner,32};
     assert(!domain_call(R_DOMAIN_PUBLISH,(uintptr_t)&p,&foreign,NULL));
     assert(d->state==R_ALLOCATING);
     assert(domain_call(R_DOMAIN_PUBLISH,(uintptr_t)&p,&context,NULL));
@@ -173,8 +178,8 @@ static void managed_tests(void)
     assert(a && b && a!=b && a->domain==d && b->domain==d && d->threads==2);
     struct RestrictedPublication pa={.slot=a,.stack=&owner,.fault_stack=&owner,.tls=&owner};
     struct RestrictedPublication pb={.slot=b,.stack=&other,.fault_stack=&other,.tls=&other};
-    pa.pool=&other;assert(!call(R_PUBLISH,(uintptr_t)&pa,&owner,&context));
-    assert(d->pool==&owner && a->state==R_ALLOCATING);pa.pool=NULL;
+    pa.code=&other;assert(!call(R_PUBLISH,(uintptr_t)&pa,&owner,&context));
+    assert(d->code==&owner && a->state==R_ALLOCATING);pa.code=NULL;
     assert(call(R_PUBLISH,(uintptr_t)&pa,&owner,&context));
     assert(call(R_PUBLISH,(uintptr_t)&pb,&other,&foreign));
     assert(!r_close(a) && !d->closing && !d->space.stopped);
@@ -298,6 +303,39 @@ static void thread_growth(void)
     assert(call(R_LIFETIME,(uintptr_t)&life,&owner,&context));
     assert(!life.live && !life.domains && !life.pages && !life.metadata_pages);
 }
+static uintptr_t table_transfer(struct RestrictedTableTransfer *p,void *ctx)
+{
+    struct AROSAppleRuntimeFrame f={.x={(uintptr_t)p}};
+    assert(r_table_transfer(&f,ctx,R_TABLE_GROW));return f.x[0];
+}
+static void table_growth(void)
+{
+    uint64_t handle=managed_create();struct RestrictedDomain *d=r_domain_lookup(handle);
+    d->table_pages=0;
+    struct RestrictedTableChunk a={.pages=(void *)0x10000,.count=3};
+    struct RestrictedTableTransfer p={.handle=handle,.chunk=&a};
+    assert(!table_transfer(&p,&foreign) && !d->tables);
+    assert(table_transfer(&p,&context) && d->table_pages==3 && d->table_metadata_pages==1);
+    assert(!table_transfer(&p,&context));
+    struct RestrictedTableChunk overlap={.pages=(void *)0x11000,.count=3};p.chunk=&overlap;
+    assert(!table_transfer(&p,&context) && !overlap.next);
+    assert(!r_allocate(d,14) && !d->table_used);
+    assert(!r_tables_need(d,5) && d->table_shortage==2);
+    for (unsigned i=0;i<3;++i) assert(r_allocate(d,12)==0x10000+i*R_PAGE);
+    assert(!r_allocate(d,12) && d->table_used==3);
+    struct RestrictedTableChunk extra={.pages=(void *)0x20000,.count=2048};p.chunk=&extra;
+    assert(table_transfer(&p,&context));
+    assert(r_tables_need(d,2048) && !d->table_shortage);
+    for (unsigned i=0;i<2048;++i) assert(r_allocate(d,12)==0x20000+i*R_PAGE);
+    assert(!r_allocate(d,12) && d->table_pages==2051 && d->table_used==2051);
+    struct AROSRestrictedLifetime life;assert(call(R_LIFETIME,(uintptr_t)&life,&owner,&context));
+    assert(life.table_pages==2051 && life.metadata_pages==3 && life.pages==2056);
+    d->closing=1;struct RestrictedTableChunk denied={.pages=(void *)0x1000000,.count=1};p.chunk=&denied;
+    assert(!table_transfer(&p,&context));
+    assert(domain_call(R_DOMAIN_CLOSE,handle,&context,NULL)==(uintptr_t)d);
+    assert(domain_call(R_DOMAIN_RELEASED,(uintptr_t)d,&context,NULL));
+    assert(call(R_LIFETIME,(uintptr_t)&life,&owner,&context) && !life.pages && !life.table_pages);
+}
 int main(void)
 {
     struct Restricted stack_owner={.owner=&owner,.stack_address=AROS_RESTRICTED_STACK,
@@ -330,7 +368,7 @@ int main(void)
     memset(domain_storage,0,sizeof(domain_storage));restricted_domains=NULL;
 
     domain_storage[0]=(struct RestrictedDomain){.state=R_LIVE,
-        .pool=&owner,.code=&owner,.data=&owner,.threads=2};
+        .table_pages=1024,.code=&owner,.data=&owner,.threads=2};
     restricted_domains=&domain_storage[0];
     for (unsigned i=0;i<2;++i)
         thread_storage[i]=(struct Restricted){.state=R_LIVE,.domain=&domain_storage[0],
@@ -379,7 +417,7 @@ int main(void)
     assert(call(R_LIFETIME,(uintptr_t)&life,&other,&foreign));
     assert(life.live==R_DOMAINS && life.pages==2*R_DOMAINS && !life.pending);
     for (unsigned i=0;i<R_DOMAINS;++i) {
-        struct RestrictedPublication p={.slot=slots[i],.pool=&owner,
+        struct RestrictedPublication p={.slot=slots[i],
             .code=&owner,.data=&owner,.stack=&owner,.fault_stack=&owner,.tls=&owner,.seed=i,.code_bytes=16};
         assert(!call(R_PUBLISH,(uintptr_t)&p,&other,&context));
         assert(!call(R_PUBLISH,(uintptr_t)&p,&owner,&foreign));
@@ -387,6 +425,7 @@ int main(void)
         assert(!call(R_PUBLISH,(uintptr_t)&p,&owner,&context));
         assert(slots[i]->state==R_LIVE && slots[i]->seed==i);
         assert(slots[i]->domain==&domain_storage[i] && slots[i]->domain->state==R_LIVE);
+        slots[i]->domain->table_pages=1024;
         assert(!call(R_RELEASED,(uintptr_t)slots[i],&owner,&context));
         slots[i]->domain->space.drained=1;
         slots[i]->abandoned=1;++owners_retired;
@@ -416,5 +455,6 @@ int main(void)
     thread_growth();
     shared_tests();
     domain_growth();
+    table_growth();
     return 0;
 }

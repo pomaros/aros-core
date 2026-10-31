@@ -26,11 +26,14 @@ def main():
     if out.exists() or ROOT in out.parents:p.error('use a fresh output outside source')
     out.mkdir(parents=True)
     source=SOURCE.read_text()
-    actual=''.join(body(source,name) for name in ['r_domain_slot(uintptr_t','r_domain_link(struct','r_domain_forget(struct','r_domain_lookup(uint64_t','r_shared_operation(struct','r_domain_retire(struct','r_domain_lifecycle(struct','r_slot(uintptr_t','r_thread_addresses(struct','r_thread_forget(struct','r_lifecycle(struct','r_close(struct','r_claim_reap(struct','r_stack_sp(const','r_stack_bounds(struct'])
+    actual=''.join(body(source,name) for name in ['r_domain_slot(uintptr_t','r_domain_link(struct','r_domain_forget(struct','r_domain_lookup(uint64_t','r_shared_operation(struct','r_domain_retire(struct','r_domain_lifecycle(struct','r_slot(uintptr_t','r_allocate(void','r_tables_need(struct','r_table_transfer(struct','r_thread_addresses(struct','r_thread_forget(struct','r_lifecycle(struct','r_close(struct','r_claim_reap(struct','r_stack_sp(const','r_stack_bounds(struct'])
     adapter=SOURCE.with_name('restricted_service.h')
     actual=next(line for line in adapter.read_text().splitlines() if line.startswith('#define AROS_RESTRICTED_DYNAMIC_BASE '))+'\n'+actual
     variants=[('actual',actual)]
     for name,old,new in [
+        ('foreign-table-transfer','d->owner_context!=context)) d=NULL;','0)) d=NULL;'),
+        ('table-overlap','(uintptr_t)c->pages<(uintptr_t)old->pages+old->count*R_PAGE','0'),
+        ('wrong-table-shortage','count-available : 0','count : 0'),
         ('domain-not-unlinked','if (*link) *link=d->next;','',),
         ('fixed-domain-cap','if (!d || d->state!=R_FREE','unsigned count=0;for (struct RestrictedDomain *p=restricted_domains;p;p=p->next) if (++count>=4) return 0;\n    if (!d || d->state!=R_FREE'),
         ('foreign-shared-close','b->owner_context!=context','0'),

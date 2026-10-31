@@ -31,7 +31,17 @@ static int AROSApplePageFree(void *p,size_t bytes)
     }
     abort();
 }
+static void *AROSApplePageTableAllocate(size_t bytes) { return AROSApplePageAllocate(NULL,bytes,MEMF_CLEAR); }
+static int AROSApplePageFreeRaw(void *p,size_t bytes) { return AROSApplePageFree(p,bytes); }
+struct RestrictedDomain;struct Restricted;
+enum RestrictedState { R_FREE,R_ALLOCATING,R_LIVE,R_REAPING };
 #include "records.inc"
+static uintptr_t table_publish(struct RestrictedTableTransfer *p)
+{
+    assert(exclusion==1 && p->handle==77 && p->chunk && p->chunk->pages);
+    if (publish) owned=p->chunk;
+    return publish;
+}
 static int r_memory_call(struct RestrictedMemoryOperation *op)
 {
     assert(exclusion==1 && op->operation==0);
@@ -49,6 +59,21 @@ static uintptr_t r_shared_call(struct RestrictedSharedOperation *op)
 #include "actual.inc"
 int main(void)
 {
+    Forbid();
+    assert(!r_supply_tables(77,NULL,NULL,0));
+    assert(!r_supply_tables(77,NULL,NULL,SIZE_MAX));
+    for (unsigned failure=1;failure<=2;++failure) {
+        attempts=0;fail_at=failure;publish=1;owned=NULL;
+        assert(!r_supply_tables(77,NULL,NULL,2048) && !live && !owned);
+    }
+    fail_at=0;publish=0;
+    assert(!r_supply_tables(77,NULL,NULL,2048) && !live && !owned);
+    publish=1;assert(r_supply_tables(77,NULL,NULL,2048) && live==2 && owned);
+    struct RestrictedTableChunk *c=owned;assert(c->count==2048 && !c->used && !c->next);
+    assert(r_supply_tables(77,NULL,NULL,3) && live==4);
+    struct RestrictedTableChunk *second=owned;second->next=c;second->used=1;c->used=2048;
+    struct RestrictedDomain domain={.tables=second};r_free_domain_backing(&domain);owned=NULL;
+    Permit();assert(!live && !exclusion);
     assert(!r_record_size(SIZE_MAX,1,1));
     assert(!r_record_size(16,SIZE_MAX,8));
     assert(r_record_size(16,1,8)==R_PAGE && r_record_size(16,512,8)==2*R_PAGE);
