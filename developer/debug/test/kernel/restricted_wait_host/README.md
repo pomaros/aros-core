@@ -11,14 +11,17 @@ cases. Task locks, scheduler lists, current task and IPIs are modeled on HOST.
 The baseline exercises wake before completed context save, wake after parking,
 repeated wake, native signal followed by re-parking, wrong context/domain/channel,
 ordinary native and removed tasks, independent native freeze ownership and a remembered wake on thaw, stale
-wake generations, exhausted generations and domain-close wakeup. Fifteen separately
+wake generations, exhausted generations and domain-close wakeup. Twenty-one separately
 compiled mutations must fail their intended assertions under sanitizers.
 
 This is deterministic interleaving coverage, not concurrent SMP execution.
 It does not qualify hardware register save/restore, IPIs, list lock fairness,
 exception return or task retirement. The guest workload must test two CPUs,
 peer/controller wake, cancellation while parked and full retained-state drain.
-Timeouts have a separate contract and are not supplied here. Counted suspension
+Timed waits use the actual admission, deadline, expiry and one-shot delivery
+helpers with a synthetic monotonic clock. Tests cover zero/overflow, duplicate
+admission, early/deadline expiry, wake before/at deadline, expiry before save,
+expiry while suspended, late wake, close and retained timer accounting. Counted suspension
 is extracted from the production coordinator and shares the scheduler park
 transition. Tests cover running/ready/waiting suspension, resume before save,
 nested counts, wake while suspended, resume while waiting, count overflow,
@@ -27,3 +30,7 @@ and stopped execution still require a coherent guest workload.
 
 The controller state query distinguishes admitted waits from contexts actually
 on the wait list; a task made ready by a native signal is not reported parked.
+
+Timer interrupt entry and hardware clock reads are not executed by HOST.
+Coherent guest qualification must prove progress while native tasks idle,
+suspension delays, close/retirement cleanup and simultaneous wake/expiry.

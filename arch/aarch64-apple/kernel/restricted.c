@@ -112,6 +112,8 @@ struct Restricted {
     uint64_t seed;
     uint64_t wake_generation;
     uint32_t suspend_count;
+    uint64_t wait_deadline;
+    unsigned wait_pending,wait_result;
     uint64_t callback_pc;
     struct RestrictedCodeIdentity callback_entry,callback_return,fault_code,handler_code;
     unsigned callback_active, fault_active;
@@ -128,6 +130,8 @@ struct Restricted {
  * Forbid prevents remote terminal freeze during unpublished native allocation
  * or the release transaction; the page arena operations do not Wait. */
 static struct Restricted *restricted_slots;
+/* Updated under the coordinator, atomic fast-path observation by timer IRQs. */
+static uint64_t timed_waiters;
 static struct RestrictedDomain *restricted_domains;
 struct RestrictedPublication {
     struct Restricted *slot;
@@ -296,9 +300,11 @@ static int r_lifecycle(struct AROSAppleRuntimeFrame *frame,struct Task *task,
         struct AROSRestrictedLifetime *state=(void *)(uintptr_t)frame->x[0];
         frame->x[0]=0;if (!state) return 1;
         *state=(struct AROSRestrictedLifetime){.retired=owners_retired,.reaped=owners_reaped};
+        state->timed_waits=__atomic_load_n(&timed_waiters,__ATOMIC_RELAXED);
         for (struct Restricted *r=restricted_slots;r;r=r->next) {
             if (r->state==R_FREE) continue;
             ++state->live;state->pending+=r->abandoned!=0;
+            state->waits+=r->wait_pending!=0;state->suspended_threads+=r->suspend_count!=0;
             /* ALLOCATING counts as live even before its backing is published.
              * REAPING retains its accounting until the release acknowledgement. */
             state->pages+=(r->stack ? r->stack_bytes/R_PAGE : 0)+(r->fault_stack ? r->fault_bytes/R_PAGE : 0)+(r->tls!=NULL)+r->storage_bytes/R_PAGE;
@@ -384,11 +390,68 @@ static struct ExceptionContext *r_context(struct Task *task)
     return task && (task->tc_Flags & TF_ETASK) && task->tc_UnionETask.tc_ETask ?
         task->tc_UnionETask.tc_ETask->et_RegFrame : NULL;
 }
+static uint64_t r_wait_microseconds(uint64_t ticks,uint64_t hz)
+{
+    if (!hz || hz>UINT32_MAX || ticks/hz>UINT64_MAX/1000000U) return UINT64_MAX;
+    uint64_t base=(ticks/hz)*1000000U,part=(ticks%hz)*1000000U/hz;
+    return part>UINT64_MAX-base ? UINT64_MAX : base+part;
+}
+static uint64_t r_wait_clock(void)
+{
+    uint64_t ticks,hz;
+    __asm__ volatile("isb; mrs %0,cntvct_el0; mrs %1,cntfrq_el0":"=r"(ticks),"=r"(hz));
+    return r_wait_microseconds(ticks,hz);
+}
+/* Coordinator held. Only a saved/admitted WAIT owns a pending return value.
+ * Wake/expiry clear WAIT, preserving SUSPEND; whichever completes first owns
+ * the result until save/dispatch delivers it once. A late wake still advances
+ * the notification generation, but cannot turn an expired wait into success. */
+static void r_clear_deadline(struct Restricted *r)
+{
+    if (r->wait_deadline) {
+        r->wait_deadline=0;
+        __atomic_sub_fetch(&timed_waiters,1,__ATOMIC_RELEASE);
+    }
+}
+static void r_complete_wait(struct Restricted *r,unsigned result)
+{
+    if (r->wait_pending && !r->wait_result) {
+        r->wait_result=result;r_clear_deadline(r);
+    }
+}
+static void r_clear_wait(struct Restricted *r)
+{
+    r_clear_deadline(r);r->wait_pending=r->wait_result=0;
+}
+static void r_deliver_wait(struct Restricted *r,struct AROSAppleRuntimeFrame *frame)
+{
+    if (r->wait_pending && r->wait_result) {
+        frame->x[0]=r->wait_result;
+        r_clear_wait(r);
+    }
+}
+static void r_expire_waits(uint64_t now)
+{
+    for (struct Restricted *r=restricted_slots;r;r=r->next) {
+        if (r->state!=R_LIVE || !r->owner || !r->owner_context || r->domain->closing ||
+            !r->wait_pending || r->wait_result || !r->wait_deadline || now<r->wait_deadline) continue;
+        if (AROSAppleRestrictedSetWait(r->owner,r->owner_context,0))
+            r_complete_wait(r,AROS_RESTRICTED_WAIT_EXPIRED);
+    }
+}
+void AROSAppleRestrictedExpireWaits(void)
+{
+    /* Called from masked timer IRQ/FIQ after handlers release their locks,
+     * before scheduler exit. Never allocate, run payload code or acquire a
+     * page-map lock here. The coordinator orders expiry against wake/close. */
+    if (!__atomic_load_n(&timed_waiters,__ATOMIC_ACQUIRE)) return;
+    r_coordinate();r_expire_waits(r_wait_clock());r_uncoordinate();
+}
 static void r_cancel_waiters(struct RestrictedDomain *domain)
 {
     for (struct Restricted *r=restricted_slots;r;r=r->next)
         if (r->domain==domain && r->state==R_LIVE && r->owner && r->owner_context) {
-            r->suspend_count=0;
+            r->suspend_count=0;r_clear_wait(r);
             AROSAppleRestrictedCancelPark(r->owner,r->owner_context);
         }
 }
@@ -399,6 +462,9 @@ static int r_wake_channel(struct RestrictedDomain *domain,uint64_t channel)
         if (r->domain!=domain || r->state!=R_LIVE || r->service.channel!=channel ||
             !r->owner || !r->owner_context || r->wake_generation==UINT64_MAX) continue;
         if (!AROSAppleRestrictedSetWait(r->owner,r->owner_context,0)) return 0;
+        unsigned result=r->wait_deadline && r_wait_clock()>=r->wait_deadline ?
+            AROS_RESTRICTED_WAIT_EXPIRED : AROS_RESTRICTED_WAIT_WOKEN;
+        r_complete_wait(r,result);
         ++r->wake_generation;return 1;
     }
     return 0;
@@ -733,7 +799,8 @@ static int r_table_transfer(struct AROSAppleRuntimeFrame *frame,void *context,un
 static void r_finish(struct Restricted *r, struct AROSAppleTaskExecution *execution,
     struct AROSAppleRuntimeFrame *frame, int64_t status)
 {
-    r->callback_active=0;r->fault_active=0;
+    r->callback_active=0;r->fault_active=0;r->suspend_count=0;
+    r_clear_wait(r);
     r->result.status = status;
     r->result.value = *(uint64_t *)r->domain->data;
     r->result.esr = frame->esr;
@@ -763,6 +830,7 @@ void AROSAppleRestrictedCheckStack(struct AROSAppleRuntimeFrame *frame,
     r_coordinate();
     if (r->domain->closing) r_finish(r,execution,frame,-5);
     else if (!r_stack_sp(r,frame->sp)) r_finish(r,execution,frame,-3);
+    else r_deliver_wait(r,frame);
     r_uncoordinate();
 }
 static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
@@ -815,12 +883,26 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
         case AROS_RESTRICTED_THREAD_INFO:
             frame->x[0]=r->service.channel;frame->x[1]=r->wake_generation;
             return 1;
+        case AROS_RESTRICTED_CLOCK:
+            frame->x[0]=r_wait_clock();return 1;
         case AROS_RESTRICTED_WAIT:
-            if (frame->x[0]!=r->wake_generation || r->wake_generation==UINT64_MAX) {
+        case AROS_RESTRICTED_WAIT_FOR: {
+            if (frame->x[0]!=r->wake_generation || r->wake_generation==UINT64_MAX || r->wait_pending) {
                 frame->x[0]=0;return 1;
             }
+            uint64_t deadline=0;
+            if (svc==AROS_RESTRICTED_WAIT_FOR) {
+                if (!frame->x[1]) { frame->x[0]=AROS_RESTRICTED_WAIT_EXPIRED;return 1; }
+                uint64_t now=r_wait_clock();
+                if (now==UINT64_MAX || frame->x[1]>UINT64_MAX-now) { frame->x[0]=0;return 1; }
+                deadline=now+frame->x[1];
+            }
             frame->x[0]=AROSAppleRestrictedSetWait(task,context,1);
-            return frame->x[0] ? 2 : 1;
+            if (!frame->x[0]) return 1;
+            r->wait_pending=1;r->wait_result=0;r->wait_deadline=deadline;
+            if (deadline) __atomic_add_fetch(&timed_waiters,1,__ATOMIC_RELEASE);
+            return 2;
+        }
         case AROS_RESTRICTED_WAKE:
             frame->x[0]=r_wake_channel(r->domain,frame->x[0]);return 1;
         case AROS_RESTRICTED_YIELD:
@@ -950,6 +1032,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
         }
         for (struct Restricted *owned=restricted_slots;owned;owned=owned->next) {
             if (owned->state!=R_LIVE || owned->owner_context!=retired) continue;
+            r_clear_wait(owned);owned->suspend_count=0;
             owned->owner_context=NULL;owned->abandoned=1;++owners_retired;
             /* Never dereference the removed Task after this hook. Service
              * principal/member identities are opaque until their drain. */
@@ -1549,7 +1632,7 @@ static int64_t r_resume_thread(uint64_t handle,uint64_t channel)
     __asm__ volatile("svc #0xa56d":"+r"(domain),"+r"(thread)::"memory","cc");
     return (int64_t)domain;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {27,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {28,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

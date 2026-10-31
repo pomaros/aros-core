@@ -49,9 +49,14 @@ static unsigned AROSAppleSMPOnlineMask(void) { return 3; }
 static void AROSAppleSMPSendIPI(unsigned kind,unsigned unused,unsigned mask) { assert(!task.tc_SpinLock && kind==IPI_SCHEDULE && !unused && mask==3);ipis++; }
 #define R_LIVE 1
 struct RestrictedDomain { unsigned closing; };
-struct Restricted { struct Restricted *next;struct RestrictedDomain *domain;unsigned state;struct { uint64_t channel; } service;struct Task *owner;struct ExceptionContext *owner_context;uint64_t wake_generation;uint32_t suspend_count; };
+struct Restricted { struct Restricted *next;struct RestrictedDomain *domain;unsigned state;struct { uint64_t channel; } service;struct Task *owner;struct ExceptionContext *owner_context;uint64_t wake_generation;uint32_t suspend_count;uint64_t wait_deadline;unsigned wait_pending,wait_result; };
 static struct Restricted *restricted_slots;
-struct Frame { uint64_t x[4]; };
+struct AROSAppleRuntimeFrame { uint64_t x[4]; };
+static uint64_t timed_waiters,fake_now=100;
+static unsigned coordinator;
+static uint64_t r_wait_clock(void) { return fake_now; }
+static void r_coordinate(void) { assert(!coordinator);coordinator=1; }
+static void r_uncoordinate(void) { assert(coordinator);coordinator=0; }
 #include "actual.inc"
 static void reset(void)
 {
@@ -59,7 +64,7 @@ static void reset(void)
  etask.et_RegFrame=&context;task.tc_UnionETask.tc_ETask=&etask;task.tc_Flags=TF_ETASK;task.tc_State=TS_RUN;
  task.tc_Node.list=3;base.TaskWait=1;base.TaskReady=2;base.TaskWaitSpinLock=base.TaskReadySpinLock=0;ipis=0;
  foreign_execution=(struct AROSAppleTaskExecution){0x2000,0};
- iet.iet_FrozenState=TS_WAIT;
+ iet.iet_FrozenState=TS_WAIT;timed_waiters=0;fake_now=100;coordinator=0;
 }
 static void save_and_switch(void)
 {
@@ -112,7 +117,7 @@ static void generations(void)
 {
  reset();struct RestrictedDomain domain={0},other={0};
  struct Restricted slot={NULL,&domain,R_LIVE,{17},&task,&context,0};restricted_slots=&slot;
- struct Frame frame={0};assert(payload(&slot,&frame,&task,&context,AROS_RESTRICTED_THREAD_INFO)==1);
+ struct AROSAppleRuntimeFrame frame={0};assert(payload(&slot,&frame,&task,&context,AROS_RESTRICTED_THREAD_INFO)==1);
  assert(frame.x[0]==17 && frame.x[1]==0);
  assert(!r_wake_channel(&other,17) && !r_wake_channel(&domain,18));
  assert(r_wake_channel(&domain,17) && slot.wake_generation==1);
@@ -167,4 +172,56 @@ static void suspension(void)
  execution.root=0;slot.suspend_count=0;assert(r_suspend_channel(&domain,17,0)==-1);
  restricted_slots=NULL;
 }
-int main(void) { interleavings();native_signal();ownership();generations();suspension();puts("PASS wait scheduler interleavings"); }
+static void timed_reset(struct Restricted *slot,struct RestrictedDomain *domain,struct AROSAppleRuntimeFrame *frame)
+{
+ reset();*domain=(struct RestrictedDomain){0};
+ *slot=(struct Restricted){.domain=domain,.state=R_LIVE,.service={17},.owner=&task,.owner_context=&context};
+ restricted_slots=slot;memset(frame,0,sizeof(*frame));
+}
+static void timed_arm(struct Restricted *slot,struct AROSAppleRuntimeFrame *frame,uint64_t duration)
+{
+ frame->x[0]=slot->wake_generation;frame->x[1]=duration;
+ assert(payload(slot,frame,&task,&context,AROS_RESTRICTED_WAIT_FOR)==2 && frame->x[0]==1);
+ assert(slot->wait_pending && !slot->wait_result && slot->wait_deadline==fake_now+duration && timed_waiters==1);
+}
+static void timeouts(void)
+{
+ struct Restricted slot;struct RestrictedDomain domain;struct AROSAppleRuntimeFrame frame;
+ assert(r_wait_microseconds(1500000,3000000)==500000);
+ assert(r_wait_microseconds(1,1000000)==1);
+ assert(r_wait_microseconds(123,0)==UINT64_MAX && r_wait_microseconds(123,UINT64_MAX)==UINT64_MAX);
+ assert(r_wait_microseconds(UINT64_MAX,1)==UINT64_MAX);
+ timed_reset(&slot,&domain,&frame);frame.x[1]=0;
+ assert(payload(&slot,&frame,&task,&context,AROS_RESTRICTED_WAIT_FOR)==1 && frame.x[0]==2 && !timed_waiters && !slot.wait_pending);
+ frame.x[0]=0;frame.x[1]=UINT64_MAX;
+ assert(payload(&slot,&frame,&task,&context,AROS_RESTRICTED_WAIT_FOR)==1 && !frame.x[0] && !timed_waiters);
+ timed_arm(&slot,&frame,50);frame.x[0]=0;frame.x[1]=10;
+ assert(payload(&slot,&frame,&task,&context,AROS_RESTRICTED_WAIT_FOR)==1 && !frame.x[0] && slot.wait_deadline==150 && timed_waiters==1);
+ save_and_switch();fake_now=149;AROSAppleRestrictedExpireWaits();
+ assert(task.tc_State==TS_WAIT && !slot.wait_result && timed_waiters==1);
+ fake_now=150;AROSAppleRestrictedExpireWaits();
+ assert(task.tc_State==TS_READY && slot.wait_result==2 && slot.wait_pending && !timed_waiters);
+ r_deliver_wait(&slot,&frame);assert(frame.x[0]==2 && !slot.wait_pending && !slot.wait_result);
+ frame.x[0]=77;r_deliver_wait(&slot,&frame);assert(frame.x[0]==77);
+ timed_reset(&slot,&domain,&frame);timed_arm(&slot,&frame,1);fake_now=101;
+ AROSAppleRestrictedExpireWaits();r_deliver_wait(&slot,&frame);save_and_switch();
+ assert(frame.x[0]==2 && task.tc_State==TS_READY && !timed_waiters);
+ timed_reset(&slot,&domain,&frame);timed_arm(&slot,&frame,50);save_and_switch();fake_now=149;
+ assert(r_wake_channel(&domain,17));fake_now=200;AROSAppleRestrictedExpireWaits();r_deliver_wait(&slot,&frame);
+ assert(frame.x[0]==1 && slot.wake_generation==1 && !timed_waiters);
+ timed_reset(&slot,&domain,&frame);timed_arm(&slot,&frame,50);save_and_switch();fake_now=150;
+ assert(r_wake_channel(&domain,17));r_deliver_wait(&slot,&frame);
+ assert(frame.x[0]==2 && slot.wake_generation==1 && !timed_waiters);
+ timed_reset(&slot,&domain,&frame);timed_arm(&slot,&frame,50);save_and_switch();
+ assert(r_suspend_channel(&domain,17,0)==0);fake_now=150;AROSAppleRestrictedExpireWaits();
+ assert(task.tc_State==TS_WAIT && AROSAppleRestrictedWaitState(&task,&context)==13 && slot.wait_result==2 && !timed_waiters);
+ assert(r_wake_channel(&domain,17));assert(slot.wait_result==2);
+ assert(r_suspend_channel(&domain,17,1)==1);r_deliver_wait(&slot,&frame);assert(frame.x[0]==2);
+ timed_reset(&slot,&domain,&frame);timed_arm(&slot,&frame,50);save_and_switch();
+ domain.closing=1;r_cancel_waiters(&domain);fake_now=200;AROSAppleRestrictedExpireWaits();
+ frame.x[0]=77;r_deliver_wait(&slot,&frame);assert(frame.x[0]==77 && !slot.wait_pending && !timed_waiters && !slot.wait_deadline);
+ timed_reset(&slot,&domain,&frame);timed_arm(&slot,&frame,50);slot.owner_context=NULL;r_clear_wait(&slot);
+ fake_now=200;AROSAppleRestrictedExpireWaits();assert(!timed_waiters && !slot.wait_pending && !slot.wait_deadline);
+ restricted_slots=NULL;
+}
+int main(void) { interleavings();native_signal();ownership();generations();suspension();timeouts();puts("PASS wait scheduler interleavings"); }

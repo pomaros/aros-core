@@ -17,7 +17,7 @@ struct AROSAppleTaskExecution { uint64_t root,user_tls;void *domain;uint64_t res
 struct ExceptionContext { uint64_t x[29],fp,lr,sp,pc,cpsr;void *fpuContext; };
 struct Domain { unsigned closing;void *data; };
 struct Restricted {
- unsigned cookie,callback_active,fault_active;struct Task *owner;struct Domain *domain;
+ unsigned cookie,callback_active,fault_active,wait_pending,wait_result,suspend_count;uint64_t wait_deadline;struct Task *owner;struct Domain *domain;
  void *native_lower,*native_upper;struct AROSAppleRuntimeFrame native;
  struct { int64_t status;uint64_t value,esr,far,pc; } result;
 };
@@ -26,6 +26,7 @@ static struct AROSAppleTaskExecution execution;
 static struct { uint64_t trusted_ttbr0,kernel_tls; } local;
 static uint64_t AROSAppleKernelLastDispatchSPSR,task_pointer;
 static unsigned coordinated,context_present=1;
+static uint64_t timed_waiters;
 static struct ExceptionContext *r_context(struct Task *task) { (void)task;return context_present?&saved:NULL; }
 static struct AROSAppleTaskExecution *AROSAppleTaskExecution(struct ExceptionContext *c) { assert(c==&saved);return &execution; }
 static void r_coordinate(void) { assert(!coordinated);coordinated=1; }
@@ -56,14 +57,17 @@ static void reset(void)
 }
 static void cancelled(void)
 {
- reset();domain.closing=1;struct AROSAppleRuntimeFrame f={0};restore(&f,&task,&saved);
+ reset();slot.wait_pending=1;slot.wait_deadline=200;slot.suspend_count=2;timed_waiters=1;domain.closing=1;struct AROSAppleRuntimeFrame f={0};restore(&f,&task,&saved);
  assert(slot.result.status==-5 && execution.root==0);
+ assert(!timed_waiters && !slot.wait_pending && !slot.wait_result && !slot.wait_deadline && !slot.suspend_count);
  assert(f.elr==slot.native.elr && f.sp==slot.native.sp && task.tc_SPReg==(void *)(uintptr_t)slot.native.sp);
  assert(f.return_ttbr0==0xa000 && f.task_tls==0x9000 && local.kernel_tls==0x9000);
  assert(!(f.spsr&0xc0) && AROSAppleKernelLastDispatchSPSR==f.spsr);
  assert(!slot.callback_active && !slot.fault_active && slot.result.value==17);
  assert(f.x[0]==1 && f.x[18]==slot.native.x[18] && !memcmp(f.simd,slot.native.simd,sizeof(f.simd)));
  assert(task.tc_SPLower==slot.native_lower && task.tc_SPUpper==slot.native_upper && !coordinated);
+ reset();slot.wait_pending=1;slot.wait_result=2;domain.closing=1;restore(&f,&task,&saved);
+ assert(slot.result.status==-5 && f.x[0]==1 && !slot.wait_pending && !slot.wait_result);
 }
 static void active(void)
 {

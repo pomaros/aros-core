@@ -12,6 +12,7 @@
 #include <aros/apple/runtime.h>
 #include "kernel_cpu.h"
 #include "kernel_intr.h"
+#include "restricted.h"
 #include "kernel_intern.h"
 #include "kernel_globals.h"
 #include "kernel_base.h"
@@ -230,6 +231,7 @@ int AROSVMKernelHandleIRQ(struct AROSAppleRuntimeFrame *frame)
     AROSAppleSMPCheckStop();
 #endif
     if (!handled) return 0;
+    if (id==timer_id) AROSAppleRestrictedExpireWaits();
     if (frame->vector == 9) core_ExitInterrupt(frame);
     else cpu_IdleInterrupted(frame);
     return 1;

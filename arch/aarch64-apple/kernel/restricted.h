@@ -13,6 +13,8 @@ int AROSAppleRestrictedSetWait(struct Task *,struct ExceptionContext *,int);
 int AROSAppleRestrictedSetSuspend(struct Task *,struct ExceptionContext *,int);
 int AROSAppleRestrictedCancelPark(struct Task *,struct ExceptionContext *);
 unsigned AROSAppleRestrictedWaitState(struct Task *,struct ExceptionContext *);
+/* Timer handlers have returned, all their locks released, IRQ/FIQ masked. */
+void AROSAppleRestrictedExpireWaits(void);
 void AROSAppleRestrictedCheckStack(struct AROSAppleRuntimeFrame *, struct Task *);
 int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *);
 /* Trusted EL1 only, with PageMapLock and completed remote rendezvous held.

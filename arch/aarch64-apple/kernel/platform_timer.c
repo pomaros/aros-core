@@ -17,6 +17,7 @@
 #include "kernel_globals.h"
 #include "kernel_intr.h"
 #include "kernel_cpu.h"
+#include "restricted.h"
 #include "kernel_intern.h"
 #include "platform_timer_kernel.h"
 #include "vm_irq.h"
@@ -336,6 +337,7 @@ int AROSAppleKernelTimerHandleFIQ(struct AROSAppleRuntimeFrame *frame)
         if (kernel_timer.claimed != 0) {
             AROSAppleKernelDebugTouchSink();
             AROSPlatformTimerDeliveryReady(AROSAppleTimerArmed(&kernel_timer));
+            AROSAppleRestrictedExpireWaits();
             cpu_IdleInterrupted(frame);
             return 1;
         }
@@ -352,6 +354,7 @@ int AROSAppleKernelTimerHandleFIQ(struct AROSAppleRuntimeFrame *frame)
     AROSPlatformTimerDeliveryReady(AROSAppleTimerArmed(&kernel_timer));
     /* A task (lower-EL vector) takes the ordinary scheduler exit; the idle
      * context (current-EL vector) dispatches directly, see kernel_cpu.c. */
+    AROSAppleRestrictedExpireWaits();
     if (frame->vector == 10)
         core_ExitInterrupt(frame);
     else

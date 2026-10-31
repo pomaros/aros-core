@@ -29,12 +29,19 @@ def main():
  start=g.index('#ifdef CORE_SCHEDULER_PARK\n        /* Native signals')
  actual+='static int incoming(struct Task *newtask) { int taskStateLocked=1;\n'+block(g[start:])+'return 1;\ndispatch_select:return 0; }\n'
  r=restricted.read_text()
+ actual+=''.join(function(r,name) for name in ['static uint64_t r_wait_microseconds(', 'static void r_clear_deadline(', 'static void r_clear_wait(', 'static void r_complete_wait(', 'static void r_deliver_wait(', 'static void r_expire_waits(', 'void AROSAppleRestrictedExpireWaits('])
  actual+=function(r,'static void r_cancel_waiters(struct RestrictedDomain *domain)')+function(r,'static int r_wake_channel(')+function(r,'static int64_t r_suspend_channel(')
- actual+='static int payload(struct Restricted *r,struct Frame *frame,struct Task *task,struct ExceptionContext *context,unsigned svc) { switch(svc) {\n'
+ actual+='static int payload(struct Restricted *r,struct AROSAppleRuntimeFrame *frame,struct Task *task,struct ExceptionContext *context,unsigned svc) { switch(svc) {\n'
  start=r.index('        case AROS_RESTRICTED_THREAD_INFO:');end=r.index('        case AROS_RESTRICTED_YIELD:',start)
  actual+=r[start:end]+'default:return 0;} }\n'
  variants=[('actual',actual,None,None)]
  controls=[
+ ('early-expiry','now<r->wait_deadline','0', 'task.tc_State==TS_WAIT && !slot.wait_result && timed_waiters==1','timeouts'),
+ ('late-wake-wins','r_wait_clock()>=r->wait_deadline','r_wait_clock()>r->wait_deadline','frame.x[0]==2 && slot.wake_generation==1 && !timed_waiters','timeouts'),
+ ('deadline-count-leak','__atomic_sub_fetch(&timed_waiters,1,__ATOMIC_RELEASE);','(void)0;', 'task.tc_State==TS_READY && slot.wait_result==2 && slot.wait_pending && !timed_waiters','timeouts'),
+ ('duration-wrap','frame->x[1]>UINT64_MAX-now','0','payload(&slot,&frame,&task,&context,AROS_RESTRICTED_WAIT_FOR)==1 && !frame.x[0] && !timed_waiters','timeouts'),
+ ('repeat-wait-delivery','frame->x[0]=r->wait_result;\n        r_clear_wait(r);','frame->x[0]=r->wait_result;','frame.x[0]==2 && !slot.wait_pending && !slot.wait_result','timeouts'),
+ ('expiry-lifts-suspension','if (AROSAppleRestrictedSetWait(r->owner,r->owner_context,0))','if (AROSAppleRestrictedCancelPark(r->owner,r->owner_context))','task.tc_State==TS_WAIT && AROSAppleRestrictedWaitState(&task,&context)==13 && slot.wait_result==2 && !timed_waiters','timeouts'),
  ('wake-clears-suspension','wait ? 0 : AROS_TASK_PARK_WAIT','wait ? 0 : AROS_TASK_PARK_REASONS','task.tc_State==TS_WAIT && AROSAppleRestrictedWaitState(&task,&context)==13','suspension'),
  ('resume-clears-wait','suspend ? 0 : AROS_TASK_PARK_SUSPEND','suspend ? 0 : AROS_TASK_PARK_REASONS','task.tc_State==TS_WAIT && AROSAppleRestrictedWaitState(&task,&context)==7','suspension'),
  ('nested-resume','!resume || prior>1','!resume','slot.suspend_count==1 && task.tc_State==TS_WAIT && !ipis','suspension'),

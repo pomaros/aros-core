@@ -90,7 +90,8 @@ struct Restricted {
     uint64_t cookie;
     struct Task *owner;
     void *owner_context;
-    unsigned abandoned, fault_active, snapshot_data;
+    unsigned abandoned, fault_active, snapshot_data,wait_pending,wait_result,suspend_count;
+    uint64_t wait_deadline;
     void *stack,*fault_stack,*tls;
     uint64_t stack_address,fault_address,tls_address;
     size_t stack_bytes,fault_bytes,address_span;
@@ -107,7 +108,8 @@ static struct Restricted thread_storage[R_THREADS];
 static struct Restricted *restricted_slots;
 static struct RestrictedDomain *restricted_domains;
 static struct RestrictedDomain domain_storage[64];
-static uint64_t owners_retired,owners_reaped;
+static uint64_t owners_retired,owners_reaped,timed_waiters;
+static int AROSAppleRestrictedCancelPark(struct Task *t,struct ExceptionContext *c) { (void)t;(void)c;return 1; }
 struct RestrictedDomainPublication {
     struct RestrictedDomain *domain;
     void *code,*data;
@@ -404,6 +406,20 @@ static void code_images(void)
     struct AROSRestrictedLifetime life;assert(call(R_LIFETIME,(uintptr_t)&life,&owner,&context));
     assert(life.pages==3);restricted_domains=NULL;
 }
+static void wait_accounting(void)
+{
+    struct RestrictedDomain d={.state=R_LIVE};
+    struct Restricted r={.state=R_LIVE,.domain=&d,.owner=&owner,.owner_context=&context,
+        .wait_pending=1,.wait_deadline=200,.suspend_count=2};
+    restricted_slots=&r;restricted_domains=NULL;timed_waiters=1;
+    struct AROSRestrictedLifetime life;
+    assert(call(R_LIFETIME,(uintptr_t)&life,&owner,&context));
+    assert(life.waits==1 && life.timed_waits==1 && life.suspended_threads==1);
+    r_cancel_waiters(&d);
+    assert(call(R_LIFETIME,(uintptr_t)&life,&owner,&context));
+    assert(!life.waits && !life.timed_waits && !life.suspended_threads);
+    restricted_slots=NULL;
+}
 int main(void)
 {
     struct Restricted stack_owner={.owner=&owner,.stack_address=AROS_RESTRICTED_STACK,
@@ -527,5 +543,6 @@ int main(void)
     shared_tests();
     domain_growth();
     table_growth();
+    wait_accounting();
     return 0;
 }

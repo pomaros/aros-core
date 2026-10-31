@@ -16,7 +16,7 @@ def main():
  if out.exists() or ROOT in out.parents:p.error('fresh output outside source required')
  source=ROOT/'arch/aarch64-apple/kernel/restricted.c';cpu=ROOT/'arch/aarch64-apple/kernel/kernel_cpu.c'
  text=source.read_text();c=cpu.read_text();c=c[c.index('void cpu_Dispatch('):]
- actual=function(text,'static void r_finish(')+function(text,'void AROSAppleRestrictedCheckStack(')
+ actual=''.join(function(text,name) for name in ['static void r_clear_deadline(', 'static void r_clear_wait(', 'static void r_deliver_wait(', 'static void r_finish(', 'void AROSAppleRestrictedCheckStack('])
  # Replace the unreachable target corruption halt, not any tested policy.
  assert actual.count('for (;;) __asm__ volatile("wfe");')==1
  actual=actual.replace('for (;;) __asm__ volatile("wfe");','abort();')

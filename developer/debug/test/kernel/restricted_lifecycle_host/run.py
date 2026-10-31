@@ -26,11 +26,14 @@ def main():
     if out.exists() or ROOT in out.parents:p.error('use a fresh output outside source')
     out.mkdir(parents=True)
     source=SOURCE.read_text()
-    actual=''.join(body(source,name) for name in ['r_code_storage(size_t','r_code_pc(const','r_execution_alias(struct','r_domain_slot(uintptr_t','r_domain_link(struct','r_domain_forget(struct','r_domain_lookup(uint64_t','r_shared_operation(struct','r_domain_retire(struct','r_domain_lifecycle(struct','r_slot(uintptr_t','r_allocate(void','r_tables_need(struct','r_table_transfer(struct','r_range_tables(uint64_t','r_thread_addresses(struct','r_thread_forget(struct','r_lifecycle(struct','r_close(struct','r_claim_reap(struct','r_stack_sp(const','r_stack_bounds(struct'])
+    actual=''.join(body(source,name) for name in ['r_clear_deadline(struct Restricted *r)', 'r_clear_wait(struct Restricted *r)', 'r_cancel_waiters(struct RestrictedDomain *domain)', 'r_code_storage(size_t','r_code_pc(const','r_execution_alias(struct','r_domain_slot(uintptr_t','r_domain_link(struct','r_domain_forget(struct','r_domain_lookup(uint64_t','r_shared_operation(struct','r_domain_retire(struct','r_domain_lifecycle(struct','r_slot(uintptr_t','r_allocate(void','r_tables_need(struct','r_table_transfer(struct','r_range_tables(uint64_t','r_thread_addresses(struct','r_thread_forget(struct','r_lifecycle(struct','r_close(struct','r_claim_reap(struct','r_stack_sp(const','r_stack_bounds(struct'])
     adapter=SOURCE.with_name('restricted_service.h')
     actual=next(line for line in adapter.read_text().splitlines() if line.startswith('#define AROS_RESTRICTED_DYNAMIC_BASE '))+'\n'+actual
     variants=[('actual',actual)]
     for name,old,new in [
+        ('lost-wait-accounting','state->waits+=r->wait_pending!=0','state->waits+=0'),
+        ('lost-suspend-accounting','state->suspended_threads+=r->suspend_count!=0','state->suspended_threads+=0'),
+        ('lost-timed-accounting','state->timed_waits=__atomic_load_n(&timed_waiters,__ATOMIC_RELAXED)','state->timed_waits=0'),
         ('fixed-code-cap','!bytes || bytes>UINT32_MAX','!bytes || bytes>R_PAGE || bytes>UINT32_MAX'),
         ('wrong-shared-cache-owner','a->region.shared->pages[page]!=a->backing[page]','0'),
         ('wrong-region-cache-owner','a->pages[page].physical!=a->backing[page]','0'),

@@ -35,6 +35,16 @@
 #define AROS_RESTRICTED_THREAD_INFO 0xa54b
 #define AROS_RESTRICTED_WAIT 0xa54c
 #define AROS_RESTRICTED_WAKE 0xa54d
+#define AROS_RESTRICTED_WAIT_FOR 0xa54e
+#define AROS_RESTRICTED_CLOCK 0xa54f
+#define AROS_RESTRICTED_WAIT_WOKEN 1U
+#define AROS_RESTRICTED_WAIT_EXPIRED 2U
+/* WAIT_FOR takes generation in x0, relative microseconds in x1. Zero duration
+ * expires immediately; overflow/unavailable clock/refusal returns 0. Wake is
+ * 1, expiry 2. CLOCK returns monotonic microseconds, UINT64_MAX if unavailable.
+ * Expiry is not earlier than the deadline; timer/scheduler granularity can
+ * delay return. Wake at/after deadline cannot replace expiry with success.
+ * Expiry satisfies WAIT only; SUSPEND and native Exec freeze retain ownership. */
 #define AROS_RESTRICTED_THREAD_ACTIVE 1U
 #define AROS_RESTRICTED_THREAD_WAITING 2U
 #define AROS_RESTRICTED_THREAD_PARKED 4U
@@ -58,6 +68,7 @@ struct AROSRestrictedWork {
  * Both remain charged until the release acknowledgement. */
 struct AROSRestrictedLifetime {
     uint64_t retired,reaped,live,pending,pages,domains,shared_objects,metadata_pages,table_pages;
+    uint64_t waits,timed_waits,suspended_threads;
 };
 struct AROSRestrictedAPI {
     uint32_t version, size;
