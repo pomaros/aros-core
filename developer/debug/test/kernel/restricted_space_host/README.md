@@ -50,3 +50,9 @@ independent permissions; held service output is cancelled without late writes.
 Executable pages require the native code-publication protocol and are refused.
 This component suite does not supply guest allocation syscalls or prove SMP
 cache/TLB maintenance. Native API integration and guest qualification are separate.
+
+The page-identity helper validates the owned resident ledger and live PTE,
+returns generation, and distinguishes guarded ownership from read/write access.
+A mismatched physical translation is rejected by an additional semantic control
+(eighteen total). Native fault delivery/resumption uses this helper; the host
+fixture does not execute the exception entry or the guest repair handler.

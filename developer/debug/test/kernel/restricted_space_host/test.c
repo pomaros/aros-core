@@ -66,6 +66,15 @@ static void region_tests(void)
     uint64_t actual;
     CHECK(AArch64UserPagePhysical(&spaces[0].hardware,spaces[0].root,tcr,va,2,1,&actual) && actual==(uintptr_t)pages[0],"eager-write-permission");
     CHECK(AArch64UserPagePhysical(&spaces[1].hardware,spaces[1].root,tcr,va,2,1,&actual) && actual==(uintptr_t)pages[3],"other-root-backing");
+    uintptr_t identity;uint64_t identity_generation;
+    CHECK(AROSRestrictedSpacePageIdentity(&spaces[0],va+16,2,&identity,&identity_generation) &&
+        identity==(uintptr_t)pages[0] && identity_generation==ap[0].generation,"region-page-identity");
+    CHECK(!AROSRestrictedSpacePageIdentity(&spaces[0],va+2*PAGE,0,&identity,&identity_generation),"reserved-no-identity");
+    CHECK(AArch64UnmapPage(&spaces[0].hardware,spaces[0].root,tcr,va,(uintptr_t)pages[0]) &&
+        AArch64MapPage(&spaces[0].hardware,spaces[0].root,tcr,va,(uintptr_t)pages[4],AARCH64_PROTECT_USER|3,1),"identity-foreign-pte");
+    CHECK(!AROSRestrictedSpacePageIdentity(&spaces[0],va,2,&identity,&identity_generation),"identity-pte-mismatch");
+    CHECK(AArch64UnmapPage(&spaces[0].hardware,spaces[0].root,tcr,va,(uintptr_t)pages[4]) &&
+        AArch64MapPage(&spaces[0].hardware,spaces[0].root,tcr,va,(uintptr_t)pages[0],AARCH64_PROTECT_USER|3,1),"identity-restore-pte");
     CHECK(AROSRestrictedRegionCommit(&a,1,(uintptr_t)pages[1],3),"second-page-commit");
     CHECK(!spaces[0].mapops.install(spaces[0].mapops.context,va+2*PAGE,(uintptr_t)pages[2],3),"unowned-region-install");
     CHECK(!AROSRestrictedRegionCommit(&a,2,(uintptr_t)pages[2],5) && !ab[2],"region-exec-refusal");
@@ -82,6 +91,8 @@ static void region_tests(void)
     CHECK(AArch64UnmapPage(&spaces[0].hardware,spaces[0].root,tcr,va+2*PAGE,(uintptr_t)pages[4]),"remove-foreign-pte");
     CHECK(AROSRestrictedRegionCommit(&a,2,(uintptr_t)pages[2],0),"committed-guard");
     CHECK(!AArch64UserPagePhysical(&spaces[0].hardware,spaces[0].root,tcr,va+2*PAGE,1,1,&actual),"guard-refuses-access");
+    CHECK(AROSRestrictedSpacePageIdentity(&spaces[0],va+2*PAGE,0,&identity,&identity_generation) &&
+        !AROSRestrictedSpacePageIdentity(&spaces[0],va+2*PAGE,1,&identity,&identity_generation),"guard-identity-not-access");
     CHECK(AROSRestrictedRegionProtect(&a,2,3) && AArch64UserPagePhysical(&spaces[0].hardware,spaces[0].root,tcr,va+2*PAGE,2,1,&actual),"guard-to-write");
     struct AROSRestrictedService channel={0};struct Task worker={9};int context;
     CHECK(AROSRestrictedServiceInit(&channel,&spaces[0],99),"region-channel");

@@ -33,6 +33,7 @@ def main():
    'm->start+index*m->page_size,physical,protection&~KMAP_WRITE)','eager-write-permission'),
   ('guard-readonly','mapping','(p->state==KMAP_DIRTY || anonymous) ? protection',
    'p->state==KMAP_DIRTY ? protection','guard-to-write'),
+  ('identity-pte-mismatch','adapter','if (!ok || actual!=p->physical) return 0;','if (!ok) return 0;','identity-pte-mismatch'),
   ('shared-early-close','adapter','b->closing=1;if (b->views) return 0;','b->closing=1;','shared-close-retained'),
   ('shared-unretained','adapter','r->shared=b;++b->views;','r->shared=b;','shared-view-count'),
   ('shared-owned-decommit','adapter','if (r->shared) *released=0;','','shared-decommit-retains-object'),

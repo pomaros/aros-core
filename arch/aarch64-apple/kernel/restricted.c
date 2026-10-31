@@ -91,7 +91,8 @@ struct Restricted {
     uint64_t seed;
     uint64_t callback_pc;
     unsigned callback_active, fault_active;
-    uint64_t fault_handler, fault_generation;
+    uint64_t fault_handler, fault_generation, fault_page_generation;
+    uintptr_t fault_physical;
     struct AROSAppleRuntimeFrame fault;
     struct AROSAppleRuntimeFrame callback;
     struct AROSAppleRuntimeFrame native;
@@ -550,15 +551,17 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
         r->result.cpus|=UINT64_C(1)<<cpu;
         if (cpu!=r->last_cpu) { ++r->result.migrations;r->last_cpu=cpu; }
         if (ec != 0x15) {
-            uint64_t physical;
-            /* Deliver only an owned data-page write-permission fault. The
-             * continuation and original registers never come from user memory. */
-            if (ec==0x24 && (frame->esr&63)==15 && (frame->esr&64) &&
-                frame->far>=AROS_RESTRICTED_DATA && frame->far-AROS_RESTRICTED_DATA<R_PAGE &&
+            uintptr_t physical;uint64_t generation;
+            unsigned fault=(unsigned)frame->esr&63;
+            /* Only owned resident data pages can enter a repair handler. Guards
+             * produce level-3 translation faults; RO writes permission faults.
+             * No instruction, external, alignment or unowned-address exception
+             * supplies a continuation. Bind it to the retained page generation. */
+            if (ec==0x24 && (fault==7 || fault==15) && !(frame->esr&(UINT64_C(1)<<10)) &&
                 r_code_pc(r,frame->elr) && r_stack_sp(r,frame->sp) &&
                 r->fault_handler && !r->fault_active && r->fault_generation!=UINT64_MAX &&
-                AArch64UserPagePhysical(&r->domain->space.hardware,r->domain->root,r->domain->space.tcr,
-                    AROS_RESTRICTED_DATA,AARCH64_PROTECT_READ,1,&physical) && physical==(uintptr_t)r->domain->data) {
+                AROSRestrictedSpacePageIdentity(&r->domain->space,frame->far,0,&physical,&generation)) {
+                r->fault_physical=physical;r->fault_page_generation=generation;
                 r->fault=*frame;r->fault_active=1;++r->fault_generation;
                 frame->elr=r->fault_handler;frame->x[0]=r->fault.far;
                 frame->x[1]=r->fault.esr;frame->x[2]=r->fault.elr;
@@ -619,15 +622,26 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
                 ++r->result.rejected;frame->x[0]=0;
             } else frame->x[0]=1;
             return 1;
+        case AROS_RESTRICTED_PROTECT_MEMORY: {
+            uintptr_t address=frame->x[0];unsigned ok=0;
+            if (!(address&(R_PAGE-1)) && frame->x[1]<=3)
+                for (struct RestrictedAllocation *a=r->domain->allocations;a;a=a->next)
+                    if (address>=a->region.mapping.start && address-a->region.mapping.start<a->region.mapping.length) {
+                        ok=AROSRestrictedRegionProtect(&a->region,(address-a->region.mapping.start)/R_PAGE,(unsigned)frame->x[1]);break;
+                    }
+            if (!ok) ++r->result.rejected;
+            frame->x[0]=ok;return 1;
+        }
         case AROS_RESTRICTED_FAULT_RESUME: {
-            uint64_t physical;
+            uintptr_t physical;uint64_t generation;
             if (!r->fault_active || frame->x[0]!=r->fault.elr ||
                 frame->x[1]!=r->fault_generation || r->service.request.queue ||
                 !r_code_pc(r,r->fault.elr) ||
                 r->fault.sp<=r->stack_address || r->fault.sp>r->stack_address+R_PAGE ||
                 (r->fault.sp&15) ||
-                !AArch64UserPagePhysical(&r->domain->space.hardware,r->domain->root,r->domain->space.tcr,
-                    AROS_RESTRICTED_DATA,AARCH64_PROTECT_WRITE,1,&physical) || physical!=(uintptr_t)r->domain->data) {
+                !AROSRestrictedSpacePageIdentity(&r->domain->space,r->fault.far,
+                    (r->fault.esr&64) ? KMAP_WRITE : KMAP_READ,&physical,&generation) ||
+                physical!=r->fault_physical || generation!=r->fault_page_generation) {
                 ++r->result.denied;frame->x[0]=UINT64_MAX;return 1;
             }
             *frame=r->fault;r->fault_active=0;r_stack_bounds(r,0);++r->result.resumed;
@@ -1102,7 +1116,7 @@ static unsigned r_state(const struct AROSRestrictedWork *work)
     __asm__ volatile("svc #0xa535":"+r"(argument)::"memory","cc");
     return (unsigned)argument;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {15,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {16,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

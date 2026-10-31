@@ -295,6 +295,19 @@ static void prove_shared_memory(void)
     api->lifetime(&life);CHECK(!life.shared_objects && !life.domains && !life.pages && !life.live);
     bug("[ISOVM] shared-memory domains=2 views=2 shared_values=5 private_permissions=1 decommit_preserved=1 orphan=1 retained_pages=0 PASS\n");
 }
+extern const unsigned char RestrictedRegionFault[],RestrictedRegionFaultEnd[];
+static void prove_region_faults(void)
+{
+    const uintptr_t va=UINT64_C(0x200000000);
+    uint64_t domain=api->create_domain(RestrictedRegionFault,(size_t)(RestrictedRegionFaultEnd-RestrictedRegionFault),0);
+    struct AROSRestrictedResult result;struct AROSRestrictedLifetime life;
+    CHECK(domain && api->reserve_memory(domain,va,4096) && api->commit_memory(domain,va,0));
+    CHECK(api->run_domain(domain,0,&result));
+    CHECK(result.status==0 && result.value==0x77 && result.resumed==2 && result.denied==2);
+    CHECK(api->close_domain(domain)==1);api->lifetime(&life);
+    CHECK(!life.live && !life.domains && !life.shared_objects && !life.pages);
+    bug("[ISOVM] region-fault guard_read=1 readonly_write=1 alternate_stack=2 unrepaired_refused=2 resumed=2 retained_pages=0 PASS\n");
+}
 extern const unsigned char RestrictedSpin[],RestrictedSpinEnd[];
 static uint64_t closing_domain;
 static unsigned closing_done,creator_release;
@@ -471,7 +484,7 @@ int main(void)
     intptr_t address = KrnGetSystemAttr(AROS_RESTRICTED_KATTR_API);
     CHECK(address != -1 && address != 0);
     api = (const void *)address;
-    CHECK(api->version == 15 && api->size == sizeof(*api));
+    CHECK(api->version == 16 && api->size == sizeof(*api));
     /* No worker exists: queued cancellation is deterministic. */
     static struct AROSRestrictedResult queued;
     CHECK(api->run(RestrictedQueued,(size_t)(RestrictedQueuedEnd-RestrictedQueued),12288,&queued));
@@ -541,6 +554,7 @@ int main(void)
     prove_shared_domains();
     prove_private_memory();
     prove_shared_memory();
+    prove_region_faults();
     prove_domain_close();
 #if defined(__AROSEXEC_SMP__)
     for (unsigned cpu=0;cpu<2;++cpu) KrnFreeCPUMask(cpu_masks[cpu]);

@@ -181,6 +181,21 @@ int AROSRestrictedSpaceProtect(struct AROSRestrictedSpace *s,unsigned access)
     return s->handle && !s->domain.closing &&
         KrnMappingProtectPage(&s->mapping,0,access,&s->mapops);
 }
+int AROSRestrictedSpacePageIdentity(struct AROSRestrictedSpace *s,uintptr_t address,
+    unsigned access,uintptr_t *physical,uint64_t *generation)
+{
+    if (!s || !s->handle || s->domain.closing || !physical || !generation || access>2) return 0;
+    struct KrnMappingObject *m=KrnMappingLookup(&s->arena,address);
+    if (!m || m->closing) return 0;
+    size_t index=(address-m->start)/PAGE;struct KrnMappingPage *p=&m->pages[index];
+    uintptr_t va=address&~(uintptr_t)(PAGE-1);uint64_t actual;
+    if (!p->physical || (p->state!=KMAP_CLEAN && p->state!=KMAP_DIRTY) ||
+        (access && !(p->protection&access)) || !owns_page(s,va,p->physical)) return 0;
+    int ok=access ? AArch64UserPagePhysical(&s->hardware,s->root,s->tcr,va,access,1,&actual) :
+        AArch64MappingPhysical(&s->hardware,s->root,s->tcr,va,&actual);
+    if (!ok || actual!=p->physical) return 0;
+    *physical=p->physical;*generation=p->generation;return 1;
+}
 int AROSRestrictedServiceInit(struct AROSRestrictedService *s,
     struct AROSRestrictedSpace *space,uint64_t requester)
 {

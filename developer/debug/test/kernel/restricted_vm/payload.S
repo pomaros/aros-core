@@ -685,3 +685,56 @@ RestrictedMemoryFailure:
  svc #0xa541
  b RestrictedMemoryFailure
 RestrictedMemoryEnd:
+
+.balign 16
+.global RestrictedRegionFault, RestrictedRegionFaultEnd
+RestrictedRegionFault:
+ mov x19, x1
+ mov x20, #2
+ lsl x20, x20, #32
+ adr x0, RestrictedRegionHandler
+ svc #0xa545
+ cbz x0, RestrictedRegionFailure
+ ldr x9, [x20]
+ cbnz x9, RestrictedRegionFailure
+ mov x0, x20
+ mov x1, #1
+ svc #0xa54a
+ cbz x0, RestrictedRegionFailure
+ mov x9, #0x77
+ str x9, [x20]
+ ldr x10, [x20]
+ cmp x10, #0x77
+ b.ne RestrictedRegionFailure
+ str x10, [x19]
+ mov x0, #0
+ svc #0xa541
+ b RestrictedRegionFailure
+RestrictedRegionHandler:
+ cmp x0, x20
+ b.ne RestrictedRegionFailure
+ mov x21, x2
+ mov x22, x3
+ mov x9, sp
+ mrs x10, tpidr_el0
+ sub x10, x10, #1, lsl #12
+ cmp x9, x10
+ b.ne RestrictedRegionFailure
+ /* The saved access must be repaired before its continuation is accepted. */
+ mov x0, x21
+ mov x1, x22
+ svc #0xa547
+ cmn x0, #1
+ b.ne RestrictedRegionFailure
+ mov x0, x20
+ mov x1, #3
+ svc #0xa54a
+ cbz x0, RestrictedRegionFailure
+ mov x0, x21
+ mov x1, x22
+ svc #0xa547
+RestrictedRegionFailure:
+ mov x0, #-9
+ svc #0xa541
+ b RestrictedRegionFailure
+RestrictedRegionFaultEnd:
