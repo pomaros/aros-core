@@ -16,6 +16,7 @@
 APTR TaskResBase;
 static APTR cpu_masks[2];
 static unsigned migration_ack[2];
+static unsigned removed_worker_cpu,removed_owner_cpu,reaper_stop,reaper_polls;
 #endif
 APTR KernelBase;
 extern const unsigned char RestrictedCode[], RestrictedCodeEnd[];
@@ -31,6 +32,24 @@ static unsigned worker_replies, worker_ack;
 static unsigned stop, done[2], beats, after_fault;
 static struct Task *identities[4];
 #define CHECK(x) do { if (!(x)) { bug("[ISOVM] FAIL line=%d\n",__LINE__); abort(); } } while (0)
+#if defined(__AROSEXEC_SMP__)
+static void pin(unsigned cpu)
+{
+    CHECK(SetTaskAffinity(NULL,cpu_masks[cpu]));
+    while (KrnGetCPUNumber()!=cpu) KrnSwitch();
+}
+static void *competing_reaper(void *unused)
+{
+    (void)unused;pin(1);
+    while (!__atomic_load_n(&reaper_stop,__ATOMIC_ACQUIRE)) {
+        struct AROSRestrictedLifetime state;
+        api->lifetime(&state);++reaper_polls;
+        CHECK(KrnGetCPUNumber()==1);
+        KrnSwitch();
+    }
+    return NULL;
+}
+#endif
 static void *heartbeat(void *unused)
 {
     (void)unused;
@@ -92,6 +111,9 @@ static void *client(void *argument)
 }
 static void retired_worker(void)
 {
+#if defined(__AROSEXEC_SMP__)
+    pin(1);__atomic_store_n(&removed_worker_cpu,1,__ATOMIC_RELEASE);
+#endif
     struct AROSRestrictedWork work;
     while (!api->take(&work)) KrnSwitch();
     CHECK(work.length==8);
@@ -129,15 +151,26 @@ static void prove_worker_retirement(void)
 static struct AROSRestrictedResult removed_owner_result;
 static void removed_owner(void)
 {
+#if defined(__AROSEXEC_SMP__)
+    pin(1);__atomic_store_n(&removed_owner_cpu,1,__ATOMIC_RELEASE);
+#endif
     api->run(RestrictedWorkerDeath,(size_t)(RestrictedWorkerDeathEnd-RestrictedWorkerDeath),20480,&removed_owner_result);
     CHECK(0); /* This task is removed while its request is held. */
 }
 static void prove_owner_retirement(void)
 {
+#if defined(__AROSEXEC_SMP__)
+    pthread_t reaper;
+    CHECK(KrnGetCPUNumber()==0 && __atomic_load_n(&removed_worker_cpu,__ATOMIC_ACQUIRE)==1);
+    CHECK(!pthread_create(&reaper,NULL,competing_reaper,NULL));
+#endif
     struct AROSRestrictedLifetime before,held,after;
     api->lifetime(&before);CHECK(!before.live && !before.pending && !before.pages);
     /* More removals than available domain slots prove slot/handle reuse. */
     for (unsigned cycle=0;cycle<8;++cycle) {
+#if defined(__AROSEXEC_SMP__)
+        __atomic_store_n(&removed_owner_cpu,0,__ATOMIC_RELEASE);
+#endif
         memset(&removed_owner_result,0x6b,sizeof(removed_owner_result));
         struct Task *task=AllocMem(sizeof(*task),MEMF_PUBLIC|MEMF_CLEAR);
         void *stack=AllocMem(256*1024,MEMF_PUBLIC|MEMF_CLEAR);
@@ -149,6 +182,9 @@ static void prove_owner_retirement(void)
         struct AROSRestrictedWork work;
         while (!api->take(&work)) KrnSwitch();
         CHECK(work.length==8 && api->state(&work)==AROS_RESTRICTED_RUNNING);
+#if defined(__AROSEXEC_SMP__)
+        CHECK(KrnGetCPUNumber()==0 && __atomic_load_n(&removed_owner_cpu,__ATOMIC_ACQUIRE)==1);
+#endif
         RemTask(task);FreeMem(stack,256*1024);FreeMem(task,sizeof(*task));
         api->lifetime(&held);
         CHECK(held.retired==before.retired+cycle+1 && held.reaped==before.reaped+cycle);
@@ -156,12 +192,22 @@ static void prove_owner_retirement(void)
         CHECK(api->state(&work)==AROS_RESTRICTED_CANCELLED);
         memset(work.bytes,0x39,8);CHECK(api->complete(&work));
         CHECK(!api->complete(&work) && !api->state(&work));
-        api->lifetime(&after);
+        unsigned attempts=0;
+        do {
+            api->lifetime(&after);
+            if (!after.live) break;
+            CHECK(++attempts<100000);KrnSwitch();
+        } while (1);
         CHECK(after.retired==before.retired+cycle+1 && after.reaped==before.reaped+cycle+1);
         CHECK(!after.live && !after.pending && !after.pages);
         for (unsigned i=0;i<sizeof(removed_owner_result);++i)
             CHECK(((unsigned char *)&removed_owner_result)[i]==0x6b);
     }
+#if defined(__AROSEXEC_SMP__)
+    __atomic_store_n(&reaper_stop,1,__ATOMIC_RELEASE);
+    CHECK(!pthread_join(reaper,NULL) && reaper_polls>0);
+    bug("[ISOVM] remote-lifetime caller=0 worker=1 owners=8 owner_cpu=1 reaper_cpu=1 polls=%u PASS\n",reaper_polls);
+#endif
 }
 int main(void)
 {
@@ -219,7 +265,7 @@ int main(void)
     bug("[ISOVM] migration cpus0=%llu cpus1=%llu moves0=%llu moves1=%llu PASS\n",
         (unsigned long long)results[0].cpus,(unsigned long long)results[1].cpus,
         (unsigned long long)results[0].migrations,(unsigned long long)results[1].migrations);
-    for (unsigned cpu=0;cpu<2;++cpu) KrnFreeCPUMask(cpu_masks[cpu]);
+    pin(0);
 #endif
     prove_worker_retirement();
     prove_owner_retirement();
@@ -234,6 +280,9 @@ int main(void)
         CHECK(!lifetime.live && !lifetime.pending && !lifetime.pages);
     }
     bug("[ISOVM] invalid-stack yield=1 collect=1 status=1 drained=3 PASS\n");
+#if defined(__AROSEXEC_SMP__)
+    for (unsigned cpu=0;cpu<2;++cpu) KrnFreeCPUMask(cpu_masks[cpu]);
+#endif
     bug("[ISOVM] PASS restricted=2 yields=3072 denied=32 faulted=1 survived=1 heartbeat=%u after_fault=%u joined=5 replies=402 rejected=16 callbacks=200 resumed=2 cancelled=3 worker_ack=3 close_pending=1 drained=4 removed_worker=1 removed_owners=8 reaped_owners=8 retained_pages=0\n",beats,after_fault);
     return 0;
 }
