@@ -170,11 +170,11 @@ static void shared_publication_tests(void)
     }
     CHECK(AROSRestrictedSharedClose(&b),"shared-publish-final-close");free(page);fail_native=0;
 }
-static void region_tests(void)
+static void region_tests(uint64_t va)
 {
     struct Fixture *f[2];unsigned char *data[2],*pages[5];
     struct AROSRestrictedSpace spaces[2]={{0}};
-    uint64_t tcr=25|(UINT64_C(5)<<32),va=AROS_RESTRICTED_DYNAMIC_BASE;
+    uint64_t tcr=25|(UINT64_C(5)<<32);
     for (unsigned i=0;i<2;++i) {
         f[i]=aligned_alloc(PAGE,sizeof(*f[i]));data[i]=aligned_alloc(PAGE,PAGE);
         CHECK(f[i] && data[i],"region-allocation");memset(f[i],0,sizeof(*f[i]));memset(data[i],0,PAGE);f[i]->used=1;
@@ -185,6 +185,22 @@ static void region_tests(void)
     for (unsigned i=0;i<5;++i) { pages[i]=aligned_alloc(PAGE,PAGE);CHECK(pages[i],"region-page");memset(pages[i],0xa5,PAGE);zero_page(pages[i]); }
     struct AROSRestrictedRegion a={0},b={0},collision={0};
     struct KrnMappingPage ap[3],bp[1],cp[1];uintptr_t ab[3]={0},bb[1]={0},cb[1]={0};
+    const uintptr_t refused[]={0,0xf000,0x10001,UINT64_C(0x100000000),
+        AROS_RESTRICTED_DATA,AROS_RESTRICTED_STACK,AROS_RESTRICTED_DYNAMIC_BASE-PAGE,
+        AROS_RESTRICTED_DYNAMIC_END,UINTPTR_MAX-PAGE+1};
+    for(unsigned i=0;i<sizeof(refused)/sizeof(refused[0]);++i)
+        CHECK(!AROSRestrictedRegionReserve(&spaces[0],&collision,refused[i],PAGE,cp,cb,1) &&
+            !collision.space && !collision.mapping.length,"low-range-exclusions");
+    CHECK(!AROSRestrictedRangeValid(AROS_RESTRICTED_LOW_END-PAGE,2*PAGE) &&
+        !AROSRestrictedRangeValid(AROS_RESTRICTED_LOW_BASE,0) &&
+        !AROSRestrictedRangeValid(AROS_RESTRICTED_LOW_BASE,SIZE_MAX) &&
+        !AROSRestrictedRangeValid(AROS_RESTRICTED_DYNAMIC_END-PAGE,2*PAGE),"low-range-crossing-overflow");
+    const uintptr_t edges[]={AROS_RESTRICTED_LOW_BASE,AROS_RESTRICTED_LOW_END-PAGE};
+    for(unsigned i=0;i<2;++i) {
+        CHECK(AROSRestrictedRegionReserve(&spaces[0],&collision,edges[i],PAGE,cp,cb,1),"low-range-edge");
+        CHECK(AROSRestrictedRegionDetach(&collision),"low-range-edge-release");
+        memset(&collision,0,sizeof(collision));
+    }
     CHECK(AROSRestrictedRegionReserve(&spaces[0],&a,va,3*PAGE,ap,ab,3),"region-reserve");
     CHECK(AROSRestrictedRegionReserve(&spaces[1],&b,va,PAGE,bp,bb,1),"independent-region-va");
     CHECK(!AROSRestrictedRegionReserve(&spaces[0],&collision,va,PAGE,cp,cb,1),"region-collision");
@@ -414,5 +430,5 @@ int main(void)
     CHECK(AROSRestrictedSpaceInit(&space,11,root,tcr,(uintptr_t)data,&ops),"space-reuse");
     CHECK(space.handle!=first_handle,"space-generation");
     CHECK(AROSRestrictedSpaceClose(&space),"reused-space-close");
-    free(data);free(f);region_tests();shared_tests();channel_growth();publication_tests();shared_publication_tests();puts("PASS restricted space and channel ownership");return 0;
+    free(data);free(f);region_tests(AROS_RESTRICTED_DYNAMIC_BASE);region_tests(UINT64_C(0x7ffe0000));shared_tests();channel_growth();publication_tests();shared_publication_tests();puts("PASS restricted space and channel ownership");return 0;
 }

@@ -91,7 +91,10 @@ struct AROSRestrictedAPI {
     uint64_t (*create_domain)(const void *code,size_t bytes,uint64_t seed);
     int (*run_domain)(uint64_t handle,uint64_t seed,struct AROSRestrictedResult *);
     int (*close_domain)(uint64_t handle);
-    /* Controller-only private anonymous memory. Reserve an aligned fixed range;
+    /* Version 29 additionally admits [0x10000,0x100000000); the original
+     * [0x200000000,0x400000000) window remains. A reservation must fit wholly
+     * inside one window. Null, bootstrap/thread space and code stay excluded.
+     * Controller-only private anonymous memory. Reserve an aligned fixed range;
      * commit/decommit/protect operate on one 4096-byte page. Read=1, write=2;
      * zero means committed no-access. protect_memory additionally accepts
      * read+execute (5) for committed pages through a quiesced publication

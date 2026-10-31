@@ -74,3 +74,12 @@ HOST fixture checks real synthetic PTEs, pins, W+X/shared refusal, generation
 advance, native/grant failure, retained pending state, same-page retry and
 detach ownership. The callback is modeled; the native transaction, remote
 rendezvous, executable cache aliases and guest execution are not qualified.
+
+
+Version29 adds a low exact-address window [64KiB,4GiB), separate from the
+existing [8GiB,16GiB) dynamic window. The channel data page remains at its exact
+4GiB+4KiB address; the expanded arena must never relocate it through first-fit.
+The full private-region lifecycle runs at both8GiB and0x7ffe0000. Boundary
+checks cover both low edges, null/misaligned addresses, crossing a window,
+integer overflow, bootstrap/thread addresses and the excluded gap. These are
+synthetic-MMU HOST checks, not guest execution.

@@ -134,12 +134,12 @@ int AROSRestrictedSpaceInit(struct AROSRestrictedSpace *s,uint64_t principal,
     s->mapops=(struct KrnMappingOps){s,install,remove_page};
     s->bufferops=(struct KrnBufferOps){s,admit};
     if (!KrnMappingDomainJoin(&s->domain,&s->creator,s) ||
-        !KrnMappingArenaInitialize(&s->arena,AROS_RESTRICTED_DATA,
-            AROS_RESTRICTED_DYNAMIC_END-AROS_RESTRICTED_DATA,PAGE) ||
+        !KrnMappingArenaInitialize(&s->arena,AROS_RESTRICTED_LOW_BASE,
+            AROS_RESTRICTED_DYNAMIC_END-AROS_RESTRICTED_LOW_BASE,PAGE) ||
         !KrnBufferRegister(&registry,&s->registration,s->principal,&s->domain,&s->arena,&s->handle)) return 0;
     s->next=spaces;spaces=s;
     void *identity=KrnBufferLookup(&registry,s->principal,s->handle);
-    if (!KrnMappingReserve(&s->arena,&s->mapping,PAGE,0,KMAP_READ|KMAP_WRITE,0,
+    if (!KrnMappingReserveAt(&s->arena,&s->mapping,AROS_RESTRICTED_DATA,PAGE,0,KMAP_READ|KMAP_WRITE,0,
         identity,&s->page,1)) return 0;
     struct KrnMappingRequest request;
     return KrnMappingFault(&s->mapping,AROS_RESTRICTED_DATA,KMAP_WRITE,1,&request,&s->mapops)==KMAP_FAULT_QUEUE &&
@@ -150,9 +150,8 @@ int AROSRestrictedRegionReserve(struct AROSRestrictedSpace *s,struct AROSRestric
     uintptr_t address,size_t length,struct KrnMappingPage *pages,uintptr_t *backing,size_t capacity)
 {
     if (!s || !r || !pages || !backing || !s->handle || s->domain.closing ||
-        r->space || r->next || reservation_generation==UINT64_MAX || address<AROS_RESTRICTED_DYNAMIC_BASE ||
-        address>=AROS_RESTRICTED_DYNAMIC_END || !length || (length&(PAGE-1)) ||
-        length>AROS_RESTRICTED_DYNAMIC_END-address || length/PAGE>capacity) return 0;
+        r->space || r->next || reservation_generation==UINT64_MAX ||
+        !AROSRestrictedRangeValid(address,length) || length/PAGE>capacity) return 0;
     for (size_t i=0;i<length/PAGE;++i) if (backing[i]) return 0;
     void *identity=KrnBufferLookup(&registry,s->principal,s->handle);
     if (!identity || !KrnMappingReserveVirtual(&s->arena,&r->mapping,address,length,

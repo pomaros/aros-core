@@ -214,16 +214,15 @@ static void prove_shared_domains(void)
 extern const unsigned char RestrictedMemory[],RestrictedMemoryEnd[];
 static void *foreign_memory(void *opaque)
 {
-    uint64_t handle=*(uint64_t *)opaque;uintptr_t va=UINT64_C(0x200000000);
+    uint64_t *args=opaque,handle=args[0];uintptr_t va=args[1];
     CHECK(!api->reserve_memory(handle,va+16384,4096));
     CHECK(!api->commit_memory(handle,va+4096,3));
     CHECK(!api->decommit_memory(handle,va));
     CHECK(!api->protect_memory(handle,va,0));
     CHECK(!api->release_memory(handle,va));return NULL;
 }
-static void prove_private_memory(void)
+static void prove_private_memory(uintptr_t va)
 {
-    const uintptr_t va=UINT64_C(0x200000000);
     uint64_t handles[2];struct AROSRestrictedResult result;
     struct AROSRestrictedLifetime life;
     for (unsigned i=0;i<2;++i) {
@@ -231,24 +230,29 @@ static void prove_private_memory(void)
         CHECK(handles[i] && api->reserve_memory(handles[i],va,8192));
         CHECK(!api->reserve_memory(handles[i],va,4096));
         CHECK(!api->reserve_memory(handles[i],AROS_RESTRICTED_STACK,4096));
+        CHECK(!api->reserve_memory(handles[i],0,4096));
+        CHECK(!api->reserve_memory(handles[i],UINT64_C(0xfffff000),8192));
+        CHECK(!api->reserve_memory(handles[i],UINT64_C(0x1fffff000),8192));
+        CHECK(!api->reserve_memory(handles[i],UINTPTR_MAX-4095,8192));
         CHECK(!api->commit_memory(handles[i],va,5));
         CHECK(api->commit_memory(handles[i],va,3));
         CHECK(!api->commit_memory(handles[i],va,3));
-        CHECK(api->run_domain(handles[i],0,&result) && result.status==0 && result.value==0 && result.denied==3);
+        CHECK(api->run_domain(handles[i],va,&result) && result.status==0 && result.value==0 && result.denied==3);
     }
     pthread_t foreign;
-    CHECK(!pthread_create(&foreign,NULL,foreign_memory,&handles[0]));
+    uint64_t args[]={handles[0],va};
+    CHECK(!pthread_create(&foreign,NULL,foreign_memory,args));
     CHECK(!pthread_join(foreign,NULL));
     CHECK(api->protect_memory(handles[0],va,0));
-    CHECK(api->run_domain(handles[0],0,&result) && result.status==-2 &&
+    CHECK(api->run_domain(handles[0],va,&result) && result.status==-2 &&
         result.far==va && ((result.esr>>26)&63)==0x24);
     CHECK(api->protect_memory(handles[0],va,3));
-    CHECK(api->run_domain(handles[0],0,&result) && result.status==0 && result.value==1);
+    CHECK(api->run_domain(handles[0],va,&result) && result.status==0 && result.value==1);
     CHECK(api->decommit_memory(handles[0],va));
     CHECK(api->commit_memory(handles[0],va,0));
     CHECK(api->protect_memory(handles[0],va,3));
-    CHECK(api->run_domain(handles[0],0,&result) && result.status==0 && result.value==0);
-    CHECK(api->run_domain(handles[1],0,&result) && result.status==0 && result.value==1);
+    CHECK(api->run_domain(handles[0],va,&result) && result.status==0 && result.value==0);
+    CHECK(api->run_domain(handles[1],va,&result) && result.status==0 && result.value==1);
     api->lifetime(&life);CHECK(!life.live && life.domains==2 && life.pages-life.metadata_pages-life.table_pages==6);
     CHECK(api->release_memory(handles[0],va));
     CHECK(!api->release_memory(handles[0],va));
@@ -1323,7 +1327,7 @@ int main(void)
     intptr_t address = KrnGetSystemAttr(AROS_RESTRICTED_KATTR_API);
     CHECK(address != -1 && address != 0);
     api = (const void *)address;
-    CHECK(api->version == 28 && api->size == sizeof(*api));
+    CHECK(api->version == 29 && api->size == sizeof(*api));
     /* No worker exists: queued cancellation is deterministic. */
     static struct AROSRestrictedResult queued;
     CHECK(api->run(RestrictedQueued,(size_t)(RestrictedQueuedEnd-RestrictedQueued),12288,&queued));
@@ -1392,7 +1396,9 @@ int main(void)
     CHECK(!fault_lifetime.live && !fault_lifetime.pending && !fault_lifetime.pages);
     bug("[ISOVM] fault-stack alternate=1 unregister=1 active-refusal=1 nested=1 guards=2 drained=5 PASS\n");
     prove_shared_domains();
-    prove_private_memory();
+    prove_private_memory(UINT64_C(0x200000000));
+    prove_private_memory(UINT64_C(0x7ffe0000));
+    bug("[ISOVM] low-address fixed=0x7ffe0000 domains=2 zero=3 isolated=2 recommit=1 guard_fault=1 foreign=5 exclusions=4 retained_pages=0 PASS\n");
     prove_shared_memory();
     prove_region_faults();
     prove_replaced_fault();

@@ -14,8 +14,19 @@ struct AROSRestrictedSharedBacking {
     struct AROSRestrictedRegion *publication;
     unsigned closing;
 };
+/* Low fixed mappings exclude null and the complete bootstrap/thread window. */
+#define AROS_RESTRICTED_LOW_BASE UINT64_C(0x10000)
+#define AROS_RESTRICTED_LOW_END UINT64_C(0x100000000)
 #define AROS_RESTRICTED_DYNAMIC_BASE UINT64_C(0x200000000)
 #define AROS_RESTRICTED_DYNAMIC_END UINT64_C(0x400000000)
+static inline int AROSRestrictedRangeValid(uintptr_t address,size_t length)
+{
+    if (!length || ((address|length)&4095)) return 0;
+    if (address>=AROS_RESTRICTED_LOW_BASE && address<AROS_RESTRICTED_LOW_END)
+        return length<=AROS_RESTRICTED_LOW_END-address;
+    return address>=AROS_RESTRICTED_DYNAMIC_BASE && address<AROS_RESTRICTED_DYNAMIC_END &&
+        length<=AROS_RESTRICTED_DYNAMIC_END-address;
+}
 struct AROSRestrictedSpace {
     struct AROSRestrictedSpace *next;
     struct KrnBufferSpace registration;

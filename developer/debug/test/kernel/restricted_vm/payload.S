@@ -1217,8 +1217,11 @@ RestrictedSpinEnd:
 .global RestrictedMemory, RestrictedMemoryEnd
 RestrictedMemory:
  mov x19, x1
+ mov x20, x0
+ cbnz x20, 1f
  mov x20, #2
  lsl x20, x20, #32
+1:
  ldr x9, [x20]
  str x9, [x19]
  add x9, x9, #1

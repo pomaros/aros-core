@@ -1479,8 +1479,7 @@ static size_t r_record_size(size_t header,size_t count,size_t element)
 }
 static int r_reserve_memory(uint64_t handle,uintptr_t address,size_t length)
 {
-    if (!length || (length&(R_PAGE-1)) || address<AROS_RESTRICTED_DYNAMIC_BASE ||
-        address>=AROS_RESTRICTED_DYNAMIC_END || length>AROS_RESTRICTED_DYNAMIC_END-address) return 0;
+    if (!AROSRestrictedRangeValid(address,length)) return 0;
     size_t count=length/R_PAGE;
     size_t storage=r_record_size(sizeof(struct RestrictedAllocation),count,sizeof(struct KrnMappingPage)+sizeof(uintptr_t));
     if (!storage) return 0;
@@ -1632,7 +1631,7 @@ static int64_t r_resume_thread(uint64_t handle,uint64_t channel)
     __asm__ volatile("svc #0xa56d":"+r"(domain),"+r"(thread)::"memory","cc");
     return (int64_t)domain;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {28,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {29,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"
