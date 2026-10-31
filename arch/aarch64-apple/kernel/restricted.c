@@ -24,8 +24,15 @@
 #define R_PAGE 4096U
 #define R_TABLES 1024U
 #define R_PREPARE 0xa531
+#define R_CLAIM 0xa538
+#define R_PUBLISH 0xa539
+#define R_RELEASED 0xa53a
+#define R_LIFETIME 0xa53b
 #define R_COOKIE UINT64_C(0x7265737472696374)
+enum RestrictedState { R_FREE, R_ALLOCATING, R_LIVE, R_REAPING };
 struct Restricted {
+    enum RestrictedState state;
+    void *releaser_context;
     uint64_t cookie;
     struct Task *owner;
     void *owner_context;
@@ -44,14 +51,89 @@ struct Restricted {
     struct AROSRestrictedResult result;
     struct AROSRestrictedService service;
 };
-/* Bounded kernel-owned slots publish all backing even when the native owner
- * disappears. UP Forbid protects native allocation/reaping; SVC handlers run
- * with interrupts masked. SMP admission stays disabled until shared locking. */
+/* Every state transition and published metadata access uses the coordinator.
+ * Native allocation/release has an exclusive slot claim, never that lock.
+ * Forbid prevents remote terminal freeze during unpublished native allocation
+ * or the release transaction; the page arena operations do not Wait. */
 static struct Restricted restricted_slots[KBUF_SPACES];
+struct RestrictedPublication {
+    struct Restricted *slot;
+    void *pool, *code, *data, *stack;
+    uint64_t seed;
+    size_t code_bytes;
+};
 static uint64_t owners_retired, owners_reaped;
 static void r_reap(void);
 static void r_coordinate(void);
 static void r_uncoordinate(void);
+static struct Restricted *r_slot(uintptr_t address)
+{
+    uintptr_t start=(uintptr_t)restricted_slots;
+    if (address<start || address-start>=sizeof(restricted_slots) ||
+        (address-start)%sizeof(struct Restricted)) return NULL;
+    return (struct Restricted *)address;
+}
+/* Native-only SVCs, called with local scheduling excluded. The exclusive
+ * ALLOCATING/REAPING states reserve storage while allocator work runs outside
+ * the coordinator and its mapping/scheduler lock order. */
+static int r_lifecycle(struct AROSAppleRuntimeFrame *frame,struct Task *task,
+    struct ExceptionContext *context,unsigned svc)
+{
+    if (svc==R_CLAIM) {
+        frame->x[0]=0;
+        for (unsigned i=0;i<KBUF_SPACES;++i) {
+            struct Restricted *r=&restricted_slots[i];
+            if (r->state!=R_FREE) continue;
+            r->state=R_ALLOCATING;r->owner=task;r->owner_context=context;
+            frame->x[0]=(uintptr_t)r;break;
+        }
+        return 1;
+    }
+    if (svc==R_PUBLISH) {
+        const struct RestrictedPublication *p=(void *)(uintptr_t)frame->x[0];
+        struct Restricted *r=p ? r_slot((uintptr_t)p->slot) : NULL;
+        frame->x[0]=0;
+        if (!r || r->state!=R_ALLOCATING || r->owner!=task || r->owner_context!=context) return 1;
+        r->pool=p->pool;r->code=p->code;r->data=p->data;r->stack=p->stack;
+        r->seed=p->seed;r->code_bytes=p->code_bytes;r->cookie=R_COOKIE;
+        r->state=R_LIVE;frame->x[0]=1;
+        return 1;
+    }
+    if (svc==R_RELEASED) {
+        struct Restricted *r=r_slot(frame->x[0]);
+        frame->x[0]=0;
+        if (!r || r->state!=R_REAPING || r->releaser_context!=context) return 1;
+        if (r->abandoned) ++owners_reaped;
+        memset(r,0,sizeof(*r));frame->x[0]=1;
+        return 1;
+    }
+    if (svc==R_LIFETIME) {
+        struct AROSRestrictedLifetime *state=(void *)(uintptr_t)frame->x[0];
+        frame->x[0]=0;if (!state) return 1;
+        *state=(struct AROSRestrictedLifetime){.retired=owners_retired,.reaped=owners_reaped};
+        for (unsigned i=0;i<KBUF_SPACES;++i) {
+            struct Restricted *r=&restricted_slots[i];
+            if (r->state==R_FREE) continue;
+            ++state->live;state->pending+=r->abandoned!=0;
+            /* ALLOCATING counts as live even before its backing is published.
+             * REAPING retains its accounting until the release acknowledgement. */
+            state->pages+=(r->pool ? R_TABLES : 0)+(r->code!=NULL)+(r->data!=NULL)+(r->stack!=NULL);
+        }
+        frame->x[0]=1;return 1;
+    }
+    return 0;
+}
+static struct Restricted *r_claim_reap(struct ExceptionContext *context)
+{
+    for (unsigned i=0;i<KBUF_SPACES;++i) {
+        struct Restricted *owned=&restricted_slots[i];
+        if (owned->state==R_LIVE && owned->abandoned && AROSRestrictedServiceClose(&owned->service)) {
+            owned->state=R_REAPING;owned->releaser_context=context;
+            return owned;
+        }
+    }
+    return NULL;
+}
 static int r_code_pc(const struct Restricted *r,uint64_t pc)
 {
     return pc>=AROS_RESTRICTED_CODE && !(pc&3) && r->code_bytes>=4 &&
@@ -287,7 +369,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
         frame->x[0]=AROSRestrictedServiceRetireWorker(retired);
         for (unsigned i=0;i<KBUF_SPACES;++i) {
             struct Restricted *owned=&restricted_slots[i];
-            if (!owned->cookie || owned->owner_context!=retired) continue;
+            if (owned->state!=R_LIVE || owned->owner_context!=retired) continue;
             owned->owner_context=NULL;owned->abandoned=1;++owners_retired;
             /* Never dereference the removed Task after this hook. Service
              * principal/member identities are opaque until their drain. */
@@ -297,15 +379,10 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
         return 1;
     }
     if (ec==0x15 && svc==0xa537) {
-        frame->x[0]=0;
-        for (unsigned i=0;i<KBUF_SPACES;++i) {
-            struct Restricted *owned=&restricted_slots[i];
-            if (owned->cookie && owned->abandoned && AROSRestrictedServiceClose(&owned->service)) {
-                frame->x[0]=(uintptr_t)owned;break;
-            }
-        }
+        frame->x[0]=(uintptr_t)r_claim_reap(context);
         return 1;
     }
+    if (ec==0x15 && r_lifecycle(frame,task,context,svc)) return 1;
     if (ec != 0x15 || (svc != R_PREPARE && svc != AROS_RESTRICTED_ENTER && svc != 0xa534)) return 0;
     frame->x[1] = 0;
 #if defined(__AROSEXEC_SMP__)
@@ -314,12 +391,14 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
     frame->x[0] = 0;
     return 1;
 #else
-    r = (void *)(uintptr_t)frame->x[0];
+    r = r_slot(frame->x[0]);
     frame->x[0] = 0;
-    if (!r || r->cookie != R_COOKIE || r->owner != task ||
+    if (!r || r->state!=R_LIVE || r->cookie != R_COOKIE || r->owner != task ||
         frame->entry_ttbr0 != AROSAppleRuntimeLocal()->trusted_ttbr0) return 1;
     if (svc == 0xa534) {
         frame->x[0]=AROSRestrictedServiceClose(&r->service);
+        if (frame->x[0]) { r->state=R_REAPING;r->releaser_context=context; }
+        else ++r->result.close_waits;
         return 1;
     }
     if (svc == R_PREPARE) {
@@ -383,7 +462,7 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
     if (!context) return 0;
     unsigned ec=(unsigned)(frame->esr>>26)&63,svc=(unsigned)frame->esr&65535;
     if (!AROSAppleTaskExecution(context)->root &&
-        (ec!=0x15 || svc<AROS_RESTRICTED_ENTER || svc>0xa537)) return 0;
+        (ec!=0x15 || svc<AROS_RESTRICTED_ENTER || svc>R_LIFETIME)) return 0;
     r_coordinate();
     int handled=r_trap_locked(frame);
     r_uncoordinate();
@@ -405,7 +484,9 @@ static void r_release(struct Restricted *r)
         (r->stack && !AROSApplePageFree(r->stack,R_PAGE)) ||
         (r->pool && !AROSApplePageFreeRaw(r->pool,R_TABLES*R_PAGE)))
         for (;;) __asm__ volatile("wfe");
-    memset(r,0,sizeof(*r));
+    register uintptr_t released __asm__("x0")=(uintptr_t)r;
+    __asm__ volatile("svc #0xa53a":"+r"(released)::"memory","cc");
+    if (!released) for (;;) __asm__ volatile("wfe");
 }
 static void r_reap(void)
 {
@@ -414,7 +495,7 @@ static void r_reap(void)
         register uintptr_t ready __asm__("x0")=0;
         __asm__ volatile("svc #0xa537":"+r"(ready)::"memory","cc");
         if (!ready) break;
-        r_release((void *)ready);++owners_reaped;
+        r_release((void *)ready);
     }
     Permit();
 }
@@ -422,13 +503,9 @@ static void r_lifetime(struct AROSRestrictedLifetime *state)
 {
     if (!state) return;
     r_reap();Forbid();
-    *state=(struct AROSRestrictedLifetime){.retired=owners_retired,.reaped=owners_reaped};
-    for (unsigned i=0;i<KBUF_SPACES;++i) {
-        struct Restricted *r=&restricted_slots[i];
-        if (!r->cookie) continue;
-        ++state->live;state->pending+=r->abandoned!=0;
-        state->pages+=(r->pool ? R_TABLES : 0)+(r->code!=NULL)+(r->data!=NULL)+(r->stack!=NULL);
-    }
+    register uintptr_t argument __asm__("x0")=(uintptr_t)state;
+    __asm__ volatile("svc #0xa53b":"+r"(argument)::"memory","cc");
+    if (!argument) for (;;) __asm__ volatile("wfe");
     Permit();
 }
 static int r_run(const void *code, size_t bytes, uint64_t seed,
@@ -444,17 +521,19 @@ static int r_run(const void *code, size_t bytes, uint64_t seed,
      * avoids Exec AllocMem's low-memory callbacks, which may temporarily Wait.
      * Keep allocation and publication indivisible against external UP RemTask. */
     Forbid();
-    struct Restricted *r = NULL;
-    for (unsigned i=0;i<KBUF_SPACES;++i)
-        if (!restricted_slots[i].cookie) { r=&restricted_slots[i];break; }
+    register uintptr_t claim __asm__("x0")=0;
+    __asm__ volatile("svc #0xa538":"+r"(claim)::"memory","cc");
+    struct Restricted *r=(void *)claim;
     if (!r) { Permit();return 0; }
     int ok = 0;
-    r->cookie = R_COOKIE; r->owner = FindTask(NULL); r->seed = seed; r->code_bytes=bytes;
-    r->owner_context=r_context(r->owner);
-    r->pool = AROSApplePageTableAllocate(R_TABLES * R_PAGE);
-    r->code = AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
-    r->data = AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
-    r->stack = AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
+    struct RestrictedPublication publication={.slot=r,.seed=seed,.code_bytes=bytes};
+    publication.pool = AROSApplePageTableAllocate(R_TABLES * R_PAGE);
+    publication.code = AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
+    publication.data = AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
+    publication.stack = AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
+    register uintptr_t published __asm__("x0")=(uintptr_t)&publication;
+    __asm__ volatile("svc #0xa539":"+r"(published)::"memory","cc");
+    if (!published) for (;;) __asm__ volatile("wfe");
     if (!r->pool || !r->code || !r->data || !r->stack) goto prepared;
     memcpy(r->code,code,bytes);
     *(uint64_t *)r->data = seed;
@@ -479,7 +558,6 @@ cleanup:
         register uintptr_t closing __asm__("x0")=(uintptr_t)r;
         __asm__ volatile("svc #0xa534":"+r"(closing)::"x1","memory","cc");
         if (closing) break;
-        ++r->result.close_waits;
         Permit();
         krnSysCall(SC_SWITCH);
     }

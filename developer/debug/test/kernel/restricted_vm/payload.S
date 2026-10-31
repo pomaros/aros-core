@@ -158,6 +158,19 @@ RestrictedCode:
  svc #0xa536
  cmn x0, #1
  b.ne RestrictedFailure
+ /* Native lifecycle SVCs cannot be reached from a restricted root. */
+ svc #0xa538
+ cmn x0, #1
+ b.ne RestrictedFailure
+ svc #0xa539
+ cmn x0, #1
+ b.ne RestrictedFailure
+ svc #0xa53a
+ cmn x0, #1
+ b.ne RestrictedFailure
+ svc #0xa53b
+ cmn x0, #1
+ b.ne RestrictedFailure
  cmp x23, #1, lsl #12
  b.ne 2f
  /* Terminate while a worker lease is live. Native close must cancel/drain. */

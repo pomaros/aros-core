@@ -173,7 +173,7 @@ int main(void)
     for (unsigned id=0; id<2; ++id) {
         CHECK(results[id].value == (id+1)*5120);
         CHECK(results[id].yields == (id+1)*1024);
-        CHECK(results[id].denied == 12);
+        CHECK(results[id].denied == 16);
         CHECK(results[id].cancelled==1 && results[id].drained==1);
         for (unsigned byte=0;byte<8;++byte) {
             CHECK(results[id].data[512+byte]==0xa5);
@@ -198,6 +198,6 @@ int main(void)
         CHECK(!lifetime.live && !lifetime.pending && !lifetime.pages);
     }
     bug("[ISOVM] invalid-stack yield=1 collect=1 status=1 drained=3 PASS\n");
-    bug("[ISOVM] PASS restricted=2 yields=3072 denied=24 faulted=1 survived=1 heartbeat=%u after_fault=%u joined=5 replies=402 rejected=16 callbacks=200 resumed=2 cancelled=3 worker_ack=3 close_pending=1 drained=4 removed_worker=1 removed_owners=8 reaped_owners=8 retained_pages=0\n",beats,after_fault);
+    bug("[ISOVM] PASS restricted=2 yields=3072 denied=32 faulted=1 survived=1 heartbeat=%u after_fault=%u joined=5 replies=402 rejected=16 callbacks=200 resumed=2 cancelled=3 worker_ack=3 close_pending=1 drained=4 removed_worker=1 removed_owners=8 reaped_owners=8 retained_pages=0\n",beats,after_fault);
     return 0;
 }
