@@ -2171,3 +2171,142 @@ TimedFailure:
  svc #0xa541
  b TimedFailure
 RestrictedTimedWaitEnd:
+
+.balign 16
+.global RestrictedCombined, RestrictedCombinedEnd
+RestrictedCombined:
+ mov x23, x0
+ and x9, x23, #1
+ add x19, x1, #512
+ add x19, x19, x9, lsl #8
+ mrs x20, tpidr_el0
+ cmp x18, x20
+ b.ne CombinedFailure
+ ldr x10, [x20]
+ cbnz x10, CombinedFailure
+ str x23, [x20]
+ movz x24, #2, lsl #32
+ add x24, x24, x9, lsl #13
+ movz x25, #2, lsl #32
+ movk x25, #1, lsl #16
+ svc #0xa54b
+ mov x28, x0
+ adr x0, CombinedHandler
+ svc #0xa545
+ cbz x0, CombinedFailure
+ RegisterSeed 0
+ ldr x9, [x24]
+ cbnz x9, CombinedFailure
+ add x10, x23, #0x100
+ str x10, [x24]
+ add x9, x25, x23, lsl #3
+ stlr x10, [x9]
+CombinedBarrier:
+ mov x11, #0
+1:
+ add x9, x25, x11, lsl #3
+ ldar x10, [x9]
+ cbz x10, 2f
+ add x12, x11, #0x100
+ cmp x10, x12
+ b.ne CombinedFailure
+ add x11, x11, #1
+ cmp x11, #4
+ b.lo 1b
+ b 3f
+2:
+ svc #0xa540
+ RegisterCheck 0, CombinedFailure
+ b CombinedBarrier
+3:
+ mov x22, #0
+ add x10, x23, #0x100
+ bl CombinedRequest
+ RegisterCheck 0, CombinedFailure
+ ldr x9, [x24]
+ add x10, x23, #0x100
+ cmp x9, x10
+ b.ne CombinedFailure
+ mov x22, #1
+ ldr x9, [x24, #4096]
+ cbnz x9, CombinedFailure
+ RegisterCheck 0, CombinedFailure
+ add x9, x23, #0x200
+ str x9, [x24, #4096]
+ mov x22, #2
+ add x9, x23, #0x300
+ str x9, [x24]
+ RegisterCheck 0, CombinedFailure
+ svc #0xa54b
+ cmp x0, x28
+ b.ne CombinedFailure
+ mov x21, x1
+ mov x22, #3
+ add x10, x23, #0x300
+ bl CombinedRequest
+ mov x0, x21
+ mov x27, #1
+ bl CombinedWait
+ ldr x9, [x24]
+ add x10, x23, #0x300
+ cmp x9, x10
+ b.ne CombinedFailure
+ ldr x9, [x24, #4096]
+ cbnz x9, CombinedFailure
+ mov x9, #0xa5a5
+ orr x9, x9, x9, lsl #16
+ orr x9, x9, x9, lsl #32
+ stp x9, x9, [x19, #64]
+ stp x9, x9, [x19, #80]
+ mov x22, #4
+ add x10, x23, #0x300
+ bl CombinedRequest
+ b CombinedFailure // Domain cancellation must return to the native caller.
+CombinedRequest:
+ stp x22, x23, [x19]
+ stp x28, x10, [x19, #16]
+ mov x0, x19
+ add x1, x19, #64
+ mov x2, #32
+ mov x3, #0
+ svc #0xa542
+ cbz x0, CombinedFailure
+ mov x26, x0
+1:
+ mov x0, x26
+ svc #0xa543
+ cbz x0, 1b
+ cmp x0, #1
+ b.ne CombinedFailure
+ ldp x9, x10, [x19, #64]
+ cmp x9, x22
+ b.ne CombinedFailure
+ cmp x10, x23
+ b.ne CombinedFailure
+ ret
+CombinedHandler:
+ mov x9, sp
+ sub x10, x20, #4096
+ cmp x9, x10
+ b.ne CombinedFailure
+ stp x2, x3, [sp, #-32]!
+ str x0, [sp, #16]
+ RegisterCheck 0, CombinedFailure
+ RegisterSeed 512
+ ldp x0, x1, [sp]
+ svc #0xa547
+ cmn x0, #1
+ b.ne CombinedFailure
+ ldr x10, [sp, #16]
+ bl CombinedRequest
+ RegisterCheck 512, CombinedFailure
+ ldp x0, x1, [sp]
+ svc #0xa547
+ b CombinedFailure
+CombinedWait:
+ FullWaitCheck 0xa54c, CombinedFailure
+CombinedFailure:
+ mov x0, #-9
+ svc #0xa541
+ b CombinedFailure
+RestrictedCombinedEnd:

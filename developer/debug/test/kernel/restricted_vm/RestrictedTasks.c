@@ -1121,6 +1121,103 @@ static void prove_timed_retirement(void)
     bug("[ISOVM] timed-retirement cases=1 retired=1 stale_refused=2 result_untouched=1 retained_pages=0 PASS\n");
 }
 
+extern const unsigned char RestrictedCombined[],RestrictedCombinedEnd[];
+static void combined_requests(struct AROSRestrictedWork work[4],unsigned phase,
+    uint64_t channels[4])
+{
+    unsigned seen=0;
+    for (unsigned polls=0;seen!=15 && polls<1000000;++polls) {
+        struct AROSRestrictedWork next;
+        if (!api->take(&next)) { KrnSwitch();continue; }
+        uint64_t words[4];CHECK(next.length==sizeof(words));memcpy(words,next.bytes,sizeof(words));
+        CHECK(words[0]==phase && words[1]<4 && words[2]==next.channel);
+        unsigned id=words[1];CHECK(!(seen&(1U<<id)));
+        if (!phase) channels[id]=next.channel;else CHECK(channels[id]==next.channel);
+        uint64_t value=phase==1 || phase==2 ?
+            UINT64_C(0x200000000)+(id&1)*8192+(phase==1 ? 4096 : 0) :
+            (phase ? 0x300 : 0x100)+id;
+        CHECK(words[3]==value);work[id]=next;seen|=1U<<id;
+    }
+    CHECK(seen==15);
+}
+static void prove_combined_memory_threads(void)
+{
+    const uintptr_t address=UINT64_C(0x200000000),shared_address=UINT64_C(0x200010000);
+    uint64_t domains[2],channels[4]={0},shared=api->create_shared(4096);CHECK(shared);
+    struct DynamicCodeClient clients[4]={{.seed=0},{.seed=1},{.seed=2},{.seed=3}};
+    pthread_t threads[4];struct AROSRestrictedWork work[4];
+    for (unsigned d=0;d<2;++d) {
+        domains[d]=api->create_domain(RestrictedCombined,RestrictedCombinedEnd-RestrictedCombined,0x1000+d);
+        CHECK(domains[d] && api->reserve_memory(domains[d],address,16384));
+        for (unsigned role=0;role<2;++role) {
+            CHECK(api->commit_memory(domains[d],address+role*8192,3));
+            CHECK(api->commit_memory(domains[d],address+role*8192+4096,0));
+        }
+        CHECK(api->reserve_memory(domains[d],shared_address,4096));
+        CHECK(api->attach_shared(domains[d],shared_address,shared));
+        CHECK(api->commit_shared(domains[d],shared_address,3));
+        for (unsigned role=0;role<2;++role) clients[d*2+role].domain=domains[d];
+    }
+    for (unsigned id=0;id<4;++id) CHECK(!pthread_create(&threads[id],NULL,dynamic_code_client,&clients[id]));
+    combined_requests(work,0,channels);
+    for (unsigned id=0;id<4;++id) {
+        CHECK(api->protect_memory(domains[id/2],address+(id&1)*8192,1));
+#if defined(__AROSEXEC_SMP__)
+        CHECK(SetTaskAffinity(__atomic_load_n(&clients[id].task,__ATOMIC_ACQUIRE),cpu_masks[1]));
+#endif
+        CHECK(api->complete(&work[id]));
+    }
+    for (unsigned phase=1;phase<=2;++phase) {
+        combined_requests(work,phase,channels);
+        for (unsigned id=0;id<4;++id) {
+            CHECK(api->protect_memory(domains[id/2],address+(id&1)*8192+(phase==1 ? 4096 : 0),3));
+#if defined(__AROSEXEC_SMP__)
+            if (phase==2) CHECK(SetTaskAffinity(__atomic_load_n(&clients[id].task,__ATOMIC_ACQUIRE),cpu_masks[0]));
+#endif
+            CHECK(api->complete(&work[id]));
+        }
+    }
+    combined_requests(work,3,channels);
+    for (unsigned id=0;id<4;++id) CHECK(api->complete(&work[id]));
+    for (unsigned id=0;id<4;++id) wait_parked(domains[id/2],channels[id]);
+    for (unsigned id=0;id<4;++id) {
+        CHECK(api->decommit_memory(domains[id/2],address+(id&1)*8192+4096));
+        CHECK(api->commit_memory(domains[id/2],address+(id&1)*8192+4096,3));
+        CHECK(api->wake_thread(domains[id/2],channels[id]));
+    }
+    combined_requests(work,4,channels);
+    CHECK(!api->close_shared(shared)); /* Views and worker leases keep ownership. */
+    for (unsigned d=0;d<2;++d) CHECK(api->close_domain(domains[d])==0);
+    struct AROSRestrictedLifetime held;api->lifetime(&held);
+    /* pending counts abandoned native contexts, not worker leases. */
+    CHECK(held.live==4 && !held.pending && held.domains==2 && held.shared_objects==1 && held.pages);
+    for (unsigned id=0;id<4;++id) {
+        CHECK(api->state(&work[id])==AROS_RESTRICTED_CANCELLED);
+        memset(work[id].bytes,0xee,work[id].length);
+        CHECK(api->complete(&work[id]));CHECK(!api->complete(&work[id]));
+    }
+    unsigned snapshots[2]={0};
+    for (unsigned id=0;id<4;++id) {
+        CHECK(!pthread_join(threads[id],NULL));
+        struct AROSRestrictedResult *result=&clients[id].result;
+        CHECK(result->status==-5 && result->drained && result->resumed==2 && result->denied==2 && result->replies==4);
+#if defined(__AROSEXEC_SMP__)
+        CHECK(result->cpus==3 && result->migrations>=2);
+#endif
+        if (result->snapshot_valid) {
+            ++snapshots[id/2];uint64_t value;memcpy(&value,result->data,sizeof(value));
+            CHECK(value==0x1000+id/2);
+            for (unsigned role=0;role<2;++role)
+                for (unsigned byte=0;byte<32;++byte) CHECK(result->data[512+role*256+64+byte]==0xa5);
+        }
+    }
+    for (unsigned d=0;d<2;++d) CHECK(snapshots[d]==1 && api->close_domain(domains[d])==1);
+    api->lifetime(&held);
+    CHECK(!held.live && !held.pending && !held.domains && !held.shared_objects && !held.pages &&
+        !held.waits && !held.timed_waits && !held.suspended_threads);
+    bug("[ISOVM] combined domains=2 threads=4 private_values=4 shared_slots=4 repaired=8 premature=8 waits=4 recommit_zero=4 held_workers=4 snapshots=2 no_late_write=4 retained_pages=0 PASS\n");
+}
+
 extern const unsigned char RestrictedSuspend[],RestrictedSuspendEnd[];
 extern const unsigned char RestrictedSuspendNoCalls[],RestrictedSuspendNoCallsEnd[];
 static void *suspend_client(void *argument)
@@ -1296,6 +1393,7 @@ int main(void)
     prove_timed_waits();
     prove_timed_retirement();
     bug("[ISOVM] wait-context gp=30 simd=32 fp=1 nzcv=1 tls=1 stack=1 returned=9 PASS\n");
+    prove_combined_memory_threads();
     prove_domain_close();
 #if defined(__AROSEXEC_SMP__)
     prove_task_list_churn();
