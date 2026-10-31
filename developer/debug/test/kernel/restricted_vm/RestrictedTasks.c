@@ -1301,6 +1301,7 @@ static void prove_suspension(void)
         CHECK(api->close_shared(shared));
     }
     struct AROSRestrictedLifetime life;api->lifetime(&life);CHECK(!life.pages && !life.live && !life.domains && !life.shared_objects);
+    bug("[ISOVM] suspend-context stable_gp=30 loop_result=1 simd=32 fp=1 nzcv=1 tls=1 stack=1 migrated=1 PASS\n");
     bug("[ISOVM] suspend cpu_bound=2 nested=2 wake_held=2 peer_publications=2 held_checks=256 resumed=1 closed=1 foreign=8 native_refused=4 retained_pages=0 PASS\n");
 }
 

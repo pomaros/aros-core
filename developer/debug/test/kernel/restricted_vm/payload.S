@@ -2500,57 +2500,28 @@ SuspendRequest:
  cbz x0, SuspendFailure
  mov x26, x0
  tbnz x23, #0, SuspendCollect
+ /* Snapshot all stable GP and all vector/system state before publishing
+  * readiness. The only loop-written register is x10; its exit value is one. */
+ RegisterSeed 0
  mov x25, sp
  mov x9, #0x999
- movi v8.16b, #0x5a
- movi v31.16b, #0xa5
- mov x11, #0xa0000000
- msr nzcv, x11
  mov x11, #0x400000
  msr fpcr, x11
  mov x11, #0x10
  msr fpsr, x11
+ mov x11, #0xa0000000
+ msr nzcv, x11
  add x21, x20, #8
  mov x11, #1
+ mov x10, #1
+ ContextSave
 RestrictedSuspendNoCalls:
  stlr x11, [x21]
- mov x24, #0
 SuspendPureLoop:
- add x24, x24, #1
  ldar x10, [x20]
  cbz x10, SuspendPureLoop
 RestrictedSuspendNoCallsEnd:
- mrs x11, nzcv
- mov x12, #0xa0000000
- cmp x11, x12
- b.ne SuspendFailure
- cmp x9, #0x999
- b.ne SuspendFailure
- cmp x10, #1
- b.ne SuspendFailure
- cmp x18, x28
- b.ne SuspendFailure
- mov x11, sp
- cmp x11, x25
- b.ne SuspendFailure
- umov x11, v8.d[1]
- mov x12, #0x5a5a
- orr x12, x12, x12, lsl #16
- orr x12, x12, x12, lsl #32
- cmp x11, x12
- b.ne SuspendFailure
- umov x11, v31.d[0]
- mov x12, #0xa5a5
- orr x12, x12, x12, lsl #16
- orr x12, x12, x12, lsl #32
- cmp x11, x12
- b.ne SuspendFailure
- mrs x11, fpcr
- cmp x11, #0x400000
- b.ne SuspendFailure
- mrs x11, fpsr
- cmp x11, #0x10
- b.ne SuspendFailure
+ ContextCheck -2, SuspendFailure
 SuspendCollect:
  mov x0, x26
  svc #0xa543
