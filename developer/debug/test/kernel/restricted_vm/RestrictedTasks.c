@@ -678,6 +678,67 @@ static void prove_large_code(void)
     api->lifetime(&life);CHECK(!life.pages && !life.domains && !life.live);
     bug("[ISOVM] large-code pages=3 domains=2 repaired=2 write_refused=1 retained_pages=0 PASS\n");
 }
+extern const unsigned char RestrictedDynamicCode[],RestrictedDynamicCodeEnd[];
+struct DynamicCodeClient {
+    uint64_t domain,seed;
+    struct Task *task;
+    struct AROSRestrictedResult result;
+};
+static void *dynamic_code_client(void *argument)
+{
+    struct DynamicCodeClient *client=argument;
+#if defined(__AROSEXEC_SMP__)
+    pin(0);
+#endif
+    __atomic_store_n(&client->task,FindTask(NULL),__ATOMIC_RELEASE);
+    CHECK(api->run_domain(client->domain,client->seed,&client->result));
+    return NULL;
+}
+static void prove_dynamic_code(void)
+{
+    const uintptr_t address=UINT64_C(0x200000000);
+    struct DynamicCodeClient clients[2]={{.seed=42},{.seed=77}};
+    pthread_t threads[2];unsigned phases[2]={0};
+    for (unsigned i=0;i<2;++i) {
+        clients[i].domain=api->create_domain(RestrictedDynamicCode,RestrictedDynamicCodeEnd-RestrictedDynamicCode,0);
+        CHECK(clients[i].domain);
+        CHECK(api->reserve_memory(clients[i].domain,address,4096));
+        CHECK(api->commit_memory(clients[i].domain,address,3));
+        CHECK(!pthread_create(&threads[i],NULL,dynamic_code_client,&clients[i]));
+    }
+    for (unsigned completed=0;completed<6;) {
+        struct AROSRestrictedWork work;
+        if (!api->take(&work)) { KrnSwitch();continue; }
+        uint64_t words[2];CHECK(work.length==sizeof(words));memcpy(words,work.bytes,sizeof(words));
+        unsigned id=words[1]==clients[0].seed ? 0 : 1;
+        CHECK(words[1]==clients[id].seed && words[0]==++phases[id] && phases[id]<=3);
+        CHECK(!api->protect_memory(clients[id].domain,address,7));
+        CHECK(api->protect_memory(clients[id].domain,address,phases[id]==2 ? 3 : 5));
+#if defined(__AROSEXEC_SMP__)
+        if (phases[id]!=2) {
+            struct Task *task=__atomic_load_n(&clients[id].task,__ATOMIC_ACQUIRE);CHECK(task);
+            CHECK(SetTaskAffinity(task,cpu_masks[phases[id]==1 ? 1 : 0]));
+        }
+#endif
+        CHECK(api->complete(&work));++completed;
+    }
+    for (unsigned i=0;i<2;++i) {
+        CHECK(!pthread_join(threads[i],NULL));
+        CHECK(!clients[i].result.status && clients[i].result.drained && clients[i].result.replies==3);
+#if defined(__AROSEXEC_SMP__)
+        CHECK(clients[i].result.cpus==3 && clients[i].result.migrations>=2);
+#endif
+        struct AROSRestrictedResult result={0};
+        CHECK(api->run_domain(clients[i].domain,1,&result) && !result.status && result.rejected==1);
+        CHECK(api->run_domain(clients[i].domain,0,&result) && result.status==-2 && result.far==address);
+        CHECK(api->close_domain(clients[i].domain)==1);
+    }
+    struct AROSRestrictedLifetime life;api->lifetime(&life);
+    CHECK(!life.pages && !life.domains && !life.live);
+#if defined(__AROSEXEC_SMP__)
+    bug("[ISOVM] dynamic-code domains=2 publications=4 rewrites=2 cpus=3 write_refused=2 scalar_refused=2 retained_pages=0 PASS\n");
+#endif
+}
 int main(void)
 {
     KernelBase = OpenResource((CONST_STRPTR)"kernel.resource");
@@ -693,7 +754,7 @@ int main(void)
     intptr_t address = KrnGetSystemAttr(AROS_RESTRICTED_KATTR_API);
     CHECK(address != -1 && address != 0);
     api = (const void *)address;
-    CHECK(api->version == 21 && api->size == sizeof(*api));
+    CHECK(api->version == 22 && api->size == sizeof(*api));
     /* No worker exists: queued cancellation is deterministic. */
     static struct AROSRestrictedResult queued;
     CHECK(api->run(RestrictedQueued,(size_t)(RestrictedQueuedEnd-RestrictedQueued),12288,&queued));
@@ -770,6 +831,7 @@ int main(void)
     prove_table_growth();
     prove_large_stacks();
     prove_large_code();
+    prove_dynamic_code();
     prove_domain_close();
 #if defined(__AROSEXEC_SMP__)
     prove_task_list_churn();

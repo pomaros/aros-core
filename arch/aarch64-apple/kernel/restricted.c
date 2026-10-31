@@ -384,18 +384,29 @@ static void r_clean(void *unused, const void *address, size_t bytes)
 }
 static void r_invalidate(void *unused)
 { (void)unused; __asm__ volatile("dsb ish; tlbi vmalle1is; dsb ish; isb":::"memory"); }
-static const void *r_code_alias(struct RestrictedDomain *d,uint64_t va,size_t bytes)
+static const void *r_execution_alias(struct RestrictedDomain *d,uint64_t va,size_t bytes)
 {
-    size_t storage=r_code_storage(d->code_bytes);
-    if (!d->code || va<AROS_RESTRICTED_CODE || va-AROS_RESTRICTED_CODE>storage ||
-        bytes>storage-(va-AROS_RESTRICTED_CODE)) return NULL;
-    return (const unsigned char *)d->code+(va-AROS_RESTRICTED_CODE);
+    if (!bytes) return NULL;
+    if (va>=AROS_RESTRICTED_CODE) {
+        size_t storage=r_code_storage(d->code_bytes);
+        if (!d->code || va-AROS_RESTRICTED_CODE>=storage ||
+            bytes>storage-(va-AROS_RESTRICTED_CODE)) return NULL;
+        return (const unsigned char *)d->code+(va-AROS_RESTRICTED_CODE);
+    }
+    for (struct RestrictedAllocation *a=d->allocations;a;a=a->next) {
+        if (va<a->region.mapping.start || va-a->region.mapping.start>=a->region.mapping.length) continue;
+        size_t offset=va-a->region.mapping.start,page=offset/R_PAGE,in_page=offset%R_PAGE;
+        if (a->region.shared || page>=a->count || bytes>R_PAGE-in_page ||
+            !a->backing[page] || a->pages[page].physical!=a->backing[page]) return NULL;
+        return (const unsigned char *)a->backing[page]+in_page;
+    }
+    return NULL;
 }
 static void r_sync(void *opaque, uint64_t va, size_t bytes)
 {
-    /* The root is inactive. Clean the native alias of this particular page,
-     * including a zero-padded last page, before granting execution. */
-    const void *alias=r_code_alias(opaque,va,bytes);
+    /* Clean owned native backing, never the inactive user VA. Dynamic pages
+     * arrive with native aliases already RO/NX and remote CPUs quiesced. */
+    const void *alias=r_execution_alias(opaque,va,bytes);
     if (!alias) for (;;) __asm__ volatile("wfe");
     r_clean(opaque,alias,bytes);
     __asm__ volatile("ic ialluis; dsb ish; isb":::"memory");
@@ -480,6 +491,12 @@ struct RestrictedMemoryOperation {
     unsigned operation, protection;
     struct RestrictedAllocation *allocation;
 };
+/* Set only by the native publication wrapper while PageMapLock and the
+ * remote rendezvous are held. Scalar payload SVCs cannot set this identity. */
+static void *publication_context;
+static int r_publish_native(void *context,uintptr_t physical,unsigned protection)
+{ (void)context;return AROSApplePageProtectArenaLocked(physical,protection); }
+static const struct AROSRestrictedPublicationOps publication_ops={NULL,r_publish_native};
 static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned svc)
 {
     if (svc!=R_MEMORY) return 0;
@@ -511,9 +528,13 @@ static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned s
     } else if (p->operation==2) {
         frame->x[0]=AROSRestrictedRegionDecommit(&a->region,page,&p->physical);
         if (frame->x[0] && p->physical) --d->memory_pages;
-    } else if (p->operation==3)
-        frame->x[0]=AROSRestrictedRegionProtect(&a->region,page,p->protection);
-    else if (p->operation==5)
+    } else if (p->operation==3) {
+        if ((p->protection&KMAP_EXEC) || a->region.publication_pending ||
+            (a->pages[page].protection&KMAP_EXEC)) {
+            if (publication_context && publication_context==context)
+                frame->x[0]=AROSRestrictedRegionPublish(&a->region,page,p->protection,&publication_ops);
+        } else frame->x[0]=AROSRestrictedRegionProtect(&a->region,page,p->protection);
+    } else if (p->operation==5)
         frame->x[0]=AROSRestrictedRegionCommitShared(&a->region,page,p->protection);
     else if (p->operation==4 && p->address==a->region.mapping.start &&
         AROSRestrictedRegionDetach(&a->region)) {
@@ -935,7 +956,7 @@ static void r_alias_sync(void *context,uint64_t address,size_t bytes)
     r_clean(context,(const void *)(uintptr_t)address,bytes);
     __asm__ volatile("ic ialluis; dsb ish; isb":::"memory");
 }
-int AROSAppleRestrictedProtectAliases(uintptr_t address,uint64_t tcr,unsigned permissions)
+int AROSAppleRestrictedProtectAliasesLocked(uintptr_t address,uint64_t tcr,unsigned permissions)
 {
     /* The arena is pre-split in every snapshot; no table allocation is needed.
      * Other native mapping regions require their own mirror/split protocol. */
@@ -945,15 +966,20 @@ int AROSAppleRestrictedProtectAliases(uintptr_t address,uint64_t tcr,unsigned pe
     if (policy & AARCH64_PROTECT_WRITE) policy&=~AARCH64_PROTECT_EXEC;
     const struct AArch64ProtectionOps ops={NULL,r_resolve,r_alias_no_allocate,r_clean,r_invalidate,r_alias_sync,NULL};
     int ok=1;
-    /* Enter only after rendezvous arrival: a remote coordinator holder must
-     * finish before parking. Starting rendezvous while holding it deadlocks. */
-    r_coordinate();
     for (struct RestrictedDomain *d=restricted_domains;d;d=d->next) {
         /* REAPING roots have no executing contexts, and native teardown can
          * already be freeing their table chunks outside the coordinator. */
         if (d->state==R_REAPING || !d->root) continue;
         if (!AArch64RemapPrivilegedPage(&ops,d->root,tcr,address,address,policy)) { ok=0;break; }
     }
+    return ok;
+}
+int AROSAppleRestrictedProtectAliases(uintptr_t address,uint64_t tcr,unsigned permissions)
+{
+    if (!AROSApplePageArenaContains(address)) return 1;
+    /* Acquire only after remote rendezvous arrival, never start one here. */
+    r_coordinate();
+    int ok=AROSAppleRestrictedProtectAliasesLocked(address,tcr,permissions);
     r_uncoordinate();return ok;
 }
 int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
@@ -1299,7 +1325,21 @@ static int r_decommit_memory(uint64_t handle,uintptr_t address)
 static int r_protect_memory(uint64_t handle,uintptr_t address,unsigned protection)
 {
     Forbid();struct RestrictedMemoryOperation op={.handle=handle,.address=address,.operation=3,.protection=protection};
-    int ok=r_memory_call(&op);Permit();return ok;
+    int ok=0;
+    uint64_t saved=AROSApplePageMapAcquire();
+    uint64_t token=AROSApplePageMutationBegin();
+    if (token) {
+        publication_context=r_context(r_current());
+        if (publication_context) {
+            register uintptr_t argument __asm__("x0")=(uintptr_t)&op;
+            __asm__ volatile("svc #0xa567":"+r"(argument)::"x1","memory","cc");
+            ok=argument!=0;
+        }
+        publication_context=NULL;
+        AROSApplePageMutationEnd(token);
+    }
+    AROSAppleMemoryLockRelease(&AROSApplePageMapLock,saved);
+    Permit();return ok;
 }
 static int r_release_memory(uint64_t handle,uintptr_t address)
 {
@@ -1375,7 +1415,7 @@ static unsigned r_state(const struct AROSRestrictedWork *work)
     __asm__ volatile("svc #0xa535":"+r"(argument)::"memory","cc");
     return (unsigned)argument;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {21,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {22,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

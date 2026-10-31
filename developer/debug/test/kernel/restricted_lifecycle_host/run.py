@@ -26,12 +26,13 @@ def main():
     if out.exists() or ROOT in out.parents:p.error('use a fresh output outside source')
     out.mkdir(parents=True)
     source=SOURCE.read_text()
-    actual=''.join(body(source,name) for name in ['r_code_storage(size_t','r_code_pc(const','r_code_alias(struct','r_domain_slot(uintptr_t','r_domain_link(struct','r_domain_forget(struct','r_domain_lookup(uint64_t','r_shared_operation(struct','r_domain_retire(struct','r_domain_lifecycle(struct','r_slot(uintptr_t','r_allocate(void','r_tables_need(struct','r_table_transfer(struct','r_range_tables(uint64_t','r_thread_addresses(struct','r_thread_forget(struct','r_lifecycle(struct','r_close(struct','r_claim_reap(struct','r_stack_sp(const','r_stack_bounds(struct'])
+    actual=''.join(body(source,name) for name in ['r_code_storage(size_t','r_code_pc(const','r_execution_alias(struct','r_domain_slot(uintptr_t','r_domain_link(struct','r_domain_forget(struct','r_domain_lookup(uint64_t','r_shared_operation(struct','r_domain_retire(struct','r_domain_lifecycle(struct','r_slot(uintptr_t','r_allocate(void','r_tables_need(struct','r_table_transfer(struct','r_range_tables(uint64_t','r_thread_addresses(struct','r_thread_forget(struct','r_lifecycle(struct','r_close(struct','r_claim_reap(struct','r_stack_sp(const','r_stack_bounds(struct'])
     adapter=SOURCE.with_name('restricted_service.h')
     actual=next(line for line in adapter.read_text().splitlines() if line.startswith('#define AROS_RESTRICTED_DYNAMIC_BASE '))+'\n'+actual
     variants=[('actual',actual)]
     for name,old,new in [
         ('fixed-code-cap','!bytes || bytes>UINT32_MAX','!bytes || bytes>R_PAGE || bytes>UINT32_MAX'),
+        ('wrong-region-cache-owner','a->pages[page].physical!=a->backing[page]','0'),
         ('wrong-code-alias','(const unsigned char *)d->code+(va-AROS_RESTRICTED_CODE)','(const unsigned char *)d->code'),
         ('fixed-stack-limit','sp<=base+bytes','sp<=base+R_PAGE'),
         ('short-thread-interval','r->address_span=span','r->address_span=AROS_RESTRICTED_THREAD_STRIDE'),

@@ -40,7 +40,7 @@ static int AROSRestrictedServiceClose(struct AROSRestrictedService *s)
 struct AROSRestrictedSharedBacking { uintptr_t *pages; size_t count,views; unsigned closing; };
 struct AROSRestrictedRegion {
     struct AROSRestrictedSpace *space; unsigned drained;
-    struct { uintptr_t start; } mapping;
+    struct { uintptr_t start;size_t length; } mapping;
     struct AROSRestrictedSharedBacking *shared;
 };
 static int AROSRestrictedSharedInitialize(struct AROSRestrictedSharedBacking *b,uintptr_t *pages,size_t count)
@@ -63,7 +63,9 @@ static struct RestrictedShared *restricted_shared;
 static uint64_t shared_generation;
 static int AROSRestrictedRegionDetach(struct AROSRestrictedRegion *r)
 { if (!r->drained) return 0;r->space=NULL;return 1; }
-struct RestrictedAllocation { struct RestrictedAllocation *next; struct AROSRestrictedRegion region; };
+struct KrnMappingPage { uintptr_t physical; };
+struct RestrictedAllocation { struct RestrictedAllocation *next; struct AROSRestrictedRegion region;
+    size_t count;uintptr_t *backing;struct KrnMappingPage *pages; };
 enum RestrictedState { R_FREE,R_ALLOCATING,R_LIVE,R_REAPING };
 struct RestrictedTableChunk { struct RestrictedTableChunk *next; void *pages; size_t count,used; };
 struct RestrictedDomain {
@@ -377,13 +379,24 @@ static void code_images(void)
     struct Restricted r={.domain=&d};
     assert(r_code_storage(d.code_bytes)==3*R_PAGE);
     assert(!r_code_storage(0) && !r_code_storage(SIZE_MAX) && !r_code_storage(UINT32_MAX));
-    assert(r_code_alias(&d,AROS_RESTRICTED_CODE+R_PAGE,R_PAGE)==image+R_PAGE);
-    assert(r_code_alias(&d,AROS_RESTRICTED_CODE+2*R_PAGE,R_PAGE)==image+2*R_PAGE);
-    assert(!r_code_alias(&d,AROS_RESTRICTED_CODE-1,R_PAGE));
-    assert(!r_code_alias(&d,AROS_RESTRICTED_CODE+3*R_PAGE,R_PAGE));
+    assert(r_execution_alias(&d,AROS_RESTRICTED_CODE+R_PAGE,R_PAGE)==image+R_PAGE);
+    assert(r_execution_alias(&d,AROS_RESTRICTED_CODE+2*R_PAGE,R_PAGE)==image+2*R_PAGE);
+    assert(!r_execution_alias(&d,AROS_RESTRICTED_CODE-1,R_PAGE));
+    assert(!r_execution_alias(&d,AROS_RESTRICTED_CODE+3*R_PAGE,R_PAGE));
     assert(r_code_pc(&r,AROS_RESTRICTED_CODE+2*R_PAGE));
     assert(!r_code_pc(&r,AROS_RESTRICTED_CODE+2*R_PAGE+4));
     assert(!r_code_pc(&r,AROS_RESTRICTED_CODE+1));
+    uintptr_t backing=(uintptr_t)image;
+    struct KrnMappingPage page={.physical=backing};
+    struct RestrictedAllocation allocation={.count=1,.backing=&backing,.pages=&page,
+        .region={.mapping={.start=AROS_RESTRICTED_DYNAMIC_BASE,.length=R_PAGE}}};
+    d.allocations=&allocation;
+    assert(r_execution_alias(&d,AROS_RESTRICTED_DYNAMIC_BASE+16,32)==image+16);
+    assert(!r_execution_alias(&d,AROS_RESTRICTED_DYNAMIC_BASE+R_PAGE-16,32));
+    page.physical=0;assert(!r_execution_alias(&d,AROS_RESTRICTED_DYNAMIC_BASE,R_PAGE));
+    page.physical=backing;allocation.region.shared=(void *)1;
+    assert(!r_execution_alias(&d,AROS_RESTRICTED_DYNAMIC_BASE,R_PAGE));
+    d.allocations=NULL;
     restricted_domains=&d;
     struct AROSRestrictedLifetime life;assert(call(R_LIFETIME,(uintptr_t)&life,&owner,&context));
     assert(life.pages==3);restricted_domains=NULL;

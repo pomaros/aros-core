@@ -46,6 +46,10 @@ void *AROSApplePageTableAllocate(uintptr_t length);
 int AROSApplePageFreeRaw(void *address, uintptr_t length);
 int AROSApplePageFree(void *address, uintptr_t length);
 int AROSApplePageProtect(void *address, uint32_t length, uint32_t flags);
+/* EL1 private-page publication: caller owns PageMapLock, a completed remote
+ * rendezvous and the restricted coordinator. Generic READ/WRITE flags only;
+ * arena leaves are pre-split. No allocation or lock acquisition. */
+int AROSApplePageProtectArenaLocked(uintptr_t address,unsigned permissions);
 int AROSAppleGuardedStackCreate(struct AArch64GuardedStack *, size_t size);
 int AROSAppleGuardedStackDestroy(struct AArch64GuardedStack *);
 void AROSApplePageAllocatorGetStats(

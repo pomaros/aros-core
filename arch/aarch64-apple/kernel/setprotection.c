@@ -94,24 +94,32 @@ static void synchronize_code_page(void *context, uint64_t address, size_t size)
     __asm__ volatile("dsb ish; isb" ::: "memory");
 }
 
-static uintptr_t protect_one_page(void)
+static uintptr_t protect_operation(struct AppleProtectionOperation *operation,uint64_t *tcr_out)
 {
-    uint64_t ttbr0, tcr;
-    const struct AArch64ProtectionOps ops = {
-        &protection_operation, resolve_table, take_table, clean_descriptors,
-        invalidate_translation, synchronize_code_page, can_split
-    };
+    uint64_t ttbr0,tcr;
+    const struct AArch64ProtectionOps ops={operation,resolve_table,take_table,clean_descriptors,
+        invalidate_translation,synchronize_code_page,can_split};
     __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(ttbr0));
     __asm__ volatile("mrs %0, tcr_el1" : "=r"(tcr));
-    /* The allocator and stage-two contract still use 4KB, not 16KB. */
-    if (((tcr >> 14) & 3) != 0)
-        return 0;
-    if (!AArch64ProtectPage(&ops, ttbr0, tcr, protection_operation.address,
-        protection_operation.permissions)) return 0;
-    /* All peers remain in the mutation rendezvous. A failed propagation must
-     * not authorize freeing/reusing the page; the status-bearing caller retries. */
+    if (((tcr>>14)&3)!=0) return 0;
+    *tcr_out=tcr;
+    return AArch64ProtectPage(&ops,ttbr0,tcr,operation->address,operation->permissions);
+}
+static uintptr_t protect_one_page(void)
+{
+    uint64_t tcr;
+    if (!protect_operation(&protection_operation,&tcr)) return 0;
     return AROSAppleRestrictedProtectAliases(protection_operation.address,tcr,
         protection_operation.permissions);
+}
+int AROSApplePageProtectArenaLocked(uintptr_t address,unsigned permissions)
+{
+    if (!AROSApplePageArenaContains(address) || (address&(AROS_APPLE_PAGE_SIZE-1)) ||
+        (permissions!=AARCH64_PROTECT_READ && permissions!=(AARCH64_PROTECT_READ|AARCH64_PROTECT_WRITE))) return 0;
+    struct AppleProtectionOperation operation={.address=address,.permissions=permissions};
+    uint64_t tcr;
+    if (!protect_operation(&operation,&tcr)) return 0;
+    return AROSAppleRestrictedProtectAliasesLocked(address,tcr,permissions);
 }
 
 /* Status-bearing internal entry: never release backing after a failed restore.

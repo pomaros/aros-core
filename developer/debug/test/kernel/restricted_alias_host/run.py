@@ -14,12 +14,17 @@ def main():
     out=p.parse_args().out.resolve()
     if out.exists() or ROOT in out.parents:p.error('fresh output outside source required')
     out.mkdir(parents=True);kernel=ROOT/'arch/aarch64-apple/kernel';source=kernel/'restricted.c';adapter=kernel/'setprotection.c'
-    actual=extract(source.read_text(),'static uint64_t r_alias_no_allocate(')+extract(source.read_text(),'int AROSAppleRestrictedProtectAliases(')
-    bridge=extract(adapter.read_text(),'static uintptr_t protect_one_page(')
+    actual=extract(source.read_text(),'static uint64_t r_alias_no_allocate(')+extract(source.read_text(),'int AROSAppleRestrictedProtectAliasesLocked(')+extract(source.read_text(),'int AROSAppleRestrictedProtectAliases(')
+    bridge=extract(adapter.read_text(),'static uintptr_t protect_operation(')+extract(adapter.read_text(),'static uintptr_t protect_one_page(')+extract(adapter.read_text(),'int AROSApplePageProtectArenaLocked(')
     bridge=bridge.replace('__asm__ volatile("mrs %0, ttbr0_el1" : "=r"(ttbr0));','ttbr0=123;').replace('__asm__ volatile("mrs %0, tcr_el1" : "=r"(tcr));','tcr=16;')
-    actual+=bridge
-    variants=[('actual',actual),('skip-propagation',actual.replace('return AROSAppleRestrictedProtectAliases(protection_operation.address,tcr,\n        protection_operation.permissions);','return 1;')),('retired-root',actual.replace('d->state==R_REAPING || !d->root','!d->root')),('ignore-failure',actual.replace('{ ok=0;break; }','{ break; }')),('user-alias-flags',actual.replace('permissions & (AARCH64_PROTECT_READ|AARCH64_PROTECT_WRITE|AARCH64_PROTECT_EXEC)','permissions'))]
+    wrapper=extract(source.read_text(),'static int r_protect_memory(')
+    wrapper=wrapper.replace('register uintptr_t argument __asm__("x0")=(uintptr_t)&op;','uintptr_t argument=(uintptr_t)&op;').replace('__asm__ volatile("svc #0xa567":"+r"(argument)::"x1","memory","cc");','argument=memory_svc((void *)argument);')
+    actual+=bridge+wrapper
+    variants=[('actual',actual),('missing-quiescence',actual.replace('uint64_t token=AROSApplePageMutationBegin();','uint64_t token=456;')),('retained-publication-context',actual.replace('publication_context=NULL;','')),('recursive-coordinator',actual.replace('return AROSAppleRestrictedProtectAliasesLocked(address,tcr,permissions);','return AROSAppleRestrictedProtectAliases(address,tcr,permissions);')),('skip-propagation',actual.replace('return AROSAppleRestrictedProtectAliases(protection_operation.address,tcr,\n        protection_operation.permissions);','return 1;')),('retired-root',actual.replace('d->state==R_REAPING || !d->root','!d->root')),('ignore-failure',actual.replace('{ ok=0;break; }','{ break; }')),('user-alias-flags',actual.replace('permissions & (AARCH64_PROTECT_READ|AARCH64_PROTECT_WRITE|AARCH64_PROTECT_EXEC)','permissions'))]
     expected={
+        'missing-quiescence':'map_lock && rendezvous && publication_context==&owner_context && !coordinator',
+        'retained-publication-context':'token==456 && rendezvous && !publication_context',
+        'recursive-coordinator':'map_lock && rendezvous && !coordinator',
         'skip-propagation':'protect_one_page() && native_permissions==flags[i] && calls==2',
         'retired-root':'protect_one_page() && native_permissions==flags[i] && calls==2',
         'ignore-failure':'!protect_one_page() && calls==2 && native_permissions==29 && !coordinator',
@@ -33,7 +38,7 @@ def main():
         if b.returncode:result['error']=name+' compile';break
         r=subprocess.run([str(folder/'test')],capture_output=True,text=True,timeout=10);(folder/'run.log').write_text(r.stdout+r.stderr)
         result['variants'].append({'name':name,'exit':r.returncode})
-        if (name=='actual' and (r.returncode or r.stderr)) or (name!='actual' and (r.returncode!=-6 or ('Assertion failed: ('+expected[name]+'), function main,') not in r.stderr)):
+        if (name=='actual' and (r.returncode or r.stderr)) or (name!='actual' and (r.returncode!=-6 or ('Assertion failed: ('+expected[name]+'), function '+{'recursive-coordinator':'r_coordinate','missing-quiescence':'memory_svc','retained-publication-context':'AROSApplePageMutationEnd'}.get(name,'main')+',') not in r.stderr)):
             result['error']=name+' outcome';break
     else:result['result']='DIAGNOSTIC_PASS' if result['dirty_inputs'] else 'HOST_PASS'
     (out/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps({'result':result['result'],'error':result.get('error')}));return result['result']=='FAIL'
