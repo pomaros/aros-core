@@ -3,15 +3,74 @@
 .section .rodata.restricted,"a"
 .balign 16
 /* Distinct full-width sentinels for the task, callback and fault handler.
- * Cover caller-saved, partially callee-saved and high vector registers.
+ * Cover both lanes of all thirty-two vector registers.
  * Checks use only integer scratch registers so they cannot repair corruption. */
 .macro RegisterSeed stage
  add x9, x23, #\stage
  dup v0.2d, x9
  add x9, x9, #1
+ dup v1.2d, x9
+ add x9, x9, #1
+ dup v2.2d, x9
+ add x9, x9, #1
+ dup v3.2d, x9
+ add x9, x9, #1
+ dup v4.2d, x9
+ add x9, x9, #1
+ dup v5.2d, x9
+ add x9, x9, #1
+ dup v6.2d, x9
+ add x9, x9, #1
+ dup v7.2d, x9
+ add x9, x9, #1
  dup v8.2d, x9
  add x9, x9, #1
+ dup v9.2d, x9
+ add x9, x9, #1
+ dup v10.2d, x9
+ add x9, x9, #1
+ dup v11.2d, x9
+ add x9, x9, #1
+ dup v12.2d, x9
+ add x9, x9, #1
+ dup v13.2d, x9
+ add x9, x9, #1
+ dup v14.2d, x9
+ add x9, x9, #1
+ dup v15.2d, x9
+ add x9, x9, #1
+ dup v16.2d, x9
+ add x9, x9, #1
+ dup v17.2d, x9
+ add x9, x9, #1
+ dup v18.2d, x9
+ add x9, x9, #1
+ dup v19.2d, x9
+ add x9, x9, #1
+ dup v20.2d, x9
+ add x9, x9, #1
+ dup v21.2d, x9
+ add x9, x9, #1
+ dup v22.2d, x9
+ add x9, x9, #1
+ dup v23.2d, x9
+ add x9, x9, #1
+ dup v24.2d, x9
+ add x9, x9, #1
+ dup v25.2d, x9
+ add x9, x9, #1
+ dup v26.2d, x9
+ add x9, x9, #1
+ dup v27.2d, x9
+ add x9, x9, #1
+ dup v28.2d, x9
+ add x9, x9, #1
+ dup v29.2d, x9
+ add x9, x9, #1
+ dup v30.2d, x9
+ add x9, x9, #1
  dup v31.2d, x9
+ add x9, x9, #1
 .endm
 .macro VectorCheck reg, failure=RestrictedFailure
  umov x10, \reg\().d[0]
@@ -33,7 +92,36 @@
  b.ne \failure
  add x9, x23, #\stage
  VectorCheck v0, \failure
+ VectorCheck v1, \failure
+ VectorCheck v2, \failure
+ VectorCheck v3, \failure
+ VectorCheck v4, \failure
+ VectorCheck v5, \failure
+ VectorCheck v6, \failure
+ VectorCheck v7, \failure
  VectorCheck v8, \failure
+ VectorCheck v9, \failure
+ VectorCheck v10, \failure
+ VectorCheck v11, \failure
+ VectorCheck v12, \failure
+ VectorCheck v13, \failure
+ VectorCheck v14, \failure
+ VectorCheck v15, \failure
+ VectorCheck v16, \failure
+ VectorCheck v17, \failure
+ VectorCheck v18, \failure
+ VectorCheck v19, \failure
+ VectorCheck v20, \failure
+ VectorCheck v21, \failure
+ VectorCheck v22, \failure
+ VectorCheck v23, \failure
+ VectorCheck v24, \failure
+ VectorCheck v25, \failure
+ VectorCheck v26, \failure
+ VectorCheck v27, \failure
+ VectorCheck v28, \failure
+ VectorCheck v29, \failure
+ VectorCheck v30, \failure
  VectorCheck v31, \failure
 .endm
 .global RestrictedCode, RestrictedCodeEnd
