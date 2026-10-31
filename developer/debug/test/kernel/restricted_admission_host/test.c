@@ -30,7 +30,7 @@ static void native(void)
   struct AROSAppleRuntimeFrame frame={8,0,(UINT64_C(0x15)<<26)|services[i]};calls=0;
   assert(AROSAppleRestrictedTrap(&frame)==1 && calls==1 && !locked);
  }
- const unsigned refused[]={AROS_RESTRICTED_THREAD_INFO,AROS_RESTRICTED_WAIT,AROS_RESTRICTED_WAKE,AROS_RESTRICTED_WAIT_FOR,AROS_RESTRICTED_CLOCK,0xa600,0xffff};
+ const unsigned refused[]={AROS_RESTRICTED_THREAD_INFO,AROS_RESTRICTED_WAIT,AROS_RESTRICTED_WAKE,AROS_RESTRICTED_WAIT_FOR,AROS_RESTRICTED_CLOCK,AROS_RESTRICTED_RESTORE_CONTEXT,0xa600,0xffff};
  for(unsigned i=0;i<sizeof(refused)/sizeof(refused[0]);i++) {
   struct AROSAppleRuntimeFrame frame={8,0,(UINT64_C(0x15)<<26)|refused[i]};calls=0;
   assert(!AROSAppleRestrictedTrap(&frame) && !calls);
@@ -44,6 +44,8 @@ static void boundaries(void)
  frame.spsr=5;assert(!AROSAppleRestrictedTrap(&frame) && !calls);frame.spsr=0;
  frame.esr=UINT64_C(0x24)<<26;assert(!AROSAppleRestrictedTrap(&frame) && !calls);
  execution.root=0x1000;assert(AROSAppleRestrictedTrap(&frame)==1 && calls==1);
+ frame.esr=(UINT64_C(0x15)<<26)|AROS_RESTRICTED_RESTORE_CONTEXT;calls=0;
+ assert(AROSAppleRestrictedTrap(&frame)==1 && calls==1 && !locked);
  frame.esr=(UINT64_C(0x15)<<26)|AROS_RESTRICTED_WAIT;handled=2;switched=masks=0;
  assert(AROSAppleRestrictedTrap(&frame)==1 && switched==1 && masks==1 && !locked);
  handled=0;assert(!AROSAppleRestrictedTrap(&frame));
