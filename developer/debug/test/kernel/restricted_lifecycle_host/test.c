@@ -51,7 +51,7 @@ struct Restricted {
     uint64_t cookie;
     struct Task *owner;
     void *owner_context;
-    unsigned abandoned, fault_active;
+    unsigned abandoned, fault_active, snapshot_data;
     void *stack,*fault_stack,*tls;
     uint64_t stack_address,fault_address,tls_address;
     uint64_t seed;
@@ -123,15 +123,16 @@ static void managed_tests(void)
     assert(call(R_PUBLISH,(uintptr_t)&pb,&other,&foreign));
     assert(!r_close(a) && !d->closing && !d->space.stopped);
     a->service.drained=1;
-    assert(r_close(a) && d->state==R_LIVE && !d->space.stopped && d->threads==2);
+    assert(r_close(a) && d->state==R_LIVE && !d->space.stopped && d->threads==2 && !a->snapshot_data);
     a->state=R_REAPING;a->releaser_context=&context;
     assert(call(R_RELEASED,(uintptr_t)a,&owner,&context));
     assert(d->threads==1 && b->state==R_LIVE && r_domain_lookup(handle)==d);
+    b->service.drained=1;assert(r_close(b) && !b->snapshot_data);
     assert(!domain_call(R_DOMAIN_CLOSE,handle,&foreign,&status) && status==UINTPTR_MAX && !d->closing);
     assert(!domain_call(R_DOMAIN_CLOSE,handle,&context,&status) && !status && d->closing);
     assert(!call(R_CLAIM,handle,&owner,&context) && d->threads==1);
     assert(!domain_call(R_DOMAIN_RELEASED,(uintptr_t)d,&context,NULL));
-    b->service.drained=1;assert(r_close(b) && d->threads==1);
+    b->service.drained=1;assert(r_close(b) && d->threads==1 && b->snapshot_data);
     b->state=R_REAPING;b->releaser_context=&foreign;
     assert(call(R_RELEASED,(uintptr_t)b,&other,&foreign));
     assert(!d->threads && d->state==R_LIVE);

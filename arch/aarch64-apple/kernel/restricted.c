@@ -57,7 +57,7 @@ struct Restricted {
     uint64_t cookie;
     struct Task *owner;
     void *owner_context;
-    unsigned abandoned;
+    unsigned abandoned, snapshot_data;
     void *stack, *fault_stack, *tls;
     uint64_t stack_address, fault_address, tls_address;
     void *native_lower, *native_upper;
@@ -214,6 +214,10 @@ static int r_close(struct Restricted *r)
         if (!AROSRestrictedSpaceClose(&r->domain->space)) return 0;
         r->domain->state=R_REAPING;
     }
+    /* Under the coordinator: close prevents new attachment and every other
+     * context/worker has acknowledged release when this is the last member.
+     * Publish permission for the exclusive native cleanup phase to copy data. */
+    r->snapshot_data=!r->domain->managed || (r->domain->closing && r->domain->threads==1);
     return 1;
 }
 static struct Restricted *r_claim_reap(struct ExceptionContext *context)
@@ -767,7 +771,9 @@ cleanup:
         r->result.drained=1;
         r->result.worker_retirements=r->service.worker_retirements;
         *result=r->result;
-        if (!handle) memcpy(result->data,r->domain->data,R_PAGE);
+        if (r->snapshot_data) {
+            memcpy(result->data,r->domain->data,R_PAGE);result->snapshot_valid=1;
+        }
     }
     r_release(r);
     Permit();r_reap();
@@ -848,7 +854,7 @@ static unsigned r_state(const struct AROSRestrictedWork *work)
     __asm__ volatile("svc #0xa535":"+r"(argument)::"memory","cc");
     return (unsigned)argument;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {12,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {13,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

@@ -114,6 +114,26 @@ extern const unsigned char RestrictedShared[],RestrictedSharedEnd[];
 static uint64_t shared_domains[2];
 static struct AROSRestrictedResult shared_results[4];
 static unsigned shared_stop,shared_replies;
+#if defined(__AROSEXEC_SMP__)
+static struct Task *shared_identities[4];
+static unsigned shared_done[4],shared_ack[4];
+static void *shared_migrator(void *unused)
+{
+    (void)unused;unsigned ticks=0;
+    while (!__atomic_load_n(&shared_stop,__ATOMIC_ACQUIRE)) {
+        for (unsigned id=0;id<4;++id) {
+            if (__atomic_load_n(&shared_ack[id],__ATOMIC_RELAXED)) continue;
+            if (__atomic_load_n(&shared_done[id],__ATOMIC_ACQUIRE)) {
+                __atomic_store_n(&shared_ack[id],1,__ATOMIC_RELEASE);continue;
+            }
+            struct Task *task=__atomic_load_n(&shared_identities[id],__ATOMIC_ACQUIRE);
+            if (task) CHECK(SetTaskAffinity(task,cpu_masks[(ticks/8+id)&1]));
+        }
+        ++ticks;KrnSwitch();
+    }
+    return NULL;
+}
+#endif
 static void *shared_worker(void *unused)
 {
     (void)unused;
@@ -133,14 +153,23 @@ static void *shared_client(void *argument)
     unsigned id=(unsigned)(uintptr_t)argument;
 #if defined(__AROSEXEC_SMP__)
     pin(id&1);
+    __atomic_store_n(&shared_identities[id],FindTask(NULL),__ATOMIC_RELEASE);
 #endif
     CHECK(api->close_domain(shared_domains[id/2])==-1); /* Controller ownership. */
     CHECK(api->run_domain(shared_domains[id/2],(id/2+1)*4096+(id&1),&shared_results[id]));
+#if defined(__AROSEXEC_SMP__)
+    __atomic_store_n(&shared_done[id],1,__ATOMIC_RELEASE);
+    while (!__atomic_load_n(&shared_ack[id],__ATOMIC_ACQUIRE)) KrnSwitch();
+#endif
     return NULL;
 }
 static void prove_shared_domains(void)
 {
     pthread_t clients[4],service;
+#if defined(__AROSEXEC_SMP__)
+    pthread_t migrator;
+    CHECK(!pthread_create(&migrator,NULL,shared_migrator,NULL));
+#endif
     for (unsigned d=0;d<2;++d) {
         shared_domains[d]=api->create_domain(RestrictedShared,
             (size_t)(RestrictedSharedEnd-RestrictedShared),(d+1)*4096);
@@ -152,15 +181,21 @@ static void prove_shared_domains(void)
         CHECK(!pthread_create(&clients[id],NULL,shared_client,(void *)(uintptr_t)id));
     for (unsigned id=0;id<4;++id) {
         CHECK(!pthread_join(clients[id],NULL));
-        CHECK(shared_results[id].status==0 && shared_results[id].drained==1);
+        CHECK(shared_results[id].status==0 && shared_results[id].drained==1 && !shared_results[id].snapshot_valid);
         CHECK(shared_results[id].value==(id/2+1)*4096 && shared_results[id].replies==1);
         CHECK(shared_results[id].yields>=((id&1) ? 1024 : 512));
 #if defined(__AROSEXEC_SMP__)
-        CHECK(shared_results[id].cpus==(UINT64_C(1)<<(id&1)));
+        CHECK(shared_results[id].cpus==3 && shared_results[id].migrations>0);
 #endif
     }
     __atomic_store_n(&shared_stop,1,__ATOMIC_RELEASE);
     CHECK(!pthread_join(service,NULL) && shared_replies==4);
+#if defined(__AROSEXEC_SMP__)
+    CHECK(!pthread_join(migrator,NULL));
+    bug("[ISOVM] shared-migration threads=4 moves0=%llu moves1=%llu moves2=%llu moves3=%llu PASS\n",
+        (unsigned long long)shared_results[0].migrations,(unsigned long long)shared_results[1].migrations,
+        (unsigned long long)shared_results[2].migrations,(unsigned long long)shared_results[3].migrations);
+#endif
     struct AROSRestrictedLifetime state;
     api->lifetime(&state);
     CHECK(!state.live && state.domains==2 && state.pages==2052);
@@ -174,6 +209,67 @@ static void prove_shared_domains(void)
     api->lifetime(&state);
     CHECK(!state.live && !state.domains && !state.pending && !state.pages);
     bug("[ISOVM] shared-domains domains=2 threads=4 joins=4 replies=4 tls=4 stale=1 retained_pages=0 PASS\n");
+}
+extern const unsigned char RestrictedSpin[],RestrictedSpinEnd[];
+static uint64_t closing_domain;
+static unsigned closing_done,creator_release;
+static struct AROSRestrictedResult closing_result;
+static void *closing_client(void *unused)
+{
+    (void)unused;
+#if defined(__AROSEXEC_SMP__)
+    pin(1);
+#endif
+    CHECK(api->run_domain(closing_domain,0,&closing_result));
+    __atomic_store_n(&closing_done,1,__ATOMIC_RELEASE);return NULL;
+}
+static void *orphan_creator(void *unused)
+{
+    (void)unused;
+    uint64_t handle=api->create_domain(RestrictedSpin,
+        (size_t)(RestrictedSpinEnd-RestrictedSpin),32768);
+    CHECK(handle);__atomic_store_n(&closing_domain,handle,__ATOMIC_RELEASE);
+    while (!__atomic_load_n(&creator_release,__ATOMIC_ACQUIRE)) KrnSwitch();
+    return NULL;
+}
+static void prove_domain_close(void)
+{
+    for (unsigned orphan=0;orphan<2;++orphan) {
+        pthread_t client,creator;closing_done=creator_release=0;closing_domain=0;
+        memset(&closing_result,0,sizeof(closing_result));
+        if (orphan) {
+            CHECK(!pthread_create(&creator,NULL,orphan_creator,NULL));
+            while (!__atomic_load_n(&closing_domain,__ATOMIC_ACQUIRE)) KrnSwitch();
+        } else closing_domain=api->create_domain(RestrictedSpin,
+            (size_t)(RestrictedSpinEnd-RestrictedSpin),32768);
+        CHECK(closing_domain);
+        CHECK(!pthread_create(&client,NULL,closing_client,NULL));
+        struct AROSRestrictedWork work;
+        while (!api->take(&work)) KrnSwitch();
+        CHECK(work.length==8 && api->state(&work)==AROS_RESTRICTED_RUNNING);
+        for (unsigned turn=0;turn<64;++turn) KrnSwitch();
+        if (orphan) {
+            __atomic_store_n(&creator_release,1,__ATOMIC_RELEASE);
+            CHECK(!pthread_join(creator,NULL));
+        } else CHECK(api->close_domain(closing_domain)==0);
+        while (api->state(&work)==AROS_RESTRICTED_RUNNING) KrnSwitch();
+        CHECK(api->state(&work)==AROS_RESTRICTED_CANCELLED);
+        CHECK(!__atomic_load_n(&closing_done,__ATOMIC_ACQUIRE));
+        struct AROSRestrictedLifetime state;
+        api->lifetime(&state);
+        CHECK(state.live==1 && state.domains==1 && state.pages==1029);
+        memset(work.bytes,0x55,work.length);
+        CHECK(api->complete(&work));
+        CHECK(!pthread_join(client,NULL));
+        CHECK(closing_result.status==-5 && closing_result.drained==1 && closing_result.snapshot_valid);
+        uint64_t spins;memcpy(&spins,closing_result.data+640,sizeof(spins));CHECK(spins>0);
+        for (unsigned i=0;i<8;++i) CHECK(closing_result.data[544+i]==0xa5);
+        if (!orphan) CHECK(api->close_domain(closing_domain)==1);
+        api->lifetime(&state);
+        CHECK(!state.live && !state.domains && !state.pending && !state.pages);
+        CHECK(api->close_domain(closing_domain)==-1);
+    }
+    bug("[ISOVM] domain-close cpu_bound=2 held_workers=2 cancelled=2 no_late_write=2 orphan=1 retained_pages=0 PASS\n");
 }
 static void retired_worker(void)
 {
@@ -290,7 +386,7 @@ int main(void)
     intptr_t address = KrnGetSystemAttr(AROS_RESTRICTED_KATTR_API);
     CHECK(address != -1 && address != 0);
     api = (const void *)address;
-    CHECK(api->version == 12 && api->size == sizeof(*api));
+    CHECK(api->version == 13 && api->size == sizeof(*api));
     /* No worker exists: queued cancellation is deterministic. */
     static struct AROSRestrictedResult queued;
     CHECK(api->run(RestrictedQueued,(size_t)(RestrictedQueuedEnd-RestrictedQueued),12288,&queued));
@@ -315,7 +411,7 @@ int main(void)
         CHECK(results[id].value == (id+1)*5120);
         CHECK(results[id].yields == (id+1)*1024);
         CHECK(results[id].denied == 23);
-        CHECK(results[id].cancelled==1 && results[id].drained==1);
+        CHECK(results[id].cancelled==1 && results[id].drained==1 && results[id].snapshot_valid);
         for (unsigned byte=0;byte<8;++byte) {
             CHECK(results[id].data[512+byte]==0xa5);
             CHECK(results[id].data[544+byte]==0xa5);
@@ -358,6 +454,7 @@ int main(void)
     CHECK(!fault_lifetime.live && !fault_lifetime.pending && !fault_lifetime.pages);
     bug("[ISOVM] fault-stack alternate=1 unregister=1 active-refusal=1 nested=1 guards=2 drained=5 PASS\n");
     prove_shared_domains();
+    prove_domain_close();
 #if defined(__AROSEXEC_SMP__)
     for (unsigned cpu=0;cpu<2;++cpu) KrnFreeCPUMask(cpu_masks[cpu]);
 #endif

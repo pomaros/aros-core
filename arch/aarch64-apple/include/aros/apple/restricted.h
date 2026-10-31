@@ -29,8 +29,9 @@
 struct AROSRestrictedResult {
     int64_t status;
     uint64_t value, esr, far, pc, yields, denied, replies, rejected, callbacks, resumed, cancelled, close_waits, drained, worker_retirements;
-    uint64_t cpus, migrations;
-    /* Trusted native caller snapshot, taken only after worker leases drain. */
+    uint64_t cpus, migrations, snapshot_valid;
+    /* Present only when snapshot_valid: sole legacy owner or last closing
+     * managed context, after all writers and worker leases drain. */
     unsigned char data[4096];
 };
 struct AROSRestrictedWork {
@@ -54,7 +55,8 @@ struct AROSRestrictedAPI {
      * TLS, continuation and service channel remain private to that context.
      * close_domain is controller-only: 1 reclaimed, 0 cancellation/drain pending,
      * -1 stale/foreign handle. A controller's retirement initiates cancellation.
-     * Managed run results have no bulk data snapshot while peers can write. */
+     * Managed run results have no bulk data snapshot while peers can write;
+     * snapshot_valid identifies the last closing context after all writers drain. */
     uint64_t (*create_domain)(const void *code,size_t bytes,uint64_t seed);
     int (*run_domain)(uint64_t handle,uint64_t seed,struct AROSRestrictedResult *);
     int (*close_domain)(uint64_t handle);

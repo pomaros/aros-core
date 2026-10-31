@@ -41,6 +41,8 @@ def main():
         ('foreign-domain-close','d->state!=R_LIVE || d->owner_context!=context','d->state!=R_LIVE'),
         ('early-domain-retire','d->threads || !AROSRestrictedSpaceClose(&d->space)','!AROSRestrictedSpaceClose(&d->space)'),
         ('domain-stopped-by-thread','if (!r->domain->managed) AROSRestrictedSpaceStop','if (1) AROSRestrictedSpaceStop'),
+        ('live-peer-snapshot','r->snapshot_data=!r->domain->managed || (r->domain->closing && r->domain->threads==1);','r->snapshot_data=1;'),
+        ('open-domain-snapshot','r->domain->closing && r->domain->threads==1','r->domain->threads==1'),
         ('duplicate-reap','owned->state=R_REAPING;',''),
         ('wrong-publisher','r->owner!=task','0'),
         ('wrong-context','r->owner_context!=context','0'),

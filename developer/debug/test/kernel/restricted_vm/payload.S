@@ -628,3 +628,33 @@ RestrictedSharedFailure:
  svc #0xa541
  b RestrictedSharedFailure
 RestrictedSharedEnd:
+
+.balign 16
+.global RestrictedSpin, RestrictedSpinEnd
+RestrictedSpin:
+ mov x19, x1
+ mov x9, #0xe4
+ str x9, [x19, #512]
+ mov x9, #0xa5a5
+ movk x9, #0xa5a5, lsl #16
+ movk x9, #0xa5a5, lsl #32
+ movk x9, #0xa5a5, lsl #48
+ str x9, [x19, #544]
+ add x0, x19, #512
+ add x1, x19, #544
+ mov x2, #8
+ mov x3, #0
+ svc #0xa542
+ cbz x0, RestrictedSpinFailure
+ /* No syscall or cooperative yield after publication. Cancellation must
+  * reach this context through scheduler save, with a positive spin count. */
+1:
+ ldr x9, [x19, #640]
+ add x9, x9, #1
+ str x9, [x19, #640]
+ b 1b
+RestrictedSpinFailure:
+ mov x0, #-9
+ svc #0xa541
+ b RestrictedSpinFailure
+RestrictedSpinEnd:

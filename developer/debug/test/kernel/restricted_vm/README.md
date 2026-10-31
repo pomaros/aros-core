@@ -90,7 +90,7 @@ checks the alternate SP and retained stack words across worker scheduling.
 Handler replacement/unregistration is refused while a fault is active; zero
 unregisters an idle handler. Code/backing remain immutable and retained until
 channel drain. A nested fault terminates the invocation instead of recursively
-consuming its alternate stack. Native control API v12 includes explicit domain control.
+consuming its alternate stack. Native control API v13 includes explicit domain control and checked snapshots.
 
 The kernel keeps address-space allocation records separately from execution
 slots. Table callbacks retain the domain record; accounting counts shared
@@ -115,9 +115,18 @@ The static four-domain/sixteen-context capacity is a bounded implementation limi
 
 The shared phase checks two domain-data values at the same VA, peer rendezvous
 within each domain, four private TLS/SIMD contexts, four native replies, pthread
-join, idle-domain retention and final explicit close. Clients are pinned across
-both CPUs in SMP builds; this phase does not claim migration. Reused domain
+join, idle-domain retention and final explicit close. A native migration controller moves all four clients across both CPUs in SMP
+builds; each client must report both CPUs and a positive migration count. Reused domain
 storage produces a new handle; stale run/close and foreign-controller close fail.
 Seven additional native-control SVCs are refused by each legacy payload, for 46
-total denials. Compilation alone does not qualify this phase or cancellation of
-CPU-bound shared payloads; the latter still needs its dedicated guest scenario.
+total denials. Compilation alone does not qualify these scenarios.
+
+Two close scenarios hold a native worker lease while a restricted thread spins
+without further syscalls. The controller explicitly closes the first domain;
+a creator pthread exits and orphans the second. Both must return through
+scheduler cancellation, preserve all 1,029 pages until worker acknowledgement,
+reject late output writes and reclaim all domains/contexts afterward. A positive
+guest spin counter proves entry into the non-cooperative loop. Snapshot permission
+is published under the coordinator only for a sole legacy owner or the last
+context of a closing managed domain, after worker drain. `snapshot_valid` makes
+that condition explicit; open shared domains never produce bulk snapshots.
