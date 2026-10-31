@@ -407,12 +407,17 @@ dispatch_after_self_exit:
      * F alike here); otherwise from the current readiness, as enter_idle and
      * the Sti SVC do. */
     regs->spsr = (uint64_t)context->cpsr & TASK_SPSR_ALLOWED;
-    cpu_ApplyTaskMasks(&regs->spsr, task->tc_IDNestCnt);
-    AROSAppleKernelLastDispatchSPSR = regs->spsr;
     for (index = 0; index < 66; ++index)
         regs->simd[index] =
             ((const volatile uint64_t *)context->fpuContext)[index];
-    task->tc_SPReg = (APTR)(uintptr_t)context->sp;
+    /* A controller may close a domain after its last save while this task
+     * waits on a scheduler list. Validate the restored frame after dispatch
+     * released the task lock, before choosing its return root and TLS. The
+     * cancellation path replaces the frame with the retained native return. */
+    AROSAppleRestrictedCheckStack(regs, task);
+    cpu_ApplyTaskMasks(&regs->spsr, task->tc_IDNestCnt);
+    AROSAppleKernelLastDispatchSPSR = regs->spsr;
+    task->tc_SPReg = (APTR)(uintptr_t)regs->sp;
     AROSAppleJitRestore(task);
 #if !defined(__AROSEXEC_SMP__)
     AppleTaskDispatch(GetIntETask(task),AppleTaskCounter());
