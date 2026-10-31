@@ -1,6 +1,7 @@
 /*
  * fat-handler - FAT12/16/32 filesystem handler
  *
+ * Copyright (C) 2026 John KNIPPER
  * Copyright (C) 2006 Marek Szyprowski
  * Copyright (C) 2007-2026 The AROS Development Team
  *
@@ -187,10 +188,11 @@ LONG LockFile(ULONG dir_cluster, ULONG dir_entry, LONG access,
         }
     }
 
-    /* If we do and we're trying for an exclusive lock, then bail out */
-    if (gl != NULL && access == EXCLUSIVE_LOCK)
+    /* An existing exclusive lock excludes readers as well as writers. */
+    if (gl != NULL &&
+        (access == EXCLUSIVE_LOCK || gl->access == EXCLUSIVE_LOCK))
     {
-        D(bug("[fat] can't obtain exclusive lock on already-locked file\n"));
+        D(bug("[fat] conflicting lock on already-locked file\n"));
         return ERROR_OBJECT_IN_USE;
     }
 

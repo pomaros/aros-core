@@ -21,3 +21,8 @@ sharing/type/protection/storage failures and malformed-handler cleanup under
 HOST ASan/UBSan. IPC/storage are mocked: this does not qualify disk persistence,
 packet dispatch, DOS library vectors or native execution. Build and native
 filesystem tests must establish those separately.
+
+The lock-admission fixture also extracts the actual FAT lock lookup and conflict
+check before allocation. It verifies shared/shared admission, both directions of
+exclusive conflict, unrelated identities and absent locks. Allocation and lock
+installation are outside this fixture; native tests establish real sharing.
