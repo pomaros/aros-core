@@ -233,7 +233,7 @@ static void prove_private_memory(void)
         CHECK(!api->commit_memory(handles[i],va,5));
         CHECK(api->commit_memory(handles[i],va,3));
         CHECK(!api->commit_memory(handles[i],va,3));
-        CHECK(api->run_domain(handles[i],0,&result) && result.status==0 && result.value==0 && result.denied==1);
+        CHECK(api->run_domain(handles[i],0,&result) && result.status==0 && result.value==0 && result.denied==2);
     }
     pthread_t foreign;
     CHECK(!pthread_create(&foreign,NULL,foreign_memory,&handles[0]));
@@ -256,6 +256,44 @@ static void prove_private_memory(void)
     CHECK(!api->commit_memory(handles[0],va,3));
     api->lifetime(&life);CHECK(!life.live && !life.domains && !life.pages);
     bug("[ISOVM] private-memory domains=2 fixed=2 zero=3 isolated=2 recommit=1 guard_fault=1 foreign=5 close_regions=2 retained_pages=0 PASS\n");
+}
+static void *orphan_shared(void *unused)
+{
+    (void)unused;CHECK(api->create_shared(4096));return NULL;
+}
+static void prove_shared_memory(void)
+{
+    const uintptr_t va=UINT64_C(0x200000000);
+    uint64_t object=api->create_shared(4096),domains[2];
+    struct AROSRestrictedResult result;struct AROSRestrictedLifetime life;
+    CHECK(object);
+    for (unsigned i=0;i<2;++i) {
+        domains[i]=api->create_domain(RestrictedMemory,(size_t)(RestrictedMemoryEnd-RestrictedMemory),0);
+        CHECK(domains[i] && api->reserve_memory(domains[i],va,4096));
+        CHECK(api->attach_shared(domains[i],va,object));
+        CHECK(!api->attach_shared(domains[i],va,object));
+        CHECK(!api->commit_memory(domains[i],va,3));
+        CHECK(!api->commit_shared(domains[i],va,5));
+        CHECK(api->commit_shared(domains[i],va,3));
+        CHECK(api->run_domain(domains[i],0,&result) && result.status==0 && result.value==i);
+    }
+    api->lifetime(&life);CHECK(life.shared_objects==1 && life.pages==2053);
+    CHECK(api->decommit_memory(domains[0],va));
+    CHECK(api->commit_shared(domains[0],va,3));
+    CHECK(api->run_domain(domains[0],0,&result) && result.status==0 && result.value==2);
+    CHECK(api->protect_memory(domains[0],va,1));
+    CHECK(api->run_domain(domains[0],0,&result) && result.status==-2 && result.far==va);
+    CHECK(api->run_domain(domains[1],0,&result) && result.status==0 && result.value==3);
+    CHECK(api->release_memory(domains[0],va));
+    CHECK(api->close_domain(domains[0])==1 && !api->close_shared(object));
+    CHECK(api->run_domain(domains[1],0,&result) && result.status==0 && result.value==4);
+    CHECK(api->close_domain(domains[1])==1 && api->close_shared(object));
+    CHECK(!api->close_shared(object));
+    uint64_t replacement=api->create_shared(4096);CHECK(replacement && replacement!=object);
+    CHECK(!api->close_shared(object) && api->close_shared(replacement));
+    pthread_t orphan;CHECK(!pthread_create(&orphan,NULL,orphan_shared,NULL));CHECK(!pthread_join(orphan,NULL));
+    api->lifetime(&life);CHECK(!life.shared_objects && !life.domains && !life.pages && !life.live);
+    bug("[ISOVM] shared-memory domains=2 views=2 shared_values=5 private_permissions=1 decommit_preserved=1 orphan=1 retained_pages=0 PASS\n");
 }
 extern const unsigned char RestrictedSpin[],RestrictedSpinEnd[];
 static uint64_t closing_domain;
@@ -433,7 +471,7 @@ int main(void)
     intptr_t address = KrnGetSystemAttr(AROS_RESTRICTED_KATTR_API);
     CHECK(address != -1 && address != 0);
     api = (const void *)address;
-    CHECK(api->version == 14 && api->size == sizeof(*api));
+    CHECK(api->version == 15 && api->size == sizeof(*api));
     /* No worker exists: queued cancellation is deterministic. */
     static struct AROSRestrictedResult queued;
     CHECK(api->run(RestrictedQueued,(size_t)(RestrictedQueuedEnd-RestrictedQueued),12288,&queued));
@@ -502,6 +540,7 @@ int main(void)
     bug("[ISOVM] fault-stack alternate=1 unregister=1 active-refusal=1 nested=1 guards=2 drained=5 PASS\n");
     prove_shared_domains();
     prove_private_memory();
+    prove_shared_memory();
     prove_domain_close();
 #if defined(__AROSEXEC_SMP__)
     for (unsigned cpu=0;cpu<2;++cpu) KrnFreeCPUMask(cpu_masks[cpu]);

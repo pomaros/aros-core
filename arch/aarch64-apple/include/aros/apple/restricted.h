@@ -40,7 +40,7 @@ struct AROSRestrictedWork {
     unsigned char bytes[256];
 };
 struct AROSRestrictedLifetime {
-    uint64_t retired,reaped,live,pending,pages,domains;
+    uint64_t retired,reaped,live,pending,pages,domains,shared_objects;
 };
 struct AROSRestrictedAPI {
     uint32_t version, size;
@@ -70,5 +70,14 @@ struct AROSRestrictedAPI {
     int (*decommit_memory)(uint64_t handle,uintptr_t address);
     int (*protect_memory)(uint64_t handle,uintptr_t address,unsigned protection);
     int (*release_memory)(uint64_t handle,uintptr_t address);
+    /* Controller-owned shared backing. Attach requires an empty reservation of
+     * exactly the object's size; commit each view page separately. Decommit
+     * retains shared contents. close_shared stops admission and returns 0 while
+     * views remain (also for stale/foreign handles); retry after release_memory
+     * or domain close. Creator retirement closes and reaps orphan objects. */
+    uint64_t (*create_shared)(size_t length);
+    int (*attach_shared)(uint64_t domain,uintptr_t address,uint64_t object);
+    int (*commit_shared)(uint64_t domain,uintptr_t address,unsigned protection);
+    int (*close_shared)(uint64_t object);
 };
 #endif

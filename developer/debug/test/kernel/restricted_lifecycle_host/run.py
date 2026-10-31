@@ -26,9 +26,12 @@ def main():
     if out.exists() or ROOT in out.parents:p.error('use a fresh output outside source')
     out.mkdir(parents=True)
     source=SOURCE.read_text()
-    actual=''.join(body(source,name) for name in ['r_domain_slot(uintptr_t','r_domain_lookup(uint64_t','r_domain_retire(struct','r_domain_lifecycle(struct','r_slot(uintptr_t','r_lifecycle(struct','r_close(struct','r_claim_reap(struct','r_stack_sp(const','r_stack_bounds(struct'])
+    actual=''.join(body(source,name) for name in ['r_domain_slot(uintptr_t','r_domain_lookup(uint64_t','r_shared_operation(struct','r_domain_retire(struct','r_domain_lifecycle(struct','r_slot(uintptr_t','r_lifecycle(struct','r_close(struct','r_claim_reap(struct','r_stack_sp(const','r_stack_bounds(struct'])
     variants=[('actual',actual)]
     for name,old,new in [
+        ('foreign-shared-close','b->owner_context!=context','0'),
+        ('stale-shared-handle','(*link)->handle!=p->handle','0'),
+        ('foreign-shared-release','b->releaser_context==context','1'),
         ('wrong-active-stack','r->fault_active ? r->fault_address : r->stack_address','r->stack_address'),
         ('guard-stack-bound','sp>base &&','sp>=base &&'),
         ('wrong-native-bounds','fault ? r->fault_address : r->stack_address','r->stack_address'),

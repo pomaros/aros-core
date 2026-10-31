@@ -674,6 +674,10 @@ RestrictedMemory:
  svc #0xa567
  cmn x0, #1
  b.ne RestrictedMemoryFailure
+ mov x0, #-1
+ svc #0xa568
+ cmn x0, #1
+ b.ne RestrictedMemoryFailure
  mov x0, #0
  svc #0xa541
 RestrictedMemoryFailure:

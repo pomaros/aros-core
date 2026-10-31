@@ -37,6 +37,7 @@
 #define R_DOMAIN_REAP 0xa565
 #define R_DOMAIN_ABORT 0xa566
 #define R_MEMORY 0xa567
+#define R_SHARED 0xa568
 #define R_COOKIE UINT64_C(0x7265737472696374)
 enum RestrictedState { R_FREE, R_ALLOCATING, R_LIVE, R_REAPING };
 /* Address-space allocation lifetime is separate from an execution context.
@@ -59,6 +60,22 @@ struct RestrictedDomain {
     struct AROSRestrictedSpace space;
     struct RestrictedAllocation *allocations;
 };
+struct RestrictedShared {
+    struct RestrictedShared *next;
+    struct AROSRestrictedSharedBacking backing;
+    void *owner_context,*releaser_context;
+    uint64_t handle;
+    size_t count;
+    uintptr_t *pages;
+};
+static struct RestrictedShared *restricted_shared;
+static uint64_t shared_generation;
+static void r_shared_lifetime(struct AROSRestrictedLifetime *state)
+{
+    for (struct RestrictedShared *b=restricted_shared;b;b=b->next) {
+        ++state->shared_objects;state->pages+=b->count;
+    }
+}
 struct Restricted {
     struct RestrictedDomain *domain;
     enum RestrictedState state;
@@ -213,6 +230,7 @@ static int r_lifecycle(struct AROSAppleRuntimeFrame *frame,struct Task *task,
                 state->pages+=(d->pool ? R_TABLES : 0)+(d->code!=NULL)+(d->data!=NULL)+d->memory_pages;
             }
         }
+        r_shared_lifetime(state);
         frame->x[0]=1;return 1;
     }
     return 0;
@@ -376,10 +394,57 @@ static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned s
         if (frame->x[0] && p->physical) --d->memory_pages;
     } else if (p->operation==3)
         frame->x[0]=AROSRestrictedRegionProtect(&a->region,page,p->protection);
+    else if (p->operation==5)
+        frame->x[0]=AROSRestrictedRegionCommitShared(&a->region,page,p->protection);
     else if (p->operation==4 && p->address==a->region.mapping.start &&
         AROSRestrictedRegionDetach(&a->region)) {
         for (size_t i=0;i<a->count;++i) d->memory_pages-=a->backing[i]!=0;
         *link=a->next;a->next=NULL;p->allocation=a;frame->x[0]=1;
+    }
+    return 1;
+}
+struct RestrictedSharedOperation {
+    unsigned operation;
+    uint64_t handle,domain;
+    uintptr_t address;
+    struct RestrictedShared *record;
+};
+static int r_shared_operation(struct AROSAppleRuntimeFrame *frame,void *context,unsigned svc)
+{
+    if (svc!=R_SHARED) return 0;
+    struct RestrictedSharedOperation *p=(void *)(uintptr_t)frame->x[0];
+    frame->x[0]=0;if (!p) return 1;
+    if (p->operation==0) {
+        struct RestrictedShared *b=p->record;
+        if (!b || shared_generation==UINT64_MAX ||
+            !AROSRestrictedSharedInitialize(&b->backing,b->pages,b->count)) return 1;
+        b->handle=++shared_generation;b->owner_context=context;
+        b->next=restricted_shared;restricted_shared=b;frame->x[0]=b->handle;return 1;
+    }
+    struct RestrictedShared **link=&restricted_shared;
+    if (p->operation==4) {
+        while (*link && ((*link)->owner_context || (*link)->releaser_context || (*link)->backing.views)) link=&(*link)->next;
+    } else {
+        while (*link && (*link)->handle!=p->handle) link=&(*link)->next;
+    }
+    struct RestrictedShared *b=*link;
+    if (!b) return 1;
+    if (p->operation==3) {
+        if (b->releaser_context==context && b->backing.pages==NULL) {
+            *link=b->next;frame->x[0]=1;
+        }
+        return 1;
+    }
+    if (b->releaser_context || (p->operation!=4 && b->owner_context!=context)) return 1;
+    if (p->operation==1) {
+        struct RestrictedDomain *d=r_domain_lookup(p->domain);
+        if (!d || d->closing || d->owner_context!=context) return 1;
+        for (struct RestrictedAllocation *a=d->allocations;a;a=a->next)
+            if (a->region.mapping.start==p->address) {
+                frame->x[0]=AROSRestrictedRegionAttachShared(&a->region,&b->backing);break;
+            }
+    } else if ((p->operation==2 || p->operation==4) && AROSRestrictedSharedClose(&b->backing)) {
+        b->releaser_context=context;p->record=b;frame->x[0]=1;
     }
     return 1;
 }
@@ -601,6 +666,10 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
     if (ec==0x15 && svc==0xa536) {
         void *retired=(void *)(uintptr_t)frame->x[0];
         frame->x[0]=AROSRestrictedServiceRetireWorker(retired);
+        for (struct RestrictedShared *b=restricted_shared;b;b=b->next)
+            if (b->owner_context==retired && !b->releaser_context) {
+                b->owner_context=NULL;b->backing.closing=1;
+            }
         for (unsigned i=0;i<KBUF_SPACES;++i) {
             struct RestrictedDomain *d=&restricted_domains[i];
             if (d->managed && d->state==R_LIVE && d->owner_context==retired) {
@@ -622,6 +691,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
         frame->x[0]=(uintptr_t)r_claim_reap(context);
         return 1;
     }
+    if (ec==0x15 && r_shared_operation(frame,context,svc)) return 1;
     if (ec==0x15 && r_memory(frame,context,svc)) return 1;
     if (ec==0x15 && r_domain_lifecycle(frame,context,svc)) return 1;
     if (ec==0x15 && r_lifecycle(frame,task,context,svc)) return 1;
@@ -704,7 +774,7 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
     unsigned ec=(unsigned)(frame->esr>>26)&63,svc=(unsigned)frame->esr&65535;
     if (!AROSAppleTaskExecution(context)->root &&
         (ec!=0x15 || ((svc<AROS_RESTRICTED_ENTER || svc>R_LIFETIME) &&
-         (svc<R_DOMAIN_CLAIM || svc>R_MEMORY)))) return 0;
+         (svc<R_DOMAIN_CLAIM || svc>R_SHARED)))) return 0;
     r_coordinate();
     int handled=r_trap_locked(frame);
     r_uncoordinate();
@@ -755,6 +825,21 @@ static void r_release(struct Restricted *r)
     __asm__ volatile("svc #0xa53a":"+r"(released)::"memory","cc");
     if (!released) for (;;) __asm__ volatile("wfe");
 }
+static uintptr_t r_shared_call(struct RestrictedSharedOperation *p)
+{
+    register uintptr_t argument __asm__("x0")=(uintptr_t)p;
+    __asm__ volatile("svc #0xa568":"+r"(argument)::"memory","cc");
+    return argument;
+}
+static void r_release_shared(struct RestrictedShared *b)
+{
+    for (size_t i=0;i<b->count;++i)
+        if (b->pages[i] && !AROSApplePageFree((void *)b->pages[i],R_PAGE))
+            for (;;) __asm__ volatile("wfe");
+    struct RestrictedSharedOperation op={.operation=3,.handle=b->handle};
+    if (!r_shared_call(&op)) for (;;) __asm__ volatile("wfe");
+    FreeVec(b);
+}
 static void r_reap(void)
 {
     Forbid();
@@ -769,6 +854,11 @@ static void r_reap(void)
         __asm__ volatile("svc #0xa565":"+r"(ready)::"x1","memory","cc");
         if (!ready) break;
         r_release_domain((void *)ready);
+    }
+    for (;;) {
+        struct RestrictedSharedOperation op={.operation=4};
+        if (!r_shared_call(&op)) break;
+        r_release_shared(op.record);
     }
     Permit();
 }
@@ -946,6 +1036,44 @@ static int r_release_memory(uint64_t handle,uintptr_t address)
     Permit();return ok;
 }
 
+static uint64_t r_create_shared(size_t length)
+{
+    if (!length || (length&(R_PAGE-1)) || length>AROS_RESTRICTED_DYNAMIC_END-AROS_RESTRICTED_DYNAMIC_BASE) return 0;
+    size_t count=length/R_PAGE;
+    if (count>(SIZE_MAX-sizeof(struct RestrictedShared))/sizeof(uintptr_t)) return 0;
+    Forbid();struct RestrictedShared *b=AllocVec(sizeof(*b)+count*sizeof(uintptr_t),MEMF_CLEAR);
+    if (!b) { Permit();return 0; }
+    b->count=count;b->pages=(void *)(b+1);size_t i;
+    for (i=0;i<count;++i) {
+        b->pages[i]=(uintptr_t)AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
+        if (!b->pages[i]) break;
+    }
+    struct RestrictedSharedOperation op={.operation=0,.record=b};
+    uint64_t handle=i==count ? r_shared_call(&op) : 0;
+    if (!handle) {
+        for (size_t j=0;j<i;++j)
+            if (!AROSApplePageFree((void *)b->pages[j],R_PAGE)) for (;;) __asm__ volatile("wfe");
+        FreeVec(b);
+    }
+    Permit();return handle;
+}
+static int r_attach_shared(uint64_t domain,uintptr_t address,uint64_t handle)
+{
+    Forbid();struct RestrictedSharedOperation op={.operation=1,.handle=handle,.domain=domain,.address=address};
+    int ok=r_shared_call(&op)!=0;Permit();return ok;
+}
+static int r_commit_shared(uint64_t domain,uintptr_t address,unsigned protection)
+{
+    Forbid();struct RestrictedMemoryOperation op={.handle=domain,.address=address,.operation=5,.protection=protection};
+    int ok=r_memory_call(&op);Permit();return ok;
+}
+static int r_close_shared(uint64_t handle)
+{
+    Forbid();struct RestrictedSharedOperation op={.operation=2,.handle=handle};
+    int ok=r_shared_call(&op)!=0;if (ok) r_release_shared(op.record);
+    Permit();return ok;
+}
+
 void AROSAppleRestrictedContextRetired(void *context)
 {
     if (!context || !AROSAppleRuntimeLocal()->active || !r_current()) return;
@@ -974,7 +1102,7 @@ static unsigned r_state(const struct AROSRestrictedWork *work)
     __asm__ volatile("svc #0xa535":"+r"(argument)::"memory","cc");
     return (unsigned)argument;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {14,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {15,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

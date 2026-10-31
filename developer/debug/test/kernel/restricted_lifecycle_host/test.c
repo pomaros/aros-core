@@ -21,6 +21,7 @@
 #define R_DOMAIN_RELEASED 0xa564
 #define R_DOMAIN_REAP 0xa565
 #define R_DOMAIN_ABORT 0xa566
+#define R_SHARED 0xa568
 struct Task { int id; void *tc_SPLower,*tc_SPUpper; };
 struct ExceptionContext { int id; };
 struct AROSAppleRuntimeFrame { uintptr_t x[31],entry_ttbr0; };
@@ -35,7 +36,30 @@ static int AROSRestrictedSpaceClose(struct AROSRestrictedSpace *s)
 struct AROSRestrictedService { unsigned drained,closes; };
 static int AROSRestrictedServiceClose(struct AROSRestrictedService *s)
 { ++s->closes;return s->drained; }
-struct AROSRestrictedRegion { struct AROSRestrictedSpace *space; unsigned drained; };
+struct AROSRestrictedSharedBacking { uintptr_t *pages; size_t count,views; unsigned closing; };
+struct AROSRestrictedRegion {
+    struct AROSRestrictedSpace *space; unsigned drained;
+    struct { uintptr_t start; } mapping;
+    struct AROSRestrictedSharedBacking *shared;
+};
+static int AROSRestrictedSharedInitialize(struct AROSRestrictedSharedBacking *b,uintptr_t *pages,size_t count)
+{ if (b->pages || !pages || !count) return 0;b->pages=pages;b->count=count;return 1; }
+static int AROSRestrictedSharedClose(struct AROSRestrictedSharedBacking *b)
+{ b->closing=1;if (b->views) return 0;b->pages=NULL;return 1; }
+static int AROSRestrictedRegionAttachShared(struct AROSRestrictedRegion *r,struct AROSRestrictedSharedBacking *b)
+{ if (r->shared || b->closing) return 0;r->shared=b;++b->views;return 1; }
+struct RestrictedShared {
+    struct RestrictedShared *next;
+    struct AROSRestrictedSharedBacking backing;
+    void *owner_context,*releaser_context;
+    uint64_t handle;size_t count;uintptr_t *pages;
+};
+struct RestrictedSharedOperation {
+    unsigned operation;uint64_t handle,domain;uintptr_t address;
+    struct RestrictedShared *record;
+};
+static struct RestrictedShared *restricted_shared;
+static uint64_t shared_generation;
 static int AROSRestrictedRegionDetach(struct AROSRestrictedRegion *r)
 { if (!r->drained) return 0;r->space=NULL;return 1; }
 struct RestrictedAllocation { struct RestrictedAllocation *next; struct AROSRestrictedRegion region; };
@@ -84,6 +108,7 @@ static int r_prepare_domain(struct RestrictedDomain *d,uint64_t root)
     assert(root==123 && !d->space.handle);
     d->space.handle=(++handle_generation<<32)|1;d->space.drained=1;return 1;
 }
+static void r_shared_lifetime(struct AROSRestrictedLifetime *state) { (void)state; }
 #include "actual.inc"
 static struct Task owner,other;
 static struct ExceptionContext context,foreign;
@@ -163,6 +188,33 @@ static void managed_tests(void)
     struct AROSRestrictedLifetime life;
     assert(call(R_LIFETIME,(uintptr_t)&life,&owner,&context));
     assert(!life.live && !life.domains && !life.pages);
+}
+static uintptr_t shared_call(struct RestrictedSharedOperation *op,void *ctx)
+{
+    struct AROSAppleRuntimeFrame frame={.x={(uintptr_t)op}};
+    assert(r_shared_operation(&frame,ctx,R_SHARED));return frame.x[0];
+}
+static void shared_tests(void)
+{
+    struct RestrictedShared b={.count=1};uintptr_t page=123;b.pages=&page;
+    struct RestrictedSharedOperation op={.record=&b};
+    uint64_t handle=shared_call(&op,&context);assert(handle && b.owner_context==&context);
+    op=(struct RestrictedSharedOperation){.operation=2,.handle=handle};
+    assert(!shared_call(&op,&foreign) && !b.backing.closing);
+    op.handle=handle+1;assert(!shared_call(&op,&context) && !b.backing.closing);op.handle=handle;
+    b.backing.views=1;assert(!shared_call(&op,&context) && b.backing.closing && !b.releaser_context);
+    b.backing.views=0;assert(shared_call(&op,&context) && b.releaser_context==&context && op.record==&b);
+    assert(!shared_call(&op,&context));
+    op.operation=3;assert(!shared_call(&op,&foreign) && restricted_shared==&b);
+    assert(shared_call(&op,&context) && !restricted_shared);
+    assert(!shared_call(&op,&context));
+    memset(&b,0,sizeof(b));b.count=1;b.pages=&page;op=(struct RestrictedSharedOperation){.record=&b};
+    uint64_t next=shared_call(&op,&context);assert(next>handle);
+    op=(struct RestrictedSharedOperation){.operation=2,.handle=handle};assert(!shared_call(&op,&context));
+    b.owner_context=NULL;b.backing.views=1;op.operation=4;
+    assert(!shared_call(&op,&foreign));b.backing.views=0;
+    assert(shared_call(&op,&foreign) && b.releaser_context==&foreign);
+    op.operation=3;op.handle=next;assert(shared_call(&op,&foreign) && !restricted_shared);
 }
 int main(void)
 {
@@ -283,5 +335,6 @@ int main(void)
     }
     assert(owners_reaped==4);
     managed_tests();
+    shared_tests();
     return 0;
 }
