@@ -63,7 +63,7 @@ deferred domain reclamation.
 
 External owner retirement uses eight remove/complete cycles, exceeding the four
 domain slots. Each raw Exec owner is removed while the native parent holds a
-request: the domain closes but retains 1,027 pages until acknowledgement, then
+request: the domain closes but retains 1,028 pages until acknowledgement, then
 all slots/backing drain and stale completions fail. The removed native caller's
 result storage stays untouched. Kernel control slots serialize publication and exclusive reaping through the
 coordinator. Allocation/release execute outside that lock on native stacks,
@@ -82,3 +82,12 @@ The production adapter separates address-space ownership from per-thread service
 channels. Native worker handles identify generation-tagged channels independently
 of domain handles. This workload still creates one domain per run invocation;
 multi-thread execution in one root needs its separate integration workload.
+
+Fault delivery switches to a separate zeroed RW/NX page with unmapped guards on
+both sides. Native Task stack bounds follow the active handler and revert on
+resume; the original SP stays in the kernel-retained continuation. The payload
+checks the alternate SP and retained stack words across worker scheduling.
+Handler replacement/unregistration is refused while a fault is active; zero
+unregisters an idle handler. Code/backing remain immutable and retained until
+channel drain. A nested fault terminates the invocation instead of recursively
+consuming its alternate stack. Native control API v10 identifies this layout.

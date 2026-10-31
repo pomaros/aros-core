@@ -19,6 +19,7 @@ static unsigned migration_ack[2];
 static unsigned removed_worker_cpu,removed_owner_cpu,reaper_stop,reaper_polls;
 #endif
 APTR KernelBase;
+extern const unsigned char RestrictedFaultPolicy[], RestrictedFaultPolicyEnd[];
 extern const unsigned char RestrictedCode[], RestrictedCodeEnd[];
 extern const unsigned char RestrictedBadStack[], RestrictedBadStackEnd[];
 extern const unsigned char RestrictedQueued[], RestrictedQueuedEnd[];
@@ -188,7 +189,7 @@ static void prove_owner_retirement(void)
         RemTask(task);FreeMem(stack,256*1024);FreeMem(task,sizeof(*task));
         api->lifetime(&held);
         CHECK(held.retired==before.retired+cycle+1 && held.reaped==before.reaped+cycle);
-        CHECK(held.live==1 && held.pending==1 && held.pages==1027);
+        CHECK(held.live==1 && held.pending==1 && held.pages==1028);
         CHECK(api->state(&work)==AROS_RESTRICTED_CANCELLED);
         memset(work.bytes,0x39,8);CHECK(api->complete(&work));
         CHECK(!api->complete(&work) && !api->state(&work));
@@ -224,7 +225,7 @@ int main(void)
     intptr_t address = KrnGetSystemAttr(AROS_RESTRICTED_KATTR_API);
     CHECK(address != -1 && address != 0);
     api = (const void *)address;
-    CHECK(api->version == 9 && api->size == sizeof(*api));
+    CHECK(api->version == 10 && api->size == sizeof(*api));
     /* No worker exists: queued cancellation is deterministic. */
     static struct AROSRestrictedResult queued;
     CHECK(api->run(RestrictedQueued,(size_t)(RestrictedQueuedEnd-RestrictedQueued),12288,&queued));
@@ -280,6 +281,17 @@ int main(void)
         CHECK(!lifetime.live && !lifetime.pending && !lifetime.pages);
     }
     bug("[ISOVM] invalid-stack yield=1 collect=1 status=1 drained=3 PASS\n");
+    static struct AROSRestrictedResult fault_policy;
+    for (unsigned policy=0;policy<5;++policy) {
+        CHECK(api->run(RestrictedFaultPolicy,
+            (size_t)(RestrictedFaultPolicyEnd-RestrictedFaultPolicy),policy,&fault_policy));
+        CHECK(fault_policy.status==(policy==4 ? 0 : -2) && fault_policy.drained==1);
+        CHECK(fault_policy.resumed==(policy==4) && fault_policy.rejected==(policy==4));
+    }
+    struct AROSRestrictedLifetime fault_lifetime;
+    api->lifetime(&fault_lifetime);
+    CHECK(!fault_lifetime.live && !fault_lifetime.pending && !fault_lifetime.pages);
+    bug("[ISOVM] fault-stack alternate=1 unregister=1 active-refusal=1 nested=1 guards=2 drained=5 PASS\n");
 #if defined(__AROSEXEC_SMP__)
     for (unsigned cpu=0;cpu<2;++cpu) KrnFreeCPUMask(cpu_masks[cpu]);
 #endif

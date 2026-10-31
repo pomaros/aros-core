@@ -26,9 +26,12 @@ def main():
     if out.exists() or ROOT in out.parents:p.error('use a fresh output outside source')
     out.mkdir(parents=True)
     source=SOURCE.read_text()
-    actual=''.join(body(source,name) for name in ['r_slot(uintptr_t','r_lifecycle(struct','r_claim_reap(struct'])
+    actual=''.join(body(source,name) for name in ['r_slot(uintptr_t','r_lifecycle(struct','r_claim_reap(struct','r_stack_sp(const','r_stack_bounds(struct'])
     variants=[('actual',actual)]
     for name,old,new in [
+        ('wrong-active-stack','r->fault_active ? AROS_RESTRICTED_FAULT_STACK : AROS_RESTRICTED_STACK','AROS_RESTRICTED_STACK'),
+        ('guard-stack-bound','sp>base &&','sp>=base &&'),
+        ('wrong-native-bounds','fault ? AROS_RESTRICTED_FAULT_STACK : AROS_RESTRICTED_STACK','AROS_RESTRICTED_STACK'),
         ('duplicate-reap','owned->state=R_REAPING;',''),
         ('wrong-publisher','r->owner!=task','0'),
         ('wrong-context','r->owner_context!=context','0'),
@@ -40,14 +43,14 @@ def main():
         variants.append((name,actual.replace(old,new)))
     result={'result':'FAIL','scope':__doc__,'source_commit':subprocess.check_output(
         ['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),'inputs':{},'variants':[]}
-    for path in [SOURCE,HERE/'test.c',Path(__file__).resolve()]:
+    for path in [SOURCE,ROOT/'arch/aarch64-apple/include/aros/apple/restricted.h',HERE/'test.c',Path(__file__).resolve()]:
         result['inputs'][str(path)]=hashlib.sha256(path.read_bytes()).hexdigest()
     try:
         for name,code in variants:
             folder=out/name;folder.mkdir();(folder/'actual.inc').write_text(code)
             binary=folder/'test'
             command=['clang','-std=c11','-g','-O1','-fsanitize=address,undefined',
-                '-I'+str(folder),str(HERE/'test.c'),'-o',str(binary)]
+                '-I'+str(folder),'-I'+str(ROOT/'arch/aarch64-apple/include'),str(HERE/'test.c'),'-o',str(binary)]
             build=subprocess.run(command,capture_output=True,text=True,timeout=30)
             (folder/'build.log').write_text(build.stdout+build.stderr)
             if build.returncode:raise RuntimeError(name+' compilation failed')

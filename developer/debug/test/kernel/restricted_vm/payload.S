@@ -285,6 +285,16 @@ RestrictedWriteProbe:
  svc #0xa544
  b RestrictedFailure
 RestrictedFaultHandler:
+ /* Dedicated stack lies four pages above DATA, with absent neighbors.
+  * Exercise stack memory across the worker's scheduling points. */
+ mov x9, sp
+ add x10, x19, #5, lsl #12
+ cmp x9, x10
+ b.ne RestrictedFailure
+ stp x0, x1, [sp, #-32]!
+ stp x2, x3, [sp, #16]
+ ldp x0, x1, [sp]
+ ldp x2, x3, [sp, #16]
  /* Preserve the delivered x0-x3 fault arguments while checking context. */
  RegisterCheck 256
  RegisterSeed 512
@@ -343,6 +353,12 @@ RestrictedFaultHandler:
  eor x9, x9, x26
  cmp x9, x27
  b.ne RestrictedFailure
+ ldp x9, x10, [sp, #16]
+ cmp x9, x24
+ b.ne RestrictedFailure
+ cmp x10, x25
+ b.ne RestrictedFailure
+ add sp, sp, #32
  mov x0, x24
  mov x1, x25
  svc #0xa547
@@ -440,3 +456,70 @@ BadStackYield:
  svc #0xa540
  b .
 RestrictedBadStackEnd:
+
+.balign 16
+.global RestrictedFaultPolicy, RestrictedFaultPolicyEnd
+RestrictedFaultPolicy:
+ mov x19, x1
+ mov x20, x0
+ adr x0, RestrictedPolicyHandler
+ svc #0xa545
+ cbz x0, RestrictedPolicyFailure
+ cbnz x20, 1f
+ /* An idle handler can be removed; the subsequent fault must terminate. */
+ mov x0, #0
+ svc #0xa545
+ cbz x0, RestrictedPolicyFailure
+1:
+ mov x0, x19
+ mov x1, #1
+ svc #0xa546
+ cbz x0, RestrictedPolicyFailure
+RestrictedPolicyStore:
+ str x20, [x19, #512]
+ cmp x20, #4
+ b.ne RestrictedPolicyFailure
+ mov x0, #0
+ svc #0xa541
+ b RestrictedPolicyFailure
+RestrictedPolicyHandler:
+ mov x21, x2
+ mov x22, x3
+ mov x9, sp
+ add x10, x19, #5, lsl #12
+ cmp x9, x10
+ b.ne RestrictedPolicyFailure
+ cmp x20, #1
+ b.eq RestrictedPolicyNested
+ cmp x20, #2
+ b.eq RestrictedPolicyLower
+ cmp x20, #3
+ b.eq RestrictedPolicyUpper
+ cmp x20, #4
+ b.ne RestrictedPolicyFailure
+ /* Active-handler removal must fail without invalidating this continuation. */
+ mov x0, #0
+ svc #0xa545
+ cbnz x0, RestrictedPolicyFailure
+ mov x0, x19
+ mov x1, #3
+ svc #0xa546
+ cbz x0, RestrictedPolicyFailure
+ mov x0, x21
+ mov x1, x22
+ svc #0xa547
+ b RestrictedPolicyFailure
+RestrictedPolicyNested:
+ str x20, [x19, #520]
+ b RestrictedPolicyFailure
+RestrictedPolicyLower:
+ sub x9, sp, #1, lsl #12
+ str x20, [x9, #-16]
+ b RestrictedPolicyFailure
+RestrictedPolicyUpper:
+ str x20, [sp]
+RestrictedPolicyFailure:
+ mov x0, #-9
+ svc #0xa541
+ b RestrictedPolicyFailure
+RestrictedFaultPolicyEnd:
