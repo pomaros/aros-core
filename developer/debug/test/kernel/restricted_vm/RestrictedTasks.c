@@ -13,6 +13,7 @@
 #include <aros/apple/restricted.h>
 APTR KernelBase;
 extern const unsigned char RestrictedCode[], RestrictedCodeEnd[];
+extern const unsigned char RestrictedBadStack[], RestrictedBadStackEnd[];
 extern const unsigned char RestrictedQueued[], RestrictedQueuedEnd[];
 extern const unsigned char RestrictedWorkerDeath[], RestrictedWorkerDeathEnd[];
 static const struct AROSRestrictedAPI *api;
@@ -186,6 +187,17 @@ int main(void)
     CHECK(beats > 0 && after_fault > 0);
     prove_worker_retirement();
     prove_owner_retirement();
+    static struct AROSRestrictedResult bad_stack;
+    for (unsigned operation=0;operation<3;++operation) {
+        CHECK(api->run(RestrictedBadStack,
+            (size_t)(RestrictedBadStackEnd-RestrictedBadStack),operation,&bad_stack));
+        CHECK(bad_stack.status==-3 && bad_stack.value==operation && bad_stack.drained==1);
+        CHECK(bad_stack.yields==(operation==0));
+        struct AROSRestrictedLifetime lifetime;
+        api->lifetime(&lifetime);
+        CHECK(!lifetime.live && !lifetime.pending && !lifetime.pages);
+    }
+    bug("[ISOVM] invalid-stack yield=1 collect=1 status=1 drained=3 PASS\n");
     bug("[ISOVM] PASS restricted=2 yields=3072 denied=24 faulted=1 survived=1 heartbeat=%u after_fault=%u joined=5 replies=402 rejected=16 callbacks=200 resumed=2 cancelled=3 worker_ack=3 close_pending=1 drained=4 removed_worker=1 removed_owners=8 reaped_owners=8 retained_pages=0\n",beats,after_fault);
     return 0;
 }

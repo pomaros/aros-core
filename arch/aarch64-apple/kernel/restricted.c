@@ -50,6 +50,8 @@ struct Restricted {
 static struct Restricted restricted_slots[KBUF_SPACES];
 static uint64_t owners_retired, owners_reaped;
 static void r_reap(void);
+static void r_coordinate(void);
+static void r_uncoordinate(void);
 static int r_code_pc(const struct Restricted *r,uint64_t pc)
 {
     return pc>=AROS_RESTRICTED_CODE && !(pc&3) && r->code_bytes>=4 &&
@@ -99,7 +101,7 @@ static void r_sync(void *opaque, uint64_t va, size_t bytes)
      * mapping. Clean the owned native backing, not the inactive guest VA. */
     (void)va;
     r_clean(opaque, r->code, bytes);
-    __asm__ volatile("ic iallu; dsb ish; isb":::"memory");
+    __asm__ volatile("ic ialluis; dsb ish; isb":::"memory");
 }
 /* Source tables are frozen by the native caller's mapping lock. Every table
  * allocation belongs to one retained slab, including a partial failure. */
@@ -143,10 +145,15 @@ void AROSAppleRestrictedCheckStack(struct AROSAppleRuntimeFrame *frame,
     struct AROSAppleTaskExecution *execution = AROSAppleTaskExecution(context);
     if (!execution->root) return;
     if (!r_stack_sp(frame->sp)) {
+        /* Only restricted frames reach this lock: native Wait may carry its
+         * task lock through cpu_SaveContext. Restricted code cannot call Wait.
+         * The current frame has not been published to another CPU yet. */
+        r_coordinate();
         struct Restricted *r = execution->domain;
         if (!r || r->cookie != R_COOKIE || r->owner != task)
             for (;;) __asm__ volatile("wfe");
         r_finish(r,execution,frame,-3);
+        r_uncoordinate();
     }
 }
 static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
@@ -187,9 +194,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
         case AROS_RESTRICTED_YIELD:
             ++r->result.yields;
             frame->x[0] = 0;
-            core_SysCall(SC_SWITCH,frame);
-            cpu_ApplyCurrentTaskMasks(&frame->spsr);
-            return 1;
+            return 2; /* Schedule only after releasing the coordinator. */
         case AROS_RESTRICTED_SUBMIT:
             /* Callback authority is bounded by this immutable executable
              * allocation. An active callback may call the worker again, but
@@ -214,8 +219,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
                     frame->x[30]=0;
                 }
             } else {
-                frame->x[0]=0;core_SysCall(SC_SWITCH,frame);
-                cpu_ApplyCurrentTaskMasks(&frame->spsr);
+                frame->x[0]=0;return 2;
             }
             return 1;
         case AROS_RESTRICTED_CALLBACK_RETURN:
@@ -261,8 +265,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
         case AROS_RESTRICTED_STATUS:
             frame->x[0]=r->service.request.queue && r->service.request.token==frame->x[0] ?
                 r->service.request.state : 0;
-            core_SysCall(SC_SWITCH,frame);cpu_ApplyCurrentTaskMasks(&frame->spsr);
-            return 1;
+            return 2;
         case AROS_RESTRICTED_EXIT:
             r_finish(r,execution,frame,(int64_t)frame->x[0]);
             return 1;
@@ -356,14 +359,8 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
  * Lock order is PageMapLock -> coordinator -> scheduler/task locks. No native
  * page allocator, blocking Exec operation or PageMutationBegin while held. */
 static uint32_t coordinator_lock;
-int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
+static void r_coordinate(void)
 {
-    if (!frame || frame->vector!=8 || (frame->spsr&31)) return 0;
-    struct ExceptionContext *context=r_context(r_current());
-    if (!context) return 0;
-    unsigned ec=(unsigned)(frame->esr>>26)&63,svc=(unsigned)frame->esr&65535;
-    if (!AROSAppleTaskExecution(context)->root &&
-        (ec!=0x15 || svc<AROS_RESTRICTED_ENTER || svc>0xa537)) return 0;
     for (;;) {
 #if defined(__AROSEXEC_SMP__)
         /* A mapping owner may hold PageMapLock and wait for this lock. A
@@ -374,9 +371,30 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
         if (!__atomic_exchange_n(&coordinator_lock,1,__ATOMIC_ACQUIRE)) break;
         __asm__ volatile("yield" ::: "memory");
     }
-    int handled=r_trap_locked(frame);
+}
+static void r_uncoordinate(void)
+{
     __atomic_store_n(&coordinator_lock,0,__ATOMIC_RELEASE);
-    return handled;
+}
+int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
+{
+    if (!frame || frame->vector!=8 || (frame->spsr&31)) return 0;
+    struct ExceptionContext *context=r_context(r_current());
+    if (!context) return 0;
+    unsigned ec=(unsigned)(frame->esr>>26)&63,svc=(unsigned)frame->esr&65535;
+    if (!AROSAppleTaskExecution(context)->root &&
+        (ec!=0x15 || svc<AROS_RESTRICTED_ENTER || svc>0xa537)) return 0;
+    r_coordinate();
+    int handled=r_trap_locked(frame);
+    r_uncoordinate();
+    if (handled==2) {
+        /* The scheduler saves the outgoing frame and can finish an invalid
+         * restricted stack. It must never recursively acquire our lock or
+         * carry it while choosing/dispatching another task. */
+        core_SysCall(SC_SWITCH,frame);
+        cpu_ApplyCurrentTaskMasks(&frame->spsr);
+    }
+    return handled!=0;
 }
 static void r_release(struct Restricted *r)
 {

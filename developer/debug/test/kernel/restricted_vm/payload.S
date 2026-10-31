@@ -364,3 +364,24 @@ WorkerDeathFailure:
  svc #0xa541
  b .
 RestrictedWorkerDeathEnd:
+
+.balign 16
+.global RestrictedBadStack, RestrictedBadStackEnd
+RestrictedBadStack:
+ /* Aligned but outside the owned stack. Each scheduling SVC must terminate
+  * this domain and restore the native continuation without locking twice. */
+ mov sp, x1
+ cbz x0, BadStackYield
+ cmp x0, #1
+ b.eq BadStackCollect
+ mov x0, #0
+ svc #0xa549
+ b .
+BadStackCollect:
+ mov x0, #0
+ svc #0xa543
+ b .
+BadStackYield:
+ svc #0xa540
+ b .
+RestrictedBadStackEnd:
