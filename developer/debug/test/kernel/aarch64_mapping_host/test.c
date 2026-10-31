@@ -435,11 +435,52 @@ static void privileged_alias(unsigned page)
     assert(!*entry && f.allocate_calls==allocation_count);
     finish(&f);
 }
+/* Reproduce an inherited low identity mapping in a separately owned root.
+ * The QEMU failure used 48-bit VA / 4K tables; also cover 39-bit and 16K. */
+static void low_clone_eviction(unsigned page, unsigned bits)
+{
+    struct Fixture f;init(&f,page,bits);struct AArch64ProtectionOps o=ops(&f);
+    f.va=UINT64_C(0x7ffe0000);
+    uint64_t step=UINT64_C(1)<<page,source=f.root,clone=0,pa=SENTINEL;
+    assert(AArch64MapPage(&o,source,f.tcr,f.va,f.va,3,1));
+    assert(AArch64MapPage(&o,source,f.tcr,f.va+step,f.va+step,3,1));
+    uint64_t original=*slot_at(&f,f.va,3),neighbor=*slot_at(&f,f.va+step,3);
+    size_t count=0;
+    assert(AArch64CountPrivilegedRoot(&o,source,f.tcr,MAX_TABLES,&count));
+    assert(AArch64ClonePrivilegedRoot(&o,source,f.tcr,count,&clone));
+    assert(clone!=source);f.root=clone;
+    uint64_t *entry=slot_at(&f,f.va,3),saved=*entry;
+    unsigned allocations=f.allocate_calls,invalidations=f.invalidations;
+    assert(!AArch64MapPage(&o,clone,f.tcr,f.va,DATA_PA,11,1));
+    assert(!AArch64UnmapPrivilegedPage(&o,clone,f.tcr,f.va,f.va+step));
+    const uint64_t refused[]={saved|(UINT64_C(1)<<6),saved&~UXN,
+        saved|CONTIG,saved|PA_HIGH,saved|GUARD};
+    for (unsigned i=0;i<sizeof(refused)/sizeof(*refused);++i) {
+        *entry=refused[i];
+        assert(!AArch64UnmapPrivilegedPage(&o,clone,f.tcr,f.va,f.va));
+        assert(*entry==refused[i]);
+    }
+    *entry=saved;
+    assert(f.allocate_calls==allocations && f.invalidations==invalidations);
+    assert(AArch64UnmapPrivilegedPage(&o,clone,f.tcr,f.va,f.va));
+    assert(!*entry && f.invalidations==invalidations+1);
+    assert(!AArch64UnmapPrivilegedPage(&o,clone,f.tcr,f.va,f.va));
+    assert(AArch64MapPage(&o,clone,f.tcr,f.va,DATA_PA,11,1));
+    assert(AArch64UserPagePhysical(&o,clone,f.tcr,f.va,2,1,&pa) && pa==DATA_PA);
+    assert(!AArch64UnmapPrivilegedPage(&o,clone,f.tcr,f.va,DATA_PA));
+    assert(*slot_at(&f,f.va+step,3)==neighbor);
+    assert(f.allocate_calls==allocations);
+    f.root=source;
+    assert(*slot_at(&f,f.va,3)==original && *slot_at(&f,f.va+step,3)==neighbor);
+    assert(AArch64MappingPhysical(&o,source,f.tcr,f.va,&pa) && pa==f.va);
+    finish(&f);
+}
 int main(void)
 {
     const unsigned widths[]={25,30,32,39,42,48};
     for (unsigned page=12;page<=14;page+=2) {
         for (unsigned i=0;i<sizeof(widths)/sizeof(*widths);++i) basic(page,widths[i]);
+        low_clone_eviction(page,39);low_clone_eviction(page,48);
         privileged_alias(page);user_admission(page);permissions(page);allocation_failures(page);invalid_geometry(page);corruption(page);parent_and_blocks(page);callback_contract(page);address_widths(page);
     }
     printf("[AARCH64-MAPPING-HOST] result=PASS cases=%u granules=4K,16K actual-production-walks=1 native=NOT_RUN\n",cases);

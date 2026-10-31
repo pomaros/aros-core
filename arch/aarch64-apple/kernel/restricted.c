@@ -4,6 +4,7 @@
  */
 #include <aros/config.h>
 #include <aros/kernel.h>
+#include <aros/apple/startup.h>
 #include <exec/execbase.h>
 #include <exec/memory.h>
 #include <exec/tasks.h>
@@ -633,6 +634,20 @@ static void *publication_context;
 static int r_publish_native(void *context,uintptr_t physical,unsigned protection)
 { (void)context;return AROSApplePageProtectArenaLocked(physical,protection); }
 static const struct AROSRestrictedPublicationOps publication_ops={NULL,r_publish_native};
+/* Only evict an inherited low leaf in this domain's private table clone.
+ * Owned pages (including guards) are handled by RegionCommit itself. No native
+ * physical backing is released here; the trusted identity map remains intact. */
+static int r_prepare_low_page(struct RestrictedDomain *d,
+    struct RestrictedAllocation *a, size_t page, uintptr_t address)
+{
+    if (address >= AROS_RESTRICTED_LOW_END || a->backing[page]) return 1;
+    if (!AROSAppleKernelTransitionRangeAvailable(address, R_PAGE)) return 0;
+    uint64_t physical;
+    if (!AArch64MappingPhysical(&d->space.hardware,d->root,d->space.tcr,address,&physical))
+        return 1; /* Missing or unsupported mapping: MapPage still fails closed. */
+    return AArch64UnmapPrivilegedPage(&d->space.hardware,d->root,
+        d->space.tcr,address,physical);
+}
 static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned svc)
 {
     if (svc!=R_MEMORY) return 0;
@@ -642,7 +657,9 @@ static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned s
     if (!d || d->closing || d->owner_context!=context) return 1;
     if (p->operation==0) {
         struct RestrictedAllocation *a=p->allocation;
-        if (a && AROSRestrictedRegionReserve(&d->space,&a->region,p->address,
+        if (a && (p->address >= AROS_RESTRICTED_LOW_END ||
+            AROSAppleKernelTransitionRangeAvailable(p->address,a->count*R_PAGE)) &&
+            AROSRestrictedRegionReserve(&d->space,&a->region,p->address,
             a->count*R_PAGE,a->pages,a->backing,a->count)) {
             a->next=d->allocations;d->allocations=a;d->memory_pages+=a->storage_bytes/R_PAGE;
             d->memory_metadata_pages+=a->storage_bytes/R_PAGE;frame->x[0]=1;
@@ -658,6 +675,8 @@ static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned s
     if ((p->operation==1 || p->operation==5) && !r_tables_need(d,3)) {
         frame->x[1]=d->table_shortage;return 1;
     }
+    if ((p->operation==1 || p->operation==5) &&
+        !r_prepare_low_page(d,a,page,p->address)) return 1;
     if (p->operation==1) {
         frame->x[0]=AROSRestrictedRegionCommit(&a->region,page,p->physical,p->protection);
         d->memory_pages+=frame->x[0]!=0;

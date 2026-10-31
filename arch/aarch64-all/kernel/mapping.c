@@ -176,6 +176,18 @@ int AArch64UnmapPage(const struct AArch64ProtectionOps *ops, uint64_t ttbr0,
     return 1;
 }
 
+int AArch64UnmapPrivilegedPage(const struct AArch64ProtectionOps *ops,
+    uint64_t ttbr0, uint64_t tcr, uint64_t va, uint64_t expected_physical)
+{
+    struct MappingWalk walk;
+    if (!ops || !ops->resolve ||
+        !geometry(tcr, va, expected_physical, &walk)) return 0;
+    uint64_t *slot = leaf(ops, ttbr0, &walk, va, 0);
+    if (!slot || (*slot & (UINT64_C(1) << 6)) != 0 ||
+        (*slot & M_UXN) == 0) return 0;
+    return AArch64UnmapPage(ops, ttbr0, tcr, va, expected_physical);
+}
+
 int AArch64MappingPhysical(const struct AArch64ProtectionOps *ops,
     uint64_t ttbr0, uint64_t tcr, uint64_t va, uint64_t *physical)
 {

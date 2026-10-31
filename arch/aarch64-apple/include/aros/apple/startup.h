@@ -424,6 +424,10 @@ void AROSAppleColdStartRecordRuntimeException(
 
 int AROSAppleMemoryPlanValidate(const struct AROSAppleMemoryPlan *plan);
 
+/* Refuses overlap with retained EL1 transition storage, or unknown bounds.
+ * This is an address-reservation policy, not permission to alter trusted roots. */
+int AROSAppleKernelTransitionRangeAvailable(uintptr_t start, uint64_t bytes);
+
 int AROSAppleKernelRetainedBootImage(
     uintptr_t *image_start, uint64_t *image_size);
 

@@ -13,6 +13,8 @@ def identity(path):
 def dump(path,value):
     path.write_text(json.dumps(value,indent=2)+'\n')
 EXPECTED_ASSERTIONS={
+    'evict-user-leaf':('!AArch64UnmapPrivilegedPage(&o,clone,f.tcr,f.va,f.va)','low_clone_eviction'),
+    'evict-user-executable':('!AArch64UnmapPrivilegedPage(&o,clone,f.tcr,f.va,f.va)','low_clone_eviction'),
     'execute-nx-bypass':('!AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,4,1,&pa) && pa==SENTINEL','user_admission'),
     'execute-write-alias':('!AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,4,1,&pa) && pa==SENTINEL','user_admission'),
     'alias-user-access':('!AArch64RemapPrivilegedPage(&o,f.root,f.tcr,f.va,DATA_PA,5)','privileged_alias'),
@@ -45,6 +47,8 @@ def main():
     env=dict(os.environ);env['ASAN_OPTIONS']='halt_on_error=1:detect_leaks=0';env['UBSAN_OPTIONS']='halt_on_error=1:print_stacktrace=1'
     original=(KERNEL/'mapping.c').read_text()
     mutants={
+      'evict-user-leaf':('(*slot & (UINT64_C(1) << 6)) != 0','0'),
+      'evict-user-executable':('(*slot & M_UXN) == 0','0'),
       'execute-nx-bypass':('(*slot & M_UXN) || !(*slot & (UINT64_C(1) << 7))','!(*slot & (UINT64_C(1) << 7))'),
       'execute-write-alias':('(*slot & M_UXN) || !(*slot & (UINT64_C(1) << 7))','(*slot & M_UXN)'),
       'alias-user-access':('(*slot & (UINT64_C(1)<<6))','0'),

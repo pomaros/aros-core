@@ -30,6 +30,23 @@ static const char boot_memory_name[] = "Apple boot memory";
 #include "../exec/smp_api.h"
 #endif
 
+/* Kept privileged in isolated roots: kernel text/data includes vectors,
+ * per-CPU anchors and static AP exception stacks. The boot CPU retains the
+ * complete loader allocation containing its EL1 stack. Bounds are immutable
+ * after startup, and deliberately broader than the individual entry objects. */
+static uintptr_t transition_kernel_start, transition_kernel_end;
+static uintptr_t transition_boot_start, transition_boot_end;
+
+int AROSAppleKernelTransitionRangeAvailable(uintptr_t start, uint64_t bytes)
+{
+    if (!bytes || bytes > UINTPTR_MAX - start ||
+        transition_kernel_end <= transition_kernel_start ||
+        transition_boot_end <= transition_boot_start) return 0;
+    uintptr_t end = start + bytes;
+    return !(start < transition_kernel_end && transition_kernel_start < end) &&
+        !(start < transition_boot_end && transition_boot_start < end);
+}
+
 static uintptr_t retained_boot_image_start;
 static uint64_t retained_boot_image_size;
 static struct AROSApplePayloadIdentity retained_payload_identity;
@@ -294,6 +311,8 @@ enum AROSAppleKernelStartupStatus AROSAppleKernelPrepareMemory(
     if (tags == NULL || state == NULL ||
         ((uintptr_t)state & 15U) != 0)
         return AROS_APPLE_KERNEL_STARTUP_ARGUMENT;
+    transition_kernel_start = transition_kernel_end = 0;
+    transition_boot_start = transition_boot_end = 0;
     retained_boot_image_start = 0;
     retained_boot_image_size = 0;
     retained_payload_identity.size = 0;
@@ -359,6 +378,8 @@ enum AROSAppleKernelStartupStatus AROSAppleKernelPrepareMemory(
         !AROSAppleExecSMPAPIValid(AROSAppleRuntimeLocal()->exec_smp_api))
         return fail(state, AROS_APPLE_KERNEL_STARTUP_CPU_BIND, 1);
 #endif
+    transition_kernel_start = (uintptr_t)kernel_lower;
+    transition_kernel_end = (uintptr_t)kernel_upper;
     retained_boot_image_start = (uintptr_t)boot_image_start;
     retained_boot_image_size = boot_image_size;
     retained_payload_identity = state->payload_identity;
@@ -726,6 +747,25 @@ enum AROSAppleKernelStartupStatus AROSAppleKernelImportMemory(
         return fail(state, AROS_APPLE_KERNEL_STARTUP_MEMORY_IMPORT,
             imported);
 
+    /* Import runs on the boot CPU before the first EL0 transition. Do not
+     * infer stack bounds from SP alignment or confuse the ramdisk with stage2.
+     * A missing retained stack allocation disables low-address reservations. */
+    uintptr_t boot_sp;
+    uint64_t boot_el;
+    __asm__ volatile("mov %0, sp; mrs %1, CurrentEL" : "=r"(boot_sp), "=r"(boot_el));
+    if ((boot_el >> 2) == 1 && boot_sp) {
+        unsigned matches = 0;
+        for (index = 0; index < plan->entry_count; ++index) {
+            range = memory_plan_range_at(plan, index);
+            if (range->kind == AROS_APPLE_MEMORY_RANGE_RETAIN &&
+                startup_range_contains(range->start, range->end, boot_sp - 1, 1)) {
+                transition_boot_start = range->start;
+                transition_boot_end = range->end;
+                ++matches;
+            }
+        }
+        if (matches != 1) transition_boot_start = transition_boot_end = 0;
+    }
     state->memory_plan = plan_address;
     state->conventional_bytes = plan->conventional_bytes;
     state->reclaimed_bytes = plan->release_bytes;

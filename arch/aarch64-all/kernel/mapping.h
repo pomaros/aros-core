@@ -34,6 +34,14 @@ int AArch64MapPage(const struct AArch64ProtectionOps *, uint64_t ttbr0,
 int AArch64UnmapPage(const struct AArch64ProtectionOps *, uint64_t ttbr0,
     uint64_t tcr, uint64_t virtual_address, uint64_t expected_physical);
 
+/* Remove only a privileged, UXN leaf with the expected physical backing.
+ * This does not authorize eviction: the caller must own the private root,
+ * exclude exception-transition code/data/stacks and serialize the mutation.
+ * Never frees backing, allocates tables or splits blocks. The trusted source
+ * root of a clone must not be passed here to make room for user mappings. */
+int AArch64UnmapPrivilegedPage(const struct AArch64ProtectionOps *, uint64_t ttbr0,
+    uint64_t tcr, uint64_t virtual_address, uint64_t expected_physical);
+
 /* Change permissions only for the exact existing physical owner; supports a
  * retained invalid guard too. Never replaces backing or splits a block. Uses
  * the current protection engine under the same caller-held lock/quiescence

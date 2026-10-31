@@ -60,3 +60,12 @@ query does not prove backing ownership, lifetime or native hardware behavior.
 Execute admission accepts access=4 only for a valid EL0 read-only leaf with UXN
 clear. RX, RO/NX and malformed writable/executable leaves are distinguished on
 both 4 KiB and 16 KiB geometries; query callbacks must remain read-only.
+
+Low-address clone eviction covers the observed 0x7ffe0000 identity-map collision
+with 39/48-bit VA and 4K/16K pages. It verifies distinct source/clone tables,
+refusal of wrong backing and user-accessible/executable or malformed leaves,
+ordered invalidation, replacement in the private root and unchanged neighboring
+and trusted-root leaves. Two mutation controls remove the privileged/UXN guards.
+This exercises the page primitive only: the native caller must first establish
+the exception-transition footprint and exclude it from user reservations.
+It does not qualify low-address allocation under AROS or Wine initialization.
