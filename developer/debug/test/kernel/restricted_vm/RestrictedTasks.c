@@ -796,6 +796,68 @@ static void prove_dynamic_continuations(void)
     CHECK(!life.pages && !life.live && !life.domains);
     bug("[ISOVM] dynamic-continuations cases=10 repaired=1 callbacks=1 stale_fault=2 stale_handler=2 stale_entry=2 stale_return=2 retained_pages=0 PASS\n");
 }
+extern const unsigned char RestrictedSharedCode[],RestrictedSharedCodeEnd[];
+static void prove_shared_code(void)
+{
+    const uintptr_t address=UINT64_C(0x200000000);
+    uint64_t shared=api->create_shared(4096);CHECK(shared);
+    struct DynamicCodeClient clients[2]={{.seed=0},{.seed=1}};pthread_t threads[2];
+    for (unsigned i=0;i<2;++i) {
+        clients[i].domain=api->create_domain(RestrictedSharedCode,RestrictedSharedCodeEnd-RestrictedSharedCode,0);
+        CHECK(clients[i].domain && api->reserve_memory(clients[i].domain,address,4096));
+        CHECK(api->attach_shared(clients[i].domain,address,shared));
+        CHECK(api->commit_shared(clients[i].domain,address,i ? 1 : 3));
+    }
+    CHECK(api->reserve_memory(clients[1].domain,address+4096,4096));
+    CHECK(api->attach_shared(clients[1].domain,address+4096,shared));
+    for (unsigned i=0;i<2;++i) CHECK(!pthread_create(&threads[i],NULL,dynamic_code_client,&clients[i]));
+    for (unsigned phase=1;phase<=3;++phase) {
+        struct AROSRestrictedWork work[2];unsigned held=0;
+        while (held!=3) {
+            struct AROSRestrictedWork next;if (!api->take(&next)) { KrnSwitch();continue; }
+            uint64_t words[2];CHECK(next.length==sizeof(words));memcpy(words,next.bytes,sizeof(words));
+            CHECK(words[0]==phase && words[1]<2 && !(held&(1U<<words[1])));
+            work[words[1]]=next;held|=1U<<words[1];
+        }
+        if (phase==2) {
+            CHECK(!api->protect_memory(clients[0].domain,address,3));
+            CHECK(api->protect_memory(clients[1].domain,address,1));
+            CHECK(api->protect_memory(clients[0].domain,address,3));
+        } else {
+            CHECK(!api->protect_memory(clients[1].domain,address,5));
+            CHECK(api->protect_memory(clients[0].domain,address,1));
+            for (unsigned i=0;i<2;++i) {
+                CHECK(api->protect_memory(clients[i].domain,address,5));
+#if defined(__AROSEXEC_SMP__)
+                struct Task *task=__atomic_load_n(&clients[i].task,__ATOMIC_ACQUIRE);CHECK(task);
+                CHECK(SetTaskAffinity(task,cpu_masks[phase==1 ? 1 : 0]));
+#endif
+            }
+            if (phase==1) {
+                CHECK(!api->commit_shared(clients[1].domain,address+4096,3));
+                CHECK(api->commit_shared(clients[1].domain,address+4096,1));
+            }
+        }
+        for (unsigned i=0;i<2;++i) CHECK(api->complete(&work[i]));
+    }
+    for (unsigned i=0;i<2;++i) {
+        CHECK(!pthread_join(threads[i],NULL));
+        CHECK(!clients[i].result.status && clients[i].result.drained && clients[i].result.replies==3);
+#if defined(__AROSEXEC_SMP__)
+        CHECK(clients[i].result.cpus==3 && clients[i].result.migrations>=2);
+#endif
+        struct AROSRestrictedResult result={0};
+        CHECK(api->run_domain(clients[i].domain,3,&result) && !result.status && result.rejected==1);
+        CHECK(api->run_domain(clients[i].domain,2,&result) && result.status==-2 && result.far==address);
+        CHECK(api->close_domain(clients[i].domain)==1);
+    }
+    CHECK(api->close_shared(shared));
+    struct AROSRestrictedLifetime life;api->lifetime(&life);
+    CHECK(!life.pages && !life.domains && !life.live && !life.shared_objects);
+#if defined(__AROSEXEC_SMP__)
+    bug("[ISOVM] shared-code domains=2 views=3 publications=4 rewrites=1 cpus=3 conflicts=4 write_refused=2 scalar_refused=2 retained_pages=0 PASS\n");
+#endif
+}
 int main(void)
 {
     KernelBase = OpenResource((CONST_STRPTR)"kernel.resource");
@@ -890,6 +952,7 @@ int main(void)
     prove_large_code();
     prove_dynamic_code();
     prove_dynamic_continuations();
+    prove_shared_code();
     prove_domain_close();
 #if defined(__AROSEXEC_SMP__)
     prove_task_list_churn();

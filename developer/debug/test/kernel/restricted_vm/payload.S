@@ -1206,3 +1206,78 @@ ContinuationCallbackEnd:
 .error "dynamic continuation callback exceeds one page"
 .endif
 RestrictedDynamicContinuationEnd:
+
+.balign 16
+.global RestrictedSharedCode, RestrictedSharedCodeEnd
+RestrictedSharedCode:
+ mov x19, x1
+ mov x23, x0
+ movz x20, #2, lsl #32
+ cmp x23, #2
+ b.eq SharedCodeWriteTest
+ cmp x23, #3
+ b.eq SharedCodeScalarTest
+ cbnz x23, 1f
+ mov x24, #51
+ bl SharedCodeStore
+1:
+ mov x27, #1
+ bl SharedCodeRequest
+ blr x20
+ cmp x0, #51
+ b.ne SharedCodeFailure
+ mov x27, #2
+ bl SharedCodeRequest
+ cbnz x23, 1f
+ mov x24, #77
+ bl SharedCodeStore
+1:
+ mov x27, #3
+ bl SharedCodeRequest
+ blr x20
+ cmp x0, #77
+ b.ne SharedCodeFailure
+ mov x0, #0
+ svc #0xa541
+SharedCodeStore:
+ mov x9, #0x52800000
+ orr x9, x9, x24, lsl #5
+ movz x10, #0x03c0, lsl #32
+ movk x10, #0xd65f, lsl #48
+ orr x9, x9, x10
+ str x9, [x20]
+ ret
+SharedCodeRequest:
+ stp x27, x23, [x19]
+ mov x0, x19
+ add x1, x19, #32
+ mov x2, #16
+ mov x3, #0
+ svc #0xa542
+ cbz x0, SharedCodeFailure
+ mov x26, x0
+1:
+ mov x0, x26
+ svc #0xa543
+ cbz x0, 1b
+ ldp x9, x10, [x19, #32]
+ cmp x9, x27
+ b.ne SharedCodeFailure
+ cmp x10, x23
+ b.ne SharedCodeFailure
+ svc #0xa540
+ ret
+SharedCodeScalarTest:
+ mov x0, x20
+ mov x1, #3
+ svc #0xa54a
+ cbnz x0, SharedCodeFailure
+ mov x0, #0
+ svc #0xa541
+SharedCodeWriteTest:
+ str xzr, [x20]
+SharedCodeFailure:
+ mov x0, #-9
+ svc #0xa541
+ b SharedCodeFailure
+RestrictedSharedCodeEnd:
