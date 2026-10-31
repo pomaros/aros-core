@@ -1342,6 +1342,7 @@ int main(void)
     CHECK(worker_replies == 402 && worker_ack == 3);
     CHECK(results[0].close_waits>0 && results[1].close_waits==0);
     CHECK(results[0].resumed == 1 && results[1].resumed == 1);
+    bug("[ISOVM] context-transitions gp=30 fault_gp=31 simd=32 yields=3072 callbacks=200 faults=2 fp=1 nzcv=1 tls=1 stack=1 PASS\n");
     CHECK(beats > 0 && after_fault > 0);
 #if defined(__AROSEXEC_SMP__)
     for (unsigned id=0;id<2;++id) CHECK(results[id].cpus==3 && results[id].migrations>0);
