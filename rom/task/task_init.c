@@ -63,6 +63,7 @@ static LONG taskres_Init(struct TaskResBase *TaskResBase)
     NEWLIST(&TaskResBase->trb_NotifyHooks);
     InitSemaphore(&TaskResBase->trb_NotifySem);
 #if defined(__AROSEXEC_SMP__)
+    EXEC_SPINLOCK_INIT(&TaskResBase->TaskListSpinLock);
     EXEC_SPINLOCK_INIT(&TaskResBase->trb_StopLock);
     EXEC_SPINLOCK_INIT(&TaskResBase->trb_RTLock);
 #endif

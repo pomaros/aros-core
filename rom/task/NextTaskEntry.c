@@ -68,6 +68,7 @@
     D(bug("[TaskRes] NextTaskEntry: tlist @ 0x%p, flags = $%lx\n", tlist, flags));
 
 #ifdef TASKRES_ENABLE
+    task_ListLock(TaskResBase);
     if (taskList)
     {
         if (matchFlags & LTF_RUNNING)
@@ -92,6 +93,7 @@
             taskList->tlp_Next = (struct TaskListEntry *)GetSucc(taskList->tlp_Next);
         }
     }
+    task_ListUnlock(TaskResBase);
 #else
     if (taskList)
     {

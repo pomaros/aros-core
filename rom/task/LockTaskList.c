@@ -74,9 +74,11 @@
         D(bug("[TaskRes] LockTaskList: TaskList @ 0x%p\n", taskList));
         taskList->tlp_Node.ln_Name = (char *)FindTask(NULL);
         taskList->tlp_Flags = flags;
+        task_ListLock(TaskResBase);
         taskList->tlp_Tasks = &TaskResBase->trb_TaskList;
         taskList->tlp_Next = (struct TaskListEntry *)GetHead(taskList->tlp_Tasks);
         AddTail(&TaskResBase->trb_LockedLists, &taskList->tlp_Node);
+        task_ListUnlock(TaskResBase);
     }
 #else
     Disable();

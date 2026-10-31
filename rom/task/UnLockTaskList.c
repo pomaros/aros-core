@@ -52,14 +52,14 @@
     AROS_LIBFUNC_INIT
 
 #ifdef TASKRES_ENABLE
-    struct TaskListPrivate *taskList, *tltmp;
+    struct TaskListPrivate *taskList, *tltmp, *retired=NULL;
     struct Task *thisTask = FindTask(NULL);
 #endif /* TASKRES_ENABLE */
 
     D(bug("[TaskRes] UnLockTaskList: flags = $%lx\n", flags));
 
 #ifdef TASKRES_ENABLE
-    ReleaseSemaphore(&TaskResBase->trb_Sem);
+    task_ListLock(TaskResBase);
 
     ForeachNodeSafe(&TaskResBase->trb_LockedLists, taskList, tltmp)
     {
@@ -68,10 +68,14 @@
         {
             D(bug("[TaskRes] UnLockTaskList: Releasing TaskList @ 0x%p\n", taskList));
             Remove(&taskList->tlp_Node);
-            FreeMem(taskList, sizeof(struct TaskListPrivate));
+            retired=taskList;
             break;
         }
     }
+
+    task_ListUnlock(TaskResBase);
+    ReleaseSemaphore(&TaskResBase->trb_Sem);
+    if (retired) FreeMem(retired,sizeof(*retired));
 
     /* Purge expired entries from the list... */
     task_CleanList(NULL, TaskResBase);

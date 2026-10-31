@@ -126,6 +126,9 @@ struct TaskListPrivate
 
 #define KernelBase TaskResBase->trb_KernelBase
 
+void task_ListLock(struct TaskResBase *TaskResBase);
+void task_ListUnlock(struct TaskResBase *TaskResBase);
+void task_RemoveEntry(struct Task *task, struct TaskResBase *TaskResBase);
 void task_CleanList(struct Task * task, struct TaskResBase *TaskResBase);
 struct TaskListHookEntry *GetHookTypeEntry(struct List *htList, ULONG thType, BOOL create);
 struct TaskListEntry *GetTaskEntry(struct Task *thisTask, struct TaskResBase *TaskResBase);

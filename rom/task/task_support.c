@@ -10,71 +10,70 @@
 
 #include "task_intern.h"
 
-void task_CleanList(struct Task * task, struct TaskResBase *TaskResBase)
+/* Copyright (C) 2026 John KNIPPER. The list lock protects links and entry
+ * publication only. Mask local preemption before taking the SMP spinlock; a
+ * contender must not strand a preempted owner on its own CPU. Never allocate,
+ * free or invoke callbacks while this lock is held. */
+void task_ListLock(struct TaskResBase *TaskResBase)
 {
-    /* Are there any lock holders?, if not, do housecleaning */
+    Disable();
+#if defined(__AROSEXEC_SMP__)
+    EXEC_SPINLOCK_LOCK(&TaskResBase->TaskListSpinLock, NULL, SPINLOCK_MODE_WRITE);
+#endif
+}
+void task_ListUnlock(struct TaskResBase *TaskResBase)
+{
+#if defined(__AROSEXEC_SMP__)
+    EXEC_SPINLOCK_UNLOCK(&TaskResBase->TaskListSpinLock);
+#endif
+    Enable();
+}
+void task_CleanList(struct Task *task, struct TaskResBase *TaskResBase)
+{
+    struct List garbage;struct TaskListEntry *entry,*next;
+    NEWLIST(&garbage);
+    task_ListLock(TaskResBase);
     if (IsListEmpty(&TaskResBase->trb_LockedLists))
     {
-        struct TaskListEntry *taskEntry, *tetmp;
-
-#if !defined(__AROSEXEC_SMP__)
-        /* Don't let any other task interfere with us at the moment */
-        Forbid();
-#else
-        EXEC_SPINLOCK_LOCK(&TaskResBase->TaskListSpinLock, NULL, SPINLOCK_MODE_WRITE);
-#endif
-
-        ForeachNodeSafe(&TaskResBase->trb_TaskList, taskEntry, tetmp)
-        {
-            if ((!taskEntry->tle_Task) ||
-                ((task) && (task == taskEntry->tle_Task)))
-            {
-                D(bug("[TaskRes] RemTask: destroying old taskentry @ 0x%p\n", taskEntry));
-                Remove(&taskEntry->tle_Node);
-                FreeMem(taskEntry, sizeof(struct TaskListEntry));
+        ForeachNodeSafe(&TaskResBase->trb_TaskList,entry,next)
+            if (!entry->tle_Task || (task && task==entry->tle_Task)) {
+                Remove(&entry->tle_Node);AddTail(&garbage,&entry->tle_Node);
             }
-        }
-        ForeachNodeSafe(&TaskResBase->trb_NewTasks, taskEntry, tetmp)
-        {
-            Remove(&taskEntry->tle_Node);
-            AddTail(&TaskResBase->trb_TaskList, &taskEntry->tle_Node);
-        }
-
-#if !defined(__AROSEXEC_SMP__)
-        Permit();
-#else
-        EXEC_SPINLOCK_UNLOCK(&TaskResBase->TaskListSpinLock);
-#endif
+        while ((entry=(struct TaskListEntry *)RemHead(&TaskResBase->trb_NewTasks)))
+            AddTail(&TaskResBase->trb_TaskList,&entry->tle_Node);
     }
+    task_ListUnlock(TaskResBase);
+    while ((entry=(struct TaskListEntry *)RemHead(&garbage)))
+        FreeMem(entry,sizeof(*entry));
 }
-
+void task_RemoveEntry(struct Task *task, struct TaskResBase *TaskResBase)
+{
+    struct TaskListEntry *entry,*next,*retired=NULL;
+    task_ListLock(TaskResBase);
+    ForeachNodeSafe(&TaskResBase->trb_NewTasks,entry,next)
+        if (entry->tle_Task==task) {
+            Remove(&entry->tle_Node);retired=entry;break;
+        }
+    if (!retired) {
+        ForeachNodeSafe(&TaskResBase->trb_TaskList,entry,next)
+            if (entry->tle_Task==task) {
+                if (IsListEmpty(&TaskResBase->trb_LockedLists)) {
+                    Remove(&entry->tle_Node);retired=entry;
+                } else entry->tle_Task=NULL;
+                break;
+            }
+    }
+    task_ListUnlock(TaskResBase);
+    if (retired) FreeMem(retired,sizeof(*retired));
+}
 struct TaskListEntry *GetTaskEntry(struct Task *task, struct TaskResBase *TaskResBase)
 {
-    struct TaskListEntry *currNode, *retval = NULL;
-
-#if !defined(__AROSEXEC_SMP__)
-        /* Don't let any other task interfere with us at the moment */
-        Forbid();
-#else
-        EXEC_SPINLOCK_LOCK(&TaskResBase->TaskListSpinLock, NULL, SPINLOCK_MODE_WRITE);
-#endif
-
-    ForeachNode(&TaskResBase->trb_TaskList, currNode)
-    {
-        if (currNode->tle_Task == task)
-        {
-            retval = currNode;
-            break;
-        }
-    }
-
-#if !defined(__AROSEXEC_SMP__)
-        Permit();
-#else
-        EXEC_SPINLOCK_UNLOCK(&TaskResBase->TaskListSpinLock);
-#endif
-
-    return retval;
+    struct TaskListEntry *entry,*result=NULL;
+    task_ListLock(TaskResBase);
+    ForeachNode(&TaskResBase->trb_TaskList,entry)
+        if (entry->tle_Task==task) { result=entry;break; }
+    task_ListUnlock(TaskResBase);
+    return result;
 }
 
 /* task hook support */
