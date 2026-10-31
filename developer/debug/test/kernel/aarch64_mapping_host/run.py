@@ -13,6 +13,8 @@ def identity(path):
 def dump(path,value):
     path.write_text(json.dumps(value,indent=2)+'\n')
 EXPECTED_ASSERTIONS={
+    'alias-user-access':('!AArch64RemapPrivilegedPage(&o,f.root,f.tcr,f.va,DATA_PA,5)','privileged_alias'),
+    'alias-user-execute':('!AArch64RemapPrivilegedPage(&o,f.root,f.tcr,f.va,DATA_PA,3)','privileged_alias'),
     'allow-privileged-buffer':('!AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,1,1,&pa) && pa==SENTINEL','user_admission'),
     'allow-readonly-output':('!AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,2,1,&pa) && pa==SENTINEL','user_admission'),
     'wrong-unmap-owner':('!AArch64UnmapPage(&o,f.root,f.tcr,f.va,DATA_PA+((uint64_t)1<<page))','basic'),
@@ -41,6 +43,8 @@ def main():
     env=dict(os.environ);env['ASAN_OPTIONS']='halt_on_error=1:detect_leaks=0';env['UBSAN_OPTIONS']='halt_on_error=1:print_stacktrace=1'
     original=(KERNEL/'mapping.c').read_text()
     mutants={
+      'alias-user-access':('(*slot & (UINT64_C(1)<<6))','0'),
+      'alias-user-execute':('!(*slot & M_UXN)','0'),
       'allow-privileged-buffer':('!(*slot & (UINT64_C(1) << 6)) ||','0 ||'),
       'allow-readonly-output':('(access == AARCH64_PROTECT_WRITE && (*slot & (UINT64_C(1) << 7))) ||','0 ||'),
       'wrong-unmap-owner':('(*slot & walk.mask) != pa ||','0 ||'),

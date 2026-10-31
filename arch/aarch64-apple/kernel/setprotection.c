@@ -15,6 +15,7 @@
 #include <proto/exec.h>
 #include "kernel_base.h"
 #include "page_allocator.h"
+#include "restricted.h"
 #include <aros/apple/jit.h>
 #include "jit_protect.h"
 #include "code_window.h"
@@ -105,7 +106,11 @@ static uintptr_t protect_one_page(void)
     /* The allocator and stage-two contract still use 4KB, not 16KB. */
     if (((tcr >> 14) & 3) != 0)
         return 0;
-    return AArch64ProtectPage(&ops, ttbr0, tcr, protection_operation.address,
+    if (!AArch64ProtectPage(&ops, ttbr0, tcr, protection_operation.address,
+        protection_operation.permissions)) return 0;
+    /* All peers remain in the mutation rendezvous. A failed propagation must
+     * not authorize freeing/reusing the page; the status-bearing caller retries. */
+    return AROSAppleRestrictedProtectAliases(protection_operation.address,tcr,
         protection_operation.permissions);
 }
 

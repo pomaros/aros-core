@@ -262,6 +262,12 @@ int AROSApplePageFreeRaw(void *address, uintptr_t length)
     return 1;
 }
 
+int AROSApplePageArenaContains(uintptr_t address)
+{
+    return page_allocator.ready && address>=page_allocator.start &&
+        address-page_allocator.start<(uintptr_t)page_allocator.pages*AROS_APPLE_PAGE_SIZE;
+}
+
 void AROSApplePageAllocatorGetStats(
     struct AROSApplePageAllocatorStats *stats)
 {

@@ -909,6 +909,35 @@ static void r_uncoordinate(void)
 {
     __atomic_store_n(&coordinator_lock,0,__ATOMIC_RELEASE);
 }
+static uint64_t r_alias_no_allocate(void *context,unsigned bits)
+{ (void)context;(void)bits;return 0; }
+static void r_alias_sync(void *context,uint64_t address,size_t bytes)
+{
+    /* Native identity alias, not an inactive user VA or domain->code. */
+    r_clean(context,(const void *)(uintptr_t)address,bytes);
+    __asm__ volatile("ic ialluis; dsb ish; isb":::"memory");
+}
+int AROSAppleRestrictedProtectAliases(uintptr_t address,uint64_t tcr,unsigned permissions)
+{
+    /* The arena is pre-split in every snapshot; no table allocation is needed.
+     * Other native mapping regions require their own mirror/split protocol. */
+    if (!AROSApplePageArenaContains(address)) return 1;
+    unsigned policy=permissions & (AARCH64_PROTECT_READ|AARCH64_PROTECT_WRITE|AARCH64_PROTECT_EXEC);
+    /* A writable user/JIT source is implicitly EL1-XN, as in root cloning. */
+    if (policy & AARCH64_PROTECT_WRITE) policy&=~AARCH64_PROTECT_EXEC;
+    const struct AArch64ProtectionOps ops={NULL,r_resolve,r_alias_no_allocate,r_clean,r_invalidate,r_alias_sync,NULL};
+    int ok=1;
+    /* Enter only after rendezvous arrival: a remote coordinator holder must
+     * finish before parking. Starting rendezvous while holding it deadlocks. */
+    r_coordinate();
+    for (struct RestrictedDomain *d=restricted_domains;d;d=d->next) {
+        /* REAPING roots have no executing contexts, and native teardown can
+         * already be freeing their table chunks outside the coordinator. */
+        if (d->state==R_REAPING || !d->root) continue;
+        if (!AArch64RemapPrivilegedPage(&ops,d->root,tcr,address,address,policy)) { ok=0;break; }
+    }
+    r_uncoordinate();return ok;
+}
 int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
 {
     if (!frame || frame->vector!=8 || (frame->spsr&31)) return 0;

@@ -8,5 +8,8 @@ extern const struct AROSRestrictedAPI AROSRestrictedAPI;
 struct Task;
 void AROSAppleRestrictedCheckStack(struct AROSAppleRuntimeFrame *, struct Task *);
 int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *);
+/* Trusted EL1 only, with PageMapLock and completed remote rendezvous held.
+ * Propagate arena alias policy without allocation; failure retains backing. */
+int AROSAppleRestrictedProtectAliases(uintptr_t address,uint64_t tcr,unsigned permissions);
 void AROSAppleRestrictedContextRetired(void *context);
 #endif

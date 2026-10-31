@@ -42,6 +42,14 @@ int AArch64RemapPage(const struct AArch64ProtectionOps *, uint64_t ttbr0,
     uint64_t tcr, uint64_t virtual_address, uint64_t expected_physical,
     unsigned permissions);
 
+/* Update an existing privileged, UXN alias of exactly the expected page.
+ * Refuses EL0-accessible aliases, unsupported leaves and any user/JIT flags.
+ * Never creates or splits mappings. Caller serializes/quiesces every root
+ * and retains backing on any refusal, including partial multi-root updates. */
+int AArch64RemapPrivilegedPage(const struct AArch64ProtectionOps *, uint64_t ttbr0,
+    uint64_t tcr, uint64_t virtual_address, uint64_t expected_physical,
+    unsigned permissions);
+
 /* Permanent page owner lookup, also for an inaccessible guard. Does not
  * walk/split blocks or allocate; this is not a resident-user-pointer probe.
  * Only resolve is required; output is unchanged on failure. Restricted parent

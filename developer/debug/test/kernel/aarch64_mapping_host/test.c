@@ -395,12 +395,42 @@ static void user_admission(unsigned page)
     assert(f.allocate_calls==allocations && f.clean_calls==cleans && f.invalidations==invalidations);
     finish(&f);
 }
+static void privileged_alias(unsigned page)
+{
+    struct Fixture f;init(&f,page,48);struct AArch64ProtectionOps o=ops(&f);
+    assert(AArch64MapPage(&o,f.root,f.tcr,f.va,DATA_PA,3,1));
+    uint64_t *entry=slot_at(&f,f.va,3),original=*entry;
+    *entry=original|(UINT64_C(1)<<6);
+    assert(!AArch64RemapPrivilegedPage(&o,f.root,f.tcr,f.va,DATA_PA,5));
+    assert(*entry==(original|(UINT64_C(1)<<6)));
+    *entry=original&~UXN;
+    assert(!AArch64RemapPrivilegedPage(&o,f.root,f.tcr,f.va,DATA_PA,3));
+    assert(*entry==(original&~UXN));*entry=original;
+    const unsigned invalid[]={8,11,13,29,47,7};
+    for (unsigned i=0;i<sizeof(invalid)/sizeof(*invalid);++i) {
+        assert(!AArch64RemapPrivilegedPage(&o,f.root,f.tcr,f.va,DATA_PA,invalid[i]));
+        assert(*entry==original);
+    }
+    assert(!AArch64RemapPrivilegedPage(&o,f.root,f.tcr,f.va,DATA_PA+((uint64_t)1<<page),5));
+    assert(*entry==original);
+    assert(AArch64RemapPrivilegedPage(&o,f.root,f.tcr,f.va,DATA_PA,5));
+    assert((*entry&(UINT64_C(1)<<7)) && !(*entry&PXN) && (*entry&UXN) && !(*entry&(UINT64_C(1)<<6)));
+    assert(AArch64RemapPrivilegedPage(&o,f.root,f.tcr,f.va,DATA_PA,0));
+    assert((*entry&GUARD) && !(*entry&1));
+    assert(AArch64RemapPrivilegedPage(&o,f.root,f.tcr,f.va,DATA_PA,3));
+    assert(!(*entry&(UINT64_C(1)<<7)) && (*entry&PXN) && (*entry&UXN) && !(*entry&(UINT64_C(1)<<6)));
+    unsigned allocation_count=f.allocate_calls;
+    assert(AArch64UnmapPage(&o,f.root,f.tcr,f.va,DATA_PA));
+    assert(!AArch64RemapPrivilegedPage(&o,f.root,f.tcr,f.va,DATA_PA,5));
+    assert(!*entry && f.allocate_calls==allocation_count);
+    finish(&f);
+}
 int main(void)
 {
     const unsigned widths[]={25,30,32,39,42,48};
     for (unsigned page=12;page<=14;page+=2) {
         for (unsigned i=0;i<sizeof(widths)/sizeof(*widths);++i) basic(page,widths[i]);
-        user_admission(page);permissions(page);allocation_failures(page);invalid_geometry(page);corruption(page);parent_and_blocks(page);callback_contract(page);address_widths(page);
+        privileged_alias(page);user_admission(page);permissions(page);allocation_failures(page);invalid_geometry(page);corruption(page);parent_and_blocks(page);callback_contract(page);address_widths(page);
     }
     printf("[AARCH64-MAPPING-HOST] result=PASS cases=%u granules=4K,16K actual-production-walks=1 native=NOT_RUN\n",cases);
     return 0;

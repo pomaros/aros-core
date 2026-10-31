@@ -225,6 +225,17 @@ int AArch64RemapPage(const struct AArch64ProtectionOps *ops, uint64_t ttbr0,
     return AArch64ProtectPage(ops, ttbr0, tcr, va, permissions);
 }
 
+int AArch64RemapPrivilegedPage(const struct AArch64ProtectionOps *ops,uint64_t ttbr0,
+    uint64_t tcr,uint64_t va,uint64_t expected_physical,unsigned permissions)
+{
+    struct MappingWalk walk;
+    if (!ops || !ops->resolve || (permissions & ~7U) ||
+        !geometry(tcr,va,expected_physical,&walk)) return 0;
+    uint64_t *slot=leaf(ops,ttbr0,&walk,va,0);
+    if (!slot || (*slot & (UINT64_C(1)<<6)) || !(*slot & M_UXN)) return 0;
+    return AArch64RemapPage(ops,ttbr0,tcr,va,expected_physical,permissions);
+}
+
 int AArch64TranslateResident(const struct AArch64ProtectionOps *ops,
     uint64_t ttbr0, uint64_t tcr, uint64_t va, uint64_t *physical)
 {
