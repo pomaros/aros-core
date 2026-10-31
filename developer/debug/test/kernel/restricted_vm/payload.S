@@ -1351,6 +1351,486 @@ ReservedFaultFailure:
 RestrictedReservedFaultEnd:
 
 .balign 16
+/* Save and compare every preserved register, using only x0 as scratch until
+ * all GP registers have been checked. x0 is the specified service result. */
+.macro FullWaitCheck trap, failure
+ mov x25, sp
+ mov x9, #0x999
+ mov x10, #0xaaa
+ movi v0.16b, #1
+ movi v1.16b, #2
+ movi v2.16b, #3
+ movi v3.16b, #4
+ movi v4.16b, #5
+ movi v5.16b, #6
+ movi v6.16b, #7
+ movi v7.16b, #8
+ movi v8.16b, #9
+ movi v9.16b, #10
+ movi v10.16b, #11
+ movi v11.16b, #12
+ movi v12.16b, #13
+ movi v13.16b, #14
+ movi v14.16b, #15
+ movi v15.16b, #16
+ movi v16.16b, #17
+ movi v17.16b, #18
+ movi v18.16b, #19
+ movi v19.16b, #20
+ movi v20.16b, #21
+ movi v21.16b, #22
+ movi v22.16b, #23
+ movi v23.16b, #24
+ movi v24.16b, #25
+ movi v25.16b, #26
+ movi v26.16b, #27
+ movi v27.16b, #28
+ movi v28.16b, #29
+ movi v29.16b, #30
+ movi v30.16b, #31
+ movi v31.16b, #32
+ mov x11, #0xa0000000
+ msr nzcv, x11
+ mov x11, #0x400000
+ msr fpcr, x11
+ mov x11, #0x10
+ msr fpsr, x11
+ sub sp, sp, #832
+ stp x0, x1, [sp, #0]
+ stp x2, x3, [sp, #16]
+ stp x4, x5, [sp, #32]
+ stp x6, x7, [sp, #48]
+ stp x8, x9, [sp, #64]
+ stp x10, x11, [sp, #80]
+ stp x12, x13, [sp, #96]
+ stp x14, x15, [sp, #112]
+ stp x16, x17, [sp, #128]
+ stp x18, x19, [sp, #144]
+ stp x20, x21, [sp, #160]
+ stp x22, x23, [sp, #176]
+ stp x24, x25, [sp, #192]
+ stp x26, x27, [sp, #208]
+ stp x28, x29, [sp, #224]
+ str x30, [sp, #240]
+ stp q0, q1, [sp, #256]
+ stp q2, q3, [sp, #288]
+ stp q4, q5, [sp, #320]
+ stp q6, q7, [sp, #352]
+ stp q8, q9, [sp, #384]
+ stp q10, q11, [sp, #416]
+ stp q12, q13, [sp, #448]
+ stp q14, q15, [sp, #480]
+ stp q16, q17, [sp, #512]
+ stp q18, q19, [sp, #544]
+ stp q20, q21, [sp, #576]
+ stp q22, q23, [sp, #608]
+ stp q24, q25, [sp, #640]
+ stp q26, q27, [sp, #672]
+ stp q28, q29, [sp, #704]
+ stp q30, q31, [sp, #736]
+ mrs x9, nzcv
+ str x9, [sp, #768]
+ mrs x9, fpcr
+ str x9, [sp, #776]
+ mrs x9, fpsr
+ str x9, [sp, #784]
+ mrs x9, tpidr_el0
+ str x9, [sp, #792]
+ ldr x9, [sp, #72]
+ svc #\trap
+ str x0, [sp, #800]
+ mrs x0, nzcv
+ str x0, [sp, #808]
+ ldr x0, [sp, #8]
+ cmp x1, x0
+ b.ne \failure
+ ldr x0, [sp, #16]
+ cmp x2, x0
+ b.ne \failure
+ ldr x0, [sp, #24]
+ cmp x3, x0
+ b.ne \failure
+ ldr x0, [sp, #32]
+ cmp x4, x0
+ b.ne \failure
+ ldr x0, [sp, #40]
+ cmp x5, x0
+ b.ne \failure
+ ldr x0, [sp, #48]
+ cmp x6, x0
+ b.ne \failure
+ ldr x0, [sp, #56]
+ cmp x7, x0
+ b.ne \failure
+ ldr x0, [sp, #64]
+ cmp x8, x0
+ b.ne \failure
+ ldr x0, [sp, #72]
+ cmp x9, x0
+ b.ne \failure
+ ldr x0, [sp, #80]
+ cmp x10, x0
+ b.ne \failure
+ ldr x0, [sp, #88]
+ cmp x11, x0
+ b.ne \failure
+ ldr x0, [sp, #96]
+ cmp x12, x0
+ b.ne \failure
+ ldr x0, [sp, #104]
+ cmp x13, x0
+ b.ne \failure
+ ldr x0, [sp, #112]
+ cmp x14, x0
+ b.ne \failure
+ ldr x0, [sp, #120]
+ cmp x15, x0
+ b.ne \failure
+ ldr x0, [sp, #128]
+ cmp x16, x0
+ b.ne \failure
+ ldr x0, [sp, #136]
+ cmp x17, x0
+ b.ne \failure
+ ldr x0, [sp, #144]
+ cmp x18, x0
+ b.ne \failure
+ ldr x0, [sp, #152]
+ cmp x19, x0
+ b.ne \failure
+ ldr x0, [sp, #160]
+ cmp x20, x0
+ b.ne \failure
+ ldr x0, [sp, #168]
+ cmp x21, x0
+ b.ne \failure
+ ldr x0, [sp, #176]
+ cmp x22, x0
+ b.ne \failure
+ ldr x0, [sp, #184]
+ cmp x23, x0
+ b.ne \failure
+ ldr x0, [sp, #192]
+ cmp x24, x0
+ b.ne \failure
+ ldr x0, [sp, #200]
+ cmp x25, x0
+ b.ne \failure
+ ldr x0, [sp, #208]
+ cmp x26, x0
+ b.ne \failure
+ ldr x0, [sp, #216]
+ cmp x27, x0
+ b.ne \failure
+ ldr x0, [sp, #224]
+ cmp x28, x0
+ b.ne \failure
+ ldr x0, [sp, #232]
+ cmp x29, x0
+ b.ne \failure
+ ldr x0, [sp, #240]
+ cmp x30, x0
+ b.ne \failure
+ add x0, sp, #832
+ cmp x0, x25
+ b.ne \failure
+ ldr x0, [sp, #800]
+ cmp x0, x27
+ b.ne \failure
+ ldr x0, [sp, #256]
+ umov x1, v0.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #264]
+ umov x1, v0.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #272]
+ umov x1, v1.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #280]
+ umov x1, v1.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #288]
+ umov x1, v2.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #296]
+ umov x1, v2.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #304]
+ umov x1, v3.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #312]
+ umov x1, v3.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #320]
+ umov x1, v4.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #328]
+ umov x1, v4.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #336]
+ umov x1, v5.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #344]
+ umov x1, v5.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #352]
+ umov x1, v6.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #360]
+ umov x1, v6.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #368]
+ umov x1, v7.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #376]
+ umov x1, v7.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #384]
+ umov x1, v8.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #392]
+ umov x1, v8.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #400]
+ umov x1, v9.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #408]
+ umov x1, v9.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #416]
+ umov x1, v10.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #424]
+ umov x1, v10.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #432]
+ umov x1, v11.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #440]
+ umov x1, v11.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #448]
+ umov x1, v12.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #456]
+ umov x1, v12.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #464]
+ umov x1, v13.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #472]
+ umov x1, v13.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #480]
+ umov x1, v14.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #488]
+ umov x1, v14.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #496]
+ umov x1, v15.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #504]
+ umov x1, v15.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #512]
+ umov x1, v16.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #520]
+ umov x1, v16.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #528]
+ umov x1, v17.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #536]
+ umov x1, v17.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #544]
+ umov x1, v18.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #552]
+ umov x1, v18.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #560]
+ umov x1, v19.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #568]
+ umov x1, v19.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #576]
+ umov x1, v20.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #584]
+ umov x1, v20.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #592]
+ umov x1, v21.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #600]
+ umov x1, v21.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #608]
+ umov x1, v22.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #616]
+ umov x1, v22.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #624]
+ umov x1, v23.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #632]
+ umov x1, v23.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #640]
+ umov x1, v24.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #648]
+ umov x1, v24.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #656]
+ umov x1, v25.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #664]
+ umov x1, v25.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #672]
+ umov x1, v26.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #680]
+ umov x1, v26.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #688]
+ umov x1, v27.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #696]
+ umov x1, v27.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #704]
+ umov x1, v28.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #712]
+ umov x1, v28.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #720]
+ umov x1, v29.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #728]
+ umov x1, v29.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #736]
+ umov x1, v30.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #744]
+ umov x1, v30.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #752]
+ umov x1, v31.d[0]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #760]
+ umov x1, v31.d[1]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #768]
+ ldr x1, [sp, #808]
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #776]
+ mrs x1, fpcr
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #784]
+ mrs x1, fpsr
+ cmp x0, x1
+ b.ne \failure
+ ldr x0, [sp, #792]
+ mrs x1, tpidr_el0
+ cmp x0, x1
+ b.ne \failure
+ ldp x2, x3, [sp, #16]
+ ldp x4, x5, [sp, #32]
+ ldp x6, x7, [sp, #48]
+ ldp x8, x9, [sp, #64]
+ ldp x10, x11, [sp, #80]
+ ldp x12, x13, [sp, #96]
+ ldp x14, x15, [sp, #112]
+ ldp x16, x17, [sp, #128]
+ ldp x18, x19, [sp, #144]
+ ldp x20, x21, [sp, #160]
+ ldp x22, x23, [sp, #176]
+ ldp x24, x25, [sp, #192]
+ ldp x26, x27, [sp, #208]
+ ldp x28, x29, [sp, #224]
+ ldr x1, [sp, #8]
+ ldr x30, [sp, #240]
+ ldr x0, [sp, #768]
+ msr nzcv, x0
+ ldr x0, [sp, #800]
+ add sp, sp, #832
+ ret
+.endm
 .global RestrictedWait, RestrictedWaitEnd
 RestrictedWait:
  mov x23, x0
@@ -1423,52 +1903,7 @@ WaitRequest:
  svc #0xa540
  ret
 WaitChecked:
- mov x25, sp
- mov x9, #0x999
- mov x10, #0xaaa
- movi v8.16b, #0x5a
- movi v31.16b, #0xa5
- mov x11, #0xa0000000
- msr nzcv, x11
- mov x11, #0x400000
- msr fpcr, x11
- mov x11, #0x10
- msr fpsr, x11
- svc #0xa54c
- mrs x11, nzcv
- cmp x0, x27
- b.ne WaitFailure
- mov x12, #0xa0000000
- cmp x11, x12
- b.ne WaitFailure
- cmp x9, #0x999
- b.ne WaitFailure
- cmp x10, #0xaaa
- b.ne WaitFailure
- cmp x18, x28
- b.ne WaitFailure
- mov x11, sp
- cmp x11, x25
- b.ne WaitFailure
- umov x11, v8.d[1]
- mov x12, #0x5a5a
- orr x12, x12, x12, lsl #16
- orr x12, x12, x12, lsl #32
- cmp x11, x12
- b.ne WaitFailure
- umov x11, v31.d[0]
- mov x12, #0xa5a5
- orr x12, x12, x12, lsl #16
- orr x12, x12, x12, lsl #32
- cmp x11, x12
- b.ne WaitFailure
- mrs x11, fpcr
- cmp x11, #0x400000
- b.ne WaitFailure
- mrs x11, fpsr
- cmp x11, #0x10
- b.ne WaitFailure
- ret
+ FullWaitCheck 0xa54c, WaitFailure
 WaitFailure:
  mov x0, #-9
  svc #0xa541
@@ -1642,52 +2077,7 @@ RestrictedTimedWait:
  svc #0xa541
  b TimedFailure
 TimedChecked:
- mov x25, sp
- mov x9, #0x999
- mov x10, #0xaaa
- movi v8.16b, #0x5a
- movi v31.16b, #0xa5
- mov x11, #0xa0000000
- msr nzcv, x11
- mov x11, #0x400000
- msr fpcr, x11
- mov x11, #0x10
- msr fpsr, x11
- svc #0xa54e
- mrs x11, nzcv
- cmp x0, x27
- b.ne TimedFailure
- mov x12, #0xa0000000
- cmp x11, x12
- b.ne TimedFailure
- cmp x9, #0x999
- b.ne TimedFailure
- cmp x10, #0xaaa
- b.ne TimedFailure
- cmp x18, x28
- b.ne TimedFailure
- mov x11, sp
- cmp x11, x25
- b.ne TimedFailure
- umov x11, v8.d[1]
- mov x12, #0x5a5a
- orr x12, x12, x12, lsl #16
- orr x12, x12, x12, lsl #32
- cmp x11, x12
- b.ne TimedFailure
- umov x11, v31.d[0]
- mov x12, #0xa5a5
- orr x12, x12, x12, lsl #16
- orr x12, x12, x12, lsl #32
- cmp x11, x12
- b.ne TimedFailure
- mrs x11, fpcr
- cmp x11, #0x400000
- b.ne TimedFailure
- mrs x11, fpsr
- cmp x11, #0x10
- b.ne TimedFailure
- ret
+ FullWaitCheck 0xa54e, TimedFailure
 TimedFailure:
  mov x0, #-9
  svc #0xa541

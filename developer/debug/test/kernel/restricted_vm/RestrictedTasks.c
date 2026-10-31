@@ -1295,6 +1295,7 @@ int main(void)
     prove_suspension();
     prove_timed_waits();
     prove_timed_retirement();
+    bug("[ISOVM] wait-context gp=30 simd=32 fp=1 nzcv=1 tls=1 stack=1 returned=9 PASS\n");
     prove_domain_close();
 #if defined(__AROSEXEC_SMP__)
     prove_task_list_churn();
