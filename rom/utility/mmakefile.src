@@ -22,6 +22,7 @@ FUNCTIONS := \
 	freetagitems \
 	gettagdata \
 	getuniqueid \
+	getuniqueid64 \
 	maptags \
 	movemem \
 	namedobjectname \

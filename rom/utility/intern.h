@@ -78,6 +78,8 @@ struct IntUtilityBase
     /* This is where the private data starts. */
     ULONG                ub_LastID;
     struct NameSpace     ub_NameSpace;
+    UQUAD                ub_LastID64;
+    struct SignalSemaphore ub_UniqueID64Lock;
 };
 
 #define GetIntUtilityBase(ub)   ((struct IntUtilityBase *)(ub))

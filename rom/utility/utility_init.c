@@ -12,6 +12,8 @@
 static int UtilityInit(LIBBASETYPEPTR LIBBASE)
 {
     GetIntUtilityBase(LIBBASE)->ub_LastID = 0;
+    GetIntUtilityBase(LIBBASE)->ub_LastID64 = 0xffffffffULL;
+    InitSemaphore(&GetIntUtilityBase(LIBBASE)->ub_UniqueID64Lock);
 
     /*
         I no longer allocate memory here for the global namespace, since
