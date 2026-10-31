@@ -23,6 +23,7 @@ def main():
  actual+='default:return 0;} }\n'
  variants=[('actual',actual,None)]
  for name,old,new,expected in [
+  ('reserved-extra-commit','generation!=r->fault_page_generation+1','0','reserved_fault'),
   ('stale-generation','current.generation==identity->generation','1','identity'),
   ('stale-reservation','current.reservation==identity->reservation','1','identity'),
   ('wrong-backing','current.physical==identity->physical','1','identity'),
@@ -46,6 +47,7 @@ def main():
    result['records'].append({'name':name,'exit':run.returncode})
    if expected:
     assertions={
+     'reserved-extra-commit':'frame.x[0]==UINT64_MAX && slot.fault_active && !slot.result.resumed',
      'stale-generation':'!r_match_code(&slot,&id)',
      'stale-reservation':'!r_match_code(&slot,&id)',
      'wrong-backing':'!r_match_code(&slot,&id)',

@@ -1281,3 +1281,71 @@ SharedCodeFailure:
  svc #0xa541
  b SharedCodeFailure
 RestrictedSharedCodeEnd:
+
+.balign 16
+.global RestrictedReservedFault, RestrictedReservedFaultEnd
+RestrictedReservedFault:
+ mov x19, x1
+ mov x23, x0
+ movz x20, #2, lsl #32
+ adr x0, ReservedFaultHandler
+ svc #0xa545
+ cbz x0, ReservedFaultFailure
+ mov x9, #0x77
+ cmp x23, #3
+ b.eq ReservedFaultWrite
+ ldr x10, [x20]
+ cbnz x10, ReservedFaultFailure
+ReservedFaultWrite:
+ str x9, [x20]
+ ldr x10, [x20]
+ cmp x10, #0x77
+ b.ne ReservedFaultFailure
+ str x10, [x19]
+ mov x0, #0
+ svc #0xa541
+ReservedFaultHandler:
+ cmp x0, x20
+ b.ne ReservedFaultFailure
+ mov x21, x2
+ mov x22, x3
+ mov x9, sp
+ mrs x10, tpidr_el0
+ sub x10, x10, #1, lsl #12
+ cmp x9, x10
+ b.ne ReservedFaultFailure
+ mov x0, x21
+ mov x1, x22
+ svc #0xa547
+ cmn x0, #1
+ b.ne ReservedFaultFailure
+ str x23, [x19, #512]
+ add x0, x19, #512
+ add x1, x19, #520
+ mov x2, #8
+ mov x3, #0
+ svc #0xa542
+ cbz x0, ReservedFaultFailure
+ mov x24, x0
+1:
+ mov x0, x24
+ svc #0xa543
+ cbz x0, 1b
+ svc #0xa540
+ mov x0, x21
+ mov x1, x22
+ svc #0xa547
+ cmn x0, #1
+ b.ne ReservedFaultFailure
+ cmp x23, #1
+ b.eq 1f
+ cmp x23, #2
+ b.ne ReservedFaultFailure
+1:
+ mov x0, #0
+ svc #0xa541
+ReservedFaultFailure:
+ mov x0, #-9
+ svc #0xa541
+ b ReservedFaultFailure
+RestrictedReservedFaultEnd:

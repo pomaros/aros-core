@@ -115,6 +115,11 @@ int AROSRestrictedSpaceProtect(struct AROSRestrictedSpace *, unsigned);
  * without dereferencing an untrusted guest VA. */
 int AROSRestrictedSpacePageIdentity(struct AROSRestrictedSpace *,uintptr_t,unsigned,
     uintptr_t *,uint64_t *,uint64_t *);
+/* Fault admission also accepts an owned, unmapped RESERVED page. physical=0
+ * identifies it: a valid repair must preserve the reservation incarnation and
+ * perform exactly one commit (generation+1) before resumption. */
+int AROSRestrictedSpaceFaultIdentity(struct AROSRestrictedSpace *,uintptr_t,
+    uintptr_t *,uint64_t *,uint64_t *);
 int AROSRestrictedServiceInit(struct AROSRestrictedService *,
     struct AROSRestrictedSpace *, uint64_t requester);
 int AROSRestrictedServiceSubmit(struct AROSRestrictedService *,uintptr_t,uintptr_t,size_t);

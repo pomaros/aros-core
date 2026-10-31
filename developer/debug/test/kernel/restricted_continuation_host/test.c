@@ -99,4 +99,19 @@ static void fault(void)
  struct Frame saved=slot.fault;dispatch(&slot,&frame,AROS_RESTRICTED_FAULT_RESUME);
  assert(!slot.fault_active && slot.result.resumed==1 && !memcmp(&frame,&saved,sizeof(frame)));
 }
-int main(void) { identity();callback();fault();puts("PASS continuation identity transitions"); }
+static void reserved_fault(void)
+{
+ reset();slot.fault_active=1;slot.fault=frame;slot.fault.far=dynamic;
+ slot.fault_generation=3;slot.fault_physical=0;slot.fault_page_generation=generation-1;slot.fault_reservation=reservation;
+ assert(r_capture_code(&slot,slot.fault.elr,&slot.fault_code));
+ ++generation;frame.x[0]=slot.fault.elr;frame.x[1]=3;
+ dispatch(&slot,&frame,AROS_RESTRICTED_FAULT_RESUME);
+ assert(frame.x[0]==UINT64_MAX && slot.fault_active && !slot.result.resumed);
+ --generation;++reservation;frame.x[0]=slot.fault.elr;frame.x[1]=3;
+ dispatch(&slot,&frame,AROS_RESTRICTED_FAULT_RESUME);
+ assert(frame.x[0]==UINT64_MAX && slot.fault_active && !slot.result.resumed);
+ --reservation;frame.x[0]=slot.fault.elr;frame.x[1]=3;
+ struct Frame saved=slot.fault;dispatch(&slot,&frame,AROS_RESTRICTED_FAULT_RESUME);
+ assert(!slot.fault_active && slot.result.resumed==1 && !memcmp(&frame,&saved,sizeof(frame)));
+}
+int main(void) { identity();callback();fault();reserved_fault();puts("PASS continuation identity transitions"); }

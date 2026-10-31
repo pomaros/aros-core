@@ -858,6 +858,43 @@ static void prove_shared_code(void)
     bug("[ISOVM] shared-code domains=2 views=3 publications=4 rewrites=1 cpus=3 conflicts=4 write_refused=2 scalar_refused=2 retained_pages=0 PASS\n");
 #endif
 }
+extern const unsigned char RestrictedReservedFault[],RestrictedReservedFaultEnd[];
+static void prove_reserved_faults(void)
+{
+    const uintptr_t address=UINT64_C(0x200000000);
+    for (unsigned mode=0;mode<4;++mode) {
+        struct DynamicCodeClient client={.seed=mode};pthread_t thread;
+        client.domain=api->create_domain(RestrictedReservedFault,RestrictedReservedFaultEnd-RestrictedReservedFault,0);
+        CHECK(client.domain && api->reserve_memory(client.domain,address,4096));
+        CHECK(!pthread_create(&thread,NULL,dynamic_code_client,&client));
+        struct AROSRestrictedWork work;while (!api->take(&work)) KrnSwitch();
+        uint64_t input;CHECK(work.length==sizeof(input));memcpy(&input,work.bytes,sizeof(input));CHECK(input==mode);
+        if (mode==2) {
+            CHECK(api->release_memory(client.domain,address));
+            CHECK(api->reserve_memory(client.domain,address,4096));
+        }
+        CHECK(api->commit_memory(client.domain,address,3));
+        if (mode==1) {
+            CHECK(api->decommit_memory(client.domain,address));
+            CHECK(api->commit_memory(client.domain,address,3));
+        }
+#if defined(__AROSEXEC_SMP__)
+        struct Task *task=__atomic_load_n(&client.task,__ATOMIC_ACQUIRE);CHECK(task);
+        CHECK(SetTaskAffinity(task,cpu_masks[1]));
+#endif
+        CHECK(api->complete(&work));CHECK(!pthread_join(thread,NULL));
+        unsigned repaired=mode==0 || mode==3;
+        CHECK(!client.result.status && client.result.drained && client.result.replies==1);
+        CHECK(client.result.resumed==repaired && client.result.denied==(repaired ? 1 : 2));
+#if defined(__AROSEXEC_SMP__)
+        CHECK(client.result.cpus==3 && client.result.migrations);
+#endif
+        CHECK(api->close_domain(client.domain)==1);
+    }
+    struct AROSRestrictedLifetime life;api->lifetime(&life);
+    CHECK(!life.pages && !life.live && !life.domains);
+    bug("[ISOVM] reserved-fault cases=4 read=1 write=1 premature=4 extra_commit=1 re_reserved=1 stale_refused=2 retained_pages=0 PASS\n");
+}
 int main(void)
 {
     KernelBase = OpenResource((CONST_STRPTR)"kernel.resource");
@@ -873,7 +910,7 @@ int main(void)
     intptr_t address = KrnGetSystemAttr(AROS_RESTRICTED_KATTR_API);
     CHECK(address != -1 && address != 0);
     api = (const void *)address;
-    CHECK(api->version == 24 && api->size == sizeof(*api));
+    CHECK(api->version == 25 && api->size == sizeof(*api));
     /* No worker exists: queued cancellation is deterministic. */
     static struct AROSRestrictedResult queued;
     CHECK(api->run(RestrictedQueued,(size_t)(RestrictedQueuedEnd-RestrictedQueued),12288,&queued));
@@ -953,6 +990,7 @@ int main(void)
     prove_dynamic_code();
     prove_dynamic_continuations();
     prove_shared_code();
+    prove_reserved_faults();
     prove_domain_close();
 #if defined(__AROSEXEC_SMP__)
     prove_task_list_churn();

@@ -259,6 +259,25 @@ int AROSRestrictedSpacePageIdentity(struct AROSRestrictedSpace *s,uintptr_t addr
     if (!identity) return 0;
     *physical=p->physical;*generation=p->generation;*reservation=identity;return 1;
 }
+int AROSRestrictedSpaceFaultIdentity(struct AROSRestrictedSpace *s,uintptr_t address,
+    uintptr_t *physical,uint64_t *generation,uint64_t *reservation)
+{
+    if (AROSRestrictedSpacePageIdentity(s,address,0,physical,generation,reservation)) return 1;
+    if (!s || !s->handle || s->domain.closing || !physical || !generation || !reservation) return 0;
+    struct KrnMappingObject *m=KrnMappingLookup(&s->arena,address);
+    if (!m || m->closing || !m->virtual_reservation) return 0;
+    size_t index=(address-m->start)/PAGE;struct KrnMappingPage *p=&m->pages[index];
+    if (p->state!=KMAP_RESERVED || p->physical || p->generation==UINT64_MAX) return 0;
+    uint64_t actual;
+    if (AArch64MappingPhysical(&s->hardware,s->root,s->tcr,address&~(uintptr_t)(PAGE-1),&actual)) return 0;
+    for (struct AROSRestrictedRegion *r=s->regions;r;r=r->next)
+        if (&r->mapping==m) {
+            if (!r->identity || r->backing[index] || r->publication_pending ||
+                (r->shared && r->shared->publication)) return 0;
+            *physical=0;*generation=p->generation;*reservation=r->identity;return 1;
+        }
+    return 0;
+}
 int AROSRestrictedServiceInit(struct AROSRestrictedService *s,
     struct AROSRestrictedSpace *space,uint64_t requester)
 {

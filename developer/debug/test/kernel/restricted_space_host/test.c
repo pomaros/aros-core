@@ -199,6 +199,20 @@ static void region_tests(void)
     CHECK(AROSRestrictedSpacePageIdentity(&spaces[0],va+16,2,&identity,&identity_generation,&identity_reservation) &&
         identity==(uintptr_t)pages[0] && identity_generation==ap[0].generation,"region-page-identity");
     CHECK(!AROSRestrictedSpacePageIdentity(&spaces[0],va+2*PAGE,0,&identity,&identity_generation,&identity_reservation),"reserved-no-identity");
+    CHECK(AROSRestrictedSpaceFaultIdentity(&spaces[0],va+2*PAGE+16,&identity,&identity_generation,&identity_reservation) &&
+        !identity && identity_generation==ap[2].generation && identity_reservation==a.identity,"reserved-fault-identity");
+    ab[2]=(uintptr_t)pages[4];
+    CHECK(!AROSRestrictedSpaceFaultIdentity(&spaces[0],va+2*PAGE,&identity,&identity_generation,&identity_reservation),"reserved-fault-ledger-refused");ab[2]=0;
+    a.publication_pending=1;
+    CHECK(!AROSRestrictedSpaceFaultIdentity(&spaces[0],va+2*PAGE,&identity,&identity_generation,&identity_reservation),"reserved-fault-pending-refused");a.publication_pending=0;
+    uint64_t fault_reserved_generation=ap[2].generation;ap[2].generation=UINT64_MAX;
+    CHECK(!AROSRestrictedSpaceFaultIdentity(&spaces[0],va+2*PAGE,&identity,&identity_generation,&identity_reservation),"reserved-fault-generation-exhausted");ap[2].generation=fault_reserved_generation;
+    ap[2].state=KMAP_ABSENT;
+    CHECK(!AROSRestrictedSpaceFaultIdentity(&spaces[0],va+2*PAGE,&identity,&identity_generation,&identity_reservation),"reserved-fault-state-refused");ap[2].state=KMAP_RESERVED;
+    CHECK(AArch64MapPage(&spaces[0].hardware,spaces[0].root,tcr,va+2*PAGE,(uintptr_t)pages[4],AARCH64_PROTECT_USER|3,1),"reserved-fault-rogue-map");
+    CHECK(!AROSRestrictedSpaceFaultIdentity(&spaces[0],va+2*PAGE,&identity,&identity_generation,&identity_reservation),"reserved-fault-pte-refused");
+    CHECK(AArch64UnmapPage(&spaces[0].hardware,spaces[0].root,tcr,va+2*PAGE,(uintptr_t)pages[4]),"reserved-fault-rogue-unmap");
+
     CHECK(AArch64UnmapPage(&spaces[0].hardware,spaces[0].root,tcr,va,(uintptr_t)pages[0]) &&
         AArch64MapPage(&spaces[0].hardware,spaces[0].root,tcr,va,(uintptr_t)pages[4],AARCH64_PROTECT_USER|3,1),"identity-foreign-pte");
     CHECK(!AROSRestrictedSpacePageIdentity(&spaces[0],va,2,&identity,&identity_generation,&identity_reservation),"identity-pte-mismatch");
