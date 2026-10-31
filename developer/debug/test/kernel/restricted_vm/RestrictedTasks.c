@@ -1196,6 +1196,12 @@ static void prove_combined_memory_threads(void)
     /* pending counts abandoned native contexts, not worker leases. */
     CHECK(held.live==4 && !held.pending && held.domains==2 && held.shared_objects==1 && held.pages);
     for (unsigned id=0;id<4;++id) {
+        /* Close requests cancellation; the client acknowledges it on dispatch.
+         * Retain the worker lease until that transition is observable. */
+        unsigned attempts=0;
+        while (api->state(&work[id])==AROS_RESTRICTED_RUNNING) {
+            CHECK(++attempts<100000);KrnSwitch();
+        }
         CHECK(api->state(&work[id])==AROS_RESTRICTED_CANCELLED);
         memset(work[id].bytes,0xee,work[id].length);
         CHECK(api->complete(&work[id]));CHECK(!api->complete(&work[id]));
