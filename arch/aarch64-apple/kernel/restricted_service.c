@@ -209,7 +209,7 @@ int AROSRestrictedSpaceProtect(struct AROSRestrictedSpace *s,unsigned access)
 int AROSRestrictedSpacePageIdentity(struct AROSRestrictedSpace *s,uintptr_t address,
     unsigned access,uintptr_t *physical,uint64_t *generation,uint64_t *reservation)
 {
-    if (!s || !s->handle || s->domain.closing || !physical || !generation || !reservation || access>2) return 0;
+    if (!s || !s->handle || s->domain.closing || !physical || !generation || !reservation || (access!=0 && access!=KMAP_READ && access!=KMAP_WRITE && access!=KMAP_EXEC)) return 0;
     struct KrnMappingObject *m=KrnMappingLookup(&s->arena,address);
     if (!m || m->closing) return 0;
     size_t index=(address-m->start)/PAGE;struct KrnMappingPage *p=&m->pages[index];

@@ -104,11 +104,15 @@ static void publication_tests(void)
     fail_install=0;
     CHECK(AROSRestrictedRegionPublish(&region,0,5,&ops) && !region.publication_pending && metadata[0].protection==5 && native_policy==1,"publication-rx");
     CHECK(metadata[0].generation==generation+1,"publication-retry-same-generation");
+    uintptr_t code_pa=0;uint64_t code_generation=0,code_reservation=0;
+    CHECK(AROSRestrictedSpacePageIdentity(&space,va+4,4,&code_pa,&code_generation,&code_reservation) &&
+        code_pa==(uintptr_t)page && code_generation==generation+1 && code_reservation==region.identity,"publication-execute-identity");
     uint64_t leaf=publication_leaf(&space,va);
     CHECK((leaf&128) && !(leaf&(UINT64_C(1)<<54)) && f->synchronizations,"publication-rx-pte-cache");
     CHECK(!AROSRestrictedRegionProtect(&region,0,3),"publication-exec-direct-write-refused");
     CHECK(AROSRestrictedRegionPublish(&region,0,3,&ops) && metadata[0].protection==3 && native_policy==3,"publication-rw");
     CHECK(metadata[0].generation==generation+2,"publication-write-new-generation");
+    CHECK(!AROSRestrictedSpacePageIdentity(&space,va,4,&code_pa,&code_generation,&code_reservation),"publication-writable-not-executable");
     leaf=publication_leaf(&space,va);CHECK(!(leaf&128) && (leaf&(UINT64_C(1)<<54)),"publication-rw-nx");
     fail_native=1;
     CHECK(!AROSRestrictedRegionPublish(&region,0,5,&ops) && region.publication_pending,"publication-final-pending");

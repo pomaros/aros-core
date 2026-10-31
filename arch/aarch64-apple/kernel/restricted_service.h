@@ -105,7 +105,8 @@ int AROSRestrictedSpaceInit(struct AROSRestrictedSpace *, uint64_t principal,
 void AROSRestrictedSpaceStop(struct AROSRestrictedSpace *);
 int AROSRestrictedSpaceClose(struct AROSRestrictedSpace *);
 int AROSRestrictedSpaceProtect(struct AROSRestrictedSpace *, unsigned);
-/* access is 0 (owned resident page, including a guard), 1 (read) or 2 (write).
+/* access is 0 (owned resident page, including a guard), 1 (read), 2 (write)
+ * or 4 (execute, hardware read-only and UXN clear).
  * Validate both the backing ledger and live PTE; return page identity/generation and reservation incarnation
  * without dereferencing an untrusted guest VA. */
 int AROSRestrictedSpacePageIdentity(struct AROSRestrictedSpace *,uintptr_t,unsigned,

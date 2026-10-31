@@ -28,9 +28,10 @@ not automatically reclaimed by leaf unmap. A real platform must bound/account
 that address-space ownership, or detach/prune with the required synchronization.
 It must not equate the number of allocate calls with successfully linked pages.
 
-Five separately compiled semantic mutants must fail C assertions: wrong unmap
-owner, accepting the JIT bit, dropping byte offsets, ignoring physical width and
-accepting tagged geometry. Compilation failure or an unrelated sanitizer crash
+Eleven separately compiled semantic mutants must fail C assertions: wrong
+unmap owner, accepting the JIT bit, dropping byte offsets, ignoring physical
+width, accepting tagged geometry, incorrect privileged alias access, missing
+user/read-only admission checks, and ignoring UXN or writable executable leaves. Compilation failure or an unrelated sanitizer crash
 is not an accepted negative control. Inputs are hashed before/after replay;
 commands, identities, stdout/stderr and true return codes are recorded.
 
@@ -55,3 +56,7 @@ normal-memory index, valid leaf and parent descriptors without mutating tables
 or switching roots. Both page sizes are exercised; deliberate removal of EL0
 and write-permission checks must fail their corresponding assertions. This
 query does not prove backing ownership, lifetime or native hardware behavior.
+
+Execute admission accepts access=4 only for a valid EL0 read-only leaf with UXN
+clear. RX, RO/NX and malformed writable/executable leaves are distinguished on
+both 4 KiB and 16 KiB geometries; query callbacks must remain read-only.

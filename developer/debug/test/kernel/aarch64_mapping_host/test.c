@@ -373,6 +373,16 @@ static void user_admission(unsigned page)
     *entry=original | (UINT64_C(1)<<7);pa=SENTINEL;
     assert(!AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,2,1,&pa) && pa==SENTINEL);
     assert(AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,1,1,&pa) && pa==DATA_PA);
+    /* Execute admission checks hardware UXN and read-only state, not merely
+     * the software permission ledger. Queries must not mutate page tables. */
+    *entry=original;pa=SENTINEL;
+    assert(!AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,4,1,&pa) && pa==SENTINEL);
+    *entry=original | (UINT64_C(1)<<7);pa=SENTINEL;
+    assert(!AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,4,1,&pa) && pa==SENTINEL);
+    *entry=(original | (UINT64_C(1)<<7)) & ~UXN;
+    assert(AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,4,1,&pa) && pa==DATA_PA);
+    *entry=original & ~UXN;pa=SENTINEL;
+    assert(!AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,4,1,&pa) && pa==SENTINEL);
     const uint64_t malformed[]={original & ~UINT64_C(1),original & ~(UINT64_C(1)<<10),
         original | GUARD,original | CONTIG,original | PA_HIGH,original & ~UINT64_C(0x1c)};
     for(unsigned i=0;i<sizeof(malformed)/sizeof(*malformed);++i) {
