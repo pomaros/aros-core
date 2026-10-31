@@ -26,6 +26,13 @@ Use separate source and build directories from private native development. Build
 
 Keep the official AROS remote fetch-only and review generic changes in this fork before proposing upstream contributions. A source pin identifies source inputs; build manifests and product runtime checks identify and qualify binaries separately. Changing a pin does not qualify an existing image.
 
+## Utility identifiers
+
+`utility.library` version51 provides [GetUniqueID64](rom/utility/getuniqueid64.c),
+a boot-wide identifier allocator serialized across processors. Values begin
+above the legacy32-bit range. Exhaustion returns zero permanently, without
+wrapping or reusing identifiers; callers use the API from task context.
+
 ## Generic diagnostics
 
 - [Restricted AArch64 domain mechanism](developer/debug/test/kernel/restricted_domain_qemu/README.md): real-MMU QEMU checks with semantic negative controls; independent of product boot qualification.

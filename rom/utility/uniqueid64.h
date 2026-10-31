@@ -1,6 +1,6 @@
 /*
     Copyright (C) 2026 John KNIPPER. All rights reserved.
-    SPDX-License-Identifier: APL-1.1
+    Licensed under the AROS Public License (APL) 1.1; see LICENSE.
 */
 #ifndef UTILITY_UNIQUEID64_H
 #define UTILITY_UNIQUEID64_H
