@@ -138,3 +138,12 @@ words and checks a wrong-size refusal. The controller requires normal exit
 and zero domain/context backing. This is a kernel mechanism test, not Windows
 program execution. The companion `restricted_restore_host` fixture exercises
 invalid inputs and pending-work refusal before a coherent QEMU run.
+
+The API31 shared-copy workload uses controller-owned handles and native scratch
+buffers to update shared storage without granting a writable guest mapping.
+It checks an 80-byte cross-page roundtrip, range refusal, a foreign native
+thread's denied read/write, two guest-observed updates followed by read-only
+write faults, executable-view write refusal, a guest write read back by the
+controller, closing/stale refusal and complete resource drain. Its separate
+`shared-copy` marker is required when qualifying this capability. Compilation
+and HOST checks do not establish this runtime result.

@@ -66,6 +66,57 @@ int AROSRestrictedSharedInitialize(struct AROSRestrictedSharedBacking *b,uintptr
     b->pages=pages;b->count=count;b->views=0;b->closing=0;b->publication=NULL;
     b->next=shared_backings;shared_backings=b;return 1;
 }
+/* Coordinator-serialized access through owned backing, never a guest VA.
+ * Validate every touched page before changing either destination. */
+static int shared_copy(struct AROSRestrictedSharedBacking *b,size_t offset,
+    void *buffer,size_t length,int write)
+{
+    if (!b || !shared_registered(b) || b->publication || b->closing ||
+        b->count>SIZE_MAX/PAGE || offset>b->count*PAGE ||
+        length>b->count*PAGE-offset || length>AROS_RESTRICTED_SHARED_COPY_MAX ||
+        (length && (!buffer || (uintptr_t)buffer>UINTPTR_MAX-length))) return 0;
+    if (!length) return 1;
+    uintptr_t begin=(uintptr_t)buffer,end=begin+length;
+    /* Native scratch storage must not alias any registered shared backing. */
+    for (struct AROSRestrictedSharedBacking *other=shared_backings;other;other=other->next)
+        for (size_t i=0;i<other->count;++i)
+            if (begin<other->pages[i]+PAGE && other->pages[i]<end) return 0;
+    size_t first=offset/PAGE,last=(offset+length-1)/PAGE;
+    for (size_t page=first;page<=last;++page) {
+        if (!b->pages[page] || (b->pages[page]&(PAGE-1))) return 0;
+        for (struct AROSRestrictedSpace *space=spaces;space;space=space->next)
+            for (struct AROSRestrictedRegion *r=space->regions;r;r=r->next) {
+                if (r->shared!=b || !r->backing[page]) continue;
+                struct KrnMappingPage *p=&r->mapping.pages[page];
+                if (p->physical!=b->pages[page] || r->backing[page]!=b->pages[page] ||
+                    (write && (p->protection&KMAP_EXEC))) return 0;
+            }
+    }
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    if (length==8 && !(offset&7)) {
+        uint64_t value;unsigned char *bytes=(unsigned char *)&value;
+        uint64_t *address=(void *)(b->pages[first]+offset%PAGE);
+        if (write) {
+            for (unsigned i=0;i<8;++i) bytes[i]=((unsigned char *)buffer)[i];
+            __atomic_store_n(address,value,__ATOMIC_SEQ_CST);
+        } else {
+            value=__atomic_load_n(address,__ATOMIC_SEQ_CST);
+            for (unsigned i=0;i<8;++i) ((unsigned char *)buffer)[i]=bytes[i];
+        }
+    } else {
+        for (size_t i=0;i<length;++i) {
+            size_t at=offset+i;unsigned char *address=(void *)(b->pages[at/PAGE]+at%PAGE);
+            if (write) *address=((unsigned char *)buffer)[i];
+            else ((unsigned char *)buffer)[i]=*address;
+        }
+    }
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    return 1;
+}
+int AROSRestrictedSharedRead(struct AROSRestrictedSharedBacking *b,size_t offset,void *buffer,size_t length)
+{return shared_copy(b,offset,buffer,length,0);}
+int AROSRestrictedSharedWrite(struct AROSRestrictedSharedBacking *b,size_t offset,const void *buffer,size_t length)
+{return shared_copy(b,offset,(void *)buffer,length,1);}
 int AROSRestrictedSharedClose(struct AROSRestrictedSharedBacking *b)
 {
     if (!b || !shared_registered(b)) return 0;

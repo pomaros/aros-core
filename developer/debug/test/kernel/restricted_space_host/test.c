@@ -120,6 +120,34 @@ static void publication_tests(void)
     CHECK(AROSRestrictedSpaceClose(&space),"publication-space-close");
     fail_native=0;free(page);free(data);free(f);publishing=NULL;
 }
+static void shared_copy_tests(void)
+{
+    unsigned char *pages=aligned_alloc(PAGE,2*PAGE),input[80],output[80];
+    CHECK(pages,"shared-copy-storage");memset(pages,0,2*PAGE);
+    uintptr_t backing[2]={(uintptr_t)pages,(uintptr_t)pages+PAGE};
+    struct AROSRestrictedSharedBacking b={0};
+    CHECK(AROSRestrictedSharedInitialize(&b,backing,2),"shared-copy-register");
+    for(unsigned i=0;i<80;++i)input[i]=(unsigned char)(i+1);
+    CHECK(AROSRestrictedSharedWrite(&b,PAGE-40,input,80) &&
+          AROSRestrictedSharedRead(&b,PAGE-40,output,80) && !memcmp(input,output,80),"shared-copy-cross-page");
+    CHECK(!pages[PAGE-41] && !pages[PAGE+40],"shared-copy-bounds-preserved");
+    CHECK(AROSRestrictedSharedWrite(&b,16,input+1,8) &&
+          AROSRestrictedSharedRead(&b,16,output+1,8) && !memcmp(input+1,output+1,8),"shared-copy-atomic-width");
+    memset(output,0xa5,sizeof(output));
+    CHECK(!AROSRestrictedSharedRead(&b,2*PAGE-1,output,80) && output[0]==0xa5,"shared-copy-refused-output-unchanged");
+    CHECK(!AROSRestrictedSharedWrite(&b,SIZE_MAX,input,1) &&
+          !AROSRestrictedSharedWrite(&b,0,NULL,1),"shared-copy-invalid-range");
+    CHECK(!AROSRestrictedSharedWrite(&b,0,pages+16,8) &&
+          !AROSRestrictedSharedRead(&b,0,pages+16,8),"shared-copy-native-alias-refused");
+    uintptr_t saved=backing[1];backing[1]=0;
+    CHECK(!AROSRestrictedSharedWrite(&b,PAGE-1,input,2) && pages[PAGE-1]==40,"shared-copy-prevalidate-all-pages");
+    backing[1]=saved;
+    CHECK(AROSRestrictedSharedRead(&b,2*PAGE,NULL,0),"shared-copy-empty-end");
+    b.closing=1;
+    CHECK(!AROSRestrictedSharedRead(&b,0,output,8) && !AROSRestrictedSharedWrite(&b,0,input,8),"shared-copy-closing-refused");
+    CHECK(AROSRestrictedSharedClose(&b) && !AROSRestrictedSharedRead(&b,0,output,8),"shared-copy-stale-refused");
+    free(pages);
+}
 static void shared_publication_tests(void)
 {
     struct Fixture *f[3];unsigned char *data[3],*page=aligned_alloc(PAGE,PAGE);
@@ -137,11 +165,15 @@ static void shared_publication_tests(void)
             AROSRestrictedRegionAttachShared(&r[i],&b),"shared-publish-view");
         if (i<2) CHECK(AROSRestrictedRegionCommitShared(&r[i],0,i ? 1 : 3),"shared-publish-commit");
     }
+    uint64_t copy_value=0x1122334455667788,copy_read=0;
+    CHECK(AROSRestrictedSharedWrite(&b,0,&copy_value,8),"shared-copy-data-write");
     struct AROSRestrictedPublicationOps ops={NULL,native_publication};
     fail_native=0;native_calls=0;publishing=&r[1];
     CHECK(!AROSRestrictedRegionPublish(&r[1],0,5,&ops) && !native_calls,"shared-publish-write-conflict");
     CHECK(AROSRestrictedRegionProtect(&r[0],0,1),"shared-publish-drop-writer");
     CHECK(AROSRestrictedRegionPublish(&r[1],0,5,&ops) && native_policy==1,"shared-publish-rx");
+    CHECK(!AROSRestrictedSharedWrite(&b,0,&copy_value,8),"shared-copy-executable-refused");
+    CHECK(AROSRestrictedSharedRead(&b,0,&copy_read,8) && copy_read==copy_value,"shared-copy-executable-readable");
     CHECK(!AROSRestrictedRegionCommitShared(&r[2],0,3),"shared-publish-commit-writer-refused");
     CHECK(AROSRestrictedRegionCommitShared(&r[2],0,1),"shared-publish-read-view");
     CHECK(!AROSRestrictedRegionProtect(&r[0],0,3),"shared-publish-protect-writer-refused");
@@ -152,6 +184,8 @@ static void shared_publication_tests(void)
     uintptr_t released=123;CHECK(AROSRestrictedRegionDecommit(&r[2],0,&released) && !released,"shared-publish-drop-view");
     publishing=&r[0];fail_native=1;uint64_t generation=metadata[0].generation;
     CHECK(!AROSRestrictedRegionPublish(&r[0],0,5,&ops) && b.publication==&r[0],"shared-publish-pending");
+    CHECK(!AROSRestrictedSharedRead(&b,0,&copy_read,8) &&
+          !AROSRestrictedSharedWrite(&b,0,&copy_value,8),"shared-copy-publication-refused");
     CHECK(!AROSRestrictedRegionProtect(&r[1],0,3),"shared-publish-pending-protect");
     unsigned before_calls=native_calls;
     CHECK(!AROSRestrictedRegionPublish(&r[1],0,1,&ops) && b.publication==&r[0] &&
@@ -430,5 +464,5 @@ int main(void)
     CHECK(AROSRestrictedSpaceInit(&space,11,root,tcr,(uintptr_t)data,&ops),"space-reuse");
     CHECK(space.handle!=first_handle,"space-generation");
     CHECK(AROSRestrictedSpaceClose(&space),"reused-space-close");
-    free(data);free(f);region_tests(AROS_RESTRICTED_DYNAMIC_BASE);region_tests(UINT64_C(0x7ffe0000));shared_tests();channel_growth();publication_tests();shared_publication_tests();puts("PASS restricted space and channel ownership");return 0;
+    free(data);free(f);region_tests(AROS_RESTRICTED_DYNAMIC_BASE);region_tests(UINT64_C(0x7ffe0000));shared_tests();shared_copy_tests();channel_growth();publication_tests();shared_publication_tests();puts("PASS restricted space and channel ownership");return 0;
 }

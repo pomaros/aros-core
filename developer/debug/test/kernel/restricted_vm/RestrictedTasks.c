@@ -274,6 +274,52 @@ static void *orphan_shared(void *unused)
 {
     (void)unused;CHECK(api->create_shared(4096));return NULL;
 }
+static void *foreign_shared_copy(void *argument)
+{
+    uint64_t object=*(uint64_t *)argument,value=0xfeed;
+    CHECK(!api->read_shared(object,0,&value,sizeof(value)) && value==0xfeed);
+    CHECK(!api->write_shared(object,0,&value,sizeof(value)));
+    return NULL;
+}
+static void prove_shared_copy(void)
+{
+    const uintptr_t va=UINT64_C(0x200000000);
+    uint64_t object=api->create_shared(8192),value=100,actual=0;
+    CHECK(object && api->write_shared(object,0,&value,sizeof(value)));
+    unsigned char input[80],output[80];
+    for (unsigned i=0;i<sizeof(input);++i) input[i]=(unsigned char)(i+1);
+    CHECK(api->write_shared(object,4096-40,input,sizeof(input)));
+    CHECK(api->read_shared(object,4096-40,output,sizeof(output)));
+    CHECK(!memcmp(input,output,sizeof(input)));
+    CHECK(!api->read_shared(object,8190,&actual,sizeof(actual)) && !actual);
+    CHECK(!api->write_shared(object,SIZE_MAX,&value,sizeof(value)));
+    CHECK(api->read_shared(object,8192,NULL,0));
+    pthread_t foreign;CHECK(!pthread_create(&foreign,NULL,foreign_shared_copy,&object));
+    CHECK(!pthread_join(foreign,NULL));
+    uint64_t domain=api->create_domain(RestrictedMemory,RestrictedMemoryEnd-RestrictedMemory,0);
+    CHECK(domain && api->reserve_memory(domain,va,8192));
+    CHECK(api->attach_shared(domain,va,object) && api->commit_shared(domain,va,1));
+    struct AROSRestrictedResult result;
+    for (unsigned i=0;i<2;++i) {
+        value=100+i;CHECK(api->write_shared(object,0,&value,sizeof(value)));
+        CHECK(api->run_domain(domain,0,&result) && result.status==-2 && result.far==va && result.value==value);
+        CHECK(api->read_shared(object,0,&actual,sizeof(actual)) && actual==value);
+    }
+    CHECK(api->protect_memory(domain,va,5));
+    CHECK(!api->write_shared(object,0,&value,sizeof(value)));
+    CHECK(api->read_shared(object,0,&actual,sizeof(actual)) && actual==101);
+    CHECK(api->protect_memory(domain,va,3));
+    CHECK(api->run_domain(domain,0,&result) && !result.status && result.value==101);
+    CHECK(api->read_shared(object,0,&actual,sizeof(actual)) && actual==102);
+    CHECK(!api->close_shared(object));
+    CHECK(!api->read_shared(object,0,&actual,sizeof(actual)));
+    CHECK(!api->write_shared(object,0,&value,sizeof(value)));
+    CHECK(api->close_domain(domain)==1 && api->close_shared(object));
+    CHECK(!api->read_shared(object,0,&actual,sizeof(actual)));
+    struct AROSRestrictedLifetime life;api->lifetime(&life);
+    CHECK(!life.live && !life.domains && !life.shared_objects && !life.pages);
+    bug("[ISOVM] shared-copy cross_page=1 readonly_updates=2 foreign_refused=2 executable_refused=1 closed_refused=3 retained_pages=0 PASS\n");
+}
 static void prove_shared_memory(void)
 {
     const uintptr_t va=UINT64_C(0x200000000);
@@ -1335,7 +1381,7 @@ int main(void)
     intptr_t address = KrnGetSystemAttr(AROS_RESTRICTED_KATTR_API);
     CHECK(address != -1 && address != 0);
     api = (const void *)address;
-    CHECK(api->version == 30 && api->size == sizeof(*api));
+    CHECK(api->version == 31 && api->size == sizeof(*api));
     extern const unsigned char RestrictedRestore[],RestrictedRestoreEnd[];
     static struct AROSRestrictedResult restored;
     CHECK(api->run(RestrictedRestore,(size_t)(RestrictedRestoreEnd-RestrictedRestore),0,&restored));
@@ -1415,6 +1461,7 @@ int main(void)
     prove_private_memory(UINT64_C(0x7ffe0000));
     bug("[ISOVM] low-address fixed=0x7ffe0000 domains=2 zero=3 isolated=2 recommit=1 guard_fault=1 foreign=5 exclusions=4 kernel_exclusions=2 retained_pages=0 PASS\n");
     prove_shared_memory();
+    prove_shared_copy();
     prove_region_faults();
     prove_replaced_fault();
     prove_domain_growth();

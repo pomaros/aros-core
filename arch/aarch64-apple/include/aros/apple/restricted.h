@@ -84,6 +84,7 @@ struct AROSRestrictedLifetime {
     uint64_t retired,reaped,live,pending,pages,domains,shared_objects,metadata_pages,table_pages;
     uint64_t waits,timed_waits,suspended_threads;
 };
+#define AROS_RESTRICTED_SHARED_COPY_MAX 65536U
 struct AROSRestrictedAPI {
     uint32_t version, size;
     int (*run)(const void *code, size_t bytes, uint64_t seed,
@@ -152,5 +153,15 @@ struct AROSRestrictedAPI {
      * separately and is never released by these calls. */
     int64_t (*suspend_thread)(uint64_t domain,uint64_t channel);
     int64_t (*resume_thread)(uint64_t domain,uint64_t channel);
+    /* Version31: owner-only native-buffer copies through an opaque shared handle.
+     * At most64KiB per call; validate the entire range before copying. Buffer
+     * must not alias registered shared storage. Closing/publishing objects and
+     * writes to executable shared pages are refused. No guest pointer or PA is
+     * exposed. Aligned eight-byte transfers are atomic and fully fenced; larger
+     * copies need caller synchronization (for example a sequence counter).
+     * Return1 on success,0 on refusal. Zero length accepts NULL at a valid end.
+     * The native controller is trusted to supply accessible scratch memory. */
+    int (*read_shared)(uint64_t object,size_t offset,void *buffer,size_t length);
+    int (*write_shared)(uint64_t object,size_t offset,const void *buffer,size_t length);
 };
 #endif

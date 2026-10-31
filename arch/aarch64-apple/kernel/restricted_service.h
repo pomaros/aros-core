@@ -63,6 +63,11 @@ struct AROSRestrictedRegion {
  * object mutation until retry or detachment of the publishing view. */
 int AROSRestrictedSharedInitialize(struct AROSRestrictedSharedBacking *,uintptr_t *,size_t);
 int AROSRestrictedSharedClose(struct AROSRestrictedSharedBacking *);
+/* Serialized controller copies: no backing alias in native buffer, no write
+ * while a touched page has an executable alias, no access while closing or
+ * publishing. Aligned eight-byte transfers are atomic and fully fenced. */
+int AROSRestrictedSharedRead(struct AROSRestrictedSharedBacking *,size_t,void *,size_t);
+int AROSRestrictedSharedWrite(struct AROSRestrictedSharedBacking *,size_t,const void *,size_t);
 int AROSRestrictedRegionAttachShared(struct AROSRestrictedRegion *,struct AROSRestrictedSharedBacking *);
 int AROSRestrictedRegionCommitShared(struct AROSRestrictedRegion *,size_t,unsigned);
 /* Native owned-page adapter. The caller supplies zeroed record/backing arrays,

@@ -83,3 +83,12 @@ The full private-region lifecycle runs at both8GiB and0x7ffe0000. Boundary
 checks cover both low edges, null/misaligned addresses, crossing a window,
 integer overflow, bootstrap/thread addresses and the excluded gap. These are
 synthetic-MMU HOST checks, not guest execution.
+
+Owner-buffer shared copies prevalidate the complete range, refuse native scratch
+aliases to registered backing, and reject writes to executable views. The suite
+checks cross-page contents, unchanged bytes outside the range, invalid and stale
+objects, closing/publication refusal, and aligned eight-byte transfers through
+unaligned scratch buffers. Three semantic mutations remove executable, closing
+and alias checks. Atomic-width checks here verify contents, not SMP contention.
+The native restricted-task workload separately exercises the public API owner
+gate and controller updates observed through a read-only guest mapping.

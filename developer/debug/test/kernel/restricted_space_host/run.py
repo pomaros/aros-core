@@ -20,6 +20,9 @@ def main():
  original=source.read_text()
  generic=ROOT/'rom/kernel/mapping/mapping.c';pager=ROOT/'rom/kernel/mapping/pager.c'
  cases=[('baseline','adapter',None,None,None),
+  ('shared-copy-executable','adapter','(write && (p->protection&KMAP_EXEC))','0','shared-copy-executable-refused'),
+  ('shared-copy-closing','adapter','b->publication || b->closing ||\n        b->count','b->publication ||\n        b->count','shared-copy-closing-refused'),
+  ('shared-copy-alias','adapter','if (begin<other->pages[i]+PAGE && other->pages[i]<end) return 0;','if (begin<other->pages[i]+PAGE && other->pages[i]<end && 0) return 0;','shared-copy-native-alias-refused'),
   ('reserved-fault-ledger','adapter','r->backing[index] || r->publication_pending','r->publication_pending','reserved-fault-ledger-refused'),
   ('reserved-fault-pending','adapter','r->backing[index] || r->publication_pending','r->backing[index]','reserved-fault-pending-refused'),
   ('reserved-fault-state','adapter','p->state!=KMAP_RESERVED || p->physical','p->physical','reserved-fault-state-refused'),

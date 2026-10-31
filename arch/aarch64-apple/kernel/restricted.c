@@ -753,6 +753,8 @@ struct RestrictedSharedOperation {
     uint64_t handle,domain;
     uintptr_t address;
     struct RestrictedShared *record;
+    size_t offset,length;
+    void *buffer;
 };
 static int r_shared_operation(struct AROSAppleRuntimeFrame *frame,void *context,unsigned svc)
 {
@@ -781,7 +783,11 @@ static int r_shared_operation(struct AROSAppleRuntimeFrame *frame,void *context,
         return 1;
     }
     if (b->releaser_context || (p->operation!=4 && b->owner_context!=context)) return 1;
-    if (p->operation==1) {
+    if (p->operation==5 || p->operation==6) {
+        frame->x[0]=p->operation==5 ?
+            AROSRestrictedSharedWrite(&b->backing,p->offset,p->buffer,p->length) :
+            AROSRestrictedSharedRead(&b->backing,p->offset,p->buffer,p->length);
+    } else if (p->operation==1) {
         struct RestrictedDomain *d=r_domain_lookup(p->domain);
         if (!d || d->closing || d->owner_context!=context) return 1;
         for (struct RestrictedAllocation *a=d->allocations;a;a=a->next)
@@ -1648,6 +1654,17 @@ static int r_close_shared(uint64_t handle)
     Permit();return ok;
 }
 
+static int r_read_shared(uint64_t handle,size_t offset,void *buffer,size_t length)
+{
+    Forbid();struct RestrictedSharedOperation op={.operation=6,.handle=handle,.offset=offset,.length=length,.buffer=buffer};
+    int ok=r_shared_call(&op)!=0;Permit();return ok;
+}
+static int r_write_shared(uint64_t handle,size_t offset,const void *buffer,size_t length)
+{
+    Forbid();struct RestrictedSharedOperation op={.operation=5,.handle=handle,.offset=offset,.length=length,.buffer=(void *)buffer};
+    int ok=r_shared_call(&op)!=0;Permit();return ok;
+}
+
 void AROSAppleRestrictedContextRetired(void *context)
 {
     if (!context || !AROSAppleRuntimeLocal()->active || !r_current()) return;
@@ -1704,7 +1721,7 @@ static int64_t r_resume_thread(uint64_t handle,uint64_t channel)
     __asm__ volatile("svc #0xa56d":"+r"(domain),"+r"(thread)::"memory","cc");
     return (int64_t)domain;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {30,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {31,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread,r_read_shared,r_write_shared};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"
