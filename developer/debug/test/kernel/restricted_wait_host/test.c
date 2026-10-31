@@ -18,12 +18,14 @@
 #define FALSE 0
 #define AROS_TASK_PARK_WAIT 1
 #define AROS_TASK_PARKED 2
+#define AROS_TASK_PARK_SUSPEND 4
+#define AROS_TASK_PARK_REASONS (AROS_TASK_PARK_WAIT|AROS_TASK_PARK_SUSPEND)
 struct Node { unsigned list; };
 struct ExceptionContext { uint64_t saved_x18; };
 struct ETask { struct ExceptionContext *et_RegFrame; };
 struct Task { unsigned tc_Flags,tc_State,tc_SigWait,tc_SpinLock;struct { struct ETask *tc_ETask; } tc_UnionETask;struct Node tc_Node; };
 struct AROSAppleTaskExecution { uint64_t root,park_flags; };
-static struct { unsigned TaskWaitSpinLock;unsigned TaskWait,TaskReady; } base;
+static struct { unsigned TaskWaitSpinLock,TaskReadySpinLock;unsigned TaskWait,TaskReady; } base;
 #define SysBase (&base)
 #define PrivExecBase(s) (s)
 static struct Task task;
@@ -47,7 +49,7 @@ static unsigned AROSAppleSMPOnlineMask(void) { return 3; }
 static void AROSAppleSMPSendIPI(unsigned kind,unsigned unused,unsigned mask) { assert(!task.tc_SpinLock && kind==IPI_SCHEDULE && !unused && mask==3);ipis++; }
 #define R_LIVE 1
 struct RestrictedDomain { unsigned closing; };
-struct Restricted { struct Restricted *next;struct RestrictedDomain *domain;unsigned state;struct { uint64_t channel; } service;struct Task *owner;struct ExceptionContext *owner_context;uint64_t wake_generation; };
+struct Restricted { struct Restricted *next;struct RestrictedDomain *domain;unsigned state;struct { uint64_t channel; } service;struct Task *owner;struct ExceptionContext *owner_context;uint64_t wake_generation;uint32_t suspend_count; };
 static struct Restricted *restricted_slots;
 struct Frame { uint64_t x[4]; };
 #include "actual.inc"
@@ -55,7 +57,7 @@ static void reset(void)
 {
  memset(&task,0,sizeof(task));context.saved_x18=0x1818;execution=(struct AROSAppleTaskExecution){0x1000,0};
  etask.et_RegFrame=&context;task.tc_UnionETask.tc_ETask=&etask;task.tc_Flags=TF_ETASK;task.tc_State=TS_RUN;
- task.tc_Node.list=3;base.TaskWait=1;base.TaskReady=2;base.TaskWaitSpinLock=0;ipis=0;
+ task.tc_Node.list=3;base.TaskWait=1;base.TaskReady=2;base.TaskWaitSpinLock=base.TaskReadySpinLock=0;ipis=0;
  foreign_execution=(struct AROSAppleTaskExecution){0x2000,0};
  iet.iet_FrozenState=TS_WAIT;
 }
@@ -124,4 +126,45 @@ static void generations(void)
  assert(task.tc_State==TS_READY && !execution.park_flags && ipis==1);
  restricted_slots=NULL;
 }
-int main(void) { interleavings();native_signal();ownership();generations();puts("PASS wait scheduler interleavings"); }
+static void suspension(void)
+{
+ reset();struct RestrictedDomain domain={0},other={0};
+ struct Restricted slot={NULL,&domain,R_LIVE,{17},&task,&context,0,0};restricted_slots=&slot;
+ assert(r_suspend_channel(&other,17,0)==-1 && r_suspend_channel(&domain,18,0)==-1);
+ assert(r_suspend_channel(&domain,17,0)==0 && slot.suspend_count==1);
+ assert(ipis==1 && task.tc_State==TS_RUN && AROSAppleRestrictedWaitState(&task,&context)==9);
+ save_and_switch();assert(task.tc_State==TS_WAIT && AROSAppleRestrictedWaitState(&task,&context)==13);
+ assert(r_suspend_channel(&domain,17,1)==1 && task.tc_State==TS_READY && !execution.park_flags);
+ reset();slot.suspend_count=0;
+ assert(r_suspend_channel(&domain,17,0)==0 && r_suspend_channel(&domain,17,1)==1);
+ save_and_switch();assert(task.tc_State==TS_READY && !execution.park_flags);
+ reset();slot.suspend_count=0;task.tc_State=TS_READY;task.tc_Node.list=2;
+ assert(r_suspend_channel(&domain,17,0)==0 && task.tc_State==TS_WAIT && !ipis);
+ assert(r_suspend_channel(&domain,17,0)==1 && slot.suspend_count==2);
+ assert(r_suspend_channel(&domain,17,1)==2);
+ assert(slot.suspend_count==1 && task.tc_State==TS_WAIT && !ipis);
+ assert(r_suspend_channel(&domain,17,1)==1 && task.tc_State==TS_READY && ipis==1);
+ assert(r_suspend_channel(&domain,17,1)==0 && ipis==1);
+ reset();slot.suspend_count=0;AROSAppleRestrictedSetWait(&task,&context,1);save_and_switch();
+ assert(r_suspend_channel(&domain,17,0)==0 && AROSAppleRestrictedWaitState(&task,&context)==15);
+ assert(r_wake_channel(&domain,17));
+ assert(task.tc_State==TS_WAIT && AROSAppleRestrictedWaitState(&task,&context)==13);
+ assert(r_suspend_channel(&domain,17,1)==1 && task.tc_State==TS_READY);
+ reset();slot.suspend_count=0;AROSAppleRestrictedSetWait(&task,&context,1);save_and_switch();
+ r_suspend_channel(&domain,17,0);assert(r_suspend_channel(&domain,17,1)==1);
+ assert(task.tc_State==TS_WAIT && AROSAppleRestrictedWaitState(&task,&context)==7);
+ assert(r_wake_channel(&domain,17) && task.tc_State==TS_READY);
+ reset();slot.suspend_count=0;AROSAppleRestrictedSetWait(&task,&context,1);save_and_switch();
+ r_suspend_channel(&domain,17,0);r_suspend_channel(&domain,17,0);domain.closing=1;r_cancel_waiters(&domain);
+ assert(slot.suspend_count==0 && task.tc_State==TS_READY && !execution.park_flags);
+ assert(r_suspend_channel(&domain,17,1)==-1);domain.closing=0;
+ reset();slot.suspend_count=0;AROSAppleRestrictedSetWait(&task,&context,1);save_and_switch();
+ r_suspend_channel(&domain,17,0);task.tc_State=TS_FROZEN;
+ assert(r_wake_channel(&domain,17) && task.tc_State==TS_FROZEN && iet.iet_FrozenState==TS_WAIT);
+ assert(r_suspend_channel(&domain,17,1)==1 && task.tc_State==TS_FROZEN && iet.iet_FrozenState==TS_READY && !ipis);
+ reset();slot.suspend_count=UINT32_MAX;
+ assert(r_suspend_channel(&domain,17,0)==-1 && slot.suspend_count==UINT32_MAX && !execution.park_flags);
+ execution.root=0;slot.suspend_count=0;assert(r_suspend_channel(&domain,17,0)==-1);
+ restricted_slots=NULL;
+}
+int main(void) { interleavings();native_signal();ownership();generations();suspension();puts("PASS wait scheduler interleavings"); }

@@ -38,6 +38,7 @@
 #define AROS_RESTRICTED_THREAD_ACTIVE 1U
 #define AROS_RESTRICTED_THREAD_WAITING 2U
 #define AROS_RESTRICTED_THREAD_PARKED 4U
+#define AROS_RESTRICTED_THREAD_SUSPENDED 8U
 #define AROS_RESTRICTED_RUNNING 2
 #define AROS_RESTRICTED_CANCELLED 4
 struct AROSRestrictedResult {
@@ -115,5 +116,13 @@ struct AROSRestrictedAPI {
      * foreign or no active restricted execution. PARKED acknowledges saved
      * context on the wait list; external native freeze is not PARKED. */
     unsigned (*thread_state)(uint64_t domain,uint64_t channel);
+    /* Controller-only counted suspension: prior count on success, -1 on
+     * refusal. Suspend marks a running thread for scheduler preemption;
+     * thread_state PARKED acknowledges its complete saved context. Resume
+     * removes one suspension; a remaining wait still prevents execution.
+     * Close cancels all restricted park reasons. Native Exec freeze is owned
+     * separately and is never released by these calls. */
+    int64_t (*suspend_thread)(uint64_t domain,uint64_t channel);
+    int64_t (*resume_thread)(uint64_t domain,uint64_t channel);
 };
 #endif

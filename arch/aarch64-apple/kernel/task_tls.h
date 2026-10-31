@@ -44,6 +44,8 @@ struct AROSAppleTaskExecution {
 };
 #define AROS_TASK_PARK_WAIT UINT64_C(1)
 #define AROS_TASK_PARKED UINT64_C(2)
+#define AROS_TASK_PARK_SUSPEND UINT64_C(4)
+#define AROS_TASK_PARK_REASONS (AROS_TASK_PARK_WAIT|AROS_TASK_PARK_SUSPEND)
 _Static_assert(816 + sizeof(struct AROSAppleTaskExecution) ==
     AROS_APPLE_DISPATCH_CONTEXT_SIZE, "owned execution metadata allocation");
 static inline struct AROSAppleTaskExecution *AROSAppleTaskExecution(
