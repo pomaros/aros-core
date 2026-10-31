@@ -422,8 +422,10 @@ static const void *r_execution_alias(struct RestrictedDomain *d,uint64_t va,size
     for (struct RestrictedAllocation *a=d->allocations;a;a=a->next) {
         if (va<a->region.mapping.start || va-a->region.mapping.start>=a->region.mapping.length) continue;
         size_t offset=va-a->region.mapping.start,page=offset/R_PAGE,in_page=offset%R_PAGE;
-        if (a->region.shared || page>=a->count || bytes>R_PAGE-in_page ||
-            !a->backing[page] || a->pages[page].physical!=a->backing[page]) return NULL;
+        if (page>=a->count || bytes>R_PAGE-in_page ||
+            !a->backing[page] || a->pages[page].physical!=a->backing[page] ||
+            (a->region.shared && (page>=a->region.shared->count ||
+             a->region.shared->pages[page]!=a->backing[page]))) return NULL;
         return (const unsigned char *)a->backing[page]+in_page;
     }
     return NULL;
@@ -1448,7 +1450,7 @@ static unsigned r_state(const struct AROSRestrictedWork *work)
     __asm__ volatile("svc #0xa535":"+r"(argument)::"memory","cc");
     return (unsigned)argument;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {23,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {24,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

@@ -11,6 +11,7 @@ struct AROSRestrictedSharedBacking {
     struct AROSRestrictedSharedBacking *next;
     uintptr_t *pages;
     size_t count,views;
+    struct AROSRestrictedRegion *publication;
     unsigned closing;
 };
 #define AROS_RESTRICTED_DYNAMIC_BASE UINT64_C(0x200000000)
@@ -46,7 +47,9 @@ struct AROSRestrictedRegion {
  * and returns ownership only after every attached view has detached. A region
  * retains the whole object even when its pages are decommitted. These are
  * anonymous views, not file-backed mappings with writeback semantics.
- * Shared pages remain RW/RO/no-access; executable aliases are not admitted. */
+ * Executable publication refuses any writable peer view. New writable views
+ * are refused while an executable peer exists. A pending transaction blocks
+ * object mutation until retry or detachment of the publishing view. */
 int AROSRestrictedSharedInitialize(struct AROSRestrictedSharedBacking *,uintptr_t *,size_t);
 int AROSRestrictedSharedClose(struct AROSRestrictedSharedBacking *);
 int AROSRestrictedRegionAttachShared(struct AROSRestrictedRegion *,struct AROSRestrictedSharedBacking *);
@@ -65,17 +68,18 @@ int AROSRestrictedRegionCommitShared(struct AROSRestrictedRegion *,size_t,unsign
  * Shared views never transfer page ownership on decommit/detach: decommit
  * returns zero and successful detach clears borrowed backing entries. Close
  * the backing object separately to reclaim its pages. Executable permissions
- * require a native code-publication protocol and remain refused. */
+ * require the native code-publication protocol below, never ordinary commit. */
 int AROSRestrictedRegionReserve(struct AROSRestrictedSpace *,struct AROSRestrictedRegion *,
     uintptr_t,size_t,struct KrnMappingPage *,uintptr_t *,size_t);
 int AROSRestrictedRegionCommit(struct AROSRestrictedRegion *,size_t,uintptr_t,unsigned);
 int AROSRestrictedRegionDecommit(struct AROSRestrictedRegion *,size_t,uintptr_t *);
 int AROSRestrictedRegionProtect(struct AROSRestrictedRegion *,size_t,unsigned);
-/* Private-page publication transaction. Caller holds the mapping/coordinator
+/* Owned private/shared-page publication transaction. Caller holds the mapping/coordinator
  * locks and has quiesced all CPUs using any alias for the entire call. Callback
  * must update every native alias synchronously, without allocation or waiting.
  * A transaction advances page generation once, including on later failure;
- * retries retain that generation. RX publication uses native RO/NX; all other targets restore native RW/NX.
+ * retries retain that generation. RX publication uses native RO/NX; non-executable targets keep it while any
+ * shared peer executes, otherwise restore native RW/NX.
  * Failure after guest revocation retains a no-access page and pending state.
  * Retry the same page or detach the whole region; ordinary mutation is refused
  * meanwhile. This helper does not itself establish native quiescence. */

@@ -71,8 +71,9 @@ struct AROSRestrictedAPI {
     /* Controller-only private anonymous memory. Reserve an aligned fixed range;
      * commit/decommit/protect operate on one 4096-byte page. Read=1, write=2;
      * zero means committed no-access. protect_memory additionally accepts
-     * read+execute (5) for private committed pages through a quiesced publication
-     * transaction. Commit and shared views do not accept execute. Dynamic code
+     * read+execute (5) for committed pages through a quiesced publication
+     * transaction. Shared publication requires every writable peer to be revoked;
+     * writers are refused while any peer executes. Commit never grants execute. Dynamic code
      * can supply callbacks and fault continuations: saved code identity must
      * still match when entered/restored. Replacement or revocation fails closed.
      * Release requires the reservation base.

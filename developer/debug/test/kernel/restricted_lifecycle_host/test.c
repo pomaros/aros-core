@@ -394,8 +394,11 @@ static void code_images(void)
     assert(r_execution_alias(&d,AROS_RESTRICTED_DYNAMIC_BASE+16,32)==image+16);
     assert(!r_execution_alias(&d,AROS_RESTRICTED_DYNAMIC_BASE+R_PAGE-16,32));
     page.physical=0;assert(!r_execution_alias(&d,AROS_RESTRICTED_DYNAMIC_BASE,R_PAGE));
-    page.physical=backing;allocation.region.shared=(void *)1;
-    assert(!r_execution_alias(&d,AROS_RESTRICTED_DYNAMIC_BASE,R_PAGE));
+    page.physical=backing;uintptr_t shared_page=backing;
+    struct AROSRestrictedSharedBacking shared={.pages=&shared_page,.count=1};
+    allocation.region.shared=&shared;
+    assert(r_execution_alias(&d,AROS_RESTRICTED_DYNAMIC_BASE,R_PAGE)==image);
+    shared_page+=R_PAGE;assert(!r_execution_alias(&d,AROS_RESTRICTED_DYNAMIC_BASE,R_PAGE));
     d.allocations=NULL;
     restricted_domains=&d;
     struct AROSRestrictedLifetime life;assert(call(R_LIFETIME,(uintptr_t)&life,&owner,&context));

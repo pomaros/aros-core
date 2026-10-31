@@ -32,6 +32,7 @@ def main():
     variants=[('actual',actual)]
     for name,old,new in [
         ('fixed-code-cap','!bytes || bytes>UINT32_MAX','!bytes || bytes>R_PAGE || bytes>UINT32_MAX'),
+        ('wrong-shared-cache-owner','a->region.shared->pages[page]!=a->backing[page]','0'),
         ('wrong-region-cache-owner','a->pages[page].physical!=a->backing[page]','0'),
         ('wrong-code-alias','(const unsigned char *)d->code+(va-AROS_RESTRICTED_CODE)','(const unsigned char *)d->code'),
         ('fixed-stack-limit','sp<=base+bytes','sp<=base+R_PAGE'),

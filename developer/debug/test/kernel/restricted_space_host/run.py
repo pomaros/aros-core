@@ -20,6 +20,12 @@ def main():
  original=source.read_text()
  generic=ROOT/'rom/kernel/mapping/mapping.c';pager=ROOT/'rom/kernel/mapping/pager.c'
  cases=[('baseline','adapter',None,None,None),
+  ('shared-exec-write-conflict','adapter','if ((access&KMAP_EXEC) && (p->protection&KMAP_WRITE)) return 0;','','shared-publish-write-conflict'),
+  ('shared-write-exec-conflict','adapter','if ((access&KMAP_WRITE) && (p->protection&KMAP_EXEC)) return 0;','','shared-publish-commit-writer-refused'),
+  ('shared-native-writer','adapter','((access&KMAP_EXEC) || other_execute)','(access&KMAP_EXEC)','shared-publish-keeps-native-readonly'),
+  ('shared-pending-owner','adapter','(b->publication && b->publication!=r)','0','shared-publish-pending-other-transaction'),
+  ('shared-pending-decommit','adapter','(r->shared && r->shared->publication)','0','shared-publish-pending-decommit'),
+  ('shared-pending-detach','adapter','if (r->shared->publication==r) r->shared->publication=NULL;','','shared-publish-detach-pending'),
   ('fixed-channel-cap','adapter','space->channels==(unsigned)-1','space->channels>=16','channel-growth-init'),
   ('channel-stops-domain','adapter','s->closing=1;','s->closing=1; KrnMappingDomainStop(&s->space->domain);','channel-close-keeps-domain'),
   ('stale-channel','adapter','s->channel==handle','s->channel==handle || (!s->next && handle<s->channel)','stale-channel-refused'),
