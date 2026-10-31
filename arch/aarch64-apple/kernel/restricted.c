@@ -50,6 +50,7 @@ struct Restricted {
     struct AROSAppleRuntimeFrame callback;
     struct AROSAppleRuntimeFrame native;
     struct AROSRestrictedResult result;
+    struct AROSRestrictedSpace space;
     struct AROSRestrictedService service;
 };
 /* Every state transition and published metadata access uses the coordinator.
@@ -124,11 +125,16 @@ static int r_lifecycle(struct AROSAppleRuntimeFrame *frame,struct Task *task,
     }
     return 0;
 }
+static int r_close(struct Restricted *r)
+{
+    AROSRestrictedSpaceStop(&r->space);
+    return AROSRestrictedServiceClose(&r->service) && AROSRestrictedSpaceClose(&r->space);
+}
 static struct Restricted *r_claim_reap(struct ExceptionContext *context)
 {
     for (unsigned i=0;i<KBUF_SPACES;++i) {
         struct Restricted *owned=&restricted_slots[i];
-        if (owned->state==R_LIVE && owned->abandoned && AROSRestrictedServiceClose(&owned->service)) {
+        if (owned->state==R_LIVE && owned->abandoned && r_close(owned)) {
             owned->state=R_REAPING;owned->releaser_context=context;
             return owned;
         }
@@ -200,7 +206,8 @@ static int r_prepare(struct Restricted *r, uint64_t source)
             AARCH64_PROTECT_READ|AARCH64_PROTECT_EXEC|AARCH64_PROTECT_USER,1) ||
         !AArch64MapPage(&ops,root,tcr,AROS_RESTRICTED_STACK,(uintptr_t)r->stack,rw,1)) return 0;
     r->root = root;
-    return AROSRestrictedServiceInit(&r->service,r->owner,root,tcr,(uintptr_t)r->data,&ops);
+    return AROSRestrictedSpaceInit(&r->space,(uintptr_t)r,root,tcr,(uintptr_t)r->data,&ops) &&
+        AROSRestrictedServiceInit(&r->service,&r->space,(uintptr_t)r->owner);
 }
 static void r_finish(struct Restricted *r, struct AROSAppleTaskExecution *execution,
     struct AROSAppleRuntimeFrame *frame, int64_t status)
@@ -269,7 +276,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
                 frame->far>=AROS_RESTRICTED_DATA && frame->far-AROS_RESTRICTED_DATA<R_PAGE &&
                 r_code_pc(r,frame->elr) && r_stack_sp(frame->sp) &&
                 r->fault_handler && !r->fault_active && r->fault_generation!=UINT64_MAX &&
-                AArch64UserPagePhysical(&r->service.hardware,r->root,r->service.tcr,
+                AArch64UserPagePhysical(&r->space.hardware,r->root,r->space.tcr,
                     AROS_RESTRICTED_DATA,AARCH64_PROTECT_READ,1,&physical) && physical==(uintptr_t)r->data) {
                 r->fault=*frame;r->fault_active=1;++r->fault_generation;
                 frame->elr=r->fault_handler;frame->x[0]=r->fault.far;
@@ -326,7 +333,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
             return 1;
         case AROS_RESTRICTED_PROTECT_DATA:
             if (frame->x[0]!=AROS_RESTRICTED_DATA || frame->x[1]>UINT32_MAX ||
-                !AROSRestrictedServiceProtect(&r->service,(unsigned)frame->x[1])) {
+                !AROSRestrictedSpaceProtect(&r->space,(unsigned)frame->x[1])) {
                 ++r->result.rejected;frame->x[0]=0;
             } else frame->x[0]=1;
             return 1;
@@ -335,7 +342,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
             if (!r->fault_active || frame->x[0]!=r->fault.elr ||
                 frame->x[1]!=r->fault_generation || r->service.request.queue ||
                 !r_code_pc(r,r->fault.elr) || !r_stack_sp(r->fault.sp) ||
-                !AArch64UserPagePhysical(&r->service.hardware,r->root,r->service.tcr,
+                !AArch64UserPagePhysical(&r->space.hardware,r->root,r->space.tcr,
                     AROS_RESTRICTED_DATA,AARCH64_PROTECT_WRITE,1,&physical) || physical!=(uintptr_t)r->data) {
                 ++r->result.denied;frame->x[0]=UINT64_MAX;return 1;
             }
@@ -382,7 +389,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
             /* Never dereference the removed Task after this hook. Service
              * principal/member identities are opaque until their drain. */
             owned->owner=NULL;
-            AROSRestrictedServiceClose(&owned->service);
+            r_close(owned);
         }
         return 1;
     }
@@ -398,7 +405,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
     if (!r || r->state!=R_LIVE || r->cookie != R_COOKIE || r->owner != task ||
         frame->entry_ttbr0 != AROSAppleRuntimeLocal()->trusted_ttbr0) return 1;
     if (svc == 0xa534) {
-        frame->x[0]=AROSRestrictedServiceClose(&r->service);
+        frame->x[0]=r_close(r);
         if (frame->x[0]) { r->state=R_REAPING;r->releaser_context=context; }
         else ++r->result.close_waits;
         return 1;
@@ -604,7 +611,7 @@ static unsigned r_state(const struct AROSRestrictedWork *work)
     __asm__ volatile("svc #0xa535":"+r"(argument)::"memory","cc");
     return (unsigned)argument;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {8,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {9,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

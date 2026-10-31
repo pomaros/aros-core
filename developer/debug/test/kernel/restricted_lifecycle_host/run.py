@@ -34,7 +34,7 @@ def main():
         ('wrong-context','r->owner_context!=context','0'),
         ('wrong-releaser','r->releaser_context!=context','0'),
         ('early-reuse','if (r->state!=R_FREE) continue;','if (r->state!=R_FREE && r->state!=R_REAPING) continue;'),
-        ('undrained-release','AROSRestrictedServiceClose(&owned->service)','1'),
+        ('undrained-release','r_close(owned)','1'),
     ]:
         assert actual.count(old)==1,old
         variants.append((name,actual.replace(old,new)))

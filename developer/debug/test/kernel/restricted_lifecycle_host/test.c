@@ -39,6 +39,8 @@ struct RestrictedPublication {
 };
 static struct Restricted restricted_slots[KBUF_SPACES];
 static uint64_t owners_retired,owners_reaped;
+static int r_close(struct Restricted *r)
+{ return AROSRestrictedServiceClose(&r->service); }
 #include "actual.inc"
 static struct Task owner,other;
 static struct ExceptionContext context,foreign;

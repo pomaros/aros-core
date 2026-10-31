@@ -21,7 +21,7 @@ It restores the native wrapper after completion/fault and releases its owned
 backing. It implements bounded worker services. It supports one callback frame and worker reentry, and owned-page fault resumption. External worker/owner removal and SMP reclamation are exercised explicitly.
 The source is an integration candidate; a compile is not runtime acceptance.
 
-The API version is 8. Service submit/collect use kernel-derived task identity;
+The API version is 9. Service submit/collect use kernel-derived task identity;
 collection yields when a response is unavailable. Close cancels and drains
 worker leases from native context before reclaiming backing; the workload covers queued cancellation before worker creation, running
 cancellation and termination while the worker retains a lease.
@@ -77,3 +77,8 @@ Task, callback and fault-handler vectors deliberately differ. Checks after
 yields, nested services, fault resume and callback return require restoration
 of the correct context, including the upper halves of the vector registers.
 Compilation alone is not runtime qualification.
+
+The production adapter separates address-space ownership from per-thread service
+channels. Native worker handles identify generation-tagged channels independently
+of domain handles. This workload still creates one domain per run invocation;
+multi-thread execution in one root needs its separate integration workload.

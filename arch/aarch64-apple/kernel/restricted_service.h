@@ -6,29 +6,40 @@
 #include "../../aarch64-all/kernel/mapping.h"
 #include "../../../rom/kernel/mapping/user_service.h"
 struct Task;
-struct AROSRestrictedService {
+struct AROSRestrictedSpace {
     struct KrnMappingDomain domain;
     struct KrnMappingDomainMember creator;
     struct KrnMappingArena arena;
     struct KrnMappingObject mapping;
     struct KrnMappingPage page;
-    struct KrnServiceQueue queue;
-    struct KrnBufferService request;
     struct AArch64ProtectionOps hardware;
     struct KrnMappingOps mapops;
     struct KrnBufferOps bufferops;
-    struct Task *worker;
-    void *worker_context;
-    uint64_t worker_retirements;
     uint64_t root,tcr,principal,handle;
     uintptr_t backing;
+    unsigned channels;
 };
-/* All entry points run at EL1 under the same UP exception exclusion. No
- * allocation, blocking, guest pointer dereference or callback into tasks.
- * SMP admission remains disabled until a shared lock/quiescence protocol. */
-int AROSRestrictedServiceInit(struct AROSRestrictedService *, struct Task *,
+#define AROS_RESTRICTED_CHANNELS 16U
+struct AROSRestrictedService {
+    struct AROSRestrictedSpace *space;
+    struct KrnMappingDomainMember member;
+    struct KrnServiceQueue queue;
+    struct KrnBufferService request;
+    struct Task *worker;
+    void *worker_context;
+    uint64_t principal, channel, worker_retirements;
+    unsigned closing;
+};
+/* All entry points share the EL1 coordinator lock. No allocation, blocking,
+ * guest pointer dereference or callback into tasks. Spaces own mappings;
+ * channels retain a space independently and close without retiring it. */
+int AROSRestrictedSpaceInit(struct AROSRestrictedSpace *, uint64_t principal,
     uint64_t root,uint64_t tcr,uintptr_t backing,const struct AArch64ProtectionOps *);
-int AROSRestrictedServiceProtect(struct AROSRestrictedService *, unsigned);
+void AROSRestrictedSpaceStop(struct AROSRestrictedSpace *);
+int AROSRestrictedSpaceClose(struct AROSRestrictedSpace *);
+int AROSRestrictedSpaceProtect(struct AROSRestrictedSpace *, unsigned);
+int AROSRestrictedServiceInit(struct AROSRestrictedService *,
+    struct AROSRestrictedSpace *, uint64_t requester);
 int AROSRestrictedServiceSubmit(struct AROSRestrictedService *,uintptr_t,uintptr_t,size_t);
 int AROSRestrictedServiceCollect(struct AROSRestrictedService *,uint64_t);
 int AROSRestrictedServiceTake(struct Task *,void *,struct AROSRestrictedWork *);

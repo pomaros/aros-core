@@ -31,7 +31,8 @@ struct AROSRestrictedResult {
     unsigned char data[4096];
 };
 struct AROSRestrictedWork {
-    uint64_t domain,token,length;
+    /* Generation-tagged per-thread service channel, not an address-space handle. */
+    uint64_t channel,token,length;
     unsigned char bytes[256];
 };
 struct AROSRestrictedLifetime {
