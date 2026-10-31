@@ -66,13 +66,13 @@ static void region_tests(void)
     uint64_t actual;
     CHECK(AArch64UserPagePhysical(&spaces[0].hardware,spaces[0].root,tcr,va,2,1,&actual) && actual==(uintptr_t)pages[0],"eager-write-permission");
     CHECK(AArch64UserPagePhysical(&spaces[1].hardware,spaces[1].root,tcr,va,2,1,&actual) && actual==(uintptr_t)pages[3],"other-root-backing");
-    uintptr_t identity;uint64_t identity_generation;
-    CHECK(AROSRestrictedSpacePageIdentity(&spaces[0],va+16,2,&identity,&identity_generation) &&
+    uintptr_t identity;uint64_t identity_generation,identity_reservation;
+    CHECK(AROSRestrictedSpacePageIdentity(&spaces[0],va+16,2,&identity,&identity_generation,&identity_reservation) &&
         identity==(uintptr_t)pages[0] && identity_generation==ap[0].generation,"region-page-identity");
-    CHECK(!AROSRestrictedSpacePageIdentity(&spaces[0],va+2*PAGE,0,&identity,&identity_generation),"reserved-no-identity");
+    CHECK(!AROSRestrictedSpacePageIdentity(&spaces[0],va+2*PAGE,0,&identity,&identity_generation,&identity_reservation),"reserved-no-identity");
     CHECK(AArch64UnmapPage(&spaces[0].hardware,spaces[0].root,tcr,va,(uintptr_t)pages[0]) &&
         AArch64MapPage(&spaces[0].hardware,spaces[0].root,tcr,va,(uintptr_t)pages[4],AARCH64_PROTECT_USER|3,1),"identity-foreign-pte");
-    CHECK(!AROSRestrictedSpacePageIdentity(&spaces[0],va,2,&identity,&identity_generation),"identity-pte-mismatch");
+    CHECK(!AROSRestrictedSpacePageIdentity(&spaces[0],va,2,&identity,&identity_generation,&identity_reservation),"identity-pte-mismatch");
     CHECK(AArch64UnmapPage(&spaces[0].hardware,spaces[0].root,tcr,va,(uintptr_t)pages[4]) &&
         AArch64MapPage(&spaces[0].hardware,spaces[0].root,tcr,va,(uintptr_t)pages[0],AARCH64_PROTECT_USER|3,1),"identity-restore-pte");
     CHECK(AROSRestrictedRegionCommit(&a,1,(uintptr_t)pages[1],3),"second-page-commit");
@@ -91,8 +91,8 @@ static void region_tests(void)
     CHECK(AArch64UnmapPage(&spaces[0].hardware,spaces[0].root,tcr,va+2*PAGE,(uintptr_t)pages[4]),"remove-foreign-pte");
     CHECK(AROSRestrictedRegionCommit(&a,2,(uintptr_t)pages[2],0),"committed-guard");
     CHECK(!AArch64UserPagePhysical(&spaces[0].hardware,spaces[0].root,tcr,va+2*PAGE,1,1,&actual),"guard-refuses-access");
-    CHECK(AROSRestrictedSpacePageIdentity(&spaces[0],va+2*PAGE,0,&identity,&identity_generation) &&
-        !AROSRestrictedSpacePageIdentity(&spaces[0],va+2*PAGE,1,&identity,&identity_generation),"guard-identity-not-access");
+    CHECK(AROSRestrictedSpacePageIdentity(&spaces[0],va+2*PAGE,0,&identity,&identity_generation,&identity_reservation) &&
+        !AROSRestrictedSpacePageIdentity(&spaces[0],va+2*PAGE,1,&identity,&identity_generation,&identity_reservation),"guard-identity-not-access");
     CHECK(AROSRestrictedRegionProtect(&a,2,3) && AArch64UserPagePhysical(&spaces[0].hardware,spaces[0].root,tcr,va+2*PAGE,2,1,&actual),"guard-to-write");
     struct AROSRestrictedService channel={0};struct Task worker={9};int context;
     CHECK(AROSRestrictedServiceInit(&channel,&spaces[0],99),"region-channel");
@@ -129,7 +129,16 @@ static void region_tests(void)
     CHECK(!AROSRestrictedRegionDetach(&a) && a.space==&spaces[0] && !ap[0].physical && ap[1].physical && ab[0]==(uintptr_t)pages[0],"partial-detach-retains-ownership");
     spaces[0].mapops.remove=real_remove;
     CHECK(AROSRestrictedRegionDetach(&a) && !a.space && ab[0]==(uintptr_t)pages[0],"region-detach-ownership");
+    CHECK(AROSRestrictedSpacePageIdentity(&spaces[1],va,1,&identity,&identity_generation,&identity_reservation),"old-reservation-identity");
+    uint64_t old_reservation=identity_reservation,old_generation=identity_generation;
     CHECK(AROSRestrictedRegionDetach(&b),"other-region-detach");
+    memset(&b,0,sizeof(b));bb[0]=0;
+    CHECK(AROSRestrictedRegionReserve(&spaces[1],&b,va,PAGE,bp,bb,1) &&
+        AROSRestrictedRegionCommit(&b,0,(uintptr_t)pages[3],3),"reused-reservation");
+    CHECK(AROSRestrictedSpacePageIdentity(&spaces[1],va,1,&identity,&identity_generation,&identity_reservation) &&
+        identity==(uintptr_t)pages[3] && identity_generation==old_generation &&
+        identity_reservation!=old_reservation,"reused-reservation-distinct-identity");
+    CHECK(AROSRestrictedRegionDetach(&b),"reused-reservation-detach");
     for (unsigned i=0;i<3;++i)
         CHECK(!AArch64MappingPhysical(&spaces[0].hardware,spaces[0].root,tcr,va+i*PAGE,&actual),"detached-pte-absent");
     CHECK(!AArch64MappingPhysical(&spaces[1].hardware,spaces[1].root,tcr,va,&actual),"other-detached-pte-absent");

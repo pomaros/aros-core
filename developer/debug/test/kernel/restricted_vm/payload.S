@@ -738,3 +738,44 @@ RestrictedRegionFailure:
  svc #0xa541
  b RestrictedRegionFailure
 RestrictedRegionFaultEnd:
+
+.balign 16
+.global RestrictedReplacedFault, RestrictedReplacedFaultEnd
+RestrictedReplacedFault:
+ mov x19, x1
+ mov x20, #2
+ lsl x20, x20, #32
+ adr x0, RestrictedReplacedHandler
+ svc #0xa545
+ cbz x0, RestrictedReplacedFailure
+ ldr x9, [x20]
+ b RestrictedReplacedFailure
+RestrictedReplacedHandler:
+ mov x21, x2
+ mov x22, x3
+ mov x9, #0x71
+ str x9, [x19, #512]
+ add x0, x19, #512
+ add x1, x19, #520
+ mov x2, #8
+ mov x3, #0
+ svc #0xa542
+ cbz x0, RestrictedReplacedFailure
+ mov x23, x0
+1:
+ mov x0, x23
+ svc #0xa543
+ cbz x0, 1b
+ mov x0, x21
+ mov x1, x22
+ svc #0xa547
+ cmn x0, #1
+ b.ne RestrictedReplacedFailure
+ mov x0, #0
+ svc #0xa541
+ b RestrictedReplacedFailure
+RestrictedReplacedFailure:
+ mov x0, #-9
+ svc #0xa541
+ b RestrictedReplacedFailure
+RestrictedReplacedFaultEnd:

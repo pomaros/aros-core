@@ -91,7 +91,7 @@ struct Restricted {
     uint64_t seed;
     uint64_t callback_pc;
     unsigned callback_active, fault_active;
-    uint64_t fault_handler, fault_generation, fault_page_generation;
+    uint64_t fault_handler, fault_generation, fault_page_generation, fault_reservation;
     uintptr_t fault_physical;
     struct AROSAppleRuntimeFrame fault;
     struct AROSAppleRuntimeFrame callback;
@@ -551,7 +551,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
         r->result.cpus|=UINT64_C(1)<<cpu;
         if (cpu!=r->last_cpu) { ++r->result.migrations;r->last_cpu=cpu; }
         if (ec != 0x15) {
-            uintptr_t physical;uint64_t generation;
+            uintptr_t physical;uint64_t generation,reservation;
             unsigned fault=(unsigned)frame->esr&63;
             /* Only owned resident data pages can enter a repair handler. Guards
              * produce level-3 translation faults; RO writes permission faults.
@@ -560,8 +560,8 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
             if (ec==0x24 && (fault==7 || fault==15) && !(frame->esr&(UINT64_C(1)<<10)) &&
                 r_code_pc(r,frame->elr) && r_stack_sp(r,frame->sp) &&
                 r->fault_handler && !r->fault_active && r->fault_generation!=UINT64_MAX &&
-                AROSRestrictedSpacePageIdentity(&r->domain->space,frame->far,0,&physical,&generation)) {
-                r->fault_physical=physical;r->fault_page_generation=generation;
+                AROSRestrictedSpacePageIdentity(&r->domain->space,frame->far,0,&physical,&generation,&reservation)) {
+                r->fault_physical=physical;r->fault_page_generation=generation;r->fault_reservation=reservation;
                 r->fault=*frame;r->fault_active=1;++r->fault_generation;
                 frame->elr=r->fault_handler;frame->x[0]=r->fault.far;
                 frame->x[1]=r->fault.esr;frame->x[2]=r->fault.elr;
@@ -633,15 +633,15 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
             frame->x[0]=ok;return 1;
         }
         case AROS_RESTRICTED_FAULT_RESUME: {
-            uintptr_t physical;uint64_t generation;
+            uintptr_t physical;uint64_t generation,reservation;
             if (!r->fault_active || frame->x[0]!=r->fault.elr ||
                 frame->x[1]!=r->fault_generation || r->service.request.queue ||
                 !r_code_pc(r,r->fault.elr) ||
                 r->fault.sp<=r->stack_address || r->fault.sp>r->stack_address+R_PAGE ||
                 (r->fault.sp&15) ||
                 !AROSRestrictedSpacePageIdentity(&r->domain->space,r->fault.far,
-                    (r->fault.esr&64) ? KMAP_WRITE : KMAP_READ,&physical,&generation) ||
-                physical!=r->fault_physical || generation!=r->fault_page_generation) {
+                    (r->fault.esr&64) ? KMAP_WRITE : KMAP_READ,&physical,&generation,&reservation) ||
+                physical!=r->fault_physical || generation!=r->fault_page_generation || reservation!=r->fault_reservation) {
                 ++r->result.denied;frame->x[0]=UINT64_MAX;return 1;
             }
             *frame=r->fault;r->fault_active=0;r_stack_bounds(r,0);++r->result.resumed;

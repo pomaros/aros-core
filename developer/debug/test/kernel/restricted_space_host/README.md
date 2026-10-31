@@ -56,3 +56,8 @@ returns generation, and distinguishes guarded ownership from read/write access.
 A mismatched physical translation is rejected by an additional semantic control
 (eighteen total). Native fault delivery/resumption uses this helper; the host
 fixture does not execute the exception entry or the guest repair handler.
+
+Reservations receive monotonic identities independent of page generations. A
+release/re-reserve test deliberately reuses the same metadata, VA and physical
+page with the same page generation; the reservation identity must differ. The
+nineteenth semantic control detects a constant/reused reservation identity.

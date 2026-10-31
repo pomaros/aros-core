@@ -6,6 +6,7 @@ _Static_assert(KS_RUNNING==AROS_RESTRICTED_RUNNING && KS_CANCELLED==AROS_RESTRIC
 static struct KrnBufferRegistry registry;
 static struct AROSRestrictedSpace *spaces[KBUF_SPACES];
 static struct AROSRestrictedSharedBacking *shared_backings;
+static uint64_t reservation_generation;
 /* Generation storage outlives every service object and never resets on close. */
 static struct {
     struct AROSRestrictedService *service;
@@ -129,13 +130,14 @@ int AROSRestrictedRegionReserve(struct AROSRestrictedSpace *s,struct AROSRestric
     uintptr_t address,size_t length,struct KrnMappingPage *pages,uintptr_t *backing,size_t capacity)
 {
     if (!s || !r || !pages || !backing || !s->handle || s->domain.closing ||
-        r->space || r->next || address<AROS_RESTRICTED_DYNAMIC_BASE ||
+        r->space || r->next || reservation_generation==UINT64_MAX || address<AROS_RESTRICTED_DYNAMIC_BASE ||
         address>=AROS_RESTRICTED_DYNAMIC_END || !length || (length&(PAGE-1)) ||
         length>AROS_RESTRICTED_DYNAMIC_END-address || length/PAGE>capacity) return 0;
     for (size_t i=0;i<length/PAGE;++i) if (backing[i]) return 0;
     void *identity=KrnBufferLookup(&registry,s->principal,s->handle);
     if (!identity || !KrnMappingReserveVirtual(&s->arena,&r->mapping,address,length,
         identity,pages,capacity)) return 0;
+    r->identity=++reservation_generation;
     r->space=s;r->backing=backing;r->next=s->regions;s->regions=r;return 1;
 }
 int AROSRestrictedRegionCommit(struct AROSRestrictedRegion *r,size_t page,uintptr_t pa,unsigned access)
@@ -182,9 +184,9 @@ int AROSRestrictedSpaceProtect(struct AROSRestrictedSpace *s,unsigned access)
         KrnMappingProtectPage(&s->mapping,0,access,&s->mapops);
 }
 int AROSRestrictedSpacePageIdentity(struct AROSRestrictedSpace *s,uintptr_t address,
-    unsigned access,uintptr_t *physical,uint64_t *generation)
+    unsigned access,uintptr_t *physical,uint64_t *generation,uint64_t *reservation)
 {
-    if (!s || !s->handle || s->domain.closing || !physical || !generation || access>2) return 0;
+    if (!s || !s->handle || s->domain.closing || !physical || !generation || !reservation || access>2) return 0;
     struct KrnMappingObject *m=KrnMappingLookup(&s->arena,address);
     if (!m || m->closing) return 0;
     size_t index=(address-m->start)/PAGE;struct KrnMappingPage *p=&m->pages[index];
@@ -194,7 +196,12 @@ int AROSRestrictedSpacePageIdentity(struct AROSRestrictedSpace *s,uintptr_t addr
     int ok=access ? AArch64UserPagePhysical(&s->hardware,s->root,s->tcr,va,access,1,&actual) :
         AArch64MappingPhysical(&s->hardware,s->root,s->tcr,va,&actual);
     if (!ok || actual!=p->physical) return 0;
-    *physical=p->physical;*generation=p->generation;return 1;
+    uint64_t identity=0;
+    if (m==&s->mapping) identity=s->handle;
+    else for (struct AROSRestrictedRegion *r=s->regions;r;r=r->next)
+        if (m==&r->mapping) { identity=r->identity;break; }
+    if (!identity) return 0;
+    *physical=p->physical;*generation=p->generation;*reservation=identity;return 1;
 }
 int AROSRestrictedServiceInit(struct AROSRestrictedService *s,
     struct AROSRestrictedSpace *space,uint64_t requester)

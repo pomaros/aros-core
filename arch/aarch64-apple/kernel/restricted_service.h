@@ -35,6 +35,7 @@ struct AROSRestrictedRegion {
     struct KrnMappingObject mapping;
     uintptr_t *backing;
     struct AROSRestrictedSharedBacking *shared;
+    uint64_t identity;
 };
 /* Shared anonymous backing is registered once, independently of any space.
  * Initialize transfers ownership of fresh zeroed pages; close stops admission
@@ -87,10 +88,10 @@ void AROSRestrictedSpaceStop(struct AROSRestrictedSpace *);
 int AROSRestrictedSpaceClose(struct AROSRestrictedSpace *);
 int AROSRestrictedSpaceProtect(struct AROSRestrictedSpace *, unsigned);
 /* access is 0 (owned resident page, including a guard), 1 (read) or 2 (write).
- * Validate both the backing ledger and live PTE; return page identity/generation
+ * Validate both the backing ledger and live PTE; return page identity/generation and reservation incarnation
  * without dereferencing an untrusted guest VA. */
 int AROSRestrictedSpacePageIdentity(struct AROSRestrictedSpace *,uintptr_t,unsigned,
-    uintptr_t *,uint64_t *);
+    uintptr_t *,uint64_t *,uint64_t *);
 int AROSRestrictedServiceInit(struct AROSRestrictedService *,
     struct AROSRestrictedSpace *, uint64_t requester);
 int AROSRestrictedServiceSubmit(struct AROSRestrictedService *,uintptr_t,uintptr_t,size_t);

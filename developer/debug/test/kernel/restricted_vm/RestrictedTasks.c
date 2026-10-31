@@ -308,6 +308,41 @@ static void prove_region_faults(void)
     CHECK(!life.live && !life.domains && !life.shared_objects && !life.pages);
     bug("[ISOVM] region-fault guard_read=1 readonly_write=1 alternate_stack=2 unrepaired_refused=2 resumed=2 retained_pages=0 PASS\n");
 }
+extern const unsigned char RestrictedReplacedFault[],RestrictedReplacedFaultEnd[];
+static uint64_t replaced_domain;
+static struct AROSRestrictedResult replaced_result;
+static void *replaced_client(void *unused)
+{
+    (void)unused;CHECK(api->run_domain(replaced_domain,0,&replaced_result));return NULL;
+}
+static void prove_replaced_fault(void)
+{
+    const uintptr_t va=UINT64_C(0x200000000);
+    for (unsigned mode=0;mode<2;++mode) {
+    replaced_domain=api->create_domain(RestrictedReplacedFault,
+        (size_t)(RestrictedReplacedFaultEnd-RestrictedReplacedFault),0);
+    CHECK(replaced_domain && api->reserve_memory(replaced_domain,va,4096) &&
+        api->commit_memory(replaced_domain,va,0));
+    pthread_t client;CHECK(!pthread_create(&client,NULL,replaced_client,NULL));
+    struct AROSRestrictedWork work;
+    while (!api->take(&work)) KrnSwitch();
+    uint64_t input;memcpy(&input,work.bytes,sizeof(input));CHECK(work.length==8 && input==0x71);
+    /* Fault handler is waiting on DATA-page service; the faulted region itself
+     * can be replaced. Its old continuation must not authorize the new page. */
+    if (mode) {
+        CHECK(api->release_memory(replaced_domain,va));
+        CHECK(api->reserve_memory(replaced_domain,va,4096));
+    } else CHECK(api->decommit_memory(replaced_domain,va));
+    CHECK(api->commit_memory(replaced_domain,va,3));
+    CHECK(api->complete(&work));CHECK(!pthread_join(client,NULL));
+    CHECK(replaced_result.status==0 && replaced_result.denied==1 &&
+        replaced_result.resumed==0 && replaced_result.replies==1);
+    CHECK(api->close_domain(replaced_domain)==1);
+    struct AROSRestrictedLifetime life;api->lifetime(&life);
+    CHECK(!life.live && !life.domains && !life.shared_objects && !life.pages);
+    }
+    bug("[ISOVM] replaced-fault held_handler=2 replaced_page=2 re_reserved=1 stale_resume_refused=2 retained_pages=0 PASS\n");
+}
 extern const unsigned char RestrictedSpin[],RestrictedSpinEnd[];
 static uint64_t closing_domain;
 static unsigned closing_done,creator_release;
@@ -555,6 +590,7 @@ int main(void)
     prove_private_memory();
     prove_shared_memory();
     prove_region_faults();
+    prove_replaced_fault();
     prove_domain_close();
 #if defined(__AROSEXEC_SMP__)
     for (unsigned cpu=0;cpu<2;++cpu) KrnFreeCPUMask(cpu_masks[cpu]);
