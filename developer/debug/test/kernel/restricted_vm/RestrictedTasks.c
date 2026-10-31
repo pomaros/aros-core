@@ -13,6 +13,7 @@
 #include <aros/apple/restricted.h>
 #if defined(__AROSEXEC_SMP__)
 #include <proto/task.h>
+#include <resources/task.h>
 APTR TaskResBase;
 static APTR cpu_masks[2];
 static unsigned migration_ack[2];
@@ -585,6 +586,54 @@ static void prove_owner_retirement(void)
     bug("[ISOVM] remote-lifetime caller=0 worker=1 owners=8 owner_cpu=1 reaper_cpu=1 polls=%u PASS\n",reaper_polls);
 #endif
 }
+#if defined(__AROSEXEC_SMP__)
+static unsigned task_list_stop,task_list_active,task_list_sweeps[2],task_list_concurrent[2];
+static void *task_list_reader(void *argument)
+{
+    unsigned cpu=(unsigned)(uintptr_t)argument;pin(cpu);
+    while (!__atomic_load_n(&task_list_stop,__ATOMIC_ACQUIRE)) {
+        struct TaskList *list=LockTaskList(LTF_ALL);CHECK(list);
+        unsigned count=0;
+        while (NextTaskEntry(list,LTF_ALL) && ++count<10000) { }
+        UnLockTaskList(list,LTF_ALL);
+        CHECK(count && count<10000 && KrnGetCPUNumber()==cpu);
+        __atomic_fetch_add(&task_list_sweeps[cpu],1,__ATOMIC_RELEASE);
+        if (__atomic_load_n(&task_list_active,__ATOMIC_ACQUIRE))
+            __atomic_fetch_add(&task_list_concurrent[cpu],1,__ATOMIC_RELEASE);
+        KrnSwitch();
+    }
+    return NULL;
+}
+static void *task_list_worker(void *argument)
+{
+    uintptr_t id=(uintptr_t)argument;pin(id&1);
+    for (unsigned turn=0;turn<16;++turn) KrnSwitch();
+    return (void *)(id+1);
+}
+static void prove_task_list_churn(void)
+{
+    pthread_t readers[2],workers[4];
+    for (unsigned cpu=0;cpu<2;++cpu)
+        CHECK(!pthread_create(&readers[cpu],NULL,task_list_reader,(void *)(uintptr_t)cpu));
+    while (!__atomic_load_n(&task_list_sweeps[0],__ATOMIC_ACQUIRE) ||
+        !__atomic_load_n(&task_list_sweeps[1],__ATOMIC_ACQUIRE)) KrnSwitch();
+    __atomic_store_n(&task_list_active,1,__ATOMIC_RELEASE);
+    for (unsigned batch=0;batch<32;++batch) {
+        for (unsigned i=0;i<4;++i)
+            CHECK(!pthread_create(&workers[i],NULL,task_list_worker,(void *)(uintptr_t)(4*batch+i)));
+        for (unsigned i=0;i<4;++i) {
+            void *value=NULL;CHECK(!pthread_join(workers[i],&value));
+            CHECK((uintptr_t)value==4*batch+i+1);
+        }
+    }
+    __atomic_store_n(&task_list_active,0,__ATOMIC_RELEASE);
+    __atomic_store_n(&task_list_stop,1,__ATOMIC_RELEASE);
+    for (unsigned cpu=0;cpu<2;++cpu) CHECK(!pthread_join(readers[cpu],NULL));
+    CHECK(task_list_concurrent[0] && task_list_concurrent[1]);
+    bug("[ISOVM] task-list readers=2 cpus=3 created=128 joined=128 sweeps0=%u sweeps1=%u PASS\n",
+        task_list_concurrent[0],task_list_concurrent[1]);
+}
+#endif
 int main(void)
 {
     KernelBase = OpenResource((CONST_STRPTR)"kernel.resource");
@@ -677,6 +726,7 @@ int main(void)
     prove_table_growth();
     prove_domain_close();
 #if defined(__AROSEXEC_SMP__)
+    prove_task_list_churn();
     for (unsigned cpu=0;cpu<2;++cpu) KrnFreeCPUMask(cpu_masks[cpu]);
 #endif
     bug("[ISOVM] PASS restricted=2 yields=3072 denied=46 faulted=1 survived=1 heartbeat=%u after_fault=%u joined=5 replies=402 rejected=16 callbacks=200 resumed=2 cancelled=3 worker_ack=3 close_pending=1 drained=4 removed_worker=1 removed_owners=8 reaped_owners=8 retained_pages=0\n",beats,after_fault);
