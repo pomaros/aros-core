@@ -230,6 +230,17 @@ void core_Switch(void)
             exec_TaskEnqueueWait(task);
         }
 #endif
+#ifdef CORE_SCHEDULER_PARK
+        if (task->tc_State==TS_READY && CORE_SCHEDULER_PARK(task))
+        {
+            task->tc_State=TS_WAIT;
+#if defined(__AROSEXEC_SMP__)
+            exec_TaskEnqueueWait(task);
+#else
+            Enqueue(&SysBase->TaskWait,&task->tc_Node);
+#endif
+        }
+#endif
         if (task->tc_State == TS_READY)
         {
             DSCHED(bug("[Kernel:%02d] Setting '%s' @ 0x%p as ready\n", cpunum, task->tc_Node.ln_Name, task));
@@ -267,6 +278,9 @@ struct Task *core_Dispatch(void)
 
     DSCHED(bug("[Kernel:%02d] core_Dispatch()\n", cpunum));
 
+#ifdef CORE_SCHEDULER_PARK
+dispatch_select:
+#endif
 #if defined(__AROSEXEC_SMP__)
 dispatch_rescan:
     sawContended = FALSE;
@@ -312,6 +326,23 @@ dispatch_rescan:
 
     if (newtask != NULL)
     {
+#ifdef CORE_SCHEDULER_PARK
+        /* Native signals can make a parked task ready. Recheck while the
+         * task lock still serializes a concurrent wake, before publishing
+         * ThisTask or allowing any user instruction. */
+        if (newtask->tc_State==TS_READY && CORE_SCHEDULER_PARK(newtask))
+        {
+            newtask->tc_State=TS_WAIT;
+#if defined(__AROSEXEC_SMP__)
+            exec_TaskEnqueueWait(newtask);
+            KrnSpinUnLock(&newtask->tc_SpinLock);
+            taskStateLocked=FALSE;
+#else
+            Enqueue(&SysBase->TaskWait,&newtask->tc_Node);
+#endif
+            goto dispatch_select;
+        }
+#endif
         if (newtask->tc_State == TS_READY || newtask->tc_State == TS_RUN)
         {
             DSCHED(bug("[Kernel:%02d] Preparing to run '%s' @ 0x%p\n",

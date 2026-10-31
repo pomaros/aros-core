@@ -27,6 +27,14 @@
 #define AROS_RESTRICTED_CANCEL 0xa548
 #define AROS_RESTRICTED_STATUS 0xa549
 #define AROS_RESTRICTED_PROTECT_MEMORY 0xa54a
+/* INFO returns channel in x0 and wake generation in x1. WAIT takes the
+ * observed generation in x0: 0 means changed/exhausted/refused, 1 means woken.
+ * Query again after wake; signals are coalesced by generation, not counted.
+ * WAKE takes a same-domain channel in x0, returns 1 on success, else 0.
+ * Closing the domain cancels parked execution through the native return. */
+#define AROS_RESTRICTED_THREAD_INFO 0xa54b
+#define AROS_RESTRICTED_WAIT 0xa54c
+#define AROS_RESTRICTED_WAKE 0xa54d
 #define AROS_RESTRICTED_RUNNING 2
 #define AROS_RESTRICTED_CANCELLED 4
 struct AROSRestrictedResult {
@@ -98,5 +106,7 @@ struct AROSRestrictedAPI {
      * Failure returns 0. Other run entry points select one page per stack. */
     int (*run_domain_stacks)(uint64_t handle,uint64_t seed,size_t stack_bytes,
         size_t fault_bytes,struct AROSRestrictedResult *result);
+    /* Controller-only wake of an active member identified by its channel. */
+    int (*wake_thread)(uint64_t domain,uint64_t channel);
 };
 #endif

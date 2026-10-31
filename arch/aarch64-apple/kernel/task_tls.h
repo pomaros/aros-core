@@ -38,8 +38,12 @@ struct AROSAppleTaskExecution {
     uint64_t root;
     uint64_t user_tls;
     void *domain;
-    uint64_t reserved;
+    /* Scheduler/task-lock protected. Never acquire the domain coordinator
+     * while holding that lock. PARKED acknowledges a completed context save. */
+    uint64_t park_flags;
 };
+#define AROS_TASK_PARK_WAIT UINT64_C(1)
+#define AROS_TASK_PARKED UINT64_C(2)
 _Static_assert(816 + sizeof(struct AROSAppleTaskExecution) ==
     AROS_APPLE_DISPATCH_CONTEXT_SIZE, "owned execution metadata allocation");
 static inline struct AROSAppleTaskExecution *AROSAppleTaskExecution(
