@@ -67,15 +67,15 @@ void ProbeBufferInit(void)
  /* Distinct queues start at the same queue token: record generation must
     distinguish a delayed worker after cross-domain request-record reuse. */
  struct KrnBufferService r={0};unsigned char bytes[8];size_t n=0;
- CHECK(KrnBufferServiceSubmit(&registry,1,spaces[0].handle,&spaces[0].queue,TEMP,TEMP,8,&spaces[0].bufops,&r),"buffer-cross-queue-first");
+ CHECK(KrnBufferServiceSubmit(&registry,1,spaces[0].handle,101,&spaces[0].queue,TEMP,TEMP,8,&spaces[0].bufops,&r),"buffer-cross-queue-first");
  uint64_t old=r.token,queue_token=r.service_token;
- CHECK(KrnBufferServiceCancel(&r,1,old),"buffer-cross-queue-cancel");
- CHECK(KrnBufferServiceSubmit(&registry,2,spaces[1].handle,&spaces[1].queue,TEMP,TEMP,8,&spaces[1].bufops,&r),"buffer-cross-queue-second");
+ CHECK(KrnBufferServiceCancel(&r,101,old),"buffer-cross-queue-cancel");
+ CHECK(KrnBufferServiceSubmit(&registry,2,spaces[1].handle,102,&spaces[1].queue,TEMP,TEMP,8,&spaces[1].bufops,&r),"buffer-cross-queue-second");
  CHECK(r.service_token==queue_token && r.token!=old,"buffer-cross-queue-generation");
  uint64_t token=r.token;
  CHECK(KrnBufferServiceTake(&r,token,bytes,sizeof(bytes),&n),"buffer-cross-queue-take");
  CHECK(!KrnBufferServiceComplete(&r,old,bytes,n),"buffer-cross-queue-worker");
- CHECK(KrnBufferServiceCancel(&r,2,token),"buffer-cross-queue-cancel-running");
+ CHECK(KrnBufferServiceCancel(&r,102,token),"buffer-cross-queue-cancel-running");
  CHECK(spaces[1].temp.in_flight==1,"buffer-cross-queue-pinned");
  CHECK(KrnBufferServiceComplete(&r,token,bytes,n),"buffer-cross-queue-drain");
  cross_queue=1;
@@ -83,12 +83,13 @@ void ProbeBufferInit(void)
 int ProbeBufferService(unsigned id,uint64_t ptr,uint64_t len,unsigned mask)
 {
  struct Space *s=&spaces[id];struct KrnBufferService r={0};unsigned char bytes[KBUF_BYTES];size_t n=0;
- if(!KrnBufferServiceSubmit(&registry,id+1,s->handle,&s->queue,ptr,ptr,len,&s->bufops,&r)){++refused;return 0;}
+ if(!KrnBufferServiceSubmit(&registry,id+1,s->handle,id+101,&s->queue,ptr,ptr,len,&s->bufops,&r)){++refused;return 0;}
  uint64_t token=r.token;
  CHECK(KrnBufferServiceTake(&r,token,bytes,sizeof(bytes),&n),"buffer-service-take");
  for(size_t i=0;i<n;++i)bytes[i]^=(unsigned char)mask;
  CHECK(KrnBufferServiceComplete(&r,token,bytes,n),"buffer-service-complete");
- CHECK(KrnBufferServiceCollect(&r,id+1,token,&s->bufops),"buffer-service-collect");
+ CHECK(!KrnBufferServiceCollect(&r,id+1,token,&s->bufops),"buffer-domain-not-requester");
+ CHECK(KrnBufferServiceCollect(&r,id+101,token,&s->bufops),"buffer-service-collect");
  ++copied;return 1;
 }
 void ProbeBufferFinish(unsigned id)
@@ -120,14 +121,14 @@ void ProbeBufferFinish(unsigned id)
  CHECK(ProbeMap(id,TEMP+PAGE,(uintptr_t)memory[id][1],3),"buffer-recheck-rw");
  CHECK(KrnBufferRelease(&l),"buffer-recheck-release");
  struct KrnBufferService r={0};
- CHECK(KrnBufferServiceSubmit(&registry,id+1,s->handle,&s->queue,TEMP,TEMP+PAGE-4,8,&s->bufops,&r),"buffer-cancel-submit");
- uint64_t old=r.token;CHECK(KrnBufferServiceCancel(&r,id+1,old),"buffer-cancel-queued");++cancelled;
- CHECK(KrnBufferServiceSubmit(&registry,id+1,s->handle,&s->queue,TEMP,TEMP+PAGE-4,8,&s->bufops,&r),"buffer-running-submit");
- CHECK(!KrnBufferServiceCancel(&r,id+1,old),"buffer-stale-request");
+ CHECK(KrnBufferServiceSubmit(&registry,id+1,s->handle,id+101,&s->queue,TEMP,TEMP+PAGE-4,8,&s->bufops,&r),"buffer-cancel-submit");
+ uint64_t old=r.token;CHECK(KrnBufferServiceCancel(&r,id+101,old),"buffer-cancel-queued");++cancelled;
+ CHECK(KrnBufferServiceSubmit(&registry,id+1,s->handle,id+101,&s->queue,TEMP,TEMP+PAGE-4,8,&s->bufops,&r),"buffer-running-submit");
+ CHECK(!KrnBufferServiceCancel(&r,id+101,old),"buffer-stale-request");
  uint64_t token=r.token;
  size_t n=0;CHECK(KrnBufferServiceTake(&r,token,bytes,sizeof(bytes),&n),"buffer-running-take");
  CHECK(!KrnBufferServiceComplete(&r,old,bytes,n),"buffer-stale-worker");
- CHECK(KrnBufferServiceCancel(&r,id+1,r.token),"buffer-running-cancel");
+ CHECK(KrnBufferServiceCancel(&r,id+101,r.token),"buffer-running-cancel");
  CHECK(!KrnMappingBeginClose(&s->temp),"buffer-unmap-retained");
  CHECK(!KrnMappingReleasePage(&s->temp,0,&s->mapops),"buffer-backing-retained");
  CHECK(KrnBufferServiceComplete(&r,token,bytes,n),"buffer-cancel-ack");++cancelled;
@@ -138,14 +139,14 @@ void ProbeBufferFinish(unsigned id)
  CHECK(KrnMappingReserve(&s->arena,&s->temp,2*PAGE,0,3,0,owner,s->temppages,2),"buffer-reassign");
  for(unsigned i=0;i<2;++i)populate(s,&s->temp,i,(uintptr_t)memory[id][i]);
  memory[id][0][0]=0x5e;
- CHECK(!KrnBufferServiceComplete(&r,token,bytes,n) && !KrnBufferServiceCollect(&r,id+1,old,&s->bufops) && memory[id][0][0]==0x5e,"buffer-no-reassigned-write");
+ CHECK(!KrnBufferServiceComplete(&r,token,bytes,n) && !KrnBufferServiceCollect(&r,id+101,old,&s->bufops) && memory[id][0][0]==0x5e,"buffer-no-reassigned-write");
  /* Completion-before-close must also refuse publication. */
- CHECK(KrnBufferServiceSubmit(&registry,id+1,s->handle,&s->queue,TEMP,TEMP,8,&s->bufops,&r),"buffer-ready-submit");
+ CHECK(KrnBufferServiceSubmit(&registry,id+1,s->handle,id+101,&s->queue,TEMP,TEMP,8,&s->bufops,&r),"buffer-ready-submit");
  token=r.token;
  CHECK(KrnBufferServiceTake(&r,token,bytes,sizeof(bytes),&n),"buffer-ready-take");bytes[0]=0xee;
  CHECK(KrnBufferServiceComplete(&r,token,bytes,n),"buffer-ready-complete");
  CHECK(KrnBufferClose(&registry,id+1,s->handle),"buffer-domain-close");
- CHECK(!KrnBufferServiceCollect(&r,id+1,token,&s->bufops) && memory[id][0][0]==0x5e,"buffer-close-no-write");
+ CHECK(!KrnBufferServiceCollect(&r,id+101,token,&s->bufops) && memory[id][0][0]==0x5e,"buffer-close-no-write");
  CHECK(KrnServiceDrained(&s->queue),"buffer-queue-drained");
  CHECK(KrnMappingReleasePage(&s->main,0,&s->mapops)==ProbeBacking(id),"buffer-main-release");
  for(unsigned i=0;i<2;++i)CHECK(KrnMappingReleasePage(&s->temp,i,&s->mapops)==(uintptr_t)memory[id][i],"buffer-temp-release");

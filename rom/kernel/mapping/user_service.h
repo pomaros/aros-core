@@ -11,6 +11,10 @@
  * may manipulate this request's underlying service token. The fixed byte
  * operation requires equal input/output length. No guest address reaches a
  * worker: input is copied and output is represented by a retained lease.
+ * Buffer principal is the kernel-derived address-space authority; requester
+ * is the kernel-derived thread identity used for queue ownership, cancellation
+ * and collection. Both are trusted coordinator inputs, never guest-supplied.
+ * Threads may share a buffer space without sharing request ownership.
  * token is a RECORD-scoped generation, independent of the queue token. It
  * survives completion/cancellation; never reset it while stale references may
  * exist. Exhaustion retires this record. Only initialize before first use.
@@ -21,11 +25,11 @@
 struct KrnBufferService {
     struct KrnServiceQueue *queue;
     struct KrnBufferLease output;
-    uint64_t principal, token, service_token;
+    uint64_t principal, buffer_principal, token, service_token;
     unsigned state;
 };
 int KrnBufferServiceSubmit(struct KrnBufferRegistry *, uint64_t principal,
-    uint64_t domain_handle, struct KrnServiceQueue *, uintptr_t input,
+    uint64_t domain_handle, uint64_t requester, struct KrnServiceQueue *, uintptr_t input,
     uintptr_t output, size_t length, const struct KrnBufferOps *,
     struct KrnBufferService *);
 /* Worker-only references and captured tokens come from a trusted work queue.

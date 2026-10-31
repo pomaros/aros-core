@@ -10,12 +10,12 @@ static int finish(struct KrnBufferService *r)
     *r = (struct KrnBufferService){0}; r->token = generation; return 1;
 }
 int KrnBufferServiceSubmit(struct KrnBufferRegistry *registry, uint64_t principal,
-    uint64_t handle, struct KrnServiceQueue *queue, uintptr_t input,
+    uint64_t handle, uint64_t requester, struct KrnServiceQueue *queue, uintptr_t input,
     uintptr_t output, size_t length, const struct KrnBufferOps *ops,
     struct KrnBufferService *r)
 {
     struct KrnBufferSpace *s = KrnBufferLookup(registry, principal, handle);
-    if (!r || r->token == UINT64_MAX || r->queue || r->output.space || !s || !queue || queue->domain != s->domain) return 0;
+    if (!requester || !r || r->token == UINT64_MAX || r->queue || r->output.space || !s || !queue || queue->domain != s->domain) return 0;
     struct KrnBufferLease in = {0}; unsigned char bytes[KBUF_BYTES];
     if (!KrnBufferPin(registry, principal, handle, input, length, KMAP_READ, ops, &in)) return 0;
     if (!KrnBufferPin(registry, principal, handle, output, length, KMAP_WRITE, ops, &r->output)) {
@@ -24,10 +24,10 @@ int KrnBufferServiceSubmit(struct KrnBufferRegistry *registry, uint64_t principa
     int ok = KrnBufferRead(&in, principal, bytes, sizeof(bytes), ops);
     (void)KrnBufferRelease(&in);
     uint64_t token;
-    if (!ok || !KrnServiceSubmit(queue, principal, bytes, length, &token)) {
+    if (!ok || !KrnServiceSubmit(queue, requester, bytes, length, &token)) {
         (void)KrnBufferRelease(&r->output); return 0;
     }
-    r->queue = queue; r->principal = principal; ++r->token; r->service_token = token; r->state = KS_QUEUED;
+    r->queue = queue; r->principal = requester; r->buffer_principal = principal; ++r->token; r->service_token = token; r->state = KS_QUEUED;
     return 1;
 }
 int KrnBufferServiceTake(struct KrnBufferService *r, uint64_t token, void *bytes, size_t cap, size_t *length)
@@ -61,6 +61,6 @@ int KrnBufferServiceCollect(struct KrnBufferService *r, uint64_t principal,
     unsigned char bytes[KBUF_BYTES]; size_t length = 0;
     int collected = KrnServiceCollect(r->queue, principal, r->service_token, bytes, sizeof(bytes), &length);
     if (!collected && !KrnServiceCancel(r->queue, principal, r->service_token)) return 0;
-    int copied = collected && KrnBufferWrite(&r->output, principal, bytes, length, ops);
+    int copied = collected && KrnBufferWrite(&r->output, r->buffer_principal, bytes, length, ops);
     return finish(r) && copied;
 }

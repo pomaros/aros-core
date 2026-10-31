@@ -55,7 +55,7 @@ int AROSRestrictedServiceProtect(struct AROSRestrictedService *s,unsigned access
 }
 int AROSRestrictedServiceSubmit(struct AROSRestrictedService *s,uintptr_t input,uintptr_t output,size_t length)
 {
-    return KrnBufferServiceSubmit(&registry,s->principal,s->handle,&s->queue,
+    return KrnBufferServiceSubmit(&registry,s->principal,s->handle,s->principal,&s->queue,
         input,output,length,&s->bufferops,&s->request);
 }
 int AROSRestrictedServiceCollect(struct AROSRestrictedService *s,uint64_t token)

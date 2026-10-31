@@ -44,7 +44,10 @@ cross-CPU synchronization belong to their platform coordinator.
   a mandatory platform translation/access callback. Close invalidates copying
   immediately; backing cannot be released until leases drain. Shared/file-backed
   pages and faulting admission are deliberately refused.
-- `user_service.c` connects those leases to the copied-byte service queue. Input
+- `user_service.c` connects those leases to the copied-byte service queue.
+  Domain memory authority and thread request ownership are separate kernel-derived
+  identities: sharing an address space does not grant cancellation/collection
+  authority over another thread's request. Input
   is staged before submission; output remains pinned until cancellation is
   acknowledged or completion is collected. Ready responses are discarded if
   publication is no longer valid. Workers present captured tokens so record

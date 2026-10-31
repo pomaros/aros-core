@@ -183,7 +183,7 @@ static void service_cases(void)
         struct Fixture f;init(&f);
         struct KrnServiceQueue q={0};struct KrnBufferService r={0};
         CHECK(KrnServiceInitialize(&q,&f.domain),"service-init");
-        CHECK(KrnBufferServiceSubmit(&f.registry,17,f.handle,&q,START,START+PAGE-4,8,&f.bufops,&r),"service-submit");
+        CHECK(KrnBufferServiceSubmit(&f.registry,17,f.handle,17,&q,START,START+PAGE-4,8,&f.bufops,&r),"service-submit");
         uint64_t token=r.token;
         unsigned char stale_bytes[8];size_t stale_n=0;
         CHECK(!KrnBufferServiceTake(&r,token+(UINT64_C(1)<<32),stale_bytes,sizeof(stale_bytes),&stale_n),"stale-worker-take");
@@ -212,7 +212,7 @@ static void service_cases(void)
     }
     struct Fixture f;init(&f);struct KrnServiceQueue q={0};struct KrnBufferService r={0};
     CHECK(KrnServiceInitialize(&q,&f.domain),"submit-refusal-init");
-    CHECK(!KrnBufferServiceSubmit(&f.registry,17,f.handle,&q,START,START+2*PAGE-4,8,&f.bufops,&r) && !f.mapping.in_flight,"submit-refusal-drain");
+    CHECK(!KrnBufferServiceSubmit(&f.registry,17,f.handle,17,&q,START,START+2*PAGE-4,8,&f.bufops,&r) && !f.mapping.in_flight,"submit-refusal-drain");
     KrnServiceClose(&q);clean(&f);
 }
 static void cross_queue_reuse(void)
@@ -220,10 +220,10 @@ static void cross_queue_reuse(void)
     struct Fixture a,b;init(&a);init(&b);
     struct KrnServiceQueue qa={0},qb={0};struct KrnBufferService r={0};
     CHECK(KrnServiceInitialize(&qa,&a.domain) && KrnServiceInitialize(&qb,&b.domain),"cross-queue-init");
-    CHECK(KrnBufferServiceSubmit(&a.registry,17,a.handle,&qa,START,START,8,&a.bufops,&r),"cross-queue-first");
+    CHECK(KrnBufferServiceSubmit(&a.registry,17,a.handle,17,&qa,START,START,8,&a.bufops,&r),"cross-queue-first");
     uint64_t stale=r.token,queue_token=r.service_token;
     CHECK(KrnBufferServiceCancel(&r,17,stale),"cross-queue-cancel");
-    CHECK(KrnBufferServiceSubmit(&b.registry,17,b.handle,&qb,START,START,8,&b.bufops,&r),"cross-queue-second");
+    CHECK(KrnBufferServiceSubmit(&b.registry,17,b.handle,17,&qb,START,START,8,&b.bufops,&r),"cross-queue-second");
     CHECK(r.service_token==queue_token && r.token!=stale,"cross-queue-generation");
     unsigned char bytes[8];size_t n=0;
     CHECK(KrnBufferServiceTake(&r,r.token,bytes,sizeof(bytes),&n),"cross-queue-take");
@@ -231,11 +231,41 @@ static void cross_queue_reuse(void)
     uint64_t current=r.token;
     CHECK(KrnBufferServiceCancel(&r,17,current) && KrnBufferServiceComplete(&r,current,bytes,n),"cross-queue-drain");
     r.token=UINT64_MAX;
-    CHECK(!KrnBufferServiceSubmit(&b.registry,17,b.handle,&qb,START,START,8,&b.bufops,&r),"record-generation-exhaustion");
+    CHECK(!KrnBufferServiceSubmit(&b.registry,17,b.handle,17,&qb,START,START,8,&b.bufops,&r),"record-generation-exhaustion");
     clean(&a);clean(&b);
 }
+static void shared_domain_requesters(void)
+{
+    struct Fixture f;init(&f);
+    struct KrnMappingDomainMember threads[2]={{0},{0}};
+    struct KrnServiceQueue q={0};struct KrnBufferService a={0},b={0};
+    CHECK(KrnMappingDomainJoin(&f.domain,&threads[0],&a) &&
+        KrnMappingDomainJoin(&f.domain,&threads[1],&b),"threads-join");
+    CHECK(KrnServiceInitialize(&q,&f.domain),"threads-queue");
+    CHECK(!KrnBufferServiceSubmit(&f.registry,17,f.handle,0,&q,START,START+32,8,&f.bufops,&a),"thread-zero-owner");
+    CHECK(KrnBufferServiceSubmit(&f.registry,17,f.handle,101,&q,START,START+32,8,&f.bufops,&a) &&
+        KrnBufferServiceSubmit(&f.registry,17,f.handle,102,&q,START,START+64,8,&f.bufops,&b),"threads-submit");
+    CHECK(a.principal==101 && b.principal==102 && a.buffer_principal==17 && b.buffer_principal==17,"thread-identities");
+    unsigned char bytes[8];size_t n=0;uint64_t at=a.token,bt=b.token;
+    CHECK(KrnBufferServiceTake(&a,at,bytes,sizeof(bytes),&n),"thread-a-take");
+    CHECK(!KrnBufferServiceCancel(&a,102,at),"thread-foreign-cancel");
+    CHECK(KrnBufferServiceCancel(&a,101,at),"thread-a-cancel");
+    CHECK(KrnMappingDomainLeave(&threads[0]) && !f.domain.closing,"thread-a-leave");
+    memset(bytes,0x77,sizeof(bytes));
+    CHECK(KrnBufferServiceComplete(&a,at,bytes,n) && !a.queue,"thread-a-drain");
+    CHECK(f.data[0][32]==0x31 && b.queue==&q && !f.domain.closing,"thread-a-no-write");
+    CHECK(KrnBufferServiceTake(&b,bt,bytes,sizeof(bytes),&n),"thread-b-take");
+    memset(bytes,0x88,sizeof(bytes));
+    CHECK(KrnBufferServiceComplete(&b,bt,bytes,n),"thread-b-complete");
+    CHECK(!KrnBufferServiceCollect(&b,101,bt,&f.bufops),"thread-foreign-collect");
+    CHECK(KrnBufferServiceCollect(&b,102,bt,&f.bufops) && f.data[0][64]==0x88,"thread-buffer-authority");
+    CHECK(!f.mapping.in_flight && KrnServiceDrained(&q),"threads-drained");
+    CHECK(KrnMappingDomainLeave(&threads[1]) && !f.domain.closing,"thread-last-leave-retained-space");
+    KrnServiceClose(&q);clean(&f);
+}
+
 int main(void)
 {
-    copies();refusal();revalidation();domain_lifetime();adjacent_owners();service_cases();cross_queue_reuse();
+    copies();refusal();revalidation();domain_lifetime();adjacent_owners();service_cases();cross_queue_reuse();shared_domain_requesters();
     puts("PASS owned buffers bounds permissions generations lifetime");return 0;
 }

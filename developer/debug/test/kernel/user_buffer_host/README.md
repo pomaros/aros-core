@@ -31,10 +31,11 @@ Every rejected publication leaves output untouched and every case drains both
 request and buffer ownership before final reclamation. Worker completion uses
 its captured token, so reuse of a kernel record cannot redirect a delayed reply.
 
-Nine semantic controls must fail at named assertions: wrong mapping owner,
+Eleven semantic controls must fail at named assertions: wrong mapping owner,
 wrong domain owner, stale domain generation, omitted page permission check,
 stale page generation, ignored mapping close, omitted mapping pins and stale
-worker token acceptance and resetting a record generation on retirement.
+worker token acceptance, resetting a record generation on retirement, conflating
+thread identity with memory authority, and copying with the wrong authority.
 A cross-queue test deliberately creates identical queue tokens for different
 domains; the retained record generation must still reject the old worker. The platform oracle is independent of the mapping
 ledger, allowing one check to be broken without another hiding it.
@@ -42,3 +43,7 @@ ledger, allowing one check to be broken without another hiding it.
 See `rom/kernel/mapping/user_buffer.h` and `user_service.h` for caller contracts.
 This is an anonymous resident-buffer mechanism, not a POSIX copyin interface,
 faulting pager, public kernel ABI or proof of restricted task admission.
+
+Two distinct requester identities also submit through one domain/queue. One
+thread cancels and leaves while the other collects its own reply. Foreign-thread
+cancel/collect is refused, retained memory stays live, and final close drains.
