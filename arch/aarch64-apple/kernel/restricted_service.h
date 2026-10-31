@@ -38,6 +38,8 @@ struct AROSRestrictedRegion {
     uintptr_t *backing;
     struct AROSRestrictedSharedBacking *shared;
     uint64_t identity;
+    unsigned publication_pending;
+    size_t publication_page;
 };
 /* Shared anonymous backing is registered once, independently of any space.
  * Initialize transfers ownership of fresh zeroed pages; close stops admission
@@ -69,6 +71,20 @@ int AROSRestrictedRegionReserve(struct AROSRestrictedSpace *,struct AROSRestrict
 int AROSRestrictedRegionCommit(struct AROSRestrictedRegion *,size_t,uintptr_t,unsigned);
 int AROSRestrictedRegionDecommit(struct AROSRestrictedRegion *,size_t,uintptr_t *);
 int AROSRestrictedRegionProtect(struct AROSRestrictedRegion *,size_t,unsigned);
+/* Private-page publication transaction. Caller holds the mapping/coordinator
+ * locks and has quiesced all CPUs using any alias for the entire call. Callback
+ * must update every native alias synchronously, without allocation or waiting.
+ * A transaction advances page generation once, including on later failure;
+ * retries retain that generation. RX publication uses native RO/NX; all other targets restore native RW/NX.
+ * Failure after guest revocation retains a no-access page and pending state.
+ * Retry the same page or detach the whole region; ordinary mutation is refused
+ * meanwhile. This helper does not itself establish native quiescence. */
+struct AROSRestrictedPublicationOps {
+    void *context;
+    int (*protect_native)(void *,uintptr_t physical,unsigned protection);
+};
+int AROSRestrictedRegionPublish(struct AROSRestrictedRegion *,size_t page,
+    unsigned protection,const struct AROSRestrictedPublicationOps *);
 int AROSRestrictedRegionDetach(struct AROSRestrictedRegion *);
 struct AROSRestrictedService {
     struct AROSRestrictedService *next;

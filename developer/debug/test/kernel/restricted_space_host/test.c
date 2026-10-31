@@ -8,7 +8,7 @@
 #define CHECK(x,n) do { if (!(x)) { puts("FAIL " n); exit(1); } } while(0)
 #define PAGE 4096U
 struct Task { unsigned id; };
-struct Fixture { unsigned used, invalidations; unsigned char tables[16][PAGE] __attribute__((aligned(PAGE))); };
+struct Fixture { unsigned used, invalidations, synchronizations; unsigned char tables[16][PAGE] __attribute__((aligned(PAGE))); };
 static uint64_t *resolve(void *opaque,uint64_t pa)
 {
     struct Fixture *f=opaque;uintptr_t start=(uintptr_t)f->tables;
@@ -23,7 +23,7 @@ static void clean(void *opaque,const void *address,size_t bytes)
 { (void)opaque;(void)address;(void)bytes; }
 static void invalidate(void *opaque) { ++((struct Fixture *)opaque)->invalidations; }
 static void sync_code(void *opaque,uint64_t va,size_t bytes)
-{ (void)opaque;(void)va;(void)bytes; }
+{ ++((struct Fixture *)opaque)->synchronizations;(void)va;(void)bytes; }
 static int page_allocate(void *opaque,size_t size,struct KrnPagerPage *page)
 {
     CHECK(size==PAGE,"region-page-size");*page=(struct KrnPagerPage){(uintptr_t)opaque,opaque};return 1;
@@ -41,6 +41,81 @@ static uintptr_t denied_address;
 static int (*real_remove)(void *,uintptr_t,uintptr_t);
 static int selective_remove(void *opaque,uintptr_t va,uintptr_t pa)
 { return va!=denied_address && real_remove(opaque,va,pa); }
+static struct AROSRestrictedRegion *publishing;
+static unsigned native_calls,native_policy,fail_native,fail_install;
+static int (*publication_install)(void *,uintptr_t,uintptr_t,unsigned);
+static uint64_t publication_leaf(struct AROSRestrictedSpace *s,uintptr_t va)
+{
+    uint64_t *table=(void *)(uintptr_t)s->root;
+    for (unsigned shift=30;shift>12;shift-=9)
+        table=(void *)(uintptr_t)(table[(va>>shift)&511]&UINT64_C(0x0000fffffffff000));
+    return table[(va>>12)&511];
+}
+static int native_publication(void *context,uintptr_t pa,unsigned policy)
+{
+    (void)context;++native_calls;
+    CHECK(publishing->publication_pending && !publishing->mapping.pages[0].protection &&
+        !(publication_leaf(publishing->space,publishing->mapping.start)&1),"publication-revoked-before-native");
+    CHECK(pa==publishing->backing[0],"publication-native-identity");
+    if (fail_native) return 0;native_policy=policy;return 1;
+}
+static int publication_fault(void *context,uintptr_t va,uintptr_t pa,unsigned access)
+{
+    if (fail_install==1 || (fail_install==2 && access==5)) return 0;
+    return publication_install(context,va,pa,access);
+}
+static void publication_tests(void)
+{
+    struct Fixture *f=aligned_alloc(PAGE,sizeof(*f));
+    unsigned char *data=aligned_alloc(PAGE,PAGE),*page=aligned_alloc(PAGE,PAGE);
+    CHECK(f && data && page,"publication-storage");memset(f,0,sizeof(*f));f->used=1;
+    struct AROSRestrictedSpace space={0};
+    struct AArch64ProtectionOps hardware={f,resolve,allocate,clean,invalidate,sync_code,NULL};
+    CHECK(AROSRestrictedSpaceInit(&space,99,(uintptr_t)f->tables[0],25|(UINT64_C(5)<<32),(uintptr_t)data,&hardware),"publication-space");
+    struct AROSRestrictedRegion region={0};struct KrnMappingPage metadata[2];uintptr_t ledger[2]={0};
+    uintptr_t va=AROS_RESTRICTED_DYNAMIC_BASE;
+    CHECK(AROSRestrictedRegionReserve(&space,&region,va,2*PAGE,metadata,ledger,2),"publication-reserve");
+    CHECK(AROSRestrictedRegionCommit(&region,0,(uintptr_t)page,3),"publication-commit");
+    uint64_t generation=metadata[0].generation;
+    publishing=&region;struct AROSRestrictedPublicationOps ops={NULL,native_publication};
+    publication_install=space.mapops.install;space.mapops.install=publication_fault;
+    native_calls=0;region.mapping.in_flight=1;
+    CHECK(!AROSRestrictedRegionPublish(&region,0,5,&ops) && !native_calls,"publication-pinned-refused");
+    region.mapping.in_flight=0;
+    for (unsigned access=0;access<16;++access) if (access!=0 && access!=1 && access!=3 && access!=5)
+        CHECK(!AROSRestrictedRegionPublish(&region,0,access,&ops) && !native_calls,"publication-permissions");
+    region.shared=(void *)1;
+    CHECK(!AROSRestrictedRegionPublish(&region,0,5,&ops) && !native_calls,"publication-shared-refused");region.shared=NULL;
+    fail_install=1;
+    CHECK(!AROSRestrictedRegionPublish(&region,0,5,&ops) && !native_calls && !region.publication_pending && metadata[0].protection==3,"publication-revoke-refusal");
+    CHECK(metadata[0].generation==generation,"publication-revoke-keeps-generation");
+    fail_install=0;metadata[0].generation=UINT64_MAX;
+    CHECK(!AROSRestrictedRegionPublish(&region,0,5,&ops) && !native_calls,"publication-generation-exhausted");
+    metadata[0].generation=generation;
+    fail_install=0;fail_native=1;
+    CHECK(!AROSRestrictedRegionPublish(&region,0,5,&ops) && region.publication_pending && !metadata[0].protection,"publication-native-refusal");
+    CHECK(metadata[0].generation==generation+1,"publication-generation-advanced");
+    CHECK(!AROSRestrictedRegionProtect(&region,0,3),"publication-pending-write-refused");
+    uintptr_t released=0;
+    CHECK(!AROSRestrictedRegionDecommit(&region,0,&released) && !released && ledger[0],"publication-pending-decommit-refused");
+    CHECK(!AROSRestrictedRegionPublish(&region,1,3,&ops),"publication-other-page-refused");
+    fail_native=0;fail_install=2;
+    CHECK(!AROSRestrictedRegionPublish(&region,0,5,&ops) && region.publication_pending && !metadata[0].protection && native_policy==1,"publication-grant-refusal");
+    fail_install=0;
+    CHECK(AROSRestrictedRegionPublish(&region,0,5,&ops) && !region.publication_pending && metadata[0].protection==5 && native_policy==1,"publication-rx");
+    CHECK(metadata[0].generation==generation+1,"publication-retry-same-generation");
+    uint64_t leaf=publication_leaf(&space,va);
+    CHECK((leaf&128) && !(leaf&(UINT64_C(1)<<54)) && f->synchronizations,"publication-rx-pte-cache");
+    CHECK(!AROSRestrictedRegionProtect(&region,0,3),"publication-exec-direct-write-refused");
+    CHECK(AROSRestrictedRegionPublish(&region,0,3,&ops) && metadata[0].protection==3 && native_policy==3,"publication-rw");
+    CHECK(metadata[0].generation==generation+2,"publication-write-new-generation");
+    leaf=publication_leaf(&space,va);CHECK(!(leaf&128) && (leaf&(UINT64_C(1)<<54)),"publication-rw-nx");
+    fail_native=1;
+    CHECK(!AROSRestrictedRegionPublish(&region,0,5,&ops) && region.publication_pending,"publication-final-pending");
+    CHECK(AROSRestrictedRegionDetach(&region) && !region.publication_pending && ledger[0]==(uintptr_t)page,"publication-detach-retains-backing");
+    CHECK(AROSRestrictedSpaceClose(&space),"publication-space-close");
+    fail_native=0;free(page);free(data);free(f);publishing=NULL;
+}
 static void region_tests(void)
 {
     struct Fixture *f[2];unsigned char *data[2],*pages[5];
@@ -271,5 +346,5 @@ int main(void)
     CHECK(AROSRestrictedSpaceInit(&space,11,root,tcr,(uintptr_t)data,&ops),"space-reuse");
     CHECK(space.handle!=first_handle,"space-generation");
     CHECK(AROSRestrictedSpaceClose(&space),"reused-space-close");
-    free(data);free(f);region_tests();shared_tests();channel_growth();puts("PASS restricted space and channel ownership");return 0;
+    free(data);free(f);region_tests();shared_tests();channel_growth();publication_tests();puts("PASS restricted space and channel ownership");return 0;
 }

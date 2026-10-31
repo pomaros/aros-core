@@ -67,3 +67,10 @@ have no adapter slot limit. A 32-channel workload cancels alternating queued
 requests, routes the remaining replies and drains every channel; a semantic
 control reinstating a sixteen-channel cap must fail (twenty controls total).
 Native execution-thread storage is a separate allocation concern.
+
+The private publication component revokes the guest view before calling a
+native-alias protection callback, then grants the requested permissions. The
+HOST fixture checks real synthetic PTEs, pins, W+X/shared refusal, generation
+advance, native/grant failure, retained pending state, same-page retry and
+detach ownership. The callback is modeled; the native transaction, remote
+rendezvous, executable cache aliases and guest execution are not qualified.
