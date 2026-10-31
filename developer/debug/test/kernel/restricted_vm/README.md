@@ -1,9 +1,9 @@
 # Restricted AROS task demonstration
 
-This experimental single-CPU workload invokes the native restricted control
+This experimental UP/SMP workload invokes the native restricted control
 API from two pthread tasks. Each payload runs at the same code/data/stack
 addresses with separate backing, validates TLS/x18 across explicit yields,
-and tries six forbidden SVCs. A fourth native worker receives only bounded
+and tries sixteen forbidden SVCs per task. A fourth native worker receives only bounded
 staging copies through the production W-BUF service boundary. Each payload
 checks 100 outer replies and 100 callback replies, rejecting four invalid
 input/output ranges and one invalid callback PC plus a nested callback installation; the worker
@@ -18,11 +18,10 @@ locked QEMU profile with register access qualified before execution.
 
 The experimental API admits one page of code, data and stack per invocation.
 It restores the native wrapper after completion/fault and releases its owned
-backing. It implements bounded worker services. It supports one callback frame and worker reentry, and owned-page fault resumption. It does not implement external task removal
-or SMP reclamation. SMP admission is disabled.
+backing. It implements bounded worker services. It supports one callback frame and worker reentry, and owned-page fault resumption. External worker/owner removal and SMP reclamation are exercised explicitly.
 The source is an integration candidate; a compile is not runtime acceptance.
 
-The API version is 6. Service submit/collect use kernel-derived task identity;
+The API version is 8. Service submit/collect use kernel-derived task identity;
 collection yields when a response is unavailable. Close cancels and drains
 worker leases from native context before reclaiming backing; the workload covers queued cancellation before worker creation, running
 cancellation and termination while the worker retains a lease.
@@ -53,19 +52,28 @@ request is live. The worker acknowledges cancellation and attempts duplicate
 completion. The native result includes a data-page snapshot taken after drain
 and before backing release: both cancelled output sentinels must stay unchanged,
 all three domains drain, and close must wait for the faulting domain's worker.
-External task removal remains a separate lifetime requirement.
+External task removal is exercised after the two-client workload.
 
 A final restricted client submits a request to a raw Exec worker. The worker
 claims its lease, signals its parent and parks. The parent verifies TS_WAIT
 and calls RemTask; the architecture context-deletion hook cancels and retires
 that lease before freeing the worker context. The client drains without output
-publication and returns a checked snapshot. This proves parked-worker removal,
-not arbitrary restricted-owner removal or SMP quiescence.
+publication and returns a checked snapshot. This tests parked-worker removal; the following owner-removal workload tests
+deferred domain reclamation.
 
 External owner retirement uses eight remove/complete cycles, exceeding the four
 domain slots. Each raw Exec owner is removed while the native parent holds a
 request: the domain closes but retains 1,027 pages until acknowledgement, then
 all slots/backing drain and stale completions fail. The removed native caller's
-result storage stays untouched. Static kernel control slots and non-waiting
-page allocation publish backing under UP Forbid; cleanup executes on native
-stacks after service drain. This remains a UP proof, not SMP qualification.
+result storage stays untouched. Kernel control slots serialize publication and exclusive reaping through the
+coordinator. Allocation/release execute outside that lock on native stacks,
+with Forbid protecting unpublished native backing against terminal freeze.
+In SMP builds the heartbeat forces both clients across both CPUs. CPU 0 removes
+the CPU-1 worker and eight CPU-1 owners while a second CPU-1 reaper polls; all
+backing must drain. Three invalid-stack cases exercise YIELD, COLLECT and STATUS.
+
+The payload checks full-width v0, v8 and v31 sentinels as well as x18/user TLS.
+Task, callback and fault-handler vectors deliberately differ. Checks after
+yields, nested services, fault resume and callback return require restoration
+of the correct context, including the upper halves of the vector registers.
+Compilation alone is not runtime qualification.

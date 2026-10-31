@@ -2,6 +2,37 @@
  * Licensed under the AROS Public License (APL) Version 1.1. */
 .section .rodata.restricted,"a"
 .balign 16
+/* Distinct full-width sentinels for the task, callback and fault handler.
+ * Cover caller-saved, partially callee-saved and high vector registers.
+ * Checks use only integer scratch registers so they cannot repair corruption. */
+.macro RegisterSeed stage
+ add x9, x23, #\stage
+ dup v0.2d, x9
+ add x9, x9, #1
+ dup v8.2d, x9
+ add x9, x9, #1
+ dup v31.2d, x9
+.endm
+.macro VectorCheck reg
+ umov x10, \reg\().d[0]
+ cmp x10, x9
+ b.ne RestrictedFailure
+ umov x10, \reg\().d[1]
+ cmp x10, x9
+ b.ne RestrictedFailure
+ add x9, x9, #1
+.endm
+.macro RegisterCheck stage
+ cmp x18, x20
+ b.ne RestrictedFailure
+ mrs x9, tpidr_el0
+ cmp x9, x20
+ b.ne RestrictedFailure
+ add x9, x23, #\stage
+ VectorCheck v0
+ VectorCheck v8
+ VectorCheck v31
+.endm
 .global RestrictedCode, RestrictedCodeEnd
 RestrictedCode:
  mov x19, x1
@@ -9,6 +40,7 @@ RestrictedCode:
  mov x23, x0
  lsr x22, x0, #2
  mrs x20, tpidr_el0
+ RegisterSeed 0
  mov x0, x19
  svc #0xa545
  cbnz x0, RestrictedFailure
@@ -26,6 +58,7 @@ RestrictedCode:
  add x21, x21, #1
  str x21, [x19]
  svc #0xa540
+ RegisterCheck 0
  cmp x18, x20
  b.ne RestrictedFailure
  mrs x9, tpidr_el0
@@ -80,6 +113,7 @@ RestrictedCode:
  mov x0, x25
  svc #0xa543
  cbz x0, 4b
+ RegisterCheck 0
  ldr x9, [x19, #288]
  eor x9, x9, x26
  cmp x9, x27
@@ -201,6 +235,8 @@ RestrictedFailure:
  b .
 RestrictedCallback:
  mov x19, x1
+ RegisterCheck 0
+ RegisterSeed 256
  cmp x24, #100
  b.ne 6f
  mov x0, x19
@@ -210,6 +246,7 @@ RestrictedCallback:
  mov x9, #0x1234
 RestrictedWriteProbe:
  str x9, [x19, #384]
+ RegisterCheck 256
  ldr x9, [x19, #384]
  mov x10, #0x1234
  cmp x9, x10
@@ -235,6 +272,7 @@ RestrictedWriteProbe:
  mov x0, x25
  svc #0xa543
  cbz x0, 5b
+ RegisterCheck 256
  ldr x9, [x19, #352]
  mov x26, #0x5a5a
  movk x26, #0x5a5a, lsl #16
@@ -247,6 +285,9 @@ RestrictedWriteProbe:
  svc #0xa544
  b RestrictedFailure
 RestrictedFaultHandler:
+ /* Preserve the delivered x0-x3 fault arguments while checking context. */
+ RegisterCheck 256
+ RegisterSeed 512
  add x9, x19, #384
  cmp x0, x9
  b.ne RestrictedFailure
@@ -293,6 +334,7 @@ RestrictedFaultHandler:
  mov x0, x28
  svc #0xa543
  cbz x0, 7b
+ RegisterCheck 512
  ldr x9, [x19, #448]
  mov x26, #0x5a5a
  movk x26, #0x5a5a, lsl #16
