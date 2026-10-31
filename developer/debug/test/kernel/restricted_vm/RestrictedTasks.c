@@ -230,6 +230,14 @@ static void prove_private_memory(uintptr_t va)
         CHECK(handles[i] && api->reserve_memory(handles[i],va,8192));
         CHECK(!api->reserve_memory(handles[i],va,4096));
         CHECK(!api->reserve_memory(handles[i],AROS_RESTRICTED_STACK,4096));
+        /* QEMU places both native code and API data inside the admitted low
+         * window. Refusal must come from transition protection, not bounds. */
+        uintptr_t kernel_code=(uintptr_t)api->run_domain & ~(uintptr_t)4095;
+        uintptr_t kernel_data=(uintptr_t)api & ~(uintptr_t)4095;
+        CHECK(kernel_code>=0x10000 && kernel_code<UINT64_C(0x100000000));
+        CHECK(kernel_data>=0x10000 && kernel_data<UINT64_C(0x100000000));
+        CHECK(!api->reserve_memory(handles[i],kernel_code,4096));
+        CHECK(!api->reserve_memory(handles[i],kernel_data,4096));
         CHECK(!api->reserve_memory(handles[i],0,4096));
         CHECK(!api->reserve_memory(handles[i],UINT64_C(0xfffff000),8192));
         CHECK(!api->reserve_memory(handles[i],UINT64_C(0x1fffff000),8192));
@@ -1398,7 +1406,7 @@ int main(void)
     prove_shared_domains();
     prove_private_memory(UINT64_C(0x200000000));
     prove_private_memory(UINT64_C(0x7ffe0000));
-    bug("[ISOVM] low-address fixed=0x7ffe0000 domains=2 zero=3 isolated=2 recommit=1 guard_fault=1 foreign=5 exclusions=4 retained_pages=0 PASS\n");
+    bug("[ISOVM] low-address fixed=0x7ffe0000 domains=2 zero=3 isolated=2 recommit=1 guard_fault=1 foreign=5 exclusions=4 kernel_exclusions=2 retained_pages=0 PASS\n");
     prove_shared_memory();
     prove_region_faults();
     prove_replaced_fault();
