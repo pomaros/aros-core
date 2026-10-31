@@ -6,7 +6,7 @@
 #include <string.h>
 #include <aros/apple/restricted.h>
 #define R_PAGE 4096U
-#define R_DOMAINS 4
+#define R_DOMAINS 16
 #define R_THREADS 16
 #define R_TABLES 1024
 #define R_COOKIE UINT64_C(0x7265737472696374)
@@ -65,6 +65,8 @@ static int AROSRestrictedRegionDetach(struct AROSRestrictedRegion *r)
 struct RestrictedAllocation { struct RestrictedAllocation *next; struct AROSRestrictedRegion region; };
 enum RestrictedState { R_FREE,R_ALLOCATING,R_LIVE,R_REAPING };
 struct RestrictedDomain {
+    struct RestrictedDomain *next;
+    size_t storage_bytes;
     struct AROSRestrictedSpace space;
     enum RestrictedState state;
     void *pool,*code,*data;
@@ -93,7 +95,8 @@ struct RestrictedPublication {
     size_t code_bytes;
 };
 static struct Restricted restricted_slots[R_THREADS];
-static struct RestrictedDomain restricted_domains[R_DOMAINS];
+static struct RestrictedDomain *restricted_domains;
+static struct RestrictedDomain domain_storage[64];
 static uint64_t owners_retired,owners_reaped;
 struct RestrictedDomainPublication {
     struct RestrictedDomain *domain;
@@ -112,13 +115,21 @@ static void r_shared_lifetime(struct AROSRestrictedLifetime *state) { (void)stat
 #include "actual.inc"
 static struct Task owner,other;
 static struct ExceptionContext context,foreign;
+static struct RestrictedDomain *new_domain(void)
+{
+    for (unsigned i=0;i<64;++i) if (domain_storage[i].state==R_FREE) {
+        domain_storage[i].storage_bytes=R_PAGE;return &domain_storage[i];
+    }
+    return NULL;
+}
 static uintptr_t call(unsigned svc,uintptr_t arg,struct Task *task,struct ExceptionContext *ctx)
 {
-    struct AROSAppleRuntimeFrame frame={.x={arg}};
+    struct AROSAppleRuntimeFrame frame={.x={arg,(svc==R_CLAIM && !arg) ? (uintptr_t)new_domain() : 0}};
     assert(r_lifecycle(&frame,task,ctx,svc));return frame.x[0];
 }
 static uintptr_t domain_call(unsigned svc,uintptr_t argument,void *ctx,uintptr_t *status)
 {
+    if (svc==R_DOMAIN_CLAIM && !argument) argument=(uintptr_t)new_domain();
     struct AROSAppleRuntimeFrame frame={.x={argument},.entry_ttbr0=123};
     assert(r_domain_lifecycle(&frame,ctx,svc));
     if (status) *status=frame.x[1];return frame.x[0];
@@ -138,7 +149,7 @@ static uint64_t managed_create(void)
 static void managed_tests(void)
 {
     memset(restricted_slots,0,sizeof(restricted_slots));
-    memset(restricted_domains,0,sizeof(restricted_domains));
+    memset(domain_storage,0,sizeof(domain_storage));restricted_domains=NULL;
     uint64_t handle=managed_create();struct RestrictedDomain *d=r_domain_lookup(handle);
     uintptr_t status;
     assert(!r_domain_slot((uintptr_t)d+1) && !r_domain_slot(UINTPTR_MAX));
@@ -172,7 +183,7 @@ static void managed_tests(void)
     assert(!domain_call(R_DOMAIN_CLOSE,handle,&context,&status) && !status &&
         d->state==R_LIVE && d->space.closes==closes && allocation.region.space);
     struct AROSRestrictedLifetime retained;
-    assert(call(R_LIFETIME,(uintptr_t)&retained,&owner,&context) && retained.pages==1028);
+    assert(call(R_LIFETIME,(uintptr_t)&retained,&owner,&context) && retained.pages==1029);
     allocation.region.drained=1;
     assert(domain_call(R_DOMAIN_CLOSE,handle,&context,&status)==(uintptr_t)d && status==1);
     assert(!r_domain_lookup(handle) && d->state==R_REAPING);
@@ -216,6 +227,23 @@ static void shared_tests(void)
     assert(shared_call(&op,&foreign) && b.releaser_context==&foreign);
     op.operation=3;op.handle=next;assert(shared_call(&op,&foreign) && !restricted_shared);
 }
+static void domain_growth(void)
+{
+    uint64_t handles[32];
+    for (unsigned i=0;i<32;++i) handles[i]=managed_create();
+    struct AROSRestrictedLifetime life;
+    assert(call(R_LIFETIME,(uintptr_t)&life,&owner,&context));
+    assert(life.domains==32 && life.pages==32*1027 && !life.live);
+    for (unsigned parity=0;parity<2;++parity) for (unsigned i=parity;i<32;i+=2) {
+        struct RestrictedDomain *d=r_domain_lookup(handles[i]);assert(d);
+        assert(!domain_call(R_DOMAIN_CLAIM,(uintptr_t)d,&context,NULL));
+        assert(domain_call(R_DOMAIN_CLOSE,handles[i],&context,NULL)==(uintptr_t)d);
+        assert(domain_call(R_DOMAIN_RELEASED,(uintptr_t)d,&context,NULL));
+        assert(!r_domain_lookup(handles[i]) && !r_domain_slot((uintptr_t)d));
+    }
+    assert(!restricted_domains);
+    assert(call(R_LIFETIME,(uintptr_t)&life,&owner,&context));assert(!life.domains && !life.pages);
+}
 int main(void)
 {
     struct Restricted stack_owner={.owner=&owner,.stack_address=AROS_RESTRICTED_STACK,
@@ -239,44 +267,45 @@ int main(void)
     /* Independent pools: a free domain does not authorize reuse of a context
      * whose native backing release is still in progress. */
     restricted_slots[0].state=R_REAPING;
-    restricted_slots[0].domain=&restricted_domains[0];
-    restricted_domains[0].state=R_REAPING;restricted_domains[0].threads=1;
+    restricted_slots[0].domain=&domain_storage[0];
+    domain_storage[0].state=R_REAPING;domain_storage[0].threads=1;restricted_domains=&domain_storage[0];
     assert(call(R_CLAIM,0,&owner,&context)==(uintptr_t)&restricted_slots[1]);
     assert(restricted_slots[0].state==R_REAPING);
-    assert(restricted_slots[1].domain==&restricted_domains[1]);
+    assert(restricted_slots[1].domain==&domain_storage[1]);
     memset(restricted_slots,0,sizeof(restricted_slots));
-    memset(restricted_domains,0,sizeof(restricted_domains));
+    memset(domain_storage,0,sizeof(domain_storage));restricted_domains=NULL;
 
     for (unsigned i=0;i<R_THREADS;++i)
         restricted_slots[i].state=R_ALLOCATING;
     assert(!call(R_CLAIM,0,&owner,&context));
     for (unsigned i=0;i<R_DOMAINS;++i)
-        assert(restricted_domains[i].state==R_FREE && !restricted_domains[i].threads);
+        assert(domain_storage[i].state==R_FREE && !domain_storage[i].threads);
     memset(restricted_slots,0,sizeof(restricted_slots));
-    restricted_domains[0]=(struct RestrictedDomain){.state=R_LIVE,
+    domain_storage[0]=(struct RestrictedDomain){.state=R_LIVE,
         .pool=&owner,.code=&owner,.data=&owner,.threads=2};
+    restricted_domains=&domain_storage[0];
     for (unsigned i=0;i<2;++i)
-        restricted_slots[i]=(struct Restricted){.state=R_LIVE,.domain=&restricted_domains[0],
+        restricted_slots[i]=(struct Restricted){.state=R_LIVE,.domain=&domain_storage[0],
             .stack=&owner,.fault_stack=&owner};
     struct AROSRestrictedLifetime shared_life;
     assert(call(R_LIFETIME,(uintptr_t)&shared_life,&owner,&context));
     assert(shared_life.live==2 && shared_life.pages==1030);
-    restricted_slots[0].service.drained=1;restricted_domains[0].space.drained=1;
+    restricted_slots[0].service.drained=1;domain_storage[0].space.drained=1;
     assert(!r_close(&restricted_slots[0]));
-    assert(!restricted_domains[0].space.stopped && !restricted_domains[0].space.closes);
-    assert(!restricted_slots[0].service.closes && restricted_domains[0].state==R_LIVE);
+    assert(!domain_storage[0].space.stopped && !domain_storage[0].space.closes);
+    assert(!restricted_slots[0].service.closes && domain_storage[0].state==R_LIVE);
     /* Channel acknowledgement alone cannot authorize domain release while
      * its mappings still retain backing. Exercise the actual close helper. */
-    restricted_domains[0].threads=1;restricted_domains[0].space.drained=0;
+    domain_storage[0].threads=1;domain_storage[0].space.drained=0;
     assert(!r_close(&restricted_slots[0]));
-    assert(restricted_domains[0].state==R_LIVE);
-    restricted_domains[0].space.drained=1;
+    assert(domain_storage[0].state==R_LIVE);
+    domain_storage[0].space.drained=1;
     unmap_allowed=0;
-    assert(!r_close(&restricted_slots[0]) && restricted_domains[0].state==R_LIVE);
+    assert(!r_close(&restricted_slots[0]) && domain_storage[0].state==R_LIVE);
     unmap_allowed=1;
-    assert(r_close(&restricted_slots[0]) && restricted_domains[0].state==R_REAPING);
+    assert(r_close(&restricted_slots[0]) && domain_storage[0].state==R_REAPING);
     memset(restricted_slots,0,sizeof(restricted_slots));
-    memset(restricted_domains,0,sizeof(restricted_domains));
+    memset(domain_storage,0,sizeof(domain_storage));restricted_domains=NULL;
 
     struct Restricted *slots[R_DOMAINS];
     for (unsigned i=0;i<R_DOMAINS;++i) {
@@ -299,7 +328,7 @@ int main(void)
     assert(!r_claim_reap(&foreign));
     struct AROSRestrictedLifetime life;
     assert(call(R_LIFETIME,(uintptr_t)&life,&other,&foreign));
-    assert(life.live==4 && !life.pages && !life.pending);
+    assert(life.live==R_DOMAINS && life.pages==R_DOMAINS && !life.pending);
     for (unsigned i=0;i<R_DOMAINS;++i) {
         struct RestrictedPublication p={.slot=slots[i],.pool=&owner,
             .code=&owner,.data=&owner,.stack=&owner,.fault_stack=&owner,.tls=&owner,.seed=i,.code_bytes=16};
@@ -308,7 +337,7 @@ int main(void)
         assert(call(R_PUBLISH,(uintptr_t)&p,&owner,&context));
         assert(!call(R_PUBLISH,(uintptr_t)&p,&owner,&context));
         assert(slots[i]->state==R_LIVE && slots[i]->seed==i);
-        assert(slots[i]->domain==&restricted_domains[i] && slots[i]->domain->state==R_LIVE);
+        assert(slots[i]->domain==&domain_storage[i] && slots[i]->domain->state==R_LIVE);
         assert(!call(R_RELEASED,(uintptr_t)slots[i],&owner,&context));
         slots[i]->domain->space.drained=1;
         slots[i]->abandoned=1;++owners_retired;
@@ -323,7 +352,7 @@ int main(void)
         assert(!call(R_RELEASED,(uintptr_t)slots[i],&other,&foreign));
         assert(!call(R_CLAIM,0,&other,&foreign));
         assert(call(R_LIFETIME,(uintptr_t)&life,&owner,&context));
-        assert(life.live==4 && life.pages==(4-i)*1029 && life.pending==4-i);
+        assert(life.live==R_DOMAINS && life.pages==(R_DOMAINS-i)*1030+i && life.pending==R_DOMAINS-i);
         slots[i]->domain->threads=2;
         assert(!call(R_RELEASED,(uintptr_t)slots[i],&owner,&context));
         assert(slots[i]->state==R_REAPING && slots[i]->domain->threads==2);
@@ -333,8 +362,9 @@ int main(void)
         /* Reuse only after release acknowledgement, never while freeing. */
         assert(call(R_CLAIM,0,&owner,&context)==(uintptr_t)slots[i]);
     }
-    assert(owners_reaped==4);
+    assert(owners_reaped==R_DOMAINS);
     managed_tests();
     shared_tests();
+    domain_growth();
     return 0;
 }
