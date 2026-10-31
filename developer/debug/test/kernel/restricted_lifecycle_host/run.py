@@ -26,7 +26,9 @@ def main():
     if out.exists() or ROOT in out.parents:p.error('use a fresh output outside source')
     out.mkdir(parents=True)
     source=SOURCE.read_text()
-    actual=''.join(body(source,name) for name in ['r_domain_slot(uintptr_t','r_domain_link(struct','r_domain_forget(struct','r_domain_lookup(uint64_t','r_shared_operation(struct','r_domain_retire(struct','r_domain_lifecycle(struct','r_slot(uintptr_t','r_lifecycle(struct','r_close(struct','r_claim_reap(struct','r_stack_sp(const','r_stack_bounds(struct'])
+    actual=''.join(body(source,name) for name in ['r_domain_slot(uintptr_t','r_domain_link(struct','r_domain_forget(struct','r_domain_lookup(uint64_t','r_shared_operation(struct','r_domain_retire(struct','r_domain_lifecycle(struct','r_slot(uintptr_t','r_thread_addresses(struct','r_thread_forget(struct','r_lifecycle(struct','r_close(struct','r_claim_reap(struct','r_stack_sp(const','r_stack_bounds(struct'])
+    adapter=SOURCE.with_name('restricted_service.h')
+    actual=next(line for line in adapter.read_text().splitlines() if line.startswith('#define AROS_RESTRICTED_DYNAMIC_BASE '))+'\n'+actual
     variants=[('actual',actual)]
     for name,old,new in [
         ('domain-not-unlinked','if (*link) *link=d->next;','',),
@@ -37,7 +39,7 @@ def main():
         ('wrong-active-stack','r->fault_active ? r->fault_address : r->stack_address','r->stack_address'),
         ('guard-stack-bound','sp>base &&','sp>=base &&'),
         ('wrong-native-bounds','fault ? r->fault_address : r->stack_address','r->stack_address'),
-        ('shared-tls-address','AROS_RESTRICTED_TLS+i*AROS_RESTRICTED_THREAD_STRIDE','AROS_RESTRICTED_TLS'),
+        ('shared-tls-address','AROS_RESTRICTED_TLS+offset','AROS_RESTRICTED_TLS'),
         ('shared-domain-release','r->domain->state!=R_REAPING || r->domain->threads!=1','r->domain->state!=R_REAPING'),
         ('shared-domain-close','(!r->domain->managed && r->domain->threads!=1)','0'),
         ('undrained-space','!AROSRestrictedSpaceClose(&r->domain->space)','0'),
@@ -53,14 +55,16 @@ def main():
         ('wrong-publisher','r->owner!=task','0'),
         ('wrong-context','r->owner_context!=context','0'),
         ('wrong-releaser','r->releaser_context!=context','0'),
-        ('early-reuse','if (r->state!=R_FREE) continue;','if (r->state!=R_FREE && r->state!=R_REAPING) continue;'),
+        ('early-reuse','r->state!=R_FREE || r->next || !r->storage_bytes ||\n            r_slot((uintptr_t)r) ||','!r->storage_bytes ||'),
+        ('thread-not-unlinked','if (*link) *link=r->next;',''),
+        ('fixed-thread-cap','uint64_t offset=0;','unsigned count=0;for (struct Restricted *p=restricted_slots;p;p=p->next) if (++count>=16) return 0;\n    uint64_t offset=0;'),
         ('undrained-release','r_close(owned)','1'),
     ]:
         assert actual.count(old)==1,old
         variants.append((name,actual.replace(old,new)))
     result={'result':'FAIL','scope':__doc__,'source_commit':subprocess.check_output(
         ['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),'inputs':{},'variants':[]}
-    for path in [SOURCE,ROOT/'arch/aarch64-apple/include/aros/apple/restricted.h',HERE/'test.c',Path(__file__).resolve()]:
+    for path in [SOURCE,adapter,ROOT/'arch/aarch64-apple/include/aros/apple/restricted.h',HERE/'test.c',Path(__file__).resolve()]:
         result['inputs'][str(path)]=hashlib.sha256(path.read_bytes()).hexdigest()
     try:
         for name,code in variants:

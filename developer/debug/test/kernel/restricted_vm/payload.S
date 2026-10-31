@@ -779,3 +779,40 @@ RestrictedReplacedFailure:
  svc #0xa541
  b RestrictedReplacedFailure
 RestrictedReplacedFaultEnd:
+
+.balign 16
+.global RestrictedThreadGrowth, RestrictedThreadGrowthEnd
+RestrictedThreadGrowth:
+ mov x23, x0
+ mrs x20, tpidr_el0
+ ldr x9, [x20]
+ cbnz x9, RestrictedThreadGrowthFailure
+ str x23, [x20]
+ RegisterSeed 0
+ add x25, x1, #512
+ add x25, x25, x23, lsl #4
+ str x23, [x25]
+ mov x0, x25
+ add x1, x25, #8
+ mov x2, #8
+ mov x3, #0
+ svc #0xa542
+ cbz x0, RestrictedThreadGrowthFailure
+ mov x26, x0
+1:
+ svc #0xa540
+ RegisterCheck 0, RestrictedThreadGrowthFailure
+ mov x0, x26
+ svc #0xa543
+ cbz x0, 1b
+ RegisterCheck 0, RestrictedThreadGrowthFailure
+ ldr x9, [x25, #8]
+ cmp x9, x23
+ b.ne RestrictedThreadGrowthFailure
+ mov x0, #0
+ svc #0xa541
+RestrictedThreadGrowthFailure:
+ mov x0, #-9
+ svc #0xa541
+ b RestrictedThreadGrowthFailure
+RestrictedThreadGrowthEnd:

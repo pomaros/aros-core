@@ -40,8 +40,10 @@ struct AROSRestrictedWork {
     uint64_t channel,token,length;
     unsigned char bytes[256];
 };
+/* pages includes all retained backing and metadata; metadata_pages is a subset.
+ * Both remain charged until the release acknowledgement. */
 struct AROSRestrictedLifetime {
-    uint64_t retired,reaped,live,pending,pages,domains,shared_objects;
+    uint64_t retired,reaped,live,pending,pages,domains,shared_objects,metadata_pages;
 };
 struct AROSRestrictedAPI {
     uint32_t version, size;
