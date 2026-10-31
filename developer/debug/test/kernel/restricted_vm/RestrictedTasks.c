@@ -1190,7 +1190,7 @@ static void prove_combined_memory_threads(void)
         CHECK(api->wake_thread(domains[id/2],channels[id]));
     }
     combined_requests(work,4,channels);
-    CHECK(!api->close_shared(shared)); /* Views and worker leases keep ownership. */
+    CHECK(!api->close_shared(shared)); /* Refused while views retain backing. */
     for (unsigned d=0;d<2;++d) CHECK(api->close_domain(domains[d])==0);
     struct AROSRestrictedLifetime held;api->lifetime(&held);
     /* pending counts abandoned native contexts, not worker leases. */
@@ -1222,6 +1222,8 @@ static void prove_combined_memory_threads(void)
         }
     }
     for (unsigned d=0;d<2;++d) CHECK(snapshots[d]==1 && api->close_domain(domains[d])==1);
+    CHECK(api->close_shared(shared));
+    CHECK(!api->close_shared(shared));
     api->lifetime(&held);
     CHECK(!held.live && !held.pending && !held.domains && !held.shared_objects && !held.pages &&
         !held.waits && !held.timed_waits && !held.suspended_threads);
