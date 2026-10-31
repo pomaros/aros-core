@@ -1232,6 +1232,8 @@ static void prove_combined_memory_threads(void)
 
 extern const unsigned char RestrictedSuspend[],RestrictedSuspendEnd[];
 extern const unsigned char RestrictedSuspendNoCalls[],RestrictedSuspendNoCallsEnd[];
+extern int NativeRunChecked(int (*run)(uint64_t,uint64_t,struct AROSRestrictedResult *),
+    uint64_t domain,uint64_t seed,struct AROSRestrictedResult *result);
 static void *suspend_client(void *argument)
 {
     struct DynamicCodeClient *client=argument;
@@ -1239,7 +1241,7 @@ static void *suspend_client(void *argument)
     pin((client->seed&1) ? 0 : 1);
 #endif
     __atomic_store_n(&client->task,FindTask(NULL),__ATOMIC_RELEASE);
-    CHECK(api->run_domain(client->domain,client->seed,&client->result));return NULL;
+    CHECK(NativeRunChecked(api->run_domain,client->domain,client->seed,&client->result));return NULL;
 }
 static void *suspend_foreign_controller(void *argument)
 {
@@ -1301,6 +1303,7 @@ static void prove_suspension(void)
         CHECK(api->close_shared(shared));
     }
     struct AROSRestrictedLifetime life;api->lifetime(&life);CHECK(!life.pages && !life.live && !life.domains && !life.shared_objects);
+    bug("[ISOVM] native-return calls=4 normal=3 cancelled=1 gp=11 simd_low=8 fpcr=1 tls=1 stack=1 PASS\n");
     bug("[ISOVM] suspend-context stable_gp=30 loop_result=1 simd=32 fp=1 nzcv=1 tls=1 stack=1 migrated=1 PASS\n");
     bug("[ISOVM] suspend cpu_bound=2 nested=2 wake_held=2 peer_publications=2 held_checks=256 resumed=1 closed=1 foreign=8 native_refused=4 retained_pages=0 PASS\n");
 }

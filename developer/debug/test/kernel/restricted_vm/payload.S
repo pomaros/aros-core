@@ -2758,3 +2758,142 @@ CombinedFailure:
  svc #0xa541
  b CombinedFailure
 RestrictedCombinedEnd:
+
+/* Native caller ABI probe: outside every copied restricted image. */
+.section .text,"ax"
+.balign 16
+.global NativeRunChecked
+NativeRunChecked:
+ sub sp, sp, #208
+ stp x19, x20, [sp, #0]
+ stp x21, x22, [sp, #16]
+ stp x23, x24, [sp, #32]
+ stp x25, x26, [sp, #48]
+ stp x27, x28, [sp, #64]
+ stp x29, x30, [sp, #80]
+ str x18, [sp, #96]
+ mrs x9, tpidr_el0
+ str x9, [sp, #104]
+ stp d8, d9, [sp, #112]
+ stp d10, d11, [sp, #128]
+ stp d12, d13, [sp, #144]
+ stp d14, d15, [sp, #160]
+ mrs x9, fpcr
+ str x9, [sp, #176]
+ mov x9, sp
+ str x9, [sp, #192]
+ mov x16, x0
+ mov x0, x1
+ mov x1, x2
+ mov x2, x3
+ mov x19, #275
+ mov x20, #276
+ mov x21, #277
+ mov x22, #278
+ mov x23, #279
+ mov x24, #280
+ mov x25, #281
+ mov x26, #282
+ mov x27, #283
+ mov x28, #284
+ mov x29, #285
+ mov x9, #520
+ fmov d8, x9
+ mov x9, #521
+ fmov d9, x9
+ mov x9, #522
+ fmov d10, x9
+ mov x9, #523
+ fmov d11, x9
+ mov x9, #524
+ fmov d12, x9
+ mov x9, #525
+ fmov d13, x9
+ mov x9, #526
+ fmov d14, x9
+ mov x9, #527
+ fmov d15, x9
+ mov x9, #0x400000
+ msr fpcr, x9
+ blr x16
+ str x0, [sp, #184]
+ cmp x19, #275
+ b.ne NativeRunMismatch
+ cmp x20, #276
+ b.ne NativeRunMismatch
+ cmp x21, #277
+ b.ne NativeRunMismatch
+ cmp x22, #278
+ b.ne NativeRunMismatch
+ cmp x23, #279
+ b.ne NativeRunMismatch
+ cmp x24, #280
+ b.ne NativeRunMismatch
+ cmp x25, #281
+ b.ne NativeRunMismatch
+ cmp x26, #282
+ b.ne NativeRunMismatch
+ cmp x27, #283
+ b.ne NativeRunMismatch
+ cmp x28, #284
+ b.ne NativeRunMismatch
+ cmp x29, #285
+ b.ne NativeRunMismatch
+ ldr x9, [sp, #96]
+ cmp x18, x9
+ b.ne NativeRunMismatch
+ mrs x9, tpidr_el0
+ ldr x10, [sp, #104]
+ cmp x9, x10
+ b.ne NativeRunMismatch
+ mov x9, sp
+ ldr x10, [sp, #192]
+ cmp x9, x10
+ b.ne NativeRunMismatch
+ mrs x9, fpcr
+ cmp x9, #0x400000
+ b.ne NativeRunMismatch
+ fmov x9, d8
+ cmp x9, #520
+ b.ne NativeRunMismatch
+ fmov x9, d9
+ cmp x9, #521
+ b.ne NativeRunMismatch
+ fmov x9, d10
+ cmp x9, #522
+ b.ne NativeRunMismatch
+ fmov x9, d11
+ cmp x9, #523
+ b.ne NativeRunMismatch
+ fmov x9, d12
+ cmp x9, #524
+ b.ne NativeRunMismatch
+ fmov x9, d13
+ cmp x9, #525
+ b.ne NativeRunMismatch
+ fmov x9, d14
+ cmp x9, #526
+ b.ne NativeRunMismatch
+ fmov x9, d15
+ cmp x9, #527
+ b.ne NativeRunMismatch
+ b NativeRunRestore
+NativeRunMismatch:
+ str xzr, [sp, #184]
+NativeRunRestore:
+ ldr x9, [sp, #176]
+ msr fpcr, x9
+ ldp d8, d9, [sp, #112]
+ ldp d10, d11, [sp, #128]
+ ldp d12, d13, [sp, #144]
+ ldp d14, d15, [sp, #160]
+ ldp x19, x20, [sp, #0]
+ ldp x21, x22, [sp, #16]
+ ldp x23, x24, [sp, #32]
+ ldp x25, x26, [sp, #48]
+ ldp x27, x28, [sp, #64]
+ ldp x29, x30, [sp, #80]
+ ldr x18, [sp, #96]
+ ldr x0, [sp, #184]
+ add sp, sp, #208
+ ret
