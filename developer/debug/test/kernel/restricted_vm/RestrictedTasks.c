@@ -928,6 +928,16 @@ static void wait_parked(uint64_t domain,uint64_t channel)
     }
     CHECK(state==(AROS_RESTRICTED_THREAD_ACTIVE|AROS_RESTRICTED_THREAD_WAITING|AROS_RESTRICTED_THREAD_PARKED));
 }
+static void suspend_parked(uint64_t domain,uint64_t channel)
+{
+    unsigned state=0;
+    for (unsigned polls=0;polls<1000000;++polls) {
+        state=api->thread_state(domain,channel);CHECK(state&AROS_RESTRICTED_THREAD_ACTIVE);
+        if (state&AROS_RESTRICTED_THREAD_PARKED) break;
+        KrnSwitch();
+    }
+    CHECK(state==(AROS_RESTRICTED_THREAD_ACTIVE|AROS_RESTRICTED_THREAD_SUSPENDED|AROS_RESTRICTED_THREAD_PARKED));
+}
 static void prove_waits(void)
 {
     struct DynamicCodeClient clients[4]={{.seed=0},{.seed=1},{.seed=2},{.seed=3}};
@@ -954,7 +964,13 @@ static void prove_waits(void)
 #if defined(__AROSEXEC_SMP__)
         CHECK(SetTaskAffinity(__atomic_load_n(&clients[i*2].task,__ATOMIC_ACQUIRE),cpu_masks[1]));
 #endif
+        CHECK(api->suspend_thread(domains[i],channels[i])==0);
+        CHECK(api->suspend_thread(domains[i],channels[i])==1);
         CHECK(api->wake_thread(domains[i],channels[i]));
+        suspend_parked(domains[i],channels[i]);
+        CHECK(api->resume_thread(domains[i],channels[i])==2);
+        suspend_parked(domains[i],channels[i]);
+        CHECK(api->resume_thread(domains[i],channels[i])==1);
     }
     wait_requests(work,2,0);
     for (unsigned i=0;i<2;++i) CHECK(api->complete(&work[i]));
@@ -963,6 +979,9 @@ static void prove_waits(void)
 #if defined(__AROSEXEC_SMP__)
         CHECK(SetTaskAffinity(__atomic_load_n(&clients[i*2].task,__ATOMIC_ACQUIRE),cpu_masks[0]));
 #endif
+        CHECK(api->suspend_thread(domains[i],channels[i])==0);
+        CHECK(api->resume_thread(domains[i],channels[i])==1);
+        wait_parked(domains[i],channels[i]);
         CHECK(!pthread_create(&threads[i*2+1],NULL,dynamic_code_client,&clients[i*2+1]));
     }
     wait_requests(work,0,1);
@@ -979,6 +998,8 @@ static void prove_waits(void)
     for (unsigned i=0;i<2;++i) CHECK(api->complete(&work[i]));
     for (unsigned i=0;i<2;++i) {
         wait_parked(domains[i],channels[i]);
+        CHECK(api->suspend_thread(domains[i],channels[i])==0);
+        CHECK(api->thread_state(domains[i],channels[i])==15);
         CHECK(api->close_domain(domains[i])==0);
     }
     for (unsigned i=0;i<4;++i) {
@@ -996,6 +1017,81 @@ static void prove_waits(void)
     }
     struct AROSRestrictedLifetime life;api->lifetime(&life);CHECK(!life.pages && !life.live && !life.domains);
     bug("[ISOVM] wait-wake domains=2 threads=4 early=2 controller=2 peer=2 foreign=6 native_refused=4 parked_close=2 contexts=6 retained_pages=0 PASS\n");
+    bug("[ISOVM] wait-suspend wait_then_suspend=2 wake_held=2 resume_still_waiting=2 close_both=2 PASS\n");
+}
+
+extern const unsigned char RestrictedSuspend[],RestrictedSuspendEnd[];
+extern const unsigned char RestrictedSuspendNoCalls[],RestrictedSuspendNoCallsEnd[];
+static void *suspend_client(void *argument)
+{
+    struct DynamicCodeClient *client=argument;
+#if defined(__AROSEXEC_SMP__)
+    pin((client->seed&1) ? 0 : 1);
+#endif
+    __atomic_store_n(&client->task,FindTask(NULL),__ATOMIC_RELEASE);
+    CHECK(api->run_domain(client->domain,client->seed,&client->result));return NULL;
+}
+static void *suspend_foreign_controller(void *argument)
+{
+    struct WaitForeign *p=argument;
+    CHECK(api->suspend_thread(p->domain,p->channel)==-1);
+    CHECK(api->resume_thread(p->domain,p->channel)==-1);return NULL;
+}
+static void prove_suspension(void)
+{
+    const uintptr_t address=UINT64_C(0x200000000);
+    for (unsigned mode=0;mode<2;++mode) {
+        struct DynamicCodeClient clients[2]={{.seed=mode*2},{.seed=1}};pthread_t threads[2];
+        uint64_t shared=api->create_shared(4096);CHECK(shared);
+        for (unsigned i=0;i<2;++i) {
+            clients[i].domain=api->create_domain(RestrictedSuspend,RestrictedSuspendEnd-RestrictedSuspend,0);CHECK(clients[i].domain);
+            CHECK(api->reserve_memory(clients[i].domain,address,4096));
+            CHECK(api->attach_shared(clients[i].domain,address,shared));CHECK(api->commit_shared(clients[i].domain,address,3));
+            CHECK(!pthread_create(&threads[i],NULL,suspend_client,&clients[i]));
+        }
+        struct AROSRestrictedWork work[2];unsigned held=0;
+        for (unsigned polls=0;held!=3 && polls<1000000;++polls) {
+            struct AROSRestrictedWork next;if (!api->take(&next)) { KrnSwitch();continue; }
+            uint64_t seed;CHECK(next.length==8);memcpy(&seed,next.bytes,8);
+            unsigned id=seed&1;CHECK(seed==clients[id].seed && !(held&(1U<<id)));work[id]=next;held|=1U<<id;
+        }
+        CHECK(held==3); /* Writer submits only after reader entered its no-SVC region. */
+        uint64_t domain=clients[0].domain,channel=work[0].channel;
+        CHECK(api->suspend_thread(clients[1].domain,channel)==-1);
+        CHECK(api->resume_thread(clients[1].domain,channel)==-1);
+        struct WaitForeign request={domain,channel};pthread_t foreign;
+        CHECK(!pthread_create(&foreign,NULL,suspend_foreign_controller,&request));CHECK(!pthread_join(foreign,NULL));
+        CHECK(api->resume_thread(domain,channel)==0);
+        CHECK(api->suspend_thread(domain,channel)==0);suspend_parked(domain,channel);
+        CHECK(api->suspend_thread(domain,channel)==1);
+        CHECK(api->wake_thread(domain,channel));suspend_parked(domain,channel);
+        CHECK(api->complete(&work[0]));CHECK(api->complete(&work[1]));
+        CHECK(!pthread_join(threads[1],NULL));
+        CHECK(!clients[1].result.status && clients[1].result.drained && clients[1].result.replies==1 && clients[1].result.denied==2);
+        /* Writer has published the loop exit flag, yet the reader must remain parked. */
+        for (unsigned check=0;check<64;++check) { CHECK(api->thread_state(domain,channel)==13);KrnSwitch(); }
+        CHECK(api->resume_thread(domain,channel)==2);
+        for (unsigned check=0;check<64;++check) { CHECK(api->thread_state(domain,channel)==13);KrnSwitch(); }
+        if (!mode) {
+#if defined(__AROSEXEC_SMP__)
+            CHECK(SetTaskAffinity(__atomic_load_n(&clients[0].task,__ATOMIC_ACQUIRE),cpu_masks[0]));
+#endif
+            CHECK(api->resume_thread(domain,channel)==1);
+        } else CHECK(api->close_domain(domain)==0);
+        CHECK(!pthread_join(threads[0],NULL));
+        CHECK(clients[0].result.status==(mode ? -5 : 0) && clients[0].result.drained);
+        CHECK(clients[0].result.replies==(mode ? 0 : 1));
+        if (mode) CHECK(clients[0].result.pc>=AROS_RESTRICTED_CODE+(RestrictedSuspendNoCalls-RestrictedSuspend) &&
+            clients[0].result.pc<AROS_RESTRICTED_CODE+(RestrictedSuspendNoCallsEnd-RestrictedSuspend));
+#if defined(__AROSEXEC_SMP__)
+        if (!mode) CHECK(clients[0].result.cpus==3 && clients[0].result.migrations);
+#endif
+        CHECK(api->suspend_thread(domain,channel)==-1 && api->resume_thread(domain,channel)==-1);
+        for (unsigned i=0;i<2;++i) CHECK(api->close_domain(clients[i].domain)==1);
+        CHECK(api->close_shared(shared));
+    }
+    struct AROSRestrictedLifetime life;api->lifetime(&life);CHECK(!life.pages && !life.live && !life.domains && !life.shared_objects);
+    bug("[ISOVM] suspend cpu_bound=2 nested=2 wake_held=2 peer_publications=2 held_checks=256 resumed=1 closed=1 foreign=8 native_refused=4 retained_pages=0 PASS\n");
 }
 
 int main(void)
@@ -1095,6 +1191,7 @@ int main(void)
     prove_shared_code();
     prove_reserved_faults();
     prove_waits();
+    prove_suspension();
     prove_domain_close();
 #if defined(__AROSEXEC_SMP__)
     prove_task_list_churn();
