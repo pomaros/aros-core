@@ -18,6 +18,7 @@
 #include "page_allocator.h"
 #if defined(__AROSEXEC_SMP__)
 #include "smp.h"
+#include "cpu_monitor.h"
 #endif
 #include "../../aarch64-all/kernel/mapping.h"
 
@@ -39,7 +40,7 @@ struct Restricted {
     unsigned abandoned;
     void *pool, *code, *data, *stack;
     void *native_lower, *native_upper;
-    unsigned used;
+    unsigned used, last_cpu;
     uint64_t root, seed;
     size_t code_bytes;
     uint64_t callback_pc;
@@ -253,6 +254,13 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
         if (!r || r->cookie != R_COOKIE || r->owner != task ||
             r->root != execution->root || frame->entry_ttbr0 != r->root)
             for (;;) __asm__ volatile("wfe"); /* Fail closed on kernel corruption. */
+#if defined(__AROSEXEC_SMP__)
+        unsigned cpu=AROSCPUCurrentIndex();
+#else
+        unsigned cpu=0;
+#endif
+        r->result.cpus|=UINT64_C(1)<<cpu;
+        if (cpu!=r->last_cpu) { ++r->result.migrations;r->last_cpu=cpu; }
         if (ec != 0x15) {
             uint64_t physical;
             /* Deliver only an owned data-page write-permission fault. The
@@ -385,12 +393,6 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
     if (ec==0x15 && r_lifecycle(frame,task,context,svc)) return 1;
     if (ec != 0x15 || (svc != R_PREPARE && svc != AROS_RESTRICTED_ENTER && svc != 0xa534)) return 0;
     frame->x[1] = 0;
-#if defined(__AROSEXEC_SMP__)
-    /* Admission stays disabled until task removal and root reclamation are
-     * connected to the two-CPU quiescence contract. */
-    frame->x[0] = 0;
-    return 1;
-#else
     r = r_slot(frame->x[0]);
     frame->x[0] = 0;
     if (!r || r->state!=R_LIVE || r->cookie != R_COOKIE || r->owner != task ||
@@ -405,10 +407,17 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
         frame->x[0] = r_prepare(r,frame->entry_ttbr0);
         return 1;
     }
-    /* The task fields are saved scheduling snapshots. Admission must inspect
-     * the live UP Exec nesting state, as the native interrupt path does. */
-    if (!r->root || SysBase->IDNestCnt >= 0 || SysBase->TDNestCnt >= 0 ||
+    /* Inspect live CPU nesting, not the saved task scheduling snapshot. */
+#if defined(__AROSEXEC_SMP__)
+    int disabled=TLS_GET(IDNestCnt)>=0 || TLS_GET(TDNestCnt)>=0;
+    unsigned cpu=AROSCPUCurrentIndex();
+#else
+    int disabled=SysBase->IDNestCnt>=0 || SysBase->TDNestCnt>=0;
+    unsigned cpu=0;
+#endif
+    if (!r->root || disabled ||
         AROSAppleRuntimeLocal()->irq_mask_depth) return 1;
+    r->last_cpu=cpu;r->result.cpus=UINT64_C(1)<<cpu;
     r->native = *frame;
     r->native_lower = task->tc_SPLower;
     r->native_upper = task->tc_SPUpper;
@@ -430,7 +439,6 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
     frame->task_tls = execution->user_tls;
     frame->return_ttbr0 = r->root;
     return 1;
-#endif
 }
 /* Exception entry already masks local IRQ/FIQ. Do not use the native IRQ
  * nesting API here: admission must inspect the interrupted task's real mask
@@ -511,10 +519,6 @@ static void r_lifetime(struct AROSRestrictedLifetime *state)
 static int r_run(const void *code, size_t bytes, uint64_t seed,
     struct AROSRestrictedResult *result)
 {
-#if defined(__AROSEXEC_SMP__)
-    (void)code; (void)bytes; (void)seed; (void)result;
-    return 0;
-#else
     if (!code || !bytes || bytes > R_PAGE || !result) return 0;
     r_reap();
     /* Page arena allocation/protection never waits. The static control slot
@@ -570,7 +574,6 @@ cleanup:
     r_release(r);
     Permit();
     return ok;
-#endif
 }
 
 void AROSAppleRestrictedContextRetired(void *context)
@@ -601,7 +604,7 @@ static unsigned r_state(const struct AROSRestrictedWork *work)
     __asm__ volatile("svc #0xa535":"+r"(argument)::"memory","cc");
     return (unsigned)argument;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {7,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {8,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

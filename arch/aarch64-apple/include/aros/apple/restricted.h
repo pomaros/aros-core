@@ -26,6 +26,7 @@
 struct AROSRestrictedResult {
     int64_t status;
     uint64_t value, esr, far, pc, yields, denied, replies, rejected, callbacks, resumed, cancelled, close_waits, drained, worker_retirements;
+    uint64_t cpus, migrations;
     /* Trusted native caller snapshot, taken only after worker leases drain. */
     unsigned char data[4096];
 };

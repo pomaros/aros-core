@@ -11,6 +11,12 @@
 #include <exec/lists.h>
 #include <aros/debug.h>
 #include <aros/apple/restricted.h>
+#if defined(__AROSEXEC_SMP__)
+#include <proto/task.h>
+APTR TaskResBase;
+static APTR cpu_masks[2];
+static unsigned migration_ack[2];
+#endif
 APTR KernelBase;
 extern const unsigned char RestrictedCode[], RestrictedCodeEnd[];
 extern const unsigned char RestrictedBadStack[], RestrictedBadStackEnd[];
@@ -32,6 +38,18 @@ static void *heartbeat(void *unused)
     while (!__atomic_load_n(&stop,__ATOMIC_ACQUIRE)) {
         ++beats;
         if (__atomic_load_n(&done[0],__ATOMIC_ACQUIRE)) ++after_fault;
+#if defined(__AROSEXEC_SMP__)
+        for (unsigned id=0;id<2;++id) {
+            if (__atomic_load_n(&migration_ack[id],__ATOMIC_RELAXED)) continue;
+            if (__atomic_load_n(&done[id],__ATOMIC_ACQUIRE)) {
+                /* The client retains its Task until this acknowledgement. */
+                __atomic_store_n(&migration_ack[id],1,__ATOMIC_RELEASE);
+                continue;
+            }
+            struct Task *task=__atomic_load_n(&identities[id],__ATOMIC_ACQUIRE);
+            if (task) CHECK(SetTaskAffinity(task,cpu_masks[(beats/8+id)&1]));
+        }
+#endif
         KrnSwitch();
     }
     return NULL;
@@ -63,10 +81,13 @@ static void *worker(void *unused)
 static void *client(void *argument)
 {
     unsigned id = (unsigned)(uintptr_t)argument;
-    identities[id] = FindTask(NULL);
+    __atomic_store_n(&identities[id],FindTask(NULL),__ATOMIC_RELEASE);
     CHECK(api->run(RestrictedCode,(size_t)(RestrictedCodeEnd-RestrictedCode),
         (id+1)*4096,&results[id]));
     __atomic_store_n(&done[id],1,__ATOMIC_RELEASE);
+#if defined(__AROSEXEC_SMP__)
+    while (!__atomic_load_n(&migration_ack[id],__ATOMIC_ACQUIRE)) KrnSwitch();
+#endif
     return NULL;
 }
 static void retired_worker(void)
@@ -146,10 +167,18 @@ int main(void)
 {
     KernelBase = OpenResource((CONST_STRPTR)"kernel.resource");
     CHECK(KernelBase != NULL);
+#if defined(__AROSEXEC_SMP__)
+    CHECK(KrnGetCPUCount()==2);
+    TaskResBase=OpenResource((CONST_STRPTR)"task.resource");CHECK(TaskResBase);
+    for (unsigned cpu=0;cpu<2;++cpu) {
+        cpu_masks[cpu]=KrnAllocCPUMask();CHECK(cpu_masks[cpu]);
+        KrnGetCPUMask(cpu,cpu_masks[cpu]);
+    }
+#endif
     intptr_t address = KrnGetSystemAttr(AROS_RESTRICTED_KATTR_API);
     CHECK(address != -1 && address != 0);
     api = (const void *)address;
-    CHECK(api->version == 7 && api->size == sizeof(*api));
+    CHECK(api->version == 8 && api->size == sizeof(*api));
     /* No worker exists: queued cancellation is deterministic. */
     static struct AROSRestrictedResult queued;
     CHECK(api->run(RestrictedQueued,(size_t)(RestrictedQueuedEnd-RestrictedQueued),12288,&queued));
@@ -185,6 +214,13 @@ int main(void)
     CHECK(results[0].close_waits>0 && results[1].close_waits==0);
     CHECK(results[0].resumed == 1 && results[1].resumed == 1);
     CHECK(beats > 0 && after_fault > 0);
+#if defined(__AROSEXEC_SMP__)
+    for (unsigned id=0;id<2;++id) CHECK(results[id].cpus==3 && results[id].migrations>0);
+    bug("[ISOVM] migration cpus0=%llu cpus1=%llu moves0=%llu moves1=%llu PASS\n",
+        (unsigned long long)results[0].cpus,(unsigned long long)results[1].cpus,
+        (unsigned long long)results[0].migrations,(unsigned long long)results[1].migrations);
+    for (unsigned cpu=0;cpu<2;++cpu) KrnFreeCPUMask(cpu_masks[cpu]);
+#endif
     prove_worker_retirement();
     prove_owner_retirement();
     static struct AROSRestrictedResult bad_stack;
