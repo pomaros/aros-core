@@ -1335,7 +1335,14 @@ int main(void)
     intptr_t address = KrnGetSystemAttr(AROS_RESTRICTED_KATTR_API);
     CHECK(address != -1 && address != 0);
     api = (const void *)address;
-    CHECK(api->version == 29 && api->size == sizeof(*api));
+    CHECK(api->version == 30 && api->size == sizeof(*api));
+    extern const unsigned char RestrictedRestore[],RestrictedRestoreEnd[];
+    static struct AROSRestrictedResult restored;
+    CHECK(api->run(RestrictedRestore,(size_t)(RestrictedRestoreEnd-RestrictedRestore),0,&restored));
+    CHECK(restored.status==0 && restored.rejected==1);
+    struct AROSRestrictedLifetime restore_life;api->lifetime(&restore_life);
+    CHECK(!restore_life.pages && !restore_life.live && !restore_life.domains);
+    bug("[ISOVM] restore-context gp=31 simd=32 fp=1 nzcv=1 stack=1 size_refused=1 retained_pages=0 PASS\n");
     /* No worker exists: queued cancellation is deterministic. */
     static struct AROSRestrictedResult queued;
     CHECK(api->run(RestrictedQueued,(size_t)(RestrictedQueuedEnd-RestrictedQueued),12288,&queued));

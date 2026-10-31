@@ -37,6 +37,20 @@
 #define AROS_RESTRICTED_WAKE 0xa54d
 #define AROS_RESTRICTED_WAIT_FOR 0xa54e
 #define AROS_RESTRICTED_CLOCK 0xa54f
+/* Version 30: restore the calling restricted thread. x0 points to this record,
+ * x1 is its exact size. Source must be readable owned data or the caller's
+ * normal stack. Success does not return; refusal returns x0=0 and preserves
+ * all other registers. No service, wait, callback or fault may be active.
+ * PC must name executable owned code; SP stays in the caller's normal stack.
+ * NZCV is the only writable PSTATE field. Native TLS/root and exception state
+ * are kernel-owned and unchanged. x18 is an ordinary guest register here.
+ * The kernel copies before validating; callers synchronize concurrent writers.
+ */
+#define AROS_RESTRICTED_RESTORE_CONTEXT 0xa550
+struct AROSRestrictedContext {
+    uint64_t x[31],sp,pc,nzcv;
+    uint64_t simd[64],fpcr,fpsr;
+};
 #define AROS_RESTRICTED_WAIT_WOKEN 1U
 #define AROS_RESTRICTED_WAIT_EXPIRED 2U
 /* WAIT_FOR takes generation in x0, relative microseconds in x1. Zero duration

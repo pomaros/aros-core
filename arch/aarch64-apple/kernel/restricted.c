@@ -380,6 +380,55 @@ static int r_stack_sp(const struct Restricted *r, uint64_t sp)
     size_t bytes=r->fault_active ? r->fault_bytes : r->stack_bytes;
     return sp>base && sp<=base+bytes && !(sp&15);
 }
+/* Coordinator held throughout admission, copy, validation and application.
+ * Read only kernel-owned physical aliases, never an untrusted virtual pointer.
+ * The fixed record spans at most two pages; preflight both before any copy. */
+static int r_read_context(struct Restricted *r,uint64_t address,
+    struct AROSRestrictedContext *context)
+{
+    if (!address || (address&7) || address>UINT64_MAX-sizeof(*context)) return 0;
+    struct AROSRestrictedSpace *space=&r->domain->space;
+    uintptr_t aliases[2];size_t lengths[2],count=0,left=sizeof(*context);
+    uint64_t cursor=address;
+    while (left) {
+        uintptr_t page=cursor&~(uint64_t)(R_PAGE-1),physical;
+        uint64_t generation,reservation,actual;
+        size_t offset=cursor&(R_PAGE-1),bytes=R_PAGE-offset;
+        if (count==2) return 0;
+        if (bytes>left) bytes=left;
+        if (page>=r->stack_address && page-r->stack_address<r->stack_bytes) {
+            physical=(uintptr_t)r->stack+(page-r->stack_address);
+            if (!AArch64UserPagePhysical(&space->hardware,space->root,space->tcr,
+                page,KMAP_READ,1,&actual) || actual!=physical) return 0;
+        } else if (!AROSRestrictedSpacePageIdentity(space,page,KMAP_READ,
+            &physical,&generation,&reservation)) return 0;
+        aliases[count]=physical+offset;lengths[count++]=bytes;
+        cursor+=bytes;left-=bytes;
+    }
+    unsigned char *output=(unsigned char *)context;
+    for (size_t i=0;i<count;++i) {
+        memcpy(output,(const void *)aliases[i],lengths[i]);output+=lengths[i];
+    }
+    return 1;
+}
+static int r_restore_context(struct Restricted *r,struct AROSAppleRuntimeFrame *frame)
+{
+    struct AROSRestrictedContext context;
+    struct RestrictedCodeIdentity code;
+    if (frame->x[1]!=sizeof(context) || r->domain->closing ||
+        r->callback_active || r->callback_pc || r->fault_active ||
+        r->wait_pending || r->service.request.queue ||
+        !r_read_context(r,frame->x[0],&context) ||
+        (context.nzcv&~UINT64_C(0xf0000000)) ||
+        context.fpcr>UINT32_MAX || context.fpsr>UINT32_MAX ||
+        !r_stack_sp(r,context.sp) || !r_capture_code(r,context.pc,&code)) return 0;
+    memcpy(frame->x,context.x,sizeof(frame->x));
+    frame->sp=context.sp;frame->elr=context.pc;
+    frame->spsr=(frame->spsr&~UINT64_C(0xf0000000))|context.nzcv;
+    memcpy(frame->simd,context.simd,sizeof(context.simd));
+    frame->simd[64]=context.fpcr;frame->simd[65]=context.fpsr;
+    return 1;
+}
 static void r_stack_bounds(struct Restricted *r, int fault)
 {
     uintptr_t base=fault ? r->fault_address : r->stack_address;
@@ -899,6 +948,11 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
             return 1;
         }
         switch (svc) {
+        case AROS_RESTRICTED_RESTORE_CONTEXT:
+            if (!r_restore_context(r,frame)) {
+                ++r->result.rejected;frame->x[0]=0;
+            }
+            return 1;
         case AROS_RESTRICTED_THREAD_INFO:
             frame->x[0]=r->service.channel;frame->x[1]=r->wake_generation;
             return 1;
@@ -1650,7 +1704,7 @@ static int64_t r_resume_thread(uint64_t handle,uint64_t channel)
     __asm__ volatile("svc #0xa56d":"+r"(domain),"+r"(thread)::"memory","cc");
     return (int64_t)domain;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {29,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {30,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

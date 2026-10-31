@@ -130,3 +130,11 @@ guest spin counter proves entry into the non-cooperative loop. Snapshot permissi
 is published under the coordinator only for a sole legacy owner or the last
 context of a closing managed domain, after worker drain. `snapshot_valid` makes
 that condition explicit; open shared domains never produce bulk snapshots.
+
+The API30 cohort also requires `restore-context`: a copied generic ARM64
+context restores all 31 GP registers, 32 complete SIMD registers, FPCR/FPSR,
+NZCV and SP through exception return. The payload compares all 100 context
+words and checks a wrong-size refusal. The controller requires normal exit
+and zero domain/context backing. This is a kernel mechanism test, not Windows
+program execution. The companion `restricted_restore_host` fixture exercises
+invalid inputs and pending-work refusal before a coherent QEMU run.

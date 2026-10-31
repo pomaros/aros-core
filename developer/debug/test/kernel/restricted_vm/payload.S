@@ -2900,3 +2900,97 @@ NativeRunRestore:
  ldr x0, [sp, #184]
  add sp, sp, #208
  ret
+
+/* Restore every architectural guest register through the kernel eret path.
+ * The source and destination snapshots deliberately use different stack slots. */
+.balign 16
+.global RestrictedRestore, RestrictedRestoreEnd
+RestrictedRestore:
+ sub sp, sp, #1600
+ add x0, sp, #800
+ mov x1, #100
+ mov x2, #0x1234
+ mov x3, x0
+1:
+ str x2, [x3], #8
+ add x2, x2, #1
+ subs x1, x1, #1
+ b.ne 1b
+ str x0, [x0, #248]
+ adr x2, RestoreTarget
+ str x2, [x0, #256]
+ mov x2, #0xb0000000
+ str x2, [x0, #264]
+ mov x2, #0x400000
+ str x2, [x0, #784]
+ mov x2, #0x10
+ movk x2, #0x800, lsl #16
+ str x2, [x0, #792]
+ mov x1, #799
+ svc #0xa550
+ cbnz x0, RestoreFailure
+ add x0, sp, #800
+ mov x1, #800
+ svc #0xa550
+ b RestoreFailure
+RestoreTarget:
+ sub sp, sp, #800
+ stp x0, x1, [sp, #0]
+ stp x2, x3, [sp, #16]
+ stp x4, x5, [sp, #32]
+ stp x6, x7, [sp, #48]
+ stp x8, x9, [sp, #64]
+ stp x10, x11, [sp, #80]
+ stp x12, x13, [sp, #96]
+ stp x14, x15, [sp, #112]
+ stp x16, x17, [sp, #128]
+ stp x18, x19, [sp, #144]
+ stp x20, x21, [sp, #160]
+ stp x22, x23, [sp, #176]
+ stp x24, x25, [sp, #192]
+ stp x26, x27, [sp, #208]
+ stp x28, x29, [sp, #224]
+ str x30, [sp, #240]
+ add x0, sp, #800
+ str x0, [sp, #248]
+ adr x0, RestoreTarget
+ str x0, [sp, #256]
+ mrs x0, nzcv
+ str x0, [sp, #264]
+ stp q0, q1, [sp, #272]
+ stp q2, q3, [sp, #304]
+ stp q4, q5, [sp, #336]
+ stp q6, q7, [sp, #368]
+ stp q8, q9, [sp, #400]
+ stp q10, q11, [sp, #432]
+ stp q12, q13, [sp, #464]
+ stp q14, q15, [sp, #496]
+ stp q16, q17, [sp, #528]
+ stp q18, q19, [sp, #560]
+ stp q20, q21, [sp, #592]
+ stp q22, q23, [sp, #624]
+ stp q24, q25, [sp, #656]
+ stp q26, q27, [sp, #688]
+ stp q28, q29, [sp, #720]
+ stp q30, q31, [sp, #752]
+ mrs x0, fpcr
+ str x0, [sp, #784]
+ mrs x0, fpsr
+ str x0, [sp, #792]
+ mov x0, sp
+ add x1, sp, #800
+ mov x2, #100
+1:
+ ldr x3, [x0], #8
+ ldr x4, [x1], #8
+ cmp x3, x4
+ b.ne RestoreFailure
+ subs x2, x2, #1
+ b.ne 1b
+ mov x0, #0
+ svc #0xa541
+RestoreFailure:
+ mov x0, #-30
+ svc #0xa541
+ b .
+RestrictedRestoreEnd:
