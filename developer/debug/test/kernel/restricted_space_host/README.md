@@ -61,3 +61,9 @@ Reservations receive monotonic identities independent of page generations. A
 release/re-reserve test deliberately reuses the same metadata, VA and physical
 page with the same page generation; the reservation identity must differ. The
 nineteenth semantic control detects a constant/reused reservation identity.
+
+Channels are caller-owned linked records with monotonic 64-bit identities. They
+have no adapter slot limit. A 32-channel workload cancels alternating queued
+requests, routes the remaining replies and drains every channel; a semantic
+control reinstating a sixteen-channel cap must fail (twenty controls total).
+Native execution-thread storage is a separate allocation concern.

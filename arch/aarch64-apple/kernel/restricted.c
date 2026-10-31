@@ -25,6 +25,7 @@
 #define R_PAGE 4096U
 #define R_TABLES 1024U
 #define R_DOMAINS 4U
+#define R_THREADS 16U
 #define R_PREPARE 0xa531
 #define R_CLAIM 0xa538
 #define R_PUBLISH 0xa539
@@ -104,7 +105,7 @@ struct Restricted {
  * Native allocation/release has an exclusive slot claim, never that lock.
  * Forbid prevents remote terminal freeze during unpublished native allocation
  * or the release transaction; the page arena operations do not Wait. */
-static struct Restricted restricted_slots[AROS_RESTRICTED_CHANNELS];
+static struct Restricted restricted_slots[R_THREADS];
 static struct RestrictedDomain restricted_domains[R_DOMAINS];
 struct RestrictedPublication {
     struct Restricted *slot;
@@ -168,7 +169,7 @@ static int r_lifecycle(struct AROSAppleRuntimeFrame *frame,struct Task *task,
         if (!handle) for (unsigned i=0;i<R_DOMAINS;++i)
             if (restricted_domains[i].state==R_FREE) { domain=&restricted_domains[i];break; }
         if (!domain) return 1;
-        for (unsigned i=0;i<AROS_RESTRICTED_CHANNELS;++i) {
+        for (unsigned i=0;i<R_THREADS;++i) {
             struct Restricted *r=&restricted_slots[i];
             if (r->state!=R_FREE) continue;
             if (!handle) domain->state=R_ALLOCATING;
@@ -217,7 +218,7 @@ static int r_lifecycle(struct AROSAppleRuntimeFrame *frame,struct Task *task,
         struct AROSRestrictedLifetime *state=(void *)(uintptr_t)frame->x[0];
         frame->x[0]=0;if (!state) return 1;
         *state=(struct AROSRestrictedLifetime){.retired=owners_retired,.reaped=owners_reaped};
-        for (unsigned i=0;i<AROS_RESTRICTED_CHANNELS;++i) {
+        for (unsigned i=0;i<R_THREADS;++i) {
             struct Restricted *r=&restricted_slots[i];
             if (r->state==R_FREE) continue;
             ++state->live;state->pending+=r->abandoned!=0;
@@ -254,7 +255,7 @@ static int r_close(struct Restricted *r)
 }
 static struct Restricted *r_claim_reap(struct ExceptionContext *context)
 {
-    for (unsigned i=0;i<AROS_RESTRICTED_CHANNELS;++i) {
+    for (unsigned i=0;i<R_THREADS;++i) {
         struct Restricted *owned=&restricted_slots[i];
         if (owned->state==R_LIVE && owned->abandoned && r_close(owned)) {
             owned->state=R_REAPING;owned->releaser_context=context;
@@ -691,7 +692,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
                 d->owner_context=NULL;d->closing=1;AROSRestrictedSpaceStop(&d->space);
             }
         }
-        for (unsigned i=0;i<AROS_RESTRICTED_CHANNELS;++i) {
+        for (unsigned i=0;i<R_THREADS;++i) {
             struct Restricted *owned=&restricted_slots[i];
             if (owned->state!=R_LIVE || owned->owner_context!=retired) continue;
             owned->owner_context=NULL;owned->abandoned=1;++owners_retired;

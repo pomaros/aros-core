@@ -7,7 +7,7 @@
 #include <aros/apple/restricted.h>
 #define R_PAGE 4096U
 #define R_DOMAINS 4
-#define AROS_RESTRICTED_CHANNELS 16
+#define R_THREADS 16
 #define R_TABLES 1024
 #define R_COOKIE UINT64_C(0x7265737472696374)
 #define R_CLAIM 0xa538
@@ -92,7 +92,7 @@ struct RestrictedPublication {
     uint64_t seed;
     size_t code_bytes;
 };
-static struct Restricted restricted_slots[AROS_RESTRICTED_CHANNELS];
+static struct Restricted restricted_slots[R_THREADS];
 static struct RestrictedDomain restricted_domains[R_DOMAINS];
 static uint64_t owners_retired,owners_reaped;
 struct RestrictedDomainPublication {
@@ -247,7 +247,7 @@ int main(void)
     memset(restricted_slots,0,sizeof(restricted_slots));
     memset(restricted_domains,0,sizeof(restricted_domains));
 
-    for (unsigned i=0;i<AROS_RESTRICTED_CHANNELS;++i)
+    for (unsigned i=0;i<R_THREADS;++i)
         restricted_slots[i].state=R_ALLOCATING;
     assert(!call(R_CLAIM,0,&owner,&context));
     for (unsigned i=0;i<R_DOMAINS;++i)

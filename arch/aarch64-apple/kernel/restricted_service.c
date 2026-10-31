@@ -8,16 +8,14 @@ static struct AROSRestrictedSpace *spaces;
 static struct AROSRestrictedSharedBacking *shared_backings;
 static uint64_t reservation_generation;
 /* Generation storage outlives every service object and never resets on close. */
-static struct {
-    struct AROSRestrictedService *service;
-    uint32_t generation;
-} active[AROS_RESTRICTED_CHANNELS];
+static struct AROSRestrictedService *active;
+static uint64_t channel_generation;
 static struct AROSRestrictedService *channel_lookup(uint64_t handle)
 {
-    uint32_t index=(uint32_t)handle;
-    if (!index || index>AROS_RESTRICTED_CHANNELS) return NULL;
-    return active[index-1].generation==(uint32_t)(handle>>32) ?
-        active[index-1].service : NULL;
+    if (!handle) return NULL;
+    for (struct AROSRestrictedService *s=active;s;s=s->next)
+        if (s->channel==handle) return s;
+    return NULL;
 }
 static int physical_in_use(uintptr_t pa)
 {
@@ -206,21 +204,21 @@ int AROSRestrictedServiceInit(struct AROSRestrictedService *s,
     struct AROSRestrictedSpace *space,uint64_t requester)
 {
     if (!s || !space || !requester || s->space || s->channel || s->queue.domain ||
-        s->member.domain || s->closing || !space->handle || space->domain.closing)
-        return 0;
-    for (unsigned i=0;i<AROS_RESTRICTED_CHANNELS;++i) {
-        if (active[i].service || active[i].generation==UINT32_MAX) continue;
-        if (!KrnMappingDomainJoin(&space->domain,&s->member,s)) return 0;
-        if (!KrnServiceInitialize(&s->queue,&space->domain)) {
-            KrnMappingDomainLeave(&s->member);return 0;
-        }
-        s->space=space;s->principal=requester;++space->channels;
-        ++active[i].generation;
-        s->channel=((uint64_t)active[i].generation<<32)|(i+1);
-        active[i].service=s;return 1;
+        s->next || s->member.domain || s->closing || !space->handle || space->domain.closing ||
+        space->channels==(unsigned)-1 || channel_generation==UINT64_MAX) return 0;
+    struct AROSRestrictedService **link=&active;
+    while (*link) {
+        if (*link==s) return 0;
+        link=&(*link)->next;
     }
-    return 0;
+    if (!KrnMappingDomainJoin(&space->domain,&s->member,s)) return 0;
+    if (!KrnServiceInitialize(&s->queue,&space->domain)) {
+        KrnMappingDomainLeave(&s->member);return 0;
+    }
+    s->space=space;s->principal=requester;++space->channels;
+    s->channel=++channel_generation;*link=s;return 1;
 }
+
 int AROSRestrictedServiceSubmit(struct AROSRestrictedService *s,uintptr_t input,uintptr_t output,size_t length)
 {
     if (!s || !s->space || s->closing) return 0;
@@ -236,8 +234,7 @@ int AROSRestrictedServiceCollect(struct AROSRestrictedService *s,uint64_t token)
 int AROSRestrictedServiceTake(struct Task *worker,void *context,struct AROSRestrictedWork *work)
 {
     if (!worker || !context || !work) return 0;
-    for (unsigned i=0;i<AROS_RESTRICTED_CHANNELS;++i) {
-        struct AROSRestrictedService *s=active[i].service;
+    for (struct AROSRestrictedService *s=active;s;s=s->next) {
         if (!s || s->closing || s->worker || s->space->domain.closing || s->request.state!=KS_QUEUED) continue;
         size_t length;
         if (!KrnBufferServiceTake(&s->request,s->request.token,work->bytes,sizeof(work->bytes),&length)) return 0;
@@ -268,8 +265,7 @@ int AROSRestrictedServiceRetireWorker(void *context)
      * and acknowledge its retained staging lease without reading its stack or
      * publishing a reply. The native caller frees context storage afterward. */
     if (!context) return 1;
-    for (unsigned i=0;i<AROS_RESTRICTED_CHANNELS;++i) {
-        struct AROSRestrictedService *s=active[i].service;
+    for (struct AROSRestrictedService *s=active;s;s=s->next) {
         if (!s || s->worker_context!=context) continue;
         uint64_t token=s->request.token;
         if (!KrnBufferServiceCancel(&s->request,s->principal,token) ||
@@ -289,7 +285,9 @@ int AROSRestrictedServiceClose(struct AROSRestrictedService *s)
     if (!KrnServiceDrained(&s->queue) || channel_lookup(s->channel)!=s ||
         !s->space->channels || !KrnMappingDomainLeave(&s->member)) return 0;
     --s->space->channels;
-    active[(uint32_t)s->channel-1].service=NULL;
+    struct AROSRestrictedService **link=&active;
+    while (*link!=s) link=&(*link)->next;
+    *link=s->next;s->next=NULL;
     s->queue.domain=NULL;s->channel=0;s->space=NULL;return 1;
 }
 void AROSRestrictedSpaceStop(struct AROSRestrictedSpace *s)

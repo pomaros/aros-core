@@ -70,8 +70,8 @@ int AROSRestrictedRegionCommit(struct AROSRestrictedRegion *,size_t,uintptr_t,un
 int AROSRestrictedRegionDecommit(struct AROSRestrictedRegion *,size_t,uintptr_t *);
 int AROSRestrictedRegionProtect(struct AROSRestrictedRegion *,size_t,unsigned);
 int AROSRestrictedRegionDetach(struct AROSRestrictedRegion *);
-#define AROS_RESTRICTED_CHANNELS 16U
 struct AROSRestrictedService {
+    struct AROSRestrictedService *next;
     struct AROSRestrictedSpace *space;
     struct KrnMappingDomainMember member;
     struct KrnServiceQueue queue;

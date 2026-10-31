@@ -199,6 +199,32 @@ static void shared_tests(void)
     CHECK(AROSRestrictedSharedClose(&object) && !object.pages && !AROSRestrictedSharedClose(&object),"shared-final-close");
     free(page);for (unsigned i=0;i<2;++i) { free(data[i]);free(f[i]); }
 }
+static void channel_growth(void)
+{
+    enum { COUNT=32 };
+    struct Fixture *f=aligned_alloc(PAGE,sizeof(*f));unsigned char *data=aligned_alloc(PAGE,PAGE);
+    struct AROSRestrictedService *channels=calloc(COUNT,sizeof(*channels));
+    CHECK(f && data && channels,"channel-growth-allocation");
+    memset(f,0,sizeof(*f));memset(data,0x31,PAGE);f->used=1;
+    struct AArch64ProtectionOps ops={f,resolve,allocate,clean,invalidate,sync_code,NULL};
+    struct AROSRestrictedSpace space={0};
+    CHECK(AROSRestrictedSpaceInit(&space,91,(uintptr_t)f->tables[0],25|(UINT64_C(5)<<32),(uintptr_t)data,&ops),"channel-growth-space");
+    for (unsigned i=0;i<COUNT;++i) {
+        CHECK(AROSRestrictedServiceInit(&channels[i],&space,i+101),"channel-growth-init");
+        CHECK(AROSRestrictedServiceSubmit(&channels[i],AROS_RESTRICTED_DATA,AROS_RESTRICTED_DATA+32,8),"channel-growth-submit");
+    }
+    CHECK(space.channels==COUNT,"channel-growth-count");
+    for (unsigned i=0;i<COUNT;i+=2) CHECK(AROSRestrictedServiceClose(&channels[i]),"channel-growth-cancel");
+    struct Task worker={41};int context;struct AROSRestrictedWork work;
+    for (unsigned i=1;i<COUNT;i+=2) {
+        CHECK(AROSRestrictedServiceTake(&worker,&context,&work) && work.channel==channels[i].channel,"channel-growth-route");
+        CHECK(AROSRestrictedServiceComplete(&worker,&work) && AROSRestrictedServiceCollect(&channels[i],work.token),"channel-growth-reply");
+        CHECK(AROSRestrictedServiceClose(&channels[i]),"channel-growth-close");
+    }
+    CHECK(!space.channels && !AROSRestrictedServiceTake(&worker,&context,&work) &&
+        AROSRestrictedSpaceClose(&space),"channel-growth-drain");
+    free(channels);free(data);free(f);
+}
 int main(void)
 {
     struct Fixture *f=aligned_alloc(PAGE,sizeof(*f));
@@ -245,5 +271,5 @@ int main(void)
     CHECK(AROSRestrictedSpaceInit(&space,11,root,tcr,(uintptr_t)data,&ops),"space-reuse");
     CHECK(space.handle!=first_handle,"space-generation");
     CHECK(AROSRestrictedSpaceClose(&space),"reused-space-close");
-    free(data);free(f);region_tests();shared_tests();puts("PASS restricted space and channel ownership");return 0;
+    free(data);free(f);region_tests();shared_tests();channel_growth();puts("PASS restricted space and channel ownership");return 0;
 }

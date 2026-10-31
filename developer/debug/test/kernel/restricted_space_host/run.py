@@ -20,8 +20,9 @@ def main():
  original=source.read_text()
  generic=ROOT/'rom/kernel/mapping/mapping.c';pager=ROOT/'rom/kernel/mapping/pager.c'
  cases=[('baseline','adapter',None,None,None),
+  ('fixed-channel-cap','adapter','space->channels==(unsigned)-1','space->channels>=16','channel-growth-init'),
   ('channel-stops-domain','adapter','s->closing=1;','s->closing=1; KrnMappingDomainStop(&s->space->domain);','channel-close-keeps-domain'),
-  ('stale-channel','adapter','active[index-1].generation==(uint32_t)(handle>>32)','handle!=0','stale-channel-refused'),
+  ('stale-channel','adapter','s->channel==handle','s->channel==handle || (!s->next && handle<s->channel)','stale-channel-refused'),
   ('early-space-unmap','adapter','if (s->channels) return 0;','if (0 && s->channels) return 0;','space-keeps-live-backing'),
   ('duplicate-space','adapter','s->root || physical_in_use(backing)','s->root','duplicate-space-backing'),
   ('private-alias','adapter','r->backing[page] || physical_in_use(pa)','r->backing[page]','private-alias-refused'),
