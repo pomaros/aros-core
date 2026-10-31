@@ -32,6 +32,7 @@ def main():
         ('wrong-active-stack','r->fault_active ? AROS_RESTRICTED_FAULT_STACK : AROS_RESTRICTED_STACK','AROS_RESTRICTED_STACK'),
         ('guard-stack-bound','sp>base &&','sp>=base &&'),
         ('wrong-native-bounds','fault ? AROS_RESTRICTED_FAULT_STACK : AROS_RESTRICTED_STACK','AROS_RESTRICTED_STACK'),
+        ('shared-domain-release','r->domain->threads!=1','0'),
         ('duplicate-reap','owned->state=R_REAPING;',''),
         ('wrong-publisher','r->owner!=task','0'),
         ('wrong-context','r->owner_context!=context','0'),

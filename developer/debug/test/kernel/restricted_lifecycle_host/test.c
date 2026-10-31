@@ -7,6 +7,7 @@
 #include <aros/apple/restricted.h>
 #define R_PAGE 4096U
 #define KBUF_SPACES 4
+#define AROS_RESTRICTED_CHANNELS 16
 #define R_TABLES 1024
 #define R_COOKIE UINT64_C(0x7265737472696374)
 #define R_CLAIM 0xa538
@@ -20,16 +21,22 @@ struct AROSRestrictedService { unsigned drained,closes; };
 static int AROSRestrictedServiceClose(struct AROSRestrictedService *s)
 { ++s->closes;return s->drained; }
 enum RestrictedState { R_FREE,R_ALLOCATING,R_LIVE,R_REAPING };
+struct RestrictedDomain {
+    enum RestrictedState state;
+    void *pool,*code,*data;
+    unsigned threads;
+    size_t code_bytes;
+};
 struct Restricted {
+    struct RestrictedDomain *domain;
     enum RestrictedState state;
     void *releaser_context;
     uint64_t cookie;
     struct Task *owner;
     void *owner_context;
     unsigned abandoned, fault_active;
-    void *pool,*code,*data,*stack,*fault_stack;
+    void *stack,*fault_stack;
     uint64_t seed;
-    size_t code_bytes;
     struct AROSRestrictedService service;
 };
 struct RestrictedPublication {
@@ -38,10 +45,12 @@ struct RestrictedPublication {
     uint64_t seed;
     size_t code_bytes;
 };
-static struct Restricted restricted_slots[KBUF_SPACES];
+static struct Restricted restricted_slots[AROS_RESTRICTED_CHANNELS];
+static struct RestrictedDomain restricted_domains[KBUF_SPACES];
 static uint64_t owners_retired,owners_reaped;
 static int r_close(struct Restricted *r)
-{ return AROSRestrictedServiceClose(&r->service); }
+{ if (!AROSRestrictedServiceClose(&r->service)) return 0;
+  r->domain->state=R_REAPING;return 1; }
 #include "actual.inc"
 static struct Task owner,other;
 static struct ExceptionContext context,foreign;
@@ -69,6 +78,34 @@ int main(void)
     assert((uintptr_t)owner.tc_SPLower==AROS_RESTRICTED_STACK);
     assert(r_stack_sp(&stack_owner,(uintptr_t)owner.tc_SPUpper));
 
+    /* Independent pools: a free domain does not authorize reuse of a context
+     * whose native backing release is still in progress. */
+    restricted_slots[0].state=R_REAPING;
+    restricted_slots[0].domain=&restricted_domains[0];
+    restricted_domains[0].state=R_REAPING;restricted_domains[0].threads=1;
+    assert(call(R_CLAIM,0,&owner,&context)==(uintptr_t)&restricted_slots[1]);
+    assert(restricted_slots[0].state==R_REAPING);
+    assert(restricted_slots[1].domain==&restricted_domains[1]);
+    memset(restricted_slots,0,sizeof(restricted_slots));
+    memset(restricted_domains,0,sizeof(restricted_domains));
+
+    for (unsigned i=0;i<AROS_RESTRICTED_CHANNELS;++i)
+        restricted_slots[i].state=R_ALLOCATING;
+    assert(!call(R_CLAIM,0,&owner,&context));
+    for (unsigned i=0;i<KBUF_SPACES;++i)
+        assert(restricted_domains[i].state==R_FREE && !restricted_domains[i].threads);
+    memset(restricted_slots,0,sizeof(restricted_slots));
+    restricted_domains[0]=(struct RestrictedDomain){.state=R_LIVE,
+        .pool=&owner,.code=&owner,.data=&owner,.threads=2};
+    for (unsigned i=0;i<2;++i)
+        restricted_slots[i]=(struct Restricted){.state=R_LIVE,.domain=&restricted_domains[0],
+            .stack=&owner,.fault_stack=&owner};
+    struct AROSRestrictedLifetime shared_life;
+    assert(call(R_LIFETIME,(uintptr_t)&shared_life,&owner,&context));
+    assert(shared_life.live==2 && shared_life.pages==1030);
+    memset(restricted_slots,0,sizeof(restricted_slots));
+    memset(restricted_domains,0,sizeof(restricted_domains));
+
     struct Restricted *slots[KBUF_SPACES];
     for (unsigned i=0;i<KBUF_SPACES;++i) {
         slots[i]=(void *)call(R_CLAIM,0,&owner,&context);
@@ -88,6 +125,7 @@ int main(void)
         assert(call(R_PUBLISH,(uintptr_t)&p,&owner,&context));
         assert(!call(R_PUBLISH,(uintptr_t)&p,&owner,&context));
         assert(slots[i]->state==R_LIVE && slots[i]->seed==i);
+        assert(slots[i]->domain==&restricted_domains[i] && slots[i]->domain->state==R_LIVE);
         assert(!call(R_RELEASED,(uintptr_t)slots[i],&owner,&context));
         slots[i]->abandoned=1;++owners_retired;
     }
@@ -102,6 +140,10 @@ int main(void)
         assert(!call(R_CLAIM,0,&other,&foreign));
         assert(call(R_LIFETIME,(uintptr_t)&life,&owner,&context));
         assert(life.live==4 && life.pages==(4-i)*1028 && life.pending==4-i);
+        slots[i]->domain->threads=2;
+        assert(!call(R_RELEASED,(uintptr_t)slots[i],&owner,&context));
+        assert(slots[i]->state==R_REAPING && slots[i]->domain->threads==2);
+        slots[i]->domain->threads=1;
         assert(call(R_RELEASED,(uintptr_t)slots[i],&owner,&context));
         assert(!call(R_RELEASED,(uintptr_t)slots[i],&owner,&context));
         /* Reuse only after release acknowledgement, never while freeing. */

@@ -91,3 +91,11 @@ Handler replacement/unregistration is refused while a fault is active; zero
 unregisters an idle handler. Code/backing remain immutable and retained until
 channel drain. A nested fault terminates the invocation instead of recursively
 consuming its alternate stack. Native control API v10 identifies this layout.
+
+The kernel keeps address-space allocation records separately from execution
+slots. Table callbacks retain the domain record; accounting counts shared
+backing once and thread stacks per context. Native allocation/release phases
+claim both records before dropping the coordinator. The legacy run wrapper
+still creates one domain per invocation and refuses whole-domain release with
+more than one attached context. Explicit attach/detach admission and distinct
+per-thread stack/TLS addresses require the multi-thread integration workload.
