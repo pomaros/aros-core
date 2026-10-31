@@ -1070,6 +1070,57 @@ static void prove_timed_waits(void)
     bug("[ISOVM] timed-wait cases=4 zero=4 overflow=4 expired=2 woken=1 suspended_expiry=1 late_wake=1 closed=1 retained_pages=0 PASS\n");
 }
 
+static uint64_t timed_retirement_domain;
+static struct AROSRestrictedResult timed_retirement_result;
+static void timed_retirement_owner(void)
+{
+#if defined(__AROSEXEC_SMP__)
+    pin(1);
+#endif
+    api->run_domain(timed_retirement_domain,4,&timed_retirement_result);
+    CHECK(0); /* Removed while a finite wait is parked, before returning native. */
+}
+static void prove_timed_retirement(void)
+{
+    struct AROSRestrictedLifetime before,after;api->lifetime(&before);
+    CHECK(!before.live && !before.pages && !before.waits && !before.timed_waits);
+    timed_retirement_domain=api->create_domain(RestrictedTimedWait,RestrictedTimedWaitEnd-RestrictedTimedWait,0);
+    CHECK(timed_retirement_domain);
+    memset(&timed_retirement_result,0x6b,sizeof(timed_retirement_result));
+    struct Task *task=AllocMem(sizeof(*task),MEMF_PUBLIC|MEMF_CLEAR);
+    void *stack=AllocMem(256*1024,MEMF_PUBLIC|MEMF_CLEAR);CHECK(task && stack);
+    task->tc_Node.ln_Type=NT_TASK;task->tc_Node.ln_Name="restricted timed retirement";
+    task->tc_Node.ln_Pri=FindTask(NULL)->tc_Node.ln_Pri;
+    task->tc_SPLower=stack;task->tc_SPUpper=(unsigned char *)stack+256*1024;task->tc_SPReg=task->tc_SPUpper;
+    NEWLIST(&task->tc_MemEntry);CHECK(AddTask(task,timed_retirement_owner,NULL));
+    struct AROSRestrictedWork work;unsigned found=0;
+    for (unsigned polls=0;polls<1000000;++polls) {
+        if (api->take(&work)) { found=1;break; } KrnSwitch();
+    }
+    CHECK(found && work.length==32);
+    uint64_t words[4];memcpy(words,work.bytes,sizeof(words));
+    CHECK(words[0]==4 && words[1]==work.channel && api->complete(&work));
+    wait_parked(timed_retirement_domain,work.channel);
+    api->lifetime(&after);CHECK(after.waits==1 && after.timed_waits==1);
+    RemTask(task);FreeMem(stack,256*1024);FreeMem(task,sizeof(*task));
+    api->lifetime(&after);
+    CHECK(!after.waits && !after.timed_waits && !after.suspended_threads);
+    CHECK(after.retired==before.retired+1);
+    CHECK(!api->thread_state(timed_retirement_domain,work.channel));
+    CHECK(!api->wake_thread(timed_retirement_domain,work.channel));
+    int closed=0;
+    for (unsigned polls=0;polls<1000000;++polls) {
+        closed=api->close_domain(timed_retirement_domain);CHECK(closed>=0);
+        if (closed==1) break;KrnSwitch();
+    }
+    CHECK(closed==1);api->lifetime(&after);
+    CHECK(!after.live && !after.pages && !after.domains && !after.pending &&
+        !after.waits && !after.timed_waits && !after.suspended_threads);
+    for (size_t i=0;i<sizeof(timed_retirement_result);++i)
+        CHECK(((const unsigned char *)&timed_retirement_result)[i]==0x6b);
+    bug("[ISOVM] timed-retirement cases=1 retired=1 stale_refused=2 result_untouched=1 retained_pages=0 PASS\n");
+}
+
 extern const unsigned char RestrictedSuspend[],RestrictedSuspendEnd[];
 extern const unsigned char RestrictedSuspendNoCalls[],RestrictedSuspendNoCallsEnd[];
 static void *suspend_client(void *argument)
@@ -1243,6 +1294,7 @@ int main(void)
     prove_waits();
     prove_suspension();
     prove_timed_waits();
+    prove_timed_retirement();
     prove_domain_close();
 #if defined(__AROSEXEC_SMP__)
     prove_task_list_churn();
