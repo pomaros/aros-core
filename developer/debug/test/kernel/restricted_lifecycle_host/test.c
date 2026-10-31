@@ -35,6 +35,10 @@ static int AROSRestrictedSpaceClose(struct AROSRestrictedSpace *s)
 struct AROSRestrictedService { unsigned drained,closes; };
 static int AROSRestrictedServiceClose(struct AROSRestrictedService *s)
 { ++s->closes;return s->drained; }
+struct AROSRestrictedRegion { struct AROSRestrictedSpace *space; unsigned drained; };
+static int AROSRestrictedRegionDetach(struct AROSRestrictedRegion *r)
+{ if (!r->drained) return 0;r->space=NULL;return 1; }
+struct RestrictedAllocation { struct RestrictedAllocation *next; struct AROSRestrictedRegion region; };
 enum RestrictedState { R_FREE,R_ALLOCATING,R_LIVE,R_REAPING };
 struct RestrictedDomain {
     struct AROSRestrictedSpace space;
@@ -42,7 +46,8 @@ struct RestrictedDomain {
     void *pool,*code,*data;
     unsigned threads,managed,closing;
     void *owner_context,*releaser_context;
-    size_t code_bytes;
+    size_t code_bytes,memory_pages;
+    struct RestrictedAllocation *allocations;
 };
 struct Restricted {
     struct RestrictedDomain *domain;
@@ -136,6 +141,14 @@ static void managed_tests(void)
     b->state=R_REAPING;b->releaser_context=&foreign;
     assert(call(R_RELEASED,(uintptr_t)b,&other,&foreign));
     assert(!d->threads && d->state==R_LIVE);
+    struct RestrictedAllocation allocation={.region={.space=&d->space}};
+    d->allocations=&allocation;d->memory_pages=2;
+    unsigned closes=d->space.closes;
+    assert(!domain_call(R_DOMAIN_CLOSE,handle,&context,&status) && !status &&
+        d->state==R_LIVE && d->space.closes==closes && allocation.region.space);
+    struct AROSRestrictedLifetime retained;
+    assert(call(R_LIFETIME,(uintptr_t)&retained,&owner,&context) && retained.pages==1028);
+    allocation.region.drained=1;
     assert(domain_call(R_DOMAIN_CLOSE,handle,&context,&status)==(uintptr_t)d && status==1);
     assert(!r_domain_lookup(handle) && d->state==R_REAPING);
     assert(!domain_call(R_DOMAIN_RELEASED,(uintptr_t)d,&foreign,NULL));

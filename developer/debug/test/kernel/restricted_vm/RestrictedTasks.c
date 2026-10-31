@@ -210,6 +210,53 @@ static void prove_shared_domains(void)
     CHECK(!state.live && !state.domains && !state.pending && !state.pages);
     bug("[ISOVM] shared-domains domains=2 threads=4 joins=4 replies=4 tls=4 stale=1 retained_pages=0 PASS\n");
 }
+extern const unsigned char RestrictedMemory[],RestrictedMemoryEnd[];
+static void *foreign_memory(void *opaque)
+{
+    uint64_t handle=*(uint64_t *)opaque;uintptr_t va=UINT64_C(0x200000000);
+    CHECK(!api->reserve_memory(handle,va+16384,4096));
+    CHECK(!api->commit_memory(handle,va+4096,3));
+    CHECK(!api->decommit_memory(handle,va));
+    CHECK(!api->protect_memory(handle,va,0));
+    CHECK(!api->release_memory(handle,va));return NULL;
+}
+static void prove_private_memory(void)
+{
+    const uintptr_t va=UINT64_C(0x200000000);
+    uint64_t handles[2];struct AROSRestrictedResult result;
+    struct AROSRestrictedLifetime life;
+    for (unsigned i=0;i<2;++i) {
+        handles[i]=api->create_domain(RestrictedMemory,(size_t)(RestrictedMemoryEnd-RestrictedMemory),0);
+        CHECK(handles[i] && api->reserve_memory(handles[i],va,8192));
+        CHECK(!api->reserve_memory(handles[i],va,4096));
+        CHECK(!api->reserve_memory(handles[i],AROS_RESTRICTED_STACK,4096));
+        CHECK(!api->commit_memory(handles[i],va,5));
+        CHECK(api->commit_memory(handles[i],va,3));
+        CHECK(!api->commit_memory(handles[i],va,3));
+        CHECK(api->run_domain(handles[i],0,&result) && result.status==0 && result.value==0 && result.denied==1);
+    }
+    pthread_t foreign;
+    CHECK(!pthread_create(&foreign,NULL,foreign_memory,&handles[0]));
+    CHECK(!pthread_join(foreign,NULL));
+    CHECK(api->protect_memory(handles[0],va,0));
+    CHECK(api->run_domain(handles[0],0,&result) && result.status==-2 &&
+        result.far==va && ((result.esr>>26)&63)==0x24);
+    CHECK(api->protect_memory(handles[0],va,3));
+    CHECK(api->run_domain(handles[0],0,&result) && result.status==0 && result.value==1);
+    CHECK(api->decommit_memory(handles[0],va));
+    CHECK(api->commit_memory(handles[0],va,0));
+    CHECK(api->protect_memory(handles[0],va,3));
+    CHECK(api->run_domain(handles[0],0,&result) && result.status==0 && result.value==0);
+    CHECK(api->run_domain(handles[1],0,&result) && result.status==0 && result.value==1);
+    api->lifetime(&life);CHECK(!life.live && life.domains==2 && life.pages==2054);
+    CHECK(api->release_memory(handles[0],va));
+    CHECK(!api->release_memory(handles[0],va));
+    CHECK(api->reserve_memory(handles[0],va,4096) && api->commit_memory(handles[0],va,3));
+    for (unsigned i=0;i<2;++i) CHECK(api->close_domain(handles[i])==1);
+    CHECK(!api->commit_memory(handles[0],va,3));
+    api->lifetime(&life);CHECK(!life.live && !life.domains && !life.pages);
+    bug("[ISOVM] private-memory domains=2 fixed=2 zero=3 isolated=2 recommit=1 guard_fault=1 foreign=5 close_regions=2 retained_pages=0 PASS\n");
+}
 extern const unsigned char RestrictedSpin[],RestrictedSpinEnd[];
 static uint64_t closing_domain;
 static unsigned closing_done,creator_release;
@@ -386,7 +433,7 @@ int main(void)
     intptr_t address = KrnGetSystemAttr(AROS_RESTRICTED_KATTR_API);
     CHECK(address != -1 && address != 0);
     api = (const void *)address;
-    CHECK(api->version == 13 && api->size == sizeof(*api));
+    CHECK(api->version == 14 && api->size == sizeof(*api));
     /* No worker exists: queued cancellation is deterministic. */
     static struct AROSRestrictedResult queued;
     CHECK(api->run(RestrictedQueued,(size_t)(RestrictedQueuedEnd-RestrictedQueued),12288,&queued));
@@ -454,6 +501,7 @@ int main(void)
     CHECK(!fault_lifetime.live && !fault_lifetime.pending && !fault_lifetime.pages);
     bug("[ISOVM] fault-stack alternate=1 unregister=1 active-refusal=1 nested=1 guards=2 drained=5 PASS\n");
     prove_shared_domains();
+    prove_private_memory();
     prove_domain_close();
 #if defined(__AROSEXEC_SMP__)
     for (unsigned cpu=0;cpu<2;++cpu) KrnFreeCPUMask(cpu_masks[cpu]);

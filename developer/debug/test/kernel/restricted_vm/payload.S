@@ -658,3 +658,26 @@ RestrictedSpinFailure:
  svc #0xa541
  b RestrictedSpinFailure
 RestrictedSpinEnd:
+
+.balign 16
+.global RestrictedMemory, RestrictedMemoryEnd
+RestrictedMemory:
+ mov x19, x1
+ mov x20, #2
+ lsl x20, x20, #32
+ ldr x9, [x20]
+ str x9, [x19]
+ add x9, x9, #1
+ str x9, [x20]
+ /* The native memory packet entry must never dereference a guest pointer. */
+ mov x0, #-1
+ svc #0xa567
+ cmn x0, #1
+ b.ne RestrictedMemoryFailure
+ mov x0, #0
+ svc #0xa541
+RestrictedMemoryFailure:
+ mov x0, #-9
+ svc #0xa541
+ b RestrictedMemoryFailure
+RestrictedMemoryEnd:

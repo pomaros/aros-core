@@ -36,19 +36,28 @@
 #define R_DOMAIN_RELEASED 0xa564
 #define R_DOMAIN_REAP 0xa565
 #define R_DOMAIN_ABORT 0xa566
+#define R_MEMORY 0xa567
 #define R_COOKIE UINT64_C(0x7265737472696374)
 enum RestrictedState { R_FREE, R_ALLOCATING, R_LIVE, R_REAPING };
 /* Address-space allocation lifetime is separate from an execution context.
  * The legacy run wrapper creates one domain; explicit attachment follows here,
  * rather than making a thread's native continuation own shared root storage. */
+struct RestrictedAllocation {
+    struct RestrictedAllocation *next;
+    struct AROSRestrictedRegion region;
+    size_t count;
+    struct KrnMappingPage *pages;
+    uintptr_t *backing;
+};
 struct RestrictedDomain {
     enum RestrictedState state;
     void *pool, *code, *data;
     unsigned used, threads, managed, closing;
     void *owner_context, *releaser_context;
     uint64_t root;
-    size_t code_bytes;
+    size_t code_bytes, memory_pages;
     struct AROSRestrictedSpace space;
+    struct RestrictedAllocation *allocations;
 };
 struct Restricted {
     struct RestrictedDomain *domain;
@@ -110,7 +119,10 @@ static struct RestrictedDomain *r_domain_lookup(uint64_t handle)
 static int r_domain_retire(struct RestrictedDomain *d,void *context)
 {
     d->closing=1;AROSRestrictedSpaceStop(&d->space);
-    if (d->threads || !AROSRestrictedSpaceClose(&d->space)) return 0;
+    if (d->threads) return 0;
+    for (struct RestrictedAllocation *a=d->allocations;a;a=a->next)
+        if (a->region.space && !AROSRestrictedRegionDetach(&a->region)) return 0;
+    if (!AROSRestrictedSpaceClose(&d->space)) return 0;
     d->state=R_REAPING;d->releaser_context=context;return 1;
 }
 static uint64_t owners_retired, owners_reaped;
@@ -198,7 +210,7 @@ static int r_lifecycle(struct AROSAppleRuntimeFrame *frame,struct Task *task,
             struct RestrictedDomain *d=&restricted_domains[i];
             if (d->state!=R_FREE) {
                 ++state->domains;
-                state->pages+=(d->pool ? R_TABLES : 0)+(d->code!=NULL)+(d->data!=NULL);
+                state->pages+=(d->pool ? R_TABLES : 0)+(d->code!=NULL)+(d->data!=NULL)+d->memory_pages;
             }
         }
         frame->x[0]=1;return 1;
@@ -323,6 +335,51 @@ static int r_unmap_thread(struct Restricted *r)
         uint64_t actual;
         if (!AArch64MappingPhysical(&d->space.hardware,d->root,d->space.tcr,va[i],&actual)) continue;
         if (actual!=pa[i] || !AArch64UnmapPage(&d->space.hardware,d->root,d->space.tcr,va[i],pa[i])) return 0;
+    }
+    return 1;
+}
+/* Trusted native packet only; restricted execution never reaches this dispatcher.
+ * The controller's Forbid transaction protects its unpublished allocation and
+ * native release, while the coordinator protects domain lookup and PTE changes. */
+struct RestrictedMemoryOperation {
+    uint64_t handle;
+    uintptr_t address, physical;
+    unsigned operation, protection;
+    struct RestrictedAllocation *allocation;
+};
+static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned svc)
+{
+    if (svc!=R_MEMORY) return 0;
+    struct RestrictedMemoryOperation *p=(void *)(uintptr_t)frame->x[0];
+    frame->x[0]=0;if (!p) return 1;
+    struct RestrictedDomain *d=r_domain_lookup(p->handle);
+    if (!d || d->closing || d->owner_context!=context) return 1;
+    if (p->operation==0) {
+        struct RestrictedAllocation *a=p->allocation;
+        if (a && AROSRestrictedRegionReserve(&d->space,&a->region,p->address,
+            a->count*R_PAGE,a->pages,a->backing,a->count)) {
+            a->next=d->allocations;d->allocations=a;frame->x[0]=1;
+        }
+        return 1;
+    }
+    struct RestrictedAllocation **link=&d->allocations;
+    while (*link && !(p->address>=(*link)->region.mapping.start &&
+        p->address-(*link)->region.mapping.start<(*link)->region.mapping.length)) link=&(*link)->next;
+    struct RestrictedAllocation *a=*link;
+    if (!a || (p->address&(R_PAGE-1))) return 1;
+    size_t page=(p->address-a->region.mapping.start)/R_PAGE;
+    if (p->operation==1) {
+        frame->x[0]=AROSRestrictedRegionCommit(&a->region,page,p->physical,p->protection);
+        d->memory_pages+=frame->x[0]!=0;
+    } else if (p->operation==2) {
+        frame->x[0]=AROSRestrictedRegionDecommit(&a->region,page,&p->physical);
+        if (frame->x[0] && p->physical) --d->memory_pages;
+    } else if (p->operation==3)
+        frame->x[0]=AROSRestrictedRegionProtect(&a->region,page,p->protection);
+    else if (p->operation==4 && p->address==a->region.mapping.start &&
+        AROSRestrictedRegionDetach(&a->region)) {
+        for (size_t i=0;i<a->count;++i) d->memory_pages-=a->backing[i]!=0;
+        *link=a->next;a->next=NULL;p->allocation=a;frame->x[0]=1;
     }
     return 1;
 }
@@ -565,6 +622,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
         frame->x[0]=(uintptr_t)r_claim_reap(context);
         return 1;
     }
+    if (ec==0x15 && r_memory(frame,context,svc)) return 1;
     if (ec==0x15 && r_domain_lifecycle(frame,context,svc)) return 1;
     if (ec==0x15 && r_lifecycle(frame,task,context,svc)) return 1;
     if (ec != 0x15 || (svc != R_PREPARE && svc != AROS_RESTRICTED_ENTER && svc != 0xa534)) return 0;
@@ -646,7 +704,7 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
     unsigned ec=(unsigned)(frame->esr>>26)&63,svc=(unsigned)frame->esr&65535;
     if (!AROSAppleTaskExecution(context)->root &&
         (ec!=0x15 || ((svc<AROS_RESTRICTED_ENTER || svc>R_LIFETIME) &&
-         (svc<R_DOMAIN_CLAIM || svc>R_DOMAIN_ABORT)))) return 0;
+         (svc<R_DOMAIN_CLAIM || svc>R_MEMORY)))) return 0;
     r_coordinate();
     int handled=r_trap_locked(frame);
     r_uncoordinate();
@@ -659,8 +717,19 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
     }
     return handled!=0;
 }
+static void r_free_allocation(struct RestrictedAllocation *a)
+{
+    for (size_t i=0;i<a->count;++i)
+        if (a->backing[i] && !AROSApplePageFree((void *)a->backing[i],R_PAGE))
+            for (;;) __asm__ volatile("wfe");
+    FreeVec(a);
+}
 static void r_free_domain_backing(struct RestrictedDomain *d)
 {
+    struct RestrictedAllocation *a=d->allocations;
+    while (a) {
+        struct RestrictedAllocation *next=a->next;r_free_allocation(a);a=next;
+    }
     if ((d->code && !AROSApplePageFree(d->code,R_PAGE)) ||
         (d->data && !AROSApplePageFree(d->data,R_PAGE)) ||
         (d->pool && !AROSApplePageFreeRaw(d->pool,R_TABLES*R_PAGE)))
@@ -826,6 +895,57 @@ static int r_close_domain(uint64_t handle)
     Permit();return (int)(intptr_t)status;
 }
 
+static int r_memory_call(struct RestrictedMemoryOperation *p)
+{
+    register uintptr_t argument __asm__("x0")=(uintptr_t)p;
+    __asm__ volatile("svc #0xa567":"+r"(argument)::"memory","cc");
+    return argument!=0;
+}
+static int r_reserve_memory(uint64_t handle,uintptr_t address,size_t length)
+{
+    if (!length || (length&(R_PAGE-1)) || address<AROS_RESTRICTED_DYNAMIC_BASE ||
+        address>=AROS_RESTRICTED_DYNAMIC_END || length>AROS_RESTRICTED_DYNAMIC_END-address) return 0;
+    size_t count=length/R_PAGE;
+    if (count>(SIZE_MAX-sizeof(struct RestrictedAllocation))/(sizeof(struct KrnMappingPage)+sizeof(uintptr_t))) return 0;
+    Forbid();
+    struct RestrictedAllocation *a=AllocVec(sizeof(*a)+count*(sizeof(*a->pages)+sizeof(*a->backing)),MEMF_CLEAR);
+    if (!a) { Permit();return 0; }
+    a->count=count;a->pages=(void *)(a+1);a->backing=(void *)(a->pages+count);
+    struct RestrictedMemoryOperation op={.handle=handle,.address=address,.allocation=a};
+    int ok=r_memory_call(&op);if (!ok) FreeVec(a);
+    Permit();return ok;
+}
+static int r_commit_memory(uint64_t handle,uintptr_t address,unsigned protection)
+{
+    if (protection&~3U) return 0;
+    Forbid();void *page=AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
+    if (!page) { Permit();return 0; }
+    struct RestrictedMemoryOperation op={.handle=handle,.address=address,
+        .operation=1,.physical=(uintptr_t)page,.protection=protection};
+    int ok=r_memory_call(&op);
+    if (!ok && !AROSApplePageFree(page,R_PAGE)) for (;;) __asm__ volatile("wfe");
+    Permit();return ok;
+}
+static int r_decommit_memory(uint64_t handle,uintptr_t address)
+{
+    Forbid();struct RestrictedMemoryOperation op={.handle=handle,.address=address,.operation=2};
+    int ok=r_memory_call(&op);
+    if (ok && op.physical && !AROSApplePageFree((void *)op.physical,R_PAGE))
+        for (;;) __asm__ volatile("wfe");
+    Permit();return ok;
+}
+static int r_protect_memory(uint64_t handle,uintptr_t address,unsigned protection)
+{
+    Forbid();struct RestrictedMemoryOperation op={.handle=handle,.address=address,.operation=3,.protection=protection};
+    int ok=r_memory_call(&op);Permit();return ok;
+}
+static int r_release_memory(uint64_t handle,uintptr_t address)
+{
+    Forbid();struct RestrictedMemoryOperation op={.handle=handle,.address=address,.operation=4};
+    int ok=r_memory_call(&op);if (ok) r_free_allocation(op.allocation);
+    Permit();return ok;
+}
+
 void AROSAppleRestrictedContextRetired(void *context)
 {
     if (!context || !AROSAppleRuntimeLocal()->active || !r_current()) return;
@@ -854,7 +974,7 @@ static unsigned r_state(const struct AROSRestrictedWork *work)
     __asm__ volatile("svc #0xa535":"+r"(argument)::"memory","cc");
     return (unsigned)argument;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {13,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {14,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

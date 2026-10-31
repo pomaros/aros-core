@@ -60,5 +60,15 @@ struct AROSRestrictedAPI {
     uint64_t (*create_domain)(const void *code,size_t bytes,uint64_t seed);
     int (*run_domain)(uint64_t handle,uint64_t seed,struct AROSRestrictedResult *);
     int (*close_domain)(uint64_t handle);
+    /* Controller-only private anonymous memory. Reserve an aligned fixed range;
+     * commit/decommit/protect operate on one 4096-byte page. Read=1, write=2;
+     * zero means committed no-access. Release requires the reservation base.
+     * A failed release can begin draining: retain the reservation and retry.
+     * All return 1 on success, 0 on refusal; no physical address is exposed. */
+    int (*reserve_memory)(uint64_t handle,uintptr_t address,size_t length);
+    int (*commit_memory)(uint64_t handle,uintptr_t address,unsigned protection);
+    int (*decommit_memory)(uint64_t handle,uintptr_t address);
+    int (*protect_memory)(uint64_t handle,uintptr_t address,unsigned protection);
+    int (*release_memory)(uint64_t handle,uintptr_t address);
 };
 #endif
