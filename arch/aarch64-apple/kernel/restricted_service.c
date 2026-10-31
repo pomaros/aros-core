@@ -4,7 +4,7 @@
 #define PAGE 4096U
 _Static_assert(KS_RUNNING==AROS_RESTRICTED_RUNNING && KS_CANCELLED==AROS_RESTRICTED_CANCELLED,"public work states");
 static struct KrnBufferRegistry registry;
-static struct AROSRestrictedSpace *spaces[KBUF_SPACES];
+static struct AROSRestrictedSpace *spaces;
 static struct AROSRestrictedSharedBacking *shared_backings;
 static uint64_t reservation_generation;
 /* Generation storage outlives every service object and never resets on close. */
@@ -23,8 +23,7 @@ static int physical_in_use(uintptr_t pa)
 {
     for (struct AROSRestrictedSharedBacking *b=shared_backings;b;b=b->next)
         for (size_t i=0;i<b->count;++i) if (b->pages[i]==pa) return 1;
-    for (unsigned i=0;i<KBUF_SPACES;++i) {
-        struct AROSRestrictedSpace *s=spaces[i];if (!s) continue;
+    for (struct AROSRestrictedSpace *s=spaces;s;s=s->next) {
         if (s->backing==pa) return 1;
         for (struct AROSRestrictedRegion *r=s->regions;r;r=r->next)
             for (size_t page=0;page<r->mapping.page_count;++page)
@@ -116,8 +115,8 @@ int AROSRestrictedSpaceInit(struct AROSRestrictedSpace *s,uint64_t principal,
     if (!KrnMappingDomainJoin(&s->domain,&s->creator,s) ||
         !KrnMappingArenaInitialize(&s->arena,AROS_RESTRICTED_DATA,
             AROS_RESTRICTED_DYNAMIC_END-AROS_RESTRICTED_DATA,PAGE) ||
-        !KrnBufferRegister(&registry,s->principal,&s->domain,&s->arena,&s->handle)) return 0;
-    spaces[(uint32_t)s->handle-1]=s;
+        !KrnBufferRegister(&registry,&s->registration,s->principal,&s->domain,&s->arena,&s->handle)) return 0;
+    s->next=spaces;spaces=s;
     void *identity=KrnBufferLookup(&registry,s->principal,s->handle);
     if (!KrnMappingReserve(&s->arena,&s->mapping,PAGE,0,KMAP_READ|KMAP_WRITE,0,
         identity,&s->page,1)) return 0;
@@ -310,7 +309,10 @@ int AROSRestrictedSpaceClose(struct AROSRestrictedSpace *s)
             if (!KrnMappingRelease(&s->arena,&s->mapping)) return 0;
         }
         if (!KrnBufferUnregister(&registry,s->principal,s->handle)) return 0;
-        spaces[(uint32_t)s->handle-1]=NULL;
+        struct AROSRestrictedSpace **link=&spaces;
+        while (*link && *link!=s) link=&(*link)->next;
+        if (!*link) return 0;
+        *link=s->next;s->next=NULL;
         s->handle=0;
     }
     if (s->creator.domain && !KrnMappingDomainLeave(&s->creator)) return 0;

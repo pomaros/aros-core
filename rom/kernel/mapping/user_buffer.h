@@ -5,19 +5,19 @@
 #define AROS_KERNEL_USER_BUFFER_H
 #include "mapping.h"
 #include "domain.h"
-#define KBUF_SPACES 4U
 #define KBUF_PAGES 4U
 #define KBUF_BYTES 256U
 struct KrnBufferSpace {
+    struct KrnBufferSpace *next;
     struct KrnMappingDomain *domain;
     struct KrnMappingArena *arena;
     struct KrnMappingDomainMember retention;
     uint64_t principal;
-    uint32_t generation;
+    uint64_t generation;
     unsigned closing;
     size_t leases;
 };
-struct KrnBufferRegistry { struct KrnBufferSpace spaces[KBUF_SPACES]; };
+struct KrnBufferRegistry { struct KrnBufferSpace *first; uint64_t generation; };
 struct KrnBufferPart {
     struct KrnMappingObject *mapping;
     size_t page, offset, length;
@@ -27,7 +27,7 @@ struct KrnBufferPart {
 struct KrnBufferLease {
     struct KrnBufferSpace *space;
     struct KrnMappingDomainMember retention;
-    uint32_t generation;
+    uint64_t generation;
     unsigned access, count;
     size_t length;
     struct KrnBufferPart parts[KBUF_PAGES];
@@ -47,14 +47,18 @@ struct KrnBufferOps {
 };
 /* All APIs share the address-space/coordinator lock with mapping mutations.
  * Registry, domains, arenas and leases are zeroed before first publication.
- * Registry storage/generation counters are never reset while handles may exist.
+ * Registry generation never resets while handles may exist; it is monotonic
+ * across caller-owned records, and exhaustion refuses registration. Records
+ * outlive registration and all leases; successful unregister unlinks and clears
+ * the record so its owner may reclaim storage. Registry capacity is not fixed.
+ * No allocation/free occurs under these APIs.
  * principal is nonzero KERNEL-derived caller identity, never an untrusted field.
  * Each registered space owns an initially empty arena; mapping.owner must be
  * the validated KrnBufferSpace pointer. Registry and domains must outlive all
  * users. No pointer in these structs is exposed to an untrusted task.
  * Anonymous resident mappings only; no shared/file/writeback support here.
  */
-int KrnBufferRegister(struct KrnBufferRegistry *, uint64_t principal,
+int KrnBufferRegister(struct KrnBufferRegistry *, struct KrnBufferSpace *, uint64_t principal,
     struct KrnMappingDomain *, struct KrnMappingArena *, uint64_t *handle);
 struct KrnBufferSpace *KrnBufferLookup(struct KrnBufferRegistry *,
     uint64_t principal, uint64_t handle);

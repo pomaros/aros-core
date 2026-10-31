@@ -16,6 +16,8 @@ struct AROSRestrictedSharedBacking {
 #define AROS_RESTRICTED_DYNAMIC_BASE UINT64_C(0x200000000)
 #define AROS_RESTRICTED_DYNAMIC_END UINT64_C(0x400000000)
 struct AROSRestrictedSpace {
+    struct AROSRestrictedSpace *next;
+    struct KrnBufferSpace registration;
     struct KrnMappingDomain domain;
     struct KrnMappingDomainMember creator;
     struct KrnMappingArena arena;

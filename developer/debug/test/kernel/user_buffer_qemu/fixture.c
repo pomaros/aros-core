@@ -13,6 +13,7 @@ extern unsigned char *ProbeAdmit(unsigned,uintptr_t,uintptr_t,size_t,unsigned);
 #define CHECK(x,n) do { if(!(x))ProbeFail(n); } while(0)
 static struct KrnBufferRegistry registry;
 struct Space {
+ struct KrnBufferSpace registration;
  unsigned id;
  struct KrnMappingDomain domain;
  struct KrnMappingArena arena;
@@ -55,7 +56,7 @@ void ProbeBufferInit(void)
   s->mapops=(struct KrnMappingOps){s,install,remove_page};
   s->bufops=(struct KrnBufferOps){s,admit};
   CHECK(KrnMappingArenaInitialize(&s->arena,DATA,5*PAGE,PAGE),"buffer-arena");
-  CHECK(KrnBufferRegister(&registry,id+1,&s->domain,&s->arena,&s->handle),"buffer-register");
+  CHECK(KrnBufferRegister(&registry,&s->registration,id+1,&s->domain,&s->arena,&s->handle),"buffer-register");
   void *owner=KrnBufferLookup(&registry,id+1,s->handle);
   CHECK(KrnMappingReserve(&s->arena,&s->main,PAGE,0,3,0,owner,s->mainpages,1),"buffer-main");
   CHECK(KrnMappingReserve(&s->arena,&s->gap,2*PAGE,0,0,0,owner,s->gappages,2),"buffer-gap");

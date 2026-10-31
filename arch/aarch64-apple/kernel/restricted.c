@@ -24,6 +24,7 @@
 
 #define R_PAGE 4096U
 #define R_TABLES 1024U
+#define R_DOMAINS 4U
 #define R_PREPARE 0xa531
 #define R_CLAIM 0xa538
 #define R_PUBLISH 0xa539
@@ -104,7 +105,7 @@ struct Restricted {
  * Forbid prevents remote terminal freeze during unpublished native allocation
  * or the release transaction; the page arena operations do not Wait. */
 static struct Restricted restricted_slots[AROS_RESTRICTED_CHANNELS];
-static struct RestrictedDomain restricted_domains[KBUF_SPACES];
+static struct RestrictedDomain restricted_domains[R_DOMAINS];
 struct RestrictedPublication {
     struct Restricted *slot;
     void *pool, *code, *data, *stack, *fault_stack, *tls;
@@ -128,7 +129,7 @@ static struct RestrictedDomain *r_domain_slot(uintptr_t address)
 static struct RestrictedDomain *r_domain_lookup(uint64_t handle)
 {
     if (!handle) return NULL;
-    for (unsigned i=0;i<KBUF_SPACES;++i) {
+    for (unsigned i=0;i<R_DOMAINS;++i) {
         struct RestrictedDomain *d=&restricted_domains[i];
         if (d->managed && d->state==R_LIVE && d->space.handle==handle) return d;
     }
@@ -164,7 +165,7 @@ static int r_lifecycle(struct AROSAppleRuntimeFrame *frame,struct Task *task,
         uint64_t handle=frame->x[0];frame->x[0]=0;
         struct RestrictedDomain *domain=r_domain_lookup(handle);
         if (handle && (!domain || domain->closing)) return 1;
-        if (!handle) for (unsigned i=0;i<KBUF_SPACES;++i)
+        if (!handle) for (unsigned i=0;i<R_DOMAINS;++i)
             if (restricted_domains[i].state==R_FREE) { domain=&restricted_domains[i];break; }
         if (!domain) return 1;
         for (unsigned i=0;i<AROS_RESTRICTED_CHANNELS;++i) {
@@ -224,7 +225,7 @@ static int r_lifecycle(struct AROSAppleRuntimeFrame *frame,struct Task *task,
              * REAPING retains its accounting until the release acknowledgement. */
             state->pages+=(r->stack!=NULL)+(r->fault_stack!=NULL)+(r->tls!=NULL);
         }
-        for (unsigned i=0;i<KBUF_SPACES;++i) {
+        for (unsigned i=0;i<R_DOMAINS;++i) {
             struct RestrictedDomain *d=&restricted_domains[i];
             if (d->state!=R_FREE) {
                 ++state->domains;
@@ -454,7 +455,7 @@ static int r_domain_lifecycle(struct AROSAppleRuntimeFrame *frame,void *context,
     if (svc<R_DOMAIN_CLAIM || svc>R_DOMAIN_ABORT) return 0;
     uintptr_t argument=frame->x[0];frame->x[0]=0;frame->x[1]=0;
     if (svc==R_DOMAIN_CLAIM) {
-        for (unsigned i=0;i<KBUF_SPACES;++i) {
+        for (unsigned i=0;i<R_DOMAINS;++i) {
             struct RestrictedDomain *d=&restricted_domains[i];
             if (d->state!=R_FREE) continue;
             d->state=R_ALLOCATING;d->managed=1;d->owner_context=context;
@@ -470,7 +471,7 @@ static int r_domain_lifecycle(struct AROSAppleRuntimeFrame *frame,void *context,
         d->state=R_LIVE;frame->x[0]=1;return 1;
     }
     if (svc==R_DOMAIN_REAP) {
-        for (unsigned i=0;i<KBUF_SPACES;++i) {
+        for (unsigned i=0;i<R_DOMAINS;++i) {
             struct RestrictedDomain *d=&restricted_domains[i];
             if (d->managed && d->state==R_LIVE && !d->owner_context &&
                 r_domain_retire(d,context)) { frame->x[0]=(uintptr_t)d;break; }
@@ -684,7 +685,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
             if (b->owner_context==retired && !b->releaser_context) {
                 b->owner_context=NULL;b->backing.closing=1;
             }
-        for (unsigned i=0;i<KBUF_SPACES;++i) {
+        for (unsigned i=0;i<R_DOMAINS;++i) {
             struct RestrictedDomain *d=&restricted_domains[i];
             if (d->managed && d->state==R_LIVE && d->owner_context==retired) {
                 d->owner_context=NULL;d->closing=1;AROSRestrictedSpaceStop(&d->space);

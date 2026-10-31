@@ -11,6 +11,7 @@
 #define CHECK(x, name) do { if (!(x)) { puts("FAIL " name); exit(1); } } while (0)
 struct Fixture {
     struct KrnBufferRegistry registry;
+    struct KrnBufferSpace registration;
     struct KrnMappingDomain domain;
     struct KrnMappingArena arena;
     struct KrnMappingObject mapping;
@@ -48,7 +49,7 @@ static void init(struct Fixture *f)
     f->mapops = (struct KrnMappingOps){f,install,remove_page};
     f->bufops = (struct KrnBufferOps){f,admit};
     CHECK(KrnMappingArenaInitialize(&f->arena,START,4*PAGE,PAGE),"arena");
-    CHECK(KrnBufferRegister(&f->registry,17,&f->domain,&f->arena,&f->handle),"register");
+    CHECK(KrnBufferRegister(&f->registry,&f->registration,17,&f->domain,&f->arena,&f->handle),"register");
     struct KrnBufferSpace *owner = KrnBufferLookup(&f->registry,17,f->handle);
     CHECK(owner,"lookup");
     CHECK(KrnMappingReserve(&f->arena,&f->mapping,2*PAGE,0,3,0,owner,f->pages,2),"reserve");
@@ -111,7 +112,7 @@ static void refusal(void)
     f.mapping.in_flight=SIZE_MAX-1;
     CHECK(!pin(&f,START+PAGE-4,8,KMAP_READ,&l) && f.mapping.in_flight==SIZE_MAX-1,"pin-count-overflow");
     f.mapping.in_flight=0;
-    CHECK(f.mapping.in_flight==0 && f.domain.members==&f.registry.spaces[0].retention && !f.domain.members->next,"refusal-no-leaks");
+    CHECK(f.mapping.in_flight==0 && f.domain.members==&f.registration.retention && !f.domain.members->next,"refusal-no-leaks");
     clean(&f);
 }
 static void revalidation(void)
@@ -139,12 +140,12 @@ static void domain_lifetime(void)
     CHECK(!KrnMappingDomainCanReclaim(&f.domain),"live-domain");
     CHECK(KrnBufferRelease(&l),"domain-release");uint64_t old=f.handle;clean(&f);
     struct KrnMappingDomain d={0};
-    CHECK(KrnBufferRegister(&f.registry,17,&d,&f.arena,&f.handle),"reuse-space");
+    CHECK(KrnBufferRegister(&f.registry,&f.registration,17,&d,&f.arena,&f.handle),"reuse-space");
     CHECK(f.handle!=old && !KrnBufferLookup(&f.registry,17,old),"stale-domain-handle");
     CHECK(KrnBufferClose(&f.registry,17,f.handle) && KrnBufferUnregister(&f.registry,17,f.handle),"reuse-close");
-    for(unsigned i=0;i<KBUF_SPACES;++i)f.registry.spaces[i].generation=UINT32_MAX;
+    f.registry.generation=UINT64_MAX;
     struct KrnMappingDomain next={0};
-    CHECK(!KrnBufferRegister(&f.registry,17,&next,&f.arena,&f.handle),"generation-exhaustion");
+    CHECK(!KrnBufferRegister(&f.registry,&f.registration,17,&next,&f.arena,&f.handle),"generation-exhaustion");
 }
 static void adjacent_owners(void)
 {
@@ -264,8 +265,31 @@ static void shared_domain_requesters(void)
     KrnServiceClose(&q);clean(&f);
 }
 
+static void registry_growth(void)
+{
+    enum { COUNT=32 };
+    struct KrnBufferRegistry registry={0};struct KrnBufferSpace spaces[COUNT]={{0}};
+    struct KrnMappingDomain domains[COUNT]={{0}};struct KrnMappingArena arenas[COUNT];uint64_t handles[COUNT];
+    for (unsigned i=0;i<COUNT;++i) {
+        CHECK(KrnMappingArenaInitialize(&arenas[i],START,PAGE,PAGE),"growth-arena");
+        CHECK(KrnBufferRegister(&registry,&spaces[i],i+1,&domains[i],&arenas[i],&handles[i]),"growth-register");
+        CHECK(KrnBufferLookup(&registry,i+1,handles[i])==&spaces[i],"growth-lookup");
+        uint64_t ignored=0;
+        CHECK(!KrnBufferRegister(&registry,&spaces[i],i+1,&domains[i],&arenas[i],&ignored),"growth-double-register");
+    }
+    for (unsigned i=0;i<COUNT;++i) {
+        CHECK(KrnBufferClose(&registry,i+1,handles[i]) && KrnBufferUnregister(&registry,i+1,handles[i]),"growth-close");
+        CHECK(!KrnBufferLookup(&registry,i+1,handles[i]) && KrnMappingDomainCanReclaim(&domains[i]),"growth-drained");
+    }
+    CHECK(!registry.first,"growth-empty");
+    memset(&domains[0],0,sizeof(domains[0]));uint64_t fresh;
+    CHECK(KrnBufferRegister(&registry,&spaces[0],1,&domains[0],&arenas[0],&fresh) && fresh>handles[COUNT-1],"growth-monotonic");
+    CHECK(!KrnBufferLookup(&registry,1,handles[0]),"growth-stale-reuse");
+    CHECK(KrnBufferClose(&registry,1,fresh) && KrnBufferUnregister(&registry,1,fresh),"growth-reuse-close");
+}
 int main(void)
 {
     copies();refusal();revalidation();domain_lifetime();adjacent_owners();service_cases();cross_queue_reuse();shared_domain_requesters();
+    registry_growth();
     puts("PASS owned buffers bounds permissions generations lifetime");return 0;
 }

@@ -40,13 +40,15 @@ def main():
         'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
         'dirty_inputs': dirty, 'input_hashes': hashes, 'records': []}
     mutations = [
+        ('registry-wrap', ' || r->generation==UINT64_MAX', '', 'generation-exhaustion'),
+        ('registry-reuse', 'space->generation=++r->generation;', 'space->generation=1;++r->generation;', 'stale-domain-handle'),
         ('service-thread-owner', 'r->principal = requester;', 'r->principal = principal;', 'thread-identities'),
         ('service-buffer-authority', 'KrnBufferWrite(&r->output, r->buffer_principal, bytes', 'KrnBufferWrite(&r->output, principal, bytes', 'thread-buffer-authority'),
         ('service-reset-generation', 'r->token = generation;', 'r->token = generation - generation;', 'cross-queue-generation'),
         ('service-stale-worker', 'r->token != token || (r->state != KS_RUNNING', '!token || (r->state != KS_RUNNING', 'stale-worker-complete'),
         ('foreign-owner', 'm->owner != s', '0', 'foreign-mapping'),
-        ('domain-owner', 's->principal == principal', 'principal != 0', 'domain-owner'),
-        ('stale-domain', 's->generation == (uint32_t)(handle >> 32)', 's->generation != 0', 'domain-generation'),
+        ('domain-owner', 's->principal==principal', 'principal!=0', 'domain-owner'),
+        ('stale-domain', 's->generation==handle', 's->generation!=0', 'domain-generation'),
         ('permission', '(p->protection & access) == access', '1', 'guard-tail-atomic'),
         ('stale-page', 'p->generation == b->generation', '1', 'page-generation'),
         ('late-write', 'm->closing || m->shared', 'm->shared', 'no-late-write'),

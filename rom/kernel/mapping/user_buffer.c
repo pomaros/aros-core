@@ -6,30 +6,24 @@
 struct KrnBufferSpace *KrnBufferLookup(struct KrnBufferRegistry *r,
     uint64_t principal, uint64_t handle)
 {
-    uint32_t index = (uint32_t)handle;
-    if (!r || !principal || !index || index > KBUF_SPACES)
-        return NULL;
-    struct KrnBufferSpace *s = &r->spaces[index - 1];
-    return s->domain && s->principal == principal &&
-        s->generation == (uint32_t)(handle >> 32) ? s : NULL;
+    if (!r || !principal || !handle) return NULL;
+    for (struct KrnBufferSpace *s=r->first;s;s=s->next)
+        if (s->domain && s->principal==principal && s->generation==handle) return s;
+    return NULL;
 }
 
-int KrnBufferRegister(struct KrnBufferRegistry *r, uint64_t principal,
-    struct KrnMappingDomain *d, struct KrnMappingArena *a, uint64_t *handle)
+int KrnBufferRegister(struct KrnBufferRegistry *r,struct KrnBufferSpace *space,uint64_t principal,
+    struct KrnMappingDomain *d,struct KrnMappingArena *a,uint64_t *handle)
 {
-    if (!r || !principal || !d || d->closing || !a || !a->page_size || a->first || !handle)
-        return 0;
-    struct KrnBufferSpace *free = NULL; unsigned index = 0;
-    for (unsigned i = 0; i < KBUF_SPACES; ++i) {
-        struct KrnBufferSpace *s = &r->spaces[i];
-        if (s->domain && (s->domain == d || s->arena == a)) return 0;
-        if (!free && !s->domain && s->generation != UINT32_MAX) { free = s; index = i; }
-    }
-    if (!free || !KrnMappingDomainJoin(d, &free->retention, free)) return 0;
-    free->domain = d; free->arena = a; free->principal = principal;
-    ++free->generation;
-    *handle = ((uint64_t)free->generation << 32) | (index + 1);
-    return 1;
+    if (!r || !space || space->domain || space->next || space->retention.domain ||
+        space->leases || space->closing || !principal || !d || d->closing || !a ||
+        !a->page_size || a->first || !handle || r->generation==UINT64_MAX) return 0;
+    for (struct KrnBufferSpace *s=r->first;s;s=s->next)
+        if (s==space || s->domain==d || s->arena==a) return 0;
+    if (!KrnMappingDomainJoin(d,&space->retention,space)) return 0;
+    space->domain=d;space->arena=a;space->principal=principal;
+    space->generation=++r->generation;space->next=r->first;r->first=space;
+    *handle=space->generation;return 1;
 }
 
 int KrnBufferClose(struct KrnBufferRegistry *r, uint64_t principal, uint64_t handle)
@@ -47,8 +41,9 @@ int KrnBufferUnregister(struct KrnBufferRegistry *r, uint64_t principal, uint64_
     struct KrnBufferSpace *s = KrnBufferLookup(r, principal, handle);
     if (!s || !s->closing || s->leases || s->arena->first ||
         !KrnMappingDomainLeave(&s->retention)) return 0;
-    uint32_t generation = s->generation;
-    *s = (struct KrnBufferSpace){0}; s->generation = generation;
+    struct KrnBufferSpace **link=&r->first;
+    while (*link!=s) link=&(*link)->next;
+    *link=s->next;*s=(struct KrnBufferSpace){0};
     return 1;
 }
 

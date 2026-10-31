@@ -6,7 +6,7 @@
 #include <string.h>
 #include <aros/apple/restricted.h>
 #define R_PAGE 4096U
-#define KBUF_SPACES 4
+#define R_DOMAINS 4
 #define AROS_RESTRICTED_CHANNELS 16
 #define R_TABLES 1024
 #define R_COOKIE UINT64_C(0x7265737472696374)
@@ -93,7 +93,7 @@ struct RestrictedPublication {
     size_t code_bytes;
 };
 static struct Restricted restricted_slots[AROS_RESTRICTED_CHANNELS];
-static struct RestrictedDomain restricted_domains[KBUF_SPACES];
+static struct RestrictedDomain restricted_domains[R_DOMAINS];
 static uint64_t owners_retired,owners_reaped;
 struct RestrictedDomainPublication {
     struct RestrictedDomain *domain;
@@ -250,7 +250,7 @@ int main(void)
     for (unsigned i=0;i<AROS_RESTRICTED_CHANNELS;++i)
         restricted_slots[i].state=R_ALLOCATING;
     assert(!call(R_CLAIM,0,&owner,&context));
-    for (unsigned i=0;i<KBUF_SPACES;++i)
+    for (unsigned i=0;i<R_DOMAINS;++i)
         assert(restricted_domains[i].state==R_FREE && !restricted_domains[i].threads);
     memset(restricted_slots,0,sizeof(restricted_slots));
     restricted_domains[0]=(struct RestrictedDomain){.state=R_LIVE,
@@ -278,19 +278,19 @@ int main(void)
     memset(restricted_slots,0,sizeof(restricted_slots));
     memset(restricted_domains,0,sizeof(restricted_domains));
 
-    struct Restricted *slots[KBUF_SPACES];
-    for (unsigned i=0;i<KBUF_SPACES;++i) {
+    struct Restricted *slots[R_DOMAINS];
+    for (unsigned i=0;i<R_DOMAINS;++i) {
         slots[i]=(void *)call(R_CLAIM,0,&owner,&context);
         assert(slots[i]==&restricted_slots[i] && slots[i]->state==R_ALLOCATING);
         assert(slots[i]->stack_address==AROS_RESTRICTED_STACK+i*AROS_RESTRICTED_THREAD_STRIDE);
         assert(slots[i]->fault_address==AROS_RESTRICTED_FAULT_STACK+i*AROS_RESTRICTED_THREAD_STRIDE);
         assert(slots[i]->tls_address==AROS_RESTRICTED_TLS+i*AROS_RESTRICTED_THREAD_STRIDE);
     }
-    for (unsigned i=0;i<KBUF_SPACES;++i) {
-        for (unsigned j=0;j<KBUF_SPACES;++j)
+    for (unsigned i=0;i<R_DOMAINS;++i) {
+        for (unsigned j=0;j<R_DOMAINS;++j)
             assert(r_stack_sp(slots[i],slots[j]->stack_address+R_PAGE)==(i==j));
         slots[i]->fault_active=1;
-        for (unsigned j=0;j<KBUF_SPACES;++j)
+        for (unsigned j=0;j<R_DOMAINS;++j)
             assert(r_stack_sp(slots[i],slots[j]->fault_address+R_PAGE)==(i==j));
         slots[i]->fault_active=0;
     }
@@ -300,7 +300,7 @@ int main(void)
     struct AROSRestrictedLifetime life;
     assert(call(R_LIFETIME,(uintptr_t)&life,&other,&foreign));
     assert(life.live==4 && !life.pages && !life.pending);
-    for (unsigned i=0;i<KBUF_SPACES;++i) {
+    for (unsigned i=0;i<R_DOMAINS;++i) {
         struct RestrictedPublication p={.slot=slots[i],.pool=&owner,
             .code=&owner,.data=&owner,.stack=&owner,.fault_stack=&owner,.tls=&owner,.seed=i,.code_bytes=16};
         assert(!call(R_PUBLISH,(uintptr_t)&p,&other,&context));
@@ -314,7 +314,7 @@ int main(void)
         slots[i]->abandoned=1;++owners_retired;
     }
     assert(!r_claim_reap(&foreign)); /* Outstanding worker lease. */
-    for (unsigned i=0;i<KBUF_SPACES;++i) {
+    for (unsigned i=0;i<R_DOMAINS;++i) {
         slots[i]->service.drained=1;
         assert(r_claim_reap(&context)==slots[i]);
         unsigned closes=slots[i]->service.closes;

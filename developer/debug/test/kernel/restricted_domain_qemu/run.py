@@ -109,8 +109,8 @@ def main():
         controls = {
             'reset-record-generation': ('user_service.c', 'r->token = generation;', 'r->token = generation - generation;', 'FAIL buffer-cross-queue-generation'),
             'stale-worker': ('user_service.c', 'r->token != token || (r->state != KS_RUNNING', '!token || (r->state != KS_RUNNING', 'FAIL buffer-cross-queue-worker'),
-            'foreign-domain': ('user_buffer.c', 's->principal == principal', 'principal != 0', 'FAIL buffer-foreign-domain'),
-            'stale-domain': ('user_buffer.c', 's->generation == (uint32_t)(handle >> 32)', 's->generation != 0', 'FAIL buffer-stale-domain'),
+            'foreign-domain': ('user_buffer.c', 's->principal==principal', 'principal!=0', 'FAIL buffer-foreign-domain'),
+            'stale-domain': ('user_buffer.c', 's->generation==handle', 's->generation!=0', 'FAIL buffer-stale-domain'),
             'foreign-page': ('user_buffer.c', 'm->owner != s', '0', 'FAIL buffer-foreign-page'),
             'readonly-ledger': ('user_buffer.c', '(p->protection & access) == access', '1', 'FAIL buffer-readonly-ledger'),
             'cancel-early-release': ('user_service.c', 'if (r->state == KS_RUNNING || r->state == KS_CANCELLED)', 'if (r->state == KS_CANCELLED)', 'FAIL buffer-cross-queue-pinned'),

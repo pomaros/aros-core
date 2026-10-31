@@ -47,3 +47,10 @@ faulting pager, public kernel ABI or proof of restricted task admission.
 Two distinct requester identities also submit through one domain/queue. One
 thread cancels and leaves while the other collects its own reply. Foreign-thread
 cancel/collect is refused, retained memory stays live, and final close drains.
+
+The registry stores caller-owned space records in a linked list, without a fixed
+space capacity. Monotonic 64-bit registry identities survive record reuse and
+refuse exhaustion; unregister unlinks only after leases and mappings drain.
+The fixture registers and retires 32 independent spaces, then reuses record
+storage and rejects old handles. Two additional semantic controls check handle
+reuse and generation wrap. Native execution-slot/channel limits are separate.
