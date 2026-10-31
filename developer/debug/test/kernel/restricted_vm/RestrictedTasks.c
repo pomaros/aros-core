@@ -292,7 +292,16 @@ static void prove_shared_memory(void)
     uint64_t replacement=api->create_shared(4096);CHECK(replacement && replacement!=object);
     CHECK(!api->close_shared(object) && api->close_shared(replacement));
     pthread_t orphan;CHECK(!pthread_create(&orphan,NULL,orphan_shared,NULL));CHECK(!pthread_join(orphan,NULL));
-    api->lifetime(&life);CHECK(!life.shared_objects && !life.domains && !life.pages && !life.live);
+    /* pthread completion follows CRT teardown but can precede native context
+     * deletion on another CPU. Ownership ends at that kernel retirement hook,
+     * not at the earlier join indication. Keep the drain explicitly bounded. */
+    for (unsigned attempts=0;;++attempts) {
+        api->lifetime(&life);
+        CHECK(!life.domains && !life.live);
+        if (!life.shared_objects) break;
+        CHECK(life.shared_objects==1 && attempts<100000);KrnSwitch();
+    }
+    CHECK(!life.pages);
     bug("[ISOVM] shared-memory domains=2 views=2 shared_values=5 private_permissions=1 decommit_preserved=1 orphan=1 retained_pages=0 PASS\n");
 }
 extern const unsigned char RestrictedRegionFault[],RestrictedRegionFaultEnd[];
