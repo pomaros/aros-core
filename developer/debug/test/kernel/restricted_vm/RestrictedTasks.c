@@ -1020,6 +1020,56 @@ static void prove_waits(void)
     bug("[ISOVM] wait-suspend wait_then_suspend=2 wake_held=2 resume_still_waiting=2 close_both=2 PASS\n");
 }
 
+extern const unsigned char RestrictedTimedWait[],RestrictedTimedWaitEnd[];
+static void prove_timed_waits(void)
+{
+    for (unsigned mode=0;mode<4;++mode) {
+        struct DynamicCodeClient client={.seed=mode};pthread_t thread;
+        client.domain=api->create_domain(RestrictedTimedWait,RestrictedTimedWaitEnd-RestrictedTimedWait,0);
+        CHECK(client.domain && !pthread_create(&thread,NULL,dynamic_code_client,&client));
+        struct AROSRestrictedWork work;unsigned found=0;
+        for (unsigned polls=0;polls<1000000;++polls) {
+            if (api->take(&work)) { found=1;break; } KrnSwitch();
+        }
+        CHECK(found && work.length==32);
+        uint64_t words[4];memcpy(words,work.bytes,sizeof(words));
+        CHECK(words[0]==mode && words[1]==work.channel);
+        uint64_t channel=work.channel;
+        CHECK(api->complete(&work));
+        if (mode) {
+            wait_parked(client.domain,channel);
+            struct AROSRestrictedLifetime life;api->lifetime(&life);
+            CHECK(life.waits==1 && life.timed_waits==1);
+            if (mode==1) CHECK(api->wake_thread(client.domain,channel));
+            if (mode==2) {
+                CHECK(api->suspend_thread(client.domain,channel)==0);
+                unsigned state=0;
+                for (unsigned polls=0;polls<10000000;++polls) {
+                    state=api->thread_state(client.domain,channel);
+                    CHECK(state&AROS_RESTRICTED_THREAD_SUSPENDED);
+                    if (!(state&AROS_RESTRICTED_THREAD_WAITING)) break;
+                    KrnSwitch();
+                }
+                CHECK(state==13); /* Expiry clears WAIT, never suspension. */
+                api->lifetime(&life);
+                CHECK(life.waits==1 && !life.timed_waits && life.suspended_threads==1);
+                CHECK(api->wake_thread(client.domain,channel)); /* Cannot replace latched expiry. */
+                suspend_parked(client.domain,channel);
+                CHECK(api->resume_thread(client.domain,channel)==1);
+            }
+            if (mode==3) CHECK(api->close_domain(client.domain)==0);
+        }
+        CHECK(!pthread_join(thread,NULL));
+        CHECK(client.result.status==(mode==3 ? -5 : 0) && client.result.drained);
+        CHECK(client.result.replies==1);
+        CHECK(api->close_domain(client.domain)==1);
+        struct AROSRestrictedLifetime life;api->lifetime(&life);
+        CHECK(!life.pages && !life.live && !life.domains && !life.waits &&
+            !life.timed_waits && !life.suspended_threads);
+    }
+    bug("[ISOVM] timed-wait cases=4 zero=4 overflow=4 expired=2 woken=1 suspended_expiry=1 late_wake=1 closed=1 retained_pages=0 PASS\n");
+}
+
 extern const unsigned char RestrictedSuspend[],RestrictedSuspendEnd[];
 extern const unsigned char RestrictedSuspendNoCalls[],RestrictedSuspendNoCallsEnd[];
 static void *suspend_client(void *argument)
@@ -1192,6 +1242,7 @@ int main(void)
     prove_reserved_faults();
     prove_waits();
     prove_suspension();
+    prove_timed_waits();
     prove_domain_close();
 #if defined(__AROSEXEC_SMP__)
     prove_task_list_churn();

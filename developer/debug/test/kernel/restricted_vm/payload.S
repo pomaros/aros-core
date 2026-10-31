@@ -1575,3 +1575,121 @@ SuspendFailure:
  svc #0xa541
  b SuspendFailure
 RestrictedSuspendEnd:
+
+.balign 16
+.global RestrictedTimedWait, RestrictedTimedWaitEnd
+RestrictedTimedWait:
+ mov x23, x0
+ mov x19, x1
+ mov x28, x18
+ svc #0xa54b
+ mov x20, x0
+ mov x21, x1
+ mov x0, x21
+ mov x1, #0
+ svc #0xa54e
+ cmp x0, #2
+ b.ne TimedFailure
+ mov x0, x21
+ mov x1, #-1
+ svc #0xa54e
+ cbnz x0, TimedFailure
+ stp x23, x20, [x19]
+ stp x21, xzr, [x19, #16]
+ mov x0, x19
+ add x1, x19, #64
+ mov x2, #32
+ mov x3, #0
+ svc #0xa542
+ cbz x0, TimedFailure
+ mov x26, x0
+1:
+ mov x0, x26
+ svc #0xa543
+ cbz x0, 1b
+ svc #0xa54f
+ cmn x0, #1
+ b.eq TimedFailure
+ mov x24, x0
+ mov x22, #0x86a0
+ movk x22, #1, lsl #16 // 100000 us, ordinary expiration.
+ cbz x23, 2f
+ mov x22, #0x4240
+ movk x22, #0xf, lsl #16 // 1000000 us for suspension/expiry handshake.
+ cmp x23, #2
+ b.eq 2f
+ mov x22, #0x9680
+ movk x22, #0x98, lsl #16 // 10000000 us, controller wake or close.
+2:
+ mov x0, x21
+ mov x1, x22
+ mov x27, #2
+ cmp x23, #1
+ b.ne 3f
+ mov x27, #1
+3:
+ bl TimedChecked
+ svc #0xa54f
+ cmp x0, x24
+ b.lo TimedFailure
+ sub x0, x0, x24
+ cmp x23, #1
+ b.eq 4f
+ cmp x0, x22
+ b.lo TimedFailure
+4:
+ mov x0, #0
+ svc #0xa541
+ b TimedFailure
+TimedChecked:
+ mov x25, sp
+ mov x9, #0x999
+ mov x10, #0xaaa
+ movi v8.16b, #0x5a
+ movi v31.16b, #0xa5
+ mov x11, #0xa0000000
+ msr nzcv, x11
+ mov x11, #0x400000
+ msr fpcr, x11
+ mov x11, #0x10
+ msr fpsr, x11
+ svc #0xa54e
+ mrs x11, nzcv
+ cmp x0, x27
+ b.ne TimedFailure
+ mov x12, #0xa0000000
+ cmp x11, x12
+ b.ne TimedFailure
+ cmp x9, #0x999
+ b.ne TimedFailure
+ cmp x10, #0xaaa
+ b.ne TimedFailure
+ cmp x18, x28
+ b.ne TimedFailure
+ mov x11, sp
+ cmp x11, x25
+ b.ne TimedFailure
+ umov x11, v8.d[1]
+ mov x12, #0x5a5a
+ orr x12, x12, x12, lsl #16
+ orr x12, x12, x12, lsl #32
+ cmp x11, x12
+ b.ne TimedFailure
+ umov x11, v31.d[0]
+ mov x12, #0xa5a5
+ orr x12, x12, x12, lsl #16
+ orr x12, x12, x12, lsl #32
+ cmp x11, x12
+ b.ne TimedFailure
+ mrs x11, fpcr
+ cmp x11, #0x400000
+ b.ne TimedFailure
+ mrs x11, fpsr
+ cmp x11, #0x10
+ b.ne TimedFailure
+ ret
+TimedFailure:
+ mov x0, #-9
+ svc #0xa541
+ b TimedFailure
+RestrictedTimedWaitEnd:
