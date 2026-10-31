@@ -739,6 +739,50 @@ static void prove_dynamic_code(void)
     bug("[ISOVM] dynamic-code domains=2 publications=4 rewrites=2 cpus=3 write_refused=2 scalar_refused=2 retained_pages=0 PASS\n");
 #endif
 }
+extern const unsigned char RestrictedDynamicContinuation[],RestrictedDynamicContinuationEnd[];
+static void prove_dynamic_continuations(void)
+{
+    const uintptr_t address=UINT64_C(0x200000000);
+    const unsigned requests[]={1,2,2,2,2,3};
+    const int statuses[]={0,0,-2,0,-4,-4};
+    for (unsigned mode=0;mode<6;++mode) {
+        struct DynamicCodeClient client={.seed=mode};pthread_t thread;
+        client.domain=api->create_domain(RestrictedDynamicContinuation,
+            RestrictedDynamicContinuationEnd-RestrictedDynamicContinuation,0);
+        CHECK(client.domain && api->reserve_memory(client.domain,address,3*4096));
+        for (unsigned page=0;page<3;++page) CHECK(api->commit_memory(client.domain,address+page*4096,3));
+        CHECK(!pthread_create(&thread,NULL,dynamic_code_client,&client));
+        for (unsigned step=0;step<requests[mode];) {
+            struct AROSRestrictedWork work;if (!api->take(&work)) { KrnSwitch();continue; }
+            uint64_t words[2];CHECK(work.length==sizeof(words));memcpy(words,work.bytes,sizeof(words));
+            unsigned phase=step==0 ? 0 : mode==1 ? 2 : mode==2 ? 1 : step==1 ? 3 : 4;
+            CHECK(words[0]==phase && words[1]==mode);
+            if (!phase) {
+                for (unsigned page=0;page<3;++page) CHECK(api->protect_memory(client.domain,address+page*4096,5));
+#if defined(__AROSEXEC_SMP__)
+                struct Task *task=__atomic_load_n(&client.task,__ATOMIC_ACQUIRE);CHECK(task);
+                CHECK(SetTaskAffinity(task,cpu_masks[1]));
+#endif
+            } else if (mode==1 || mode==2 || mode==4 || (mode==5 && phase==4)) {
+                unsigned page=mode==2 ? 1 : mode==4 ? 2 : 0;
+                CHECK(api->protect_memory(client.domain,address+page*4096,3));
+                CHECK(api->protect_memory(client.domain,address+page*4096,5));
+            }
+            CHECK(api->complete(&work));++step;
+        }
+        CHECK(!pthread_join(thread,NULL));
+        CHECK(client.result.status==statuses[mode] && client.result.drained);
+        CHECK(client.result.resumed==(mode==0) && client.result.callbacks==(mode==3));
+        CHECK(client.result.denied==(mode==1));
+#if defined(__AROSEXEC_SMP__)
+        CHECK(client.result.cpus==3 && client.result.migrations);
+#endif
+        CHECK(api->close_domain(client.domain)==1);
+    }
+    struct AROSRestrictedLifetime life;api->lifetime(&life);
+    CHECK(!life.pages && !life.live && !life.domains);
+    bug("[ISOVM] dynamic-continuations cases=6 repaired=1 callbacks=1 stale_fault=1 stale_handler=1 stale_entry=1 stale_return=1 retained_pages=0 PASS\n");
+}
 int main(void)
 {
     KernelBase = OpenResource((CONST_STRPTR)"kernel.resource");
@@ -832,6 +876,7 @@ int main(void)
     prove_large_stacks();
     prove_large_code();
     prove_dynamic_code();
+    prove_dynamic_continuations();
     prove_domain_close();
 #if defined(__AROSEXEC_SMP__)
     prove_task_list_churn();

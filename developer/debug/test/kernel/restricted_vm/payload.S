@@ -1013,3 +1013,179 @@ DynamicCodeFailure:
  svc #0xa541
  b DynamicCodeFailure
 RestrictedDynamicCodeEnd:
+
+/* Copy position-independent bodies into three private pages. The native
+ * controller publishes them before any indirect branch or handler admission. */
+.balign 16
+.global RestrictedDynamicContinuation, RestrictedDynamicContinuationEnd
+RestrictedDynamicContinuation:
+ mov x19, x1
+ mov x23, x0
+ movz x20, #2, lsl #32
+ adr x9, ContinuationBody
+ adr x10, ContinuationBodyEnd
+ mov x11, x20
+1:
+ ldr w12, [x9], #4
+ str w12, [x11], #4
+ cmp x9, x10
+ b.lo 1b
+ adr x9, ContinuationHandler
+ adr x10, ContinuationHandlerEnd
+ add x11, x20, #1, lsl #12
+1:
+ ldr w12, [x9], #4
+ str w12, [x11], #4
+ cmp x9, x10
+ b.lo 1b
+ adr x9, ContinuationCallback
+ adr x10, ContinuationCallbackEnd
+ add x11, x20, #2, lsl #12
+1:
+ ldr w12, [x9], #4
+ str w12, [x11], #4
+ cmp x9, x10
+ b.lo 1b
+ mov x27, #0
+ bl ContinuationRequest
+ add x0, x20, #1, lsl #12
+ svc #0xa545
+ cbz x0, ContinuationFailure
+ cmp x23, #3
+ b.hs 2f
+ cmp x23, #2
+ b.ne 1f
+ mov x27, #1
+ bl ContinuationRequest
+1:
+ mov x0, x19
+ mov x1, #1
+ svc #0xa546
+ cbz x0, ContinuationFailure
+2:
+ br x20
+ContinuationRequest:
+ stp x27, x23, [x19]
+ mov x0, x19
+ add x1, x19, #32
+ mov x2, #16
+ mov x3, #0
+ svc #0xa542
+ cbz x0, ContinuationFailure
+ mov x26, x0
+1:
+ mov x0, x26
+ svc #0xa543
+ cbz x0, 1b
+ svc #0xa540
+ ret
+ContinuationFailure:
+ mov x0, #-9
+ svc #0xa541
+ b ContinuationFailure
+
+.balign 16
+ContinuationBody:
+ cmp x23, #3
+ b.hs 1f
+ str xzr, [x19]
+ mov x0, #0
+ svc #0xa541
+1:
+ mov x27, #3
+ stp x27, x23, [x19]
+ mov x0, x19
+ add x1, x19, #32
+ mov x2, #16
+ add x3, x20, #2, lsl #12
+ svc #0xa542
+ cbz x0, ContinuationBodyFailure
+ mov x26, x0
+1:
+ mov x0, x26
+ svc #0xa543
+ cbz x0, 1b
+ mov x0, #0
+ svc #0xa541
+ContinuationBodyFailure:
+ mov x0, #-9
+ svc #0xa541
+ b ContinuationBodyFailure
+ContinuationBodyEnd:
+
+.balign 16
+ContinuationHandler:
+ mov x24, x2
+ mov x25, x3
+ mov x0, x19
+ mov x1, #3
+ svc #0xa546
+ cbz x0, ContinuationHandlerFailure
+ cmp x23, #1
+ b.ne 2f
+ mov x27, #2
+ stp x27, x23, [x19]
+ mov x0, x19
+ add x1, x19, #32
+ mov x2, #16
+ mov x3, #0
+ svc #0xa542
+ cbz x0, ContinuationHandlerFailure
+ mov x26, x0
+1:
+ mov x0, x26
+ svc #0xa543
+ cbz x0, 1b
+ svc #0xa540
+2:
+ mov x0, x24
+ mov x1, x25
+ svc #0xa547
+ /* Only the deliberately stale continuation may return from RESUME. */
+ cmp x23, #1
+ b.ne ContinuationHandlerFailure
+ cmn x0, #1
+ b.ne ContinuationHandlerFailure
+ mov x0, #0
+ svc #0xa541
+ContinuationHandlerFailure:
+ mov x0, #-9
+ svc #0xa541
+ b ContinuationHandlerFailure
+ContinuationHandlerEnd:
+
+.balign 16
+ContinuationCallback:
+ cmp x23, #5
+ b.ne 2f
+ mov x27, #4
+ stp x27, x23, [x19]
+ mov x0, x19
+ add x1, x19, #32
+ mov x2, #16
+ mov x3, #0
+ svc #0xa542
+ cbz x0, ContinuationCallbackFailure
+ mov x26, x0
+1:
+ mov x0, x26
+ svc #0xa543
+ cbz x0, 1b
+2:
+ mov x0, #0
+ svc #0xa544
+ContinuationCallbackFailure:
+ mov x0, #-9
+ svc #0xa541
+ b ContinuationCallbackFailure
+ContinuationCallbackEnd:
+.if ContinuationBodyEnd-ContinuationBody > 4096
+.error "dynamic continuation body exceeds one page"
+.endif
+.if ContinuationHandlerEnd-ContinuationHandler > 4096
+.error "dynamic continuation handler exceeds one page"
+.endif
+.if ContinuationCallbackEnd-ContinuationCallback > 4096
+.error "dynamic continuation callback exceeds one page"
+.endif
+RestrictedDynamicContinuationEnd:
