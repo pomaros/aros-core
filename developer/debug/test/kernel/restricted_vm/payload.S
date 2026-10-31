@@ -13,28 +13,28 @@
  add x9, x9, #1
  dup v31.2d, x9
 .endm
-.macro VectorCheck reg
+.macro VectorCheck reg, failure=RestrictedFailure
  umov x10, \reg\().d[0]
  cmp x10, x9
- b.ne RestrictedFailure
+ b.ne \failure
  umov x10, \reg\().d[1]
  cmp x10, x9
- b.ne RestrictedFailure
+ b.ne \failure
  add x9, x9, #1
 .endm
-.macro RegisterCheck stage
+.macro RegisterCheck stage, failure=RestrictedFailure
  cmp x18, x20
- b.ne RestrictedFailure
+ b.ne \failure
  mrs x9, tpidr_el0
  cmp x9, x20
- b.ne RestrictedFailure
+ b.ne \failure
  ldr x11, [x20]
  cmp x11, x23
- b.ne RestrictedFailure
+ b.ne \failure
  add x9, x23, #\stage
- VectorCheck v0
- VectorCheck v8
- VectorCheck v31
+ VectorCheck v0, \failure
+ VectorCheck v8, \failure
+ VectorCheck v31, \failure
 .endm
 .global RestrictedCode, RestrictedCodeEnd
 RestrictedCode:
@@ -209,6 +209,27 @@ RestrictedCode:
  cmn x0, #1
  b.ne RestrictedFailure
  svc #0xa53b
+ cmn x0, #1
+ b.ne RestrictedFailure
+ svc #0xa560
+ cmn x0, #1
+ b.ne RestrictedFailure
+ svc #0xa561
+ cmn x0, #1
+ b.ne RestrictedFailure
+ svc #0xa562
+ cmn x0, #1
+ b.ne RestrictedFailure
+ svc #0xa563
+ cmn x0, #1
+ b.ne RestrictedFailure
+ svc #0xa564
+ cmn x0, #1
+ b.ne RestrictedFailure
+ svc #0xa565
+ cmn x0, #1
+ b.ne RestrictedFailure
+ svc #0xa566
  cmn x0, #1
  b.ne RestrictedFailure
  cmp x23, #1, lsl #12
@@ -531,3 +552,79 @@ RestrictedPolicyFailure:
  svc #0xa541
  b RestrictedPolicyFailure
 RestrictedFaultPolicyEnd:
+
+.balign 16
+.global RestrictedShared, RestrictedSharedEnd
+RestrictedShared:
+ mov x19, x1
+ mov x23, x0
+ and x21, x0, #1
+ bic x24, x0, #1
+ ldr x9, [x19]
+ cmp x9, x24
+ b.ne RestrictedSharedFailure
+ mrs x20, tpidr_el0
+ ldr x9, [x20]
+ cbnz x9, RestrictedSharedFailure
+ str x23, [x20]
+ RegisterSeed 0
+ add x9, x19, #64
+ str x23, [x9, x21, lsl #3]
+ dmb ish
+1:
+ ldr x9, [x19, #64]
+ ldr x10, [x19, #72]
+ cbz x9, 2f
+ cbz x10, 2f
+ cmp x9, x24
+ b.ne RestrictedSharedFailure
+ add x11, x24, #1
+ cmp x10, x11
+ b.ne RestrictedSharedFailure
+ b 3f
+2:
+ svc #0xa540
+ RegisterCheck 0, RestrictedSharedFailure
+ b 1b
+3:
+ mov x22, #512
+ lsl x22, x22, x21
+4:
+ svc #0xa540
+ RegisterCheck 0, RestrictedSharedFailure
+ ldr x9, [x19]
+ cmp x9, x24
+ b.ne RestrictedSharedFailure
+ subs x22, x22, #1
+ b.ne 4b
+ add x25, x19, #512
+ add x25, x25, x21, lsl #6
+ str x23, [x25]
+ mov x0, x25
+ add x1, x25, #8
+ mov x2, #8
+ mov x3, #0
+ svc #0xa542
+ cbz x0, RestrictedSharedFailure
+ mov x26, x0
+5:
+ mov x0, x26
+ svc #0xa543
+ cbz x0, 5b
+ RegisterCheck 0, RestrictedSharedFailure
+ mov x9, #0x5a5a
+ movk x9, #0x5a5a, lsl #16
+ movk x9, #0x5a5a, lsl #32
+ movk x9, #0x5a5a, lsl #48
+ eor x9, x9, x23
+ ldr x10, [x25, #8]
+ cmp x9, x10
+ b.ne RestrictedSharedFailure
+ mov x0, #0
+ svc #0xa541
+ b RestrictedSharedFailure
+RestrictedSharedFailure:
+ mov x0, #-9
+ svc #0xa541
+ b RestrictedSharedFailure
+RestrictedSharedEnd:

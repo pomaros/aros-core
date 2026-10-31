@@ -110,6 +110,71 @@ static void *client(void *argument)
 #endif
     return NULL;
 }
+extern const unsigned char RestrictedShared[],RestrictedSharedEnd[];
+static uint64_t shared_domains[2];
+static struct AROSRestrictedResult shared_results[4];
+static unsigned shared_stop,shared_replies;
+static void *shared_worker(void *unused)
+{
+    (void)unused;
+    while (!__atomic_load_n(&shared_stop,__ATOMIC_ACQUIRE)) {
+        struct AROSRestrictedWork work;
+        if (api->take(&work)) {
+            CHECK(work.length==8);
+            for (unsigned i=0;i<8;++i) work.bytes[i]^=0x5a;
+            CHECK(api->complete(&work));++shared_replies;
+        }
+        KrnSwitch();
+    }
+    return NULL;
+}
+static void *shared_client(void *argument)
+{
+    unsigned id=(unsigned)(uintptr_t)argument;
+#if defined(__AROSEXEC_SMP__)
+    pin(id&1);
+#endif
+    CHECK(api->close_domain(shared_domains[id/2])==-1); /* Controller ownership. */
+    CHECK(api->run_domain(shared_domains[id/2],(id/2+1)*4096+(id&1),&shared_results[id]));
+    return NULL;
+}
+static void prove_shared_domains(void)
+{
+    pthread_t clients[4],service;
+    for (unsigned d=0;d<2;++d) {
+        shared_domains[d]=api->create_domain(RestrictedShared,
+            (size_t)(RestrictedSharedEnd-RestrictedShared),(d+1)*4096);
+        CHECK(shared_domains[d]);
+    }
+    CHECK(shared_domains[0]!=shared_domains[1]);
+    CHECK(!pthread_create(&service,NULL,shared_worker,NULL));
+    for (unsigned id=0;id<4;++id)
+        CHECK(!pthread_create(&clients[id],NULL,shared_client,(void *)(uintptr_t)id));
+    for (unsigned id=0;id<4;++id) {
+        CHECK(!pthread_join(clients[id],NULL));
+        CHECK(shared_results[id].status==0 && shared_results[id].drained==1);
+        CHECK(shared_results[id].value==(id/2+1)*4096 && shared_results[id].replies==1);
+        CHECK(shared_results[id].yields>=((id&1) ? 1024 : 512));
+#if defined(__AROSEXEC_SMP__)
+        CHECK(shared_results[id].cpus==(UINT64_C(1)<<(id&1)));
+#endif
+    }
+    __atomic_store_n(&shared_stop,1,__ATOMIC_RELEASE);
+    CHECK(!pthread_join(service,NULL) && shared_replies==4);
+    struct AROSRestrictedLifetime state;
+    api->lifetime(&state);
+    CHECK(!state.live && state.domains==2 && state.pages==2052);
+    for (unsigned d=0;d<2;++d) CHECK(api->close_domain(shared_domains[d])==1);
+    uint64_t replacement=api->create_domain(RestrictedShared,
+        (size_t)(RestrictedSharedEnd-RestrictedShared),4096);
+    CHECK(replacement && replacement!=shared_domains[0]);
+    CHECK(!api->run_domain(shared_domains[0],0,&shared_results[0]));
+    CHECK(api->close_domain(shared_domains[0])==-1);
+    CHECK(api->close_domain(replacement)==1);
+    api->lifetime(&state);
+    CHECK(!state.live && !state.domains && !state.pending && !state.pages);
+    bug("[ISOVM] shared-domains domains=2 threads=4 joins=4 replies=4 tls=4 stale=1 retained_pages=0 PASS\n");
+}
 static void retired_worker(void)
 {
 #if defined(__AROSEXEC_SMP__)
@@ -225,7 +290,7 @@ int main(void)
     intptr_t address = KrnGetSystemAttr(AROS_RESTRICTED_KATTR_API);
     CHECK(address != -1 && address != 0);
     api = (const void *)address;
-    CHECK(api->version == 11 && api->size == sizeof(*api));
+    CHECK(api->version == 12 && api->size == sizeof(*api));
     /* No worker exists: queued cancellation is deterministic. */
     static struct AROSRestrictedResult queued;
     CHECK(api->run(RestrictedQueued,(size_t)(RestrictedQueuedEnd-RestrictedQueued),12288,&queued));
@@ -249,7 +314,7 @@ int main(void)
     for (unsigned id=0; id<2; ++id) {
         CHECK(results[id].value == (id+1)*5120);
         CHECK(results[id].yields == (id+1)*1024);
-        CHECK(results[id].denied == 16);
+        CHECK(results[id].denied == 23);
         CHECK(results[id].cancelled==1 && results[id].drained==1);
         for (unsigned byte=0;byte<8;++byte) {
             CHECK(results[id].data[512+byte]==0xa5);
@@ -292,9 +357,10 @@ int main(void)
     api->lifetime(&fault_lifetime);
     CHECK(!fault_lifetime.live && !fault_lifetime.pending && !fault_lifetime.pages);
     bug("[ISOVM] fault-stack alternate=1 unregister=1 active-refusal=1 nested=1 guards=2 drained=5 PASS\n");
+    prove_shared_domains();
 #if defined(__AROSEXEC_SMP__)
     for (unsigned cpu=0;cpu<2;++cpu) KrnFreeCPUMask(cpu_masks[cpu]);
 #endif
-    bug("[ISOVM] PASS restricted=2 yields=3072 denied=32 faulted=1 survived=1 heartbeat=%u after_fault=%u joined=5 replies=402 rejected=16 callbacks=200 resumed=2 cancelled=3 worker_ack=3 close_pending=1 drained=4 removed_worker=1 removed_owners=8 reaped_owners=8 retained_pages=0\n",beats,after_fault);
+    bug("[ISOVM] PASS restricted=2 yields=3072 denied=46 faulted=1 survived=1 heartbeat=%u after_fault=%u joined=5 replies=402 rejected=16 callbacks=200 resumed=2 cancelled=3 worker_ack=3 close_pending=1 drained=4 removed_worker=1 removed_owners=8 reaped_owners=8 retained_pages=0\n",beats,after_fault);
     return 0;
 }

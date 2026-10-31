@@ -29,6 +29,13 @@
 #define R_PUBLISH 0xa539
 #define R_RELEASED 0xa53a
 #define R_LIFETIME 0xa53b
+#define R_DOMAIN_CLAIM 0xa560
+#define R_DOMAIN_PUBLISH 0xa561
+#define R_DOMAIN_PREPARE 0xa562
+#define R_DOMAIN_CLOSE 0xa563
+#define R_DOMAIN_RELEASED 0xa564
+#define R_DOMAIN_REAP 0xa565
+#define R_DOMAIN_ABORT 0xa566
 #define R_COOKIE UINT64_C(0x7265737472696374)
 enum RestrictedState { R_FREE, R_ALLOCATING, R_LIVE, R_REAPING };
 /* Address-space allocation lifetime is separate from an execution context.
@@ -37,7 +44,8 @@ enum RestrictedState { R_FREE, R_ALLOCATING, R_LIVE, R_REAPING };
 struct RestrictedDomain {
     enum RestrictedState state;
     void *pool, *code, *data;
-    unsigned used, threads;
+    unsigned used, threads, managed, closing;
+    void *owner_context, *releaser_context;
     uint64_t root;
     size_t code_bytes;
     struct AROSRestrictedSpace space;
@@ -76,6 +84,35 @@ struct RestrictedPublication {
     uint64_t seed;
     size_t code_bytes;
 };
+struct RestrictedDomainPublication {
+    struct RestrictedDomain *domain;
+    void *pool,*code,*data;
+    size_t code_bytes;
+};
+static int r_prepare_domain(struct RestrictedDomain *,uint64_t);
+static int r_unmap_thread(struct Restricted *);
+static struct RestrictedDomain *r_domain_slot(uintptr_t address)
+{
+    uintptr_t start=(uintptr_t)restricted_domains;
+    if (address<start || address-start>=sizeof(restricted_domains) ||
+        (address-start)%sizeof(struct RestrictedDomain)) return NULL;
+    return (void *)address;
+}
+static struct RestrictedDomain *r_domain_lookup(uint64_t handle)
+{
+    if (!handle) return NULL;
+    for (unsigned i=0;i<KBUF_SPACES;++i) {
+        struct RestrictedDomain *d=&restricted_domains[i];
+        if (d->managed && d->state==R_LIVE && d->space.handle==handle) return d;
+    }
+    return NULL;
+}
+static int r_domain_retire(struct RestrictedDomain *d,void *context)
+{
+    d->closing=1;AROSRestrictedSpaceStop(&d->space);
+    if (d->threads || !AROSRestrictedSpaceClose(&d->space)) return 0;
+    d->state=R_REAPING;d->releaser_context=context;return 1;
+}
 static uint64_t owners_retired, owners_reaped;
 static void r_reap(void);
 static void r_coordinate(void);
@@ -94,15 +131,17 @@ static int r_lifecycle(struct AROSAppleRuntimeFrame *frame,struct Task *task,
     struct ExceptionContext *context,unsigned svc)
 {
     if (svc==R_CLAIM) {
-        frame->x[0]=0;
-        struct RestrictedDomain *domain=NULL;
-        for (unsigned i=0;i<KBUF_SPACES;++i)
+        uint64_t handle=frame->x[0];frame->x[0]=0;
+        struct RestrictedDomain *domain=r_domain_lookup(handle);
+        if (handle && (!domain || domain->closing)) return 1;
+        if (!handle) for (unsigned i=0;i<KBUF_SPACES;++i)
             if (restricted_domains[i].state==R_FREE) { domain=&restricted_domains[i];break; }
         if (!domain) return 1;
         for (unsigned i=0;i<AROS_RESTRICTED_CHANNELS;++i) {
             struct Restricted *r=&restricted_slots[i];
             if (r->state!=R_FREE) continue;
-            domain->state=R_ALLOCATING;domain->threads=1;r->domain=domain;
+            if (!handle) domain->state=R_ALLOCATING;
+            ++domain->threads;r->domain=domain;
             r->stack_address=AROS_RESTRICTED_STACK+i*AROS_RESTRICTED_THREAD_STRIDE;
             r->fault_address=AROS_RESTRICTED_FAULT_STACK+i*AROS_RESTRICTED_THREAD_STRIDE;
             r->tls_address=AROS_RESTRICTED_TLS+i*AROS_RESTRICTED_THREAD_STRIDE;
@@ -116,18 +155,30 @@ static int r_lifecycle(struct AROSAppleRuntimeFrame *frame,struct Task *task,
         struct Restricted *r=p ? r_slot((uintptr_t)p->slot) : NULL;
         frame->x[0]=0;
         if (!r || r->state!=R_ALLOCATING || r->owner!=task || r->owner_context!=context) return 1;
-        r->domain->pool=p->pool;r->domain->code=p->code;r->domain->data=p->data;r->stack=p->stack;r->fault_stack=p->fault_stack;r->tls=p->tls;
-        r->seed=p->seed;r->domain->code_bytes=p->code_bytes;r->cookie=R_COOKIE;
-        r->domain->state=R_LIVE;r->state=R_LIVE;frame->x[0]=1;
+        if (r->domain->managed) {
+            if (p->pool || p->code || p->data || p->code_bytes) return 1;
+        } else {
+            r->domain->pool=p->pool;r->domain->code=p->code;r->domain->data=p->data;
+            r->domain->code_bytes=p->code_bytes;r->domain->state=R_LIVE;
+        }
+        r->stack=p->stack;r->fault_stack=p->fault_stack;r->tls=p->tls;
+        r->seed=p->seed;r->cookie=R_COOKIE;
+        r->state=R_LIVE;frame->x[0]=1;
         return 1;
     }
     if (svc==R_RELEASED) {
         struct Restricted *r=r_slot(frame->x[0]);
         frame->x[0]=0;
         if (!r || r->state!=R_REAPING || r->releaser_context!=context) return 1;
-        if (!r->domain || r->domain->state!=R_REAPING || r->domain->threads!=1) return 1;
+        if (!r->domain || !r->domain->threads) return 1;
+        if (r->domain->managed) {
+            if (r->domain->state!=R_LIVE) return 1;
+            --r->domain->threads;
+        } else {
+            if (r->domain->state!=R_REAPING || r->domain->threads!=1) return 1;
+            memset(r->domain,0,sizeof(*r->domain));
+        }
         if (r->abandoned) ++owners_reaped;
-        memset(r->domain,0,sizeof(*r->domain));
         memset(r,0,sizeof(*r));frame->x[0]=1;
         return 1;
     }
@@ -145,8 +196,10 @@ static int r_lifecycle(struct AROSAppleRuntimeFrame *frame,struct Task *task,
         }
         for (unsigned i=0;i<KBUF_SPACES;++i) {
             struct RestrictedDomain *d=&restricted_domains[i];
-            if (d->state!=R_FREE)
+            if (d->state!=R_FREE) {
+                ++state->domains;
                 state->pages+=(d->pool ? R_TABLES : 0)+(d->code!=NULL)+(d->data!=NULL);
+            }
         }
         frame->x[0]=1;return 1;
     }
@@ -154,10 +207,13 @@ static int r_lifecycle(struct AROSAppleRuntimeFrame *frame,struct Task *task,
 }
 static int r_close(struct Restricted *r)
 {
-    if (!r->domain || r->domain->threads!=1) return 0;
-    AROSRestrictedSpaceStop(&r->domain->space);
-    if (!AROSRestrictedServiceClose(&r->service) || !AROSRestrictedSpaceClose(&r->domain->space)) return 0;
-    r->domain->state=R_REAPING;
+    if (!r->domain || (!r->domain->managed && r->domain->threads!=1)) return 0;
+    if (!r->domain->managed) AROSRestrictedSpaceStop(&r->domain->space);
+    if (!AROSRestrictedServiceClose(&r->service) || !r_unmap_thread(r)) return 0;
+    if (!r->domain->managed) {
+        if (!AROSRestrictedSpaceClose(&r->domain->space)) return 0;
+        r->domain->state=R_REAPING;
+    }
     return 1;
 }
 static struct Restricted *r_claim_reap(struct ExceptionContext *context)
@@ -231,22 +287,83 @@ static void r_sync(void *opaque, uint64_t va, size_t bytes)
 }
 /* Source tables are frozen by the native caller's mapping lock. Every table
  * allocation belongs to one retained slab, including a partial failure. */
-static int r_prepare(struct Restricted *r, uint64_t source)
+static int r_prepare_domain(struct RestrictedDomain *d,uint64_t source)
 {
-    uint64_t tcr, root = 0;
-    struct AArch64ProtectionOps ops = {r->domain,r_resolve,r_allocate,r_clean,r_invalidate,r_sync,0};
+    uint64_t tcr,root=0;
+    struct AArch64ProtectionOps ops={d,r_resolve,r_allocate,r_clean,r_invalidate,r_sync,0};
     __asm__ volatile("mrs %0,tcr_el1":"=r"(tcr));
-    if (((tcr >> 14) & 3) ||
+    if (d->root || !d->pool || !d->code || !d->data || ((tcr>>14)&3) ||
         !AArch64ClonePrivilegedRoot(&ops,source,tcr,R_TABLES,&root)) return 0;
-    unsigned rw = AARCH64_PROTECT_READ|AARCH64_PROTECT_WRITE|AARCH64_PROTECT_USER;
-    if (!AArch64MapPage(&ops,root,tcr,AROS_RESTRICTED_CODE,(uintptr_t)r->domain->code,
-            AARCH64_PROTECT_READ|AARCH64_PROTECT_EXEC|AARCH64_PROTECT_USER,1) ||
-        !AArch64MapPage(&ops,root,tcr,r->stack_address,(uintptr_t)r->stack,rw,1) ||
-        !AArch64MapPage(&ops,root,tcr,r->fault_address,(uintptr_t)r->fault_stack,rw,1) ||
-        !AArch64MapPage(&ops,root,tcr,r->tls_address,(uintptr_t)r->tls,rw,1)) return 0;
-    r->domain->root = root;
-    return AROSRestrictedSpaceInit(&r->domain->space,(uintptr_t)r->domain,root,tcr,(uintptr_t)r->domain->data,&ops) &&
-        AROSRestrictedServiceInit(&r->service,&r->domain->space,(uintptr_t)r->owner);
+    d->root=root;
+    return AArch64MapPage(&ops,root,tcr,AROS_RESTRICTED_CODE,(uintptr_t)d->code,
+        AARCH64_PROTECT_READ|AARCH64_PROTECT_EXEC|AARCH64_PROTECT_USER,1) &&
+        AROSRestrictedSpaceInit(&d->space,(uintptr_t)d,root,tcr,(uintptr_t)d->data,&ops);
+}
+static int r_prepare(struct Restricted *r,uint64_t source)
+{
+    struct RestrictedDomain *d=r->domain;
+    if (d->closing || (!d->managed && !r_prepare_domain(d,source)) || !d->space.handle) return 0;
+    unsigned rw=AARCH64_PROTECT_READ|AARCH64_PROTECT_WRITE|AARCH64_PROTECT_USER;
+    return AArch64MapPage(&d->space.hardware,d->root,d->space.tcr,r->stack_address,(uintptr_t)r->stack,rw,1) &&
+        AArch64MapPage(&d->space.hardware,d->root,d->space.tcr,r->fault_address,(uintptr_t)r->fault_stack,rw,1) &&
+        AArch64MapPage(&d->space.hardware,d->root,d->space.tcr,r->tls_address,(uintptr_t)r->tls,rw,1) &&
+        AROSRestrictedServiceInit(&r->service,&d->space,(uintptr_t)r->owner);
+}
+static int r_unmap_thread(struct Restricted *r)
+{
+    struct RestrictedDomain *d=r->domain;
+    if (!d->space.root) return 1; /* Domain construction failed before maps. */
+    uintptr_t va[]={r->stack_address,r->fault_address,r->tls_address};
+    uintptr_t pa[]={(uintptr_t)r->stack,(uintptr_t)r->fault_stack,(uintptr_t)r->tls};
+    for (unsigned i=0;i<3;++i) {
+        uint64_t actual;
+        if (!AArch64MappingPhysical(&d->space.hardware,d->root,d->space.tcr,va[i],&actual)) continue;
+        if (actual!=pa[i] || !AArch64UnmapPage(&d->space.hardware,d->root,d->space.tcr,va[i],pa[i])) return 0;
+    }
+    return 1;
+}
+static int r_domain_lifecycle(struct AROSAppleRuntimeFrame *frame,void *context,unsigned svc)
+{
+    if (svc<R_DOMAIN_CLAIM || svc>R_DOMAIN_ABORT) return 0;
+    uintptr_t argument=frame->x[0];frame->x[0]=0;frame->x[1]=0;
+    if (svc==R_DOMAIN_CLAIM) {
+        for (unsigned i=0;i<KBUF_SPACES;++i) {
+            struct RestrictedDomain *d=&restricted_domains[i];
+            if (d->state!=R_FREE) continue;
+            d->state=R_ALLOCATING;d->managed=1;d->owner_context=context;
+            frame->x[0]=(uintptr_t)d;break;
+        }
+        return 1;
+    }
+    if (svc==R_DOMAIN_PUBLISH) {
+        const struct RestrictedDomainPublication *p=(void *)argument;
+        struct RestrictedDomain *d=p ? r_domain_slot((uintptr_t)p->domain) : NULL;
+        if (!d || !d->managed || d->state!=R_ALLOCATING || d->owner_context!=context) return 1;
+        d->pool=p->pool;d->code=p->code;d->data=p->data;d->code_bytes=p->code_bytes;
+        d->state=R_LIVE;frame->x[0]=1;return 1;
+    }
+    if (svc==R_DOMAIN_REAP) {
+        for (unsigned i=0;i<KBUF_SPACES;++i) {
+            struct RestrictedDomain *d=&restricted_domains[i];
+            if (d->managed && d->state==R_LIVE && !d->owner_context &&
+                r_domain_retire(d,context)) { frame->x[0]=(uintptr_t)d;break; }
+        }
+        return 1;
+    }
+    struct RestrictedDomain *d=svc==R_DOMAIN_CLOSE ? r_domain_lookup(argument) : r_domain_slot(argument);
+    if (!d || !d->managed) { frame->x[1]=UINT64_MAX;return 1; }
+    if (svc==R_DOMAIN_RELEASED) {
+        if (d->state!=R_REAPING || d->releaser_context!=context || d->threads) return 1;
+        memset(d,0,sizeof(*d));frame->x[0]=1;return 1;
+    }
+    if (d->state!=R_LIVE || d->owner_context!=context) { frame->x[1]=UINT64_MAX;return 1; }
+    if (svc==R_DOMAIN_PREPARE) {
+        if (!d->closing && frame->entry_ttbr0==AROSAppleRuntimeLocal()->trusted_ttbr0 &&
+            r_prepare_domain(d,frame->entry_ttbr0)) frame->x[0]=d->space.handle;
+    } else if (svc==R_DOMAIN_CLOSE || svc==R_DOMAIN_ABORT) {
+        if (r_domain_retire(d,context)) { frame->x[0]=(uintptr_t)d;frame->x[1]=1; }
+    }
+    return 1;
 }
 static void r_finish(struct Restricted *r, struct AROSAppleTaskExecution *execution,
     struct AROSAppleRuntimeFrame *frame, int64_t status)
@@ -276,14 +393,12 @@ void AROSAppleRestrictedCheckStack(struct AROSAppleRuntimeFrame *frame,
     struct Restricted *r = execution->domain;
     if (!r || r->cookie != R_COOKIE || r->owner != task)
         for (;;) __asm__ volatile("wfe");
-    if (!r_stack_sp(r,frame->sp)) {
-        /* Only restricted frames reach this lock: native Wait may carry its
-         * task lock through cpu_SaveContext. Restricted code cannot call Wait.
-         * The current frame has not been published to another CPU yet. */
-        r_coordinate();
-        r_finish(r,execution,frame,-3);
-        r_uncoordinate();
-    }
+    /* Restricted tasks cannot hold native Wait locks here. The coordinator
+     * serializes a controller's close with preemption of CPU-bound payloads. */
+    r_coordinate();
+    if (r->domain->closing) r_finish(r,execution,frame,-5);
+    else if (!r_stack_sp(r,frame->sp)) r_finish(r,execution,frame,-3);
+    r_uncoordinate();
 }
 static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
 {
@@ -300,6 +415,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
         if (!r || r->cookie != R_COOKIE || r->owner != task ||
             r->domain->root != execution->root || frame->entry_ttbr0 != r->domain->root)
             for (;;) __asm__ volatile("wfe"); /* Fail closed on kernel corruption. */
+        if (r->domain->closing) { r_finish(r,execution,frame,-5);return 1; }
 #if defined(__AROSEXEC_SMP__)
         unsigned cpu=AROSCPUCurrentIndex();
 #else
@@ -424,6 +540,12 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
     if (ec==0x15 && svc==0xa536) {
         void *retired=(void *)(uintptr_t)frame->x[0];
         frame->x[0]=AROSRestrictedServiceRetireWorker(retired);
+        for (unsigned i=0;i<KBUF_SPACES;++i) {
+            struct RestrictedDomain *d=&restricted_domains[i];
+            if (d->managed && d->state==R_LIVE && d->owner_context==retired) {
+                d->owner_context=NULL;d->closing=1;AROSRestrictedSpaceStop(&d->space);
+            }
+        }
         for (unsigned i=0;i<AROS_RESTRICTED_CHANNELS;++i) {
             struct Restricted *owned=&restricted_slots[i];
             if (owned->state!=R_LIVE || owned->owner_context!=retired) continue;
@@ -439,6 +561,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
         frame->x[0]=(uintptr_t)r_claim_reap(context);
         return 1;
     }
+    if (ec==0x15 && r_domain_lifecycle(frame,context,svc)) return 1;
     if (ec==0x15 && r_lifecycle(frame,task,context,svc)) return 1;
     if (ec != 0x15 || (svc != R_PREPARE && svc != AROS_RESTRICTED_ENTER && svc != 0xa534)) return 0;
     frame->x[1] = 0;
@@ -464,7 +587,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
     int disabled=SysBase->IDNestCnt>=0 || SysBase->TDNestCnt>=0;
     unsigned cpu=0;
 #endif
-    if (!r->domain->root || disabled ||
+    if (!r->domain->root || r->domain->closing || disabled ||
         AROSAppleRuntimeLocal()->irq_mask_depth) return 1;
     r->last_cpu=cpu;r->result.cpus=UINT64_C(1)<<cpu;
     r->native = *frame;
@@ -518,7 +641,8 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
     if (!context) return 0;
     unsigned ec=(unsigned)(frame->esr>>26)&63,svc=(unsigned)frame->esr&65535;
     if (!AROSAppleTaskExecution(context)->root &&
-        (ec!=0x15 || svc<AROS_RESTRICTED_ENTER || svc>R_LIFETIME)) return 0;
+        (ec!=0x15 || ((svc<AROS_RESTRICTED_ENTER || svc>R_LIFETIME) &&
+         (svc<R_DOMAIN_CLAIM || svc>R_DOMAIN_ABORT)))) return 0;
     r_coordinate();
     int handled=r_trap_locked(frame);
     r_uncoordinate();
@@ -531,17 +655,29 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
     }
     return handled!=0;
 }
+static void r_free_domain_backing(struct RestrictedDomain *d)
+{
+    if ((d->code && !AROSApplePageFree(d->code,R_PAGE)) ||
+        (d->data && !AROSApplePageFree(d->data,R_PAGE)) ||
+        (d->pool && !AROSApplePageFreeRaw(d->pool,R_TABLES*R_PAGE)))
+        for (;;) __asm__ volatile("wfe");
+}
+static void r_release_domain(struct RestrictedDomain *d)
+{
+    r_free_domain_backing(d);
+    register uintptr_t argument __asm__("x0")=(uintptr_t)d;
+    __asm__ volatile("svc #0xa564":"+r"(argument)::"x1","memory","cc");
+    if (!argument) for (;;) __asm__ volatile("wfe");
+}
 static void r_release(struct Restricted *r)
 {
     /* Native stack only, with scheduling excluded. Local root return completed
      * before this call; worker/domain pins have drained. */
-    if ((r->domain->code && !AROSApplePageFree(r->domain->code,R_PAGE)) ||
-        (r->domain->data && !AROSApplePageFree(r->domain->data,R_PAGE)) ||
-        (r->stack && !AROSApplePageFree(r->stack,R_PAGE)) ||
+    if ((r->stack && !AROSApplePageFree(r->stack,R_PAGE)) ||
         (r->fault_stack && !AROSApplePageFree(r->fault_stack,R_PAGE)) ||
-        (r->tls && !AROSApplePageFree(r->tls,R_PAGE)) ||
-        (r->domain->pool && !AROSApplePageFreeRaw(r->domain->pool,R_TABLES*R_PAGE)))
+        (r->tls && !AROSApplePageFree(r->tls,R_PAGE)))
         for (;;) __asm__ volatile("wfe");
+    if (!r->domain->managed) r_free_domain_backing(r->domain);
     register uintptr_t released __asm__("x0")=(uintptr_t)r;
     __asm__ volatile("svc #0xa53a":"+r"(released)::"memory","cc");
     if (!released) for (;;) __asm__ volatile("wfe");
@@ -555,6 +691,12 @@ static void r_reap(void)
         if (!ready) break;
         r_release((void *)ready);
     }
+    for (;;) {
+        register uintptr_t ready __asm__("x0")=0;
+        __asm__ volatile("svc #0xa565":"+r"(ready)::"x1","memory","cc");
+        if (!ready) break;
+        r_release_domain((void *)ready);
+    }
     Permit();
 }
 static void r_lifetime(struct AROSRestrictedLifetime *state)
@@ -566,24 +708,26 @@ static void r_lifetime(struct AROSRestrictedLifetime *state)
     if (!argument) for (;;) __asm__ volatile("wfe");
     Permit();
 }
-static int r_run(const void *code, size_t bytes, uint64_t seed,
+static int r_run_internal(uint64_t handle,const void *code, size_t bytes, uint64_t seed,
     struct AROSRestrictedResult *result)
 {
-    if (!code || !bytes || bytes > R_PAGE || !result) return 0;
+    if ((!handle && (!code || !bytes || bytes>R_PAGE)) || !result) return 0;
     r_reap();
     /* Page arena allocation/protection never waits. The static control slot
      * avoids Exec AllocMem's low-memory callbacks, which may temporarily Wait.
      * Keep allocation and publication indivisible against external UP RemTask. */
     Forbid();
-    register uintptr_t claim __asm__("x0")=0;
+    register uintptr_t claim __asm__("x0")=handle;
     __asm__ volatile("svc #0xa538":"+r"(claim)::"memory","cc");
     struct Restricted *r=(void *)claim;
     if (!r) { Permit();return 0; }
     int ok = 0;
     struct RestrictedPublication publication={.slot=r,.seed=seed,.code_bytes=bytes};
-    publication.pool = AROSApplePageTableAllocate(R_TABLES * R_PAGE);
-    publication.code = AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
-    publication.data = AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
+    if (!handle) {
+        publication.pool = AROSApplePageTableAllocate(R_TABLES * R_PAGE);
+        publication.code = AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
+        publication.data = AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
+    }
     publication.stack = AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
     publication.fault_stack = AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
     publication.tls = AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
@@ -591,9 +735,11 @@ static int r_run(const void *code, size_t bytes, uint64_t seed,
     __asm__ volatile("svc #0xa539":"+r"(published)::"memory","cc");
     if (!published) for (;;) __asm__ volatile("wfe");
     if (!r->domain->pool || !r->domain->code || !r->domain->data || !r->stack || !r->fault_stack || !r->tls) goto prepared;
-    memcpy(r->domain->code,code,bytes);
-    *(uint64_t *)r->domain->data = seed;
-    if (!AROSApplePageProtect(r->domain->code,R_PAGE,MAP_Readable|MAP_Executable)) goto prepared;
+    if (!handle) {
+        memcpy(r->domain->code,code,bytes);
+        *(uint64_t *)r->domain->data = seed;
+        if (!AROSApplePageProtect(r->domain->code,R_PAGE,MAP_Readable|MAP_Executable)) goto prepared;
+    }
     uint64_t saved = AROSApplePageMapAcquire();
     register uintptr_t argument __asm__("x0") = (uintptr_t)r;
     __asm__ volatile("svc #0xa531":"+r"(argument)::"x1","memory","cc");
@@ -621,11 +767,57 @@ cleanup:
         r->result.drained=1;
         r->result.worker_retirements=r->service.worker_retirements;
         *result=r->result;
-        memcpy(result->data,r->domain->data,R_PAGE);
+        if (!handle) memcpy(result->data,r->domain->data,R_PAGE);
     }
     r_release(r);
-    Permit();
+    Permit();r_reap();
     return ok;
+}
+
+static int r_run(const void *code,size_t bytes,uint64_t seed,struct AROSRestrictedResult *result)
+{ return r_run_internal(0,code,bytes,seed,result); }
+static int r_run_domain(uint64_t handle,uint64_t seed,struct AROSRestrictedResult *result)
+{ return handle && r_run_internal(handle,NULL,0,seed,result); }
+static uint64_t r_create_domain(const void *code,size_t bytes,uint64_t seed)
+{
+    if (!code || !bytes || bytes>R_PAGE) return 0;
+    r_reap();Forbid();
+    register uintptr_t claim __asm__("x0")=0;
+    __asm__ volatile("svc #0xa560":"+r"(claim)::"x1","memory","cc");
+    struct RestrictedDomain *d=(void *)claim;
+    if (!d) { Permit();return 0; }
+    struct RestrictedDomainPublication publication={.domain=d,.code_bytes=bytes};
+    publication.pool=AROSApplePageTableAllocate(R_TABLES*R_PAGE);
+    publication.code=AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
+    publication.data=AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
+    register uintptr_t argument __asm__("x0")=(uintptr_t)&publication;
+    __asm__ volatile("svc #0xa561":"+r"(argument)::"x1","memory","cc");
+    if (!argument) for (;;) __asm__ volatile("wfe");
+    uint64_t handle=0;
+    if (d->pool && d->code && d->data) {
+        memcpy(d->code,code,bytes);*(uint64_t *)d->data=seed;
+        if (AROSApplePageProtect(d->code,R_PAGE,MAP_Readable|MAP_Executable)) {
+            uint64_t saved=AROSApplePageMapAcquire();argument=(uintptr_t)d;
+            __asm__ volatile("svc #0xa562":"+r"(argument)::"x1","memory","cc");
+            AROSAppleMemoryLockRelease(&AROSApplePageMapLock,saved);handle=argument;
+        }
+    }
+    if (!handle) {
+        argument=(uintptr_t)d;
+        __asm__ volatile("svc #0xa566":"+r"(argument)::"x1","memory","cc");
+        if (!argument) for (;;) __asm__ volatile("wfe");
+        r_release_domain(d);
+    }
+    Permit();return handle;
+}
+static int r_close_domain(uint64_t handle)
+{
+    Forbid();
+    register uintptr_t argument __asm__("x0")=handle;
+    register uintptr_t status __asm__("x1")=0;
+    __asm__ volatile("svc #0xa563":"+r"(argument),"+r"(status)::"memory","cc");
+    if (argument) r_release_domain((void *)argument);
+    Permit();return (int)(intptr_t)status;
 }
 
 void AROSAppleRestrictedContextRetired(void *context)
@@ -656,7 +848,7 @@ static unsigned r_state(const struct AROSRestrictedWork *work)
     __asm__ volatile("svc #0xa535":"+r"(argument)::"memory","cc");
     return (unsigned)argument;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {11,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {12,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

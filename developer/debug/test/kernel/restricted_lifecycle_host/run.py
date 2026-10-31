@@ -26,7 +26,7 @@ def main():
     if out.exists() or ROOT in out.parents:p.error('use a fresh output outside source')
     out.mkdir(parents=True)
     source=SOURCE.read_text()
-    actual=''.join(body(source,name) for name in ['r_slot(uintptr_t','r_lifecycle(struct','r_close(struct','r_claim_reap(struct','r_stack_sp(const','r_stack_bounds(struct'])
+    actual=''.join(body(source,name) for name in ['r_domain_slot(uintptr_t','r_domain_lookup(uint64_t','r_domain_retire(struct','r_domain_lifecycle(struct','r_slot(uintptr_t','r_lifecycle(struct','r_close(struct','r_claim_reap(struct','r_stack_sp(const','r_stack_bounds(struct'])
     variants=[('actual',actual)]
     for name,old,new in [
         ('wrong-active-stack','r->fault_active ? r->fault_address : r->stack_address','r->stack_address'),
@@ -34,8 +34,13 @@ def main():
         ('wrong-native-bounds','fault ? r->fault_address : r->stack_address','r->stack_address'),
         ('shared-tls-address','AROS_RESTRICTED_TLS+i*AROS_RESTRICTED_THREAD_STRIDE','AROS_RESTRICTED_TLS'),
         ('shared-domain-release','r->domain->state!=R_REAPING || r->domain->threads!=1','r->domain->state!=R_REAPING'),
-        ('shared-domain-close','if (!r->domain || r->domain->threads!=1) return 0;','if (!r->domain) return 0;'),
+        ('shared-domain-close','(!r->domain->managed && r->domain->threads!=1)','0'),
         ('undrained-space','!AROSRestrictedSpaceClose(&r->domain->space)','0'),
+        ('thread-unmap-ack','!r_unmap_thread(r)','0'),
+        ('stale-domain-handle','d->space.handle==handle','1'),
+        ('foreign-domain-close','d->state!=R_LIVE || d->owner_context!=context','d->state!=R_LIVE'),
+        ('early-domain-retire','d->threads || !AROSRestrictedSpaceClose(&d->space)','!AROSRestrictedSpaceClose(&d->space)'),
+        ('domain-stopped-by-thread','if (!r->domain->managed) AROSRestrictedSpaceStop','if (1) AROSRestrictedSpaceStop'),
         ('duplicate-reap','owned->state=R_REAPING;',''),
         ('wrong-publisher','r->owner!=task','0'),
         ('wrong-context','r->owner_context!=context','0'),

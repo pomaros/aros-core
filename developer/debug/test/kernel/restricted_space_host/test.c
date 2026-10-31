@@ -33,6 +33,7 @@ int main(void)
     struct AROSRestrictedSpace space={0};
     uint64_t root=(uintptr_t)f->tables[0], tcr=25|(UINT64_C(5)<<32);
     CHECK(AROSRestrictedSpaceInit(&space,11,root,tcr,(uintptr_t)data,&ops),"space-init");
+    uint64_t first_handle=space.handle;
     struct AROSRestrictedService a={0},b={0};
     CHECK(AROSRestrictedServiceInit(&a,&space,101) && AROSRestrictedServiceInit(&b,&space,102),"channels-init");
     CHECK(space.channels==2 && a.channel!=b.channel,"channels-distinct");
@@ -64,5 +65,9 @@ int main(void)
     CHECK(AROSRestrictedServiceClose(&a) && AROSRestrictedServiceClose(&b) && !space.channels,"channels-drain");
     CHECK(AROSRestrictedSpaceClose(&space) && KrnMappingDomainCanReclaim(&space.domain),"space-reclaim");
     CHECK(!AArch64MappingPhysical(&ops,root,tcr,AROS_RESTRICTED_DATA,&physical) && f->invalidations,"space-unmapped");
+    memset(&space,0,sizeof(space));
+    CHECK(AROSRestrictedSpaceInit(&space,11,root,tcr,(uintptr_t)data,&ops),"space-reuse");
+    CHECK(space.handle!=first_handle,"space-generation");
+    CHECK(AROSRestrictedSpaceClose(&space),"reused-space-close");
     free(data);free(f);puts("PASS restricted space and channel ownership");return 0;
 }

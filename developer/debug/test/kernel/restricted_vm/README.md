@@ -1,7 +1,7 @@
 # Restricted AROS task demonstration
 
 This experimental UP/SMP workload invokes the native restricted control
-API from two pthread tasks. Each payload runs at the same code/data/stack
+API from two pthread tasks. Each payload runs at the same code/data
 addresses with separate backing, validates TLS/x18 across explicit yields,
 and tries sixteen forbidden SVCs per task. A fourth native worker receives only bounded
 staging copies through the production W-BUF service boundary. Each payload
@@ -80,8 +80,8 @@ Compilation alone is not runtime qualification.
 
 The production adapter separates address-space ownership from per-thread service
 channels. Native worker handles identify generation-tagged channels independently
-of domain handles. This workload still creates one domain per run invocation;
-multi-thread execution in one root needs its separate integration workload.
+of domain handles. The legacy workload creates one domain per run invocation; a separate shared-domain
+phase creates two explicit domains and attaches two pthread callers to each.
 
 Fault delivery switches to a separate zeroed RW/NX page with unmapped guards on
 both sides. Native Task stack bounds follow the active handler and revert on
@@ -90,17 +90,34 @@ checks the alternate SP and retained stack words across worker scheduling.
 Handler replacement/unregistration is refused while a fault is active; zero
 unregisters an idle handler. Code/backing remain immutable and retained until
 channel drain. A nested fault terminates the invocation instead of recursively
-consuming its alternate stack. Native control API v11 identifies the per-thread layout.
+consuming its alternate stack. Native control API v12 includes explicit domain control.
 
 The kernel keeps address-space allocation records separately from execution
 slots. Table callbacks retain the domain record; accounting counts shared
 backing once and thread stacks per context. Native allocation/release phases
-claim both records before dropping the coordinator. The legacy run wrapper
-still creates one domain per invocation and refuses whole-domain release with
-more than one attached context. Explicit attach/detach admission requires the multi-thread integration workload.
+claim both records before dropping the coordinator. The legacy run wrapper creates one domain per invocation. Managed domains retain
+their common backing after the last execution context exits, until their native
+controller closes them.
 
 Each execution slot has distinct stack, alternate-stack and TLS virtual addresses
 within a 64 KiB stride. TLS owns a separate zeroed RW/NX physical page rather than
 an offset in domain data. The payload checks a private TLS sentinel across yield,
 callback and fault resumption. Slot-specific stack validators reject other
 contexts' stack ranges. Code and domain-data addresses remain shared-domain VAs.
+
+The native controller creates generation-tagged domain handles and may attach
+multiple calling tasks. Thread departure closes only its service channel and
+unmaps its stack/TLS translations before native backing release. Explicit close
+stops admission, cancels work and makes running payloads return at their next
+trap or scheduler save; backing waits for all context release acknowledgements.
+Controller retirement initiates the same cancellation and orphan reaping path.
+The static four-domain/sixteen-context capacity is a bounded implementation limit.
+
+The shared phase checks two domain-data values at the same VA, peer rendezvous
+within each domain, four private TLS/SIMD contexts, four native replies, pthread
+join, idle-domain retention and final explicit close. Clients are pinned across
+both CPUs in SMP builds; this phase does not claim migration. Reused domain
+storage produces a new handle; stale run/close and foreign-controller close fail.
+Seven additional native-control SVCs are refused by each legacy payload, for 46
+total denials. Compilation alone does not qualify this phase or cancellation of
+CPU-bound shared payloads; the latter still needs its dedicated guest scenario.

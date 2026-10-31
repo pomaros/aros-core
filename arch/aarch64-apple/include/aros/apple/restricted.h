@@ -39,7 +39,7 @@ struct AROSRestrictedWork {
     unsigned char bytes[256];
 };
 struct AROSRestrictedLifetime {
-    uint64_t retired,reaped,live,pending,pages;
+    uint64_t retired,reaped,live,pending,pages,domains;
 };
 struct AROSRestrictedAPI {
     uint32_t version, size;
@@ -49,5 +49,14 @@ struct AROSRestrictedAPI {
     int (*complete)(const struct AROSRestrictedWork *);
     unsigned (*state)(const struct AROSRestrictedWork *);
     void (*lifetime)(struct AROSRestrictedLifetime *);
+    /* Native controller API: handles inherit the buffer-space generation.
+     * run_domain attaches the calling native task synchronously. Its stacks,
+     * TLS, continuation and service channel remain private to that context.
+     * close_domain is controller-only: 1 reclaimed, 0 cancellation/drain pending,
+     * -1 stale/foreign handle. A controller's retirement initiates cancellation.
+     * Managed run results have no bulk data snapshot while peers can write. */
+    uint64_t (*create_domain)(const void *code,size_t bytes,uint64_t seed);
+    int (*run_domain)(uint64_t handle,uint64_t seed,struct AROSRestrictedResult *);
+    int (*close_domain)(uint64_t handle);
 };
 #endif
