@@ -86,6 +86,10 @@ static void r_shared_lifetime(struct AROSRestrictedLifetime *state)
         state->metadata_pages+=b->storage_bytes/R_PAGE;
     }
 }
+struct RestrictedCodeIdentity {
+    uint64_t pc,generation,reservation;
+    uintptr_t physical;
+};
 struct Restricted {
     struct Restricted *next;
     size_t storage_bytes;
@@ -103,6 +107,7 @@ struct Restricted {
     unsigned last_cpu;
     uint64_t seed;
     uint64_t callback_pc;
+    struct RestrictedCodeIdentity callback_entry,callback_return,fault_code,handler_code;
     unsigned callback_active, fault_active;
     uint64_t fault_handler, fault_generation, fault_page_generation, fault_reservation;
     uintptr_t fault_physical;
@@ -332,6 +337,27 @@ static int r_code_pc(const struct Restricted *r,uint64_t pc)
 {
     return pc>=AROS_RESTRICTED_CODE && !(pc&3) && r->domain->code_bytes>=4 &&
         pc-AROS_RESTRICTED_CODE<=r->domain->code_bytes-4;
+}
+/* Captured under the coordinator; never authorize a saved continuation from
+ * VA equality alone. Re-publication advances generation even at the same PA. */
+static int r_capture_code(const struct Restricted *r,uint64_t pc,struct RestrictedCodeIdentity *identity)
+{
+    if (!identity || !r || !r->domain || r->domain->closing || (pc&3)) return 0;
+    struct RestrictedCodeIdentity found={.pc=pc};
+    if (r_code_pc(r,pc)) {
+        found.physical=(uintptr_t)r->domain->code+((pc-AROS_RESTRICTED_CODE)&~(uint64_t)(R_PAGE-1));
+        found.reservation=r->domain->space.handle;
+        if (!r->domain->code || !found.reservation) return 0;
+    } else if (!AROSRestrictedSpacePageIdentity(&r->domain->space,pc,KMAP_EXEC,
+        &found.physical,&found.generation,&found.reservation)) return 0;
+    *identity=found;return 1;
+}
+static int r_match_code(const struct Restricted *r,const struct RestrictedCodeIdentity *identity)
+{
+    struct RestrictedCodeIdentity current;
+    return identity && r_capture_code(r,identity->pc,&current) &&
+        current.physical==identity->physical && current.generation==identity->generation &&
+        current.reservation==identity->reservation;
 }
 static int r_stack_sp(const struct Restricted *r, uint64_t sp)
 {
@@ -726,8 +752,9 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
              * No instruction, external, alignment or unowned-address exception
              * supplies a continuation. Bind it to the retained page generation. */
             if (ec==0x24 && (fault==7 || fault==15) && !(frame->esr&(UINT64_C(1)<<10)) &&
-                r_code_pc(r,frame->elr) && r_stack_sp(r,frame->sp) &&
-                r->fault_handler && !r->fault_active && r->fault_generation!=UINT64_MAX &&
+                r_capture_code(r,frame->elr,&r->fault_code) && r_stack_sp(r,frame->sp) &&
+                r->fault_handler && r_match_code(r,&r->handler_code) &&
+                !r->fault_active && r->fault_generation!=UINT64_MAX &&
                 AROSRestrictedSpacePageIdentity(&r->domain->space,frame->far,0,&physical,&generation,&reservation)) {
                 r->fault_physical=physical;r->fault_page_generation=generation;r->fault_reservation=reservation;
                 r->fault=*frame;r->fault_active=1;++r->fault_generation;
@@ -745,24 +772,30 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
             ++r->result.yields;
             frame->x[0] = 0;
             return 2; /* Schedule only after releasing the coordinator. */
-        case AROS_RESTRICTED_SUBMIT:
-            /* Callback authority is bounded by this immutable executable
-             * allocation. An active callback may call the worker again, but
-             * cannot recursively install another callback frame. */
-            if (frame->x[3] && (r->callback_active || r->fault_active || !r_code_pc(r,frame->x[3]))) {
+        case AROS_RESTRICTED_SUBMIT: {
+            struct RestrictedCodeIdentity entry;
+            /* Bind pending entry to executable backing. Active callbacks may
+             * use the worker but cannot recursively install another callback. */
+            if (frame->x[3] && (r->callback_active || r->fault_active || !r_capture_code(r,frame->x[3],&entry))) {
                 ++r->result.rejected;frame->x[0]=0;return 1;
             }
             if (AROSRestrictedServiceSubmit(&r->service,frame->x[0],frame->x[1],frame->x[2]))
                 {
                 r->callback_pc=frame->x[3];
+                if (r->callback_pc) r->callback_entry=entry;
                 frame->x[0]=r->service.request.token;
             }
             else { ++r->result.rejected;frame->x[0]=0; }
             return 1;
+        }
         case AROS_RESTRICTED_COLLECT:
             if (AROSRestrictedServiceCollect(&r->service,frame->x[0])) {
                 ++r->result.replies;frame->x[0]=1;
                 if (r->callback_pc) {
+                    if (!r_match_code(r,&r->callback_entry) ||
+                        !r_capture_code(r,frame->elr,&r->callback_return)) {
+                        r_finish(r,execution,frame,-4);return 1;
+                    }
                     r->callback=*frame;r->callback_active=1;
                     frame->elr=r->callback_pc;r->callback_pc=0;
                     frame->x[0]=r->seed;frame->x[1]=AROS_RESTRICTED_DATA;
@@ -776,11 +809,11 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
             if (!r->callback_active || r->fault_active || r->service.request.queue) {
                 ++r->result.denied;frame->x[0]=UINT64_MAX;return 1;
             }
-            if (frame->x[0]) { r_finish(r,execution,frame,-4);return 1; }
+            if (frame->x[0] || !r_match_code(r,&r->callback_return)) { r_finish(r,execution,frame,-4);return 1; }
             *frame=r->callback;r->callback_active=0;++r->result.callbacks;
             return 1;
         case AROS_RESTRICTED_FAULT_HANDLER:
-            if (r->fault_active || (frame->x[0] && !r_code_pc(r,frame->x[0]))) {
+            if (r->fault_active || (frame->x[0] && !r_capture_code(r,frame->x[0],&r->handler_code))) {
                 ++r->result.rejected;frame->x[0]=0;
             } else { r->fault_handler=frame->x[0];frame->x[0]=1; }
             return 1;
@@ -804,7 +837,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
             uintptr_t physical;uint64_t generation,reservation;
             if (!r->fault_active || frame->x[0]!=r->fault.elr ||
                 frame->x[1]!=r->fault_generation || r->service.request.queue ||
-                !r_code_pc(r,r->fault.elr) ||
+                !r_match_code(r,&r->fault_code) ||
                 r->fault.sp<=r->stack_address || r->fault.sp>r->stack_address+r->stack_bytes ||
                 (r->fault.sp&15) ||
                 !AROSRestrictedSpacePageIdentity(&r->domain->space,r->fault.far,
@@ -1415,7 +1448,7 @@ static unsigned r_state(const struct AROSRestrictedWork *work)
     __asm__ volatile("svc #0xa535":"+r"(argument)::"memory","cc");
     return (unsigned)argument;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {22,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {23,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

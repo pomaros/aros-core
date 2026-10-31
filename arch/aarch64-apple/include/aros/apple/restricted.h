@@ -73,7 +73,8 @@ struct AROSRestrictedAPI {
      * zero means committed no-access. protect_memory additionally accepts
      * read+execute (5) for private committed pages through a quiesced publication
      * transaction. Commit and shared views do not accept execute. Dynamic code
-     * is not yet admitted as a callback/fault-handler continuation PC.
+     * can supply callbacks and fault continuations: saved code identity must
+     * still match when entered/restored. Replacement or revocation fails closed.
      * Release requires the reservation base.
      * A failed release can begin draining: retain the reservation and retry.
      * All return 1 on success, 0 on refusal; no physical address is exposed. */
