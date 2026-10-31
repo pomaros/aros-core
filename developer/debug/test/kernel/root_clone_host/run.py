@@ -18,7 +18,7 @@ def main():
  inputs=[KERNEL/x for x in ('mapping.c','mapping.h','setprotection.c','protection.h')]+[HERE/'test.c',HERE/'run.py']
  frozen={str(x.relative_to(ROOT)):sha(x) for x in inputs}
  result={'result':'FAIL','scope':'HOST root snapshot helper only; no restricted AROS execution','source_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),'dirty_inputs':dirty,'input_hashes':frozen,'records':[]}
- controls=[('keep-user','(desc & ~(UINT64_C(1) << 6)) | M_UXN','desc | M_UXN','deny-el0'),('omit-uxn','(desc & ~(UINT64_C(1) << 6)) | M_UXN','(desc & ~(UINT64_C(1) << 6))','force-uxn'),('omit-pxn','desc |= M_PXN;','desc |= 0;','preserve-el1-execute'),('ignore-budget','if (!*budget) return 0;','if (0) return 0;','budget-refusal'),('unused-root','i >= entries || !(desc & M_VALID)','(!entries) || !(desc & M_VALID)','unused-root-entry')]
+ controls=[('keep-user','(desc & ~(UINT64_C(1) << 6)) | M_UXN','desc | M_UXN','deny-el0'),('omit-uxn','(desc & ~(UINT64_C(1) << 6)) | M_UXN','(desc & ~(UINT64_C(1) << 6))','force-uxn'),('omit-pxn','desc |= M_PXN;','desc |= 0;','preserve-el1-execute'),('ignore-budget','if (!*budget) return 0;','if (0) return 0;','count-budget'),('unused-root','i >= entries || !(desc & M_VALID)','(!entries) || !(desc & M_VALID)','count-unused'),('count-off-by-one','*table_count = table_budget - remaining;','*table_count = table_budget - remaining + 1;','count-repeated-subtree')]
  env={**os.environ,'ASAN_OPTIONS':'abort_on_error=1:detect_leaks='+('0' if sys.platform=='darwin' else '1'),'UBSAN_OPTIONS':'halt_on_error=1'}
  try:
   result['compiler']=subprocess.check_output([a.cc,'--version'],text=True).splitlines()[0]

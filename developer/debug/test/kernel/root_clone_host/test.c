@@ -25,6 +25,11 @@ static void valid(unsigned b)
  pages[2][0]=UINT64_C(0x80000000)|ro;
  pages[2][1]=UINT64_C(0x80004000)|rw;
  uint64_t original[2048];memcpy(original,pages[2],sizeof(original));
+ size_t count=99;struct AArch64ProtectionOps query={.resolve=resolve};
+ CHECK(AArch64CountPrivilegedRoot(&query,(uintptr_t)pages[0],tcr(va),3,&count) && count==3,"count-exact");
+ CHECK(used==4 && !cleaned && !memcmp(original,pages[2],sizeof(original)),"count-readonly");
+ count=99;
+ CHECK(!AArch64CountPrivilegedRoot(&query,(uintptr_t)pages[0],tcr(va),2,&count) && count==99,"count-budget");
  uint64_t result=99;
  CHECK(AArch64ClonePrivilegedRoot(&ops,(uintptr_t)pages[0],tcr(va),3,&result),"clone");
  CHECK(result!=(uintptr_t)pages[0] && cleaned==3 && used==7,"independent-tables");
@@ -53,4 +58,17 @@ static void refusals(void)
  reset(14);pages[0][2]=(uintptr_t)pages[1]|3;
  CHECK(!AArch64ClonePrivilegedRoot(&ops,(uintptr_t)pages[0],tcr(48),8,&result) && result==99,"unused-root-entry");
 }
-int main(void){valid(12);valid(14);refusals();puts("PASS privileged root clone geometry permissions ownership refusals");return 0;}
+static void count_refusals(void)
+{
+ reset(12);size_t count=99;struct AArch64ProtectionOps query={.resolve=resolve};
+ pages[0][1]=UINT64_C(0x40000000)|1;
+ CHECK(!AArch64CountPrivilegedRoot(&query,(uintptr_t)pages[0],tcr(39),8,&count) && count==99,"count-rwx");
+ reset(12);pages[0][0]=(uintptr_t)pages[1]|3|4;
+ CHECK(!AArch64CountPrivilegedRoot(&query,(uintptr_t)pages[0],tcr(39),8,&count) && count==99,"count-descriptor");
+ reset(14);pages[0][2]=(uintptr_t)pages[1]|3;
+ CHECK(!AArch64CountPrivilegedRoot(&query,(uintptr_t)pages[0],tcr(48),8,&count) && count==99,"count-unused");
+ reset(12);pages[0][0]=(uintptr_t)pages[1]|3;pages[0][1]=(uintptr_t)pages[1]|3;
+ CHECK(AArch64CountPrivilegedRoot(&query,(uintptr_t)pages[0],tcr(39),3,&count) && count==3,"count-repeated-subtree");
+ CHECK(!used || used==4,"count-no-allocation");
+}
+int main(void){count_refusals();valid(12);valid(14);refusals();puts("PASS privileged root clone geometry permissions ownership refusals");return 0;}

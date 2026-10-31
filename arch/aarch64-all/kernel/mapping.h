@@ -89,4 +89,15 @@ int AArch64UserPagePhysical(const struct AArch64ProtectionOps *, uint64_t ttbr0,
 int AArch64ClonePrivilegedRoot(const struct AArch64ProtectionOps *, uint64_t ttbr0,
     uint64_t tcr, size_t table_budget, uint64_t *output_root);
 
+/* Read-only preflight with precisely the clone descriptor validation. Only
+ * resolve is required; no allocation, clean or invalidation callback is used.
+ * Counts destination pages, including repeated source subtrees (clones do not
+ * share tables). Source tables must be frozen and pinned as above. The count
+ * is valid for that snapshot only: a caller that drops the source lock before
+ * allocating must revalidate under the lock and handle growth before cloning.
+ * table_budget bounds traversal; table_count remains unchanged on refusal.
+ */
+int AArch64CountPrivilegedRoot(const struct AArch64ProtectionOps *, uint64_t ttbr0,
+    uint64_t tcr, size_t table_budget, size_t *table_count);
+
 #endif

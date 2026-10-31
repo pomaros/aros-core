@@ -263,19 +263,23 @@ int AArch64TranslateResident(const struct AArch64ProtectionOps *ops,
  * changed here. The allocator's ledger owns every page even on failure. */
 static int clone_privileged(const struct AArch64ProtectionOps *ops,
     const struct MappingWalk *walk, uint64_t source, unsigned level,
-    uint64_t entries, size_t *budget, uint64_t *destination)
+    uint64_t entries, size_t *budget, uint64_t *destination, int count_only)
 {
     if (!*budget) return 0;
     uint64_t *input = ops->resolve(ops->context, source);
     if (!input) return 0;
-    uint64_t physical = ops->allocate(ops->context, walk->page_bits);
-    if (!physical || !physical_valid(walk, physical)) return 0;
+    uint64_t physical = 0;
+    uint64_t *output = NULL;
+    if (!count_only) {
+        physical = ops->allocate(ops->context, walk->page_bits);
+        if (!physical || !physical_valid(walk, physical)) return 0;
+        output = ops->resolve(ops->context, physical);
+        if (!output) return 0;
+    }
     --*budget;
-    uint64_t *output = ops->resolve(ops->context, physical);
-    if (!output) return 0;
     for (uint64_t i = 0; i < walk->count; ++i) {
         uint64_t desc = input[i];
-        output[i] = 0;
+        if (output) output[i] = 0;
         if (!desc) continue;
         if (i >= entries || !(desc & M_VALID) ||
             !descriptor_address_valid(walk, desc) ||
@@ -284,8 +288,8 @@ static int clone_privileged(const struct AArch64ProtectionOps *ops,
             uint64_t child;
             if ((desc & ~(walk->mask | M_TABLE)) ||
                 !clone_privileged(ops, walk, desc & walk->mask, level + 1,
-                    walk->count, budget, &child)) return 0;
-            output[i] = child | M_TABLE;
+                    walk->count, budget, &child, count_only)) return 0;
+            if (output) output[i] = child | M_TABLE;
         } else {
             unsigned shift = walk->page_bits + walk->stride * (3 - level);
             uint64_t block_mask = (UINT64_C(1) << shift) - 1;
@@ -299,10 +303,10 @@ static int clone_privileged(const struct AArch64ProtectionOps *ops,
                 if (!(desc & (UINT64_C(1) << 6)) && !(desc & M_PXN)) return 0;
                 desc |= M_PXN;
             }
-            output[i] = (desc & ~(UINT64_C(1) << 6)) | M_UXN;
+            if (output) output[i] = (desc & ~(UINT64_C(1) << 6)) | M_UXN;
         }
     }
-    ops->clean(ops->context, output, (size_t)walk->size);
+    if (output) ops->clean(ops->context, output, (size_t)walk->size);
     *destination = physical;
     return 1;
 }
@@ -316,7 +320,22 @@ int AArch64ClonePrivilegedRoot(const struct AArch64ProtectionOps *ops,
     unsigned shift = walk.page_bits + walk.stride * (3 - walk.first);
     uint64_t entries = UINT64_C(1) << (walk.va_bits - shift), root;
     if (!clone_privileged(ops, &walk, ttbr0 & walk.mask, walk.first,
-        entries, &table_budget, &root)) return 0;
+        entries, &table_budget, &root, 0)) return 0;
     *output_root = root;
+    return 1;
+}
+
+int AArch64CountPrivilegedRoot(const struct AArch64ProtectionOps *ops,
+    uint64_t ttbr0, uint64_t tcr, size_t table_budget, size_t *table_count)
+{
+    struct MappingWalk walk;
+    if (!ops || !ops->resolve || !table_count || !table_budget ||
+        !geometry(tcr, 0, 0, &walk) || !root_valid(&walk, ttbr0)) return 0;
+    unsigned shift = walk.page_bits + walk.stride * (3 - walk.first);
+    uint64_t entries = UINT64_C(1) << (walk.va_bits - shift), unused;
+    size_t remaining = table_budget;
+    if (!clone_privileged(ops, &walk, ttbr0 & walk.mask, walk.first,
+        entries, &remaining, &unused, 1)) return 0;
+    *table_count = table_budget - remaining;
     return 1;
 }
