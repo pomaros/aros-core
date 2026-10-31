@@ -77,6 +77,13 @@ int KrnMappingArenaInitialize(struct KrnMappingArena *, uintptr_t, size_t,
 int KrnMappingReserve(struct KrnMappingArena *, struct KrnMappingObject *,
     size_t length, uint64_t offset, unsigned protection, int shared,
     void *owner, struct KrnMappingPage *, size_t capacity);
+/* Exact-address reservation, never replacement. Address/range must be aligned
+ * and wholly inside the verified arena. Collision or invalid input leaves the
+ * arena, destination record and page metadata unchanged. Caller supplies
+ * unpublished record/page storage and holds the same mapping lock. */
+int KrnMappingReserveAt(struct KrnMappingArena *, struct KrnMappingObject *,
+    uintptr_t address, size_t length, uint64_t offset, unsigned protection,
+    int shared, void *owner, struct KrnMappingPage *, size_t capacity);
 struct KrnMappingObject *KrnMappingLookup(struct KrnMappingArena *, uintptr_t);
 int KrnMappingRelease(struct KrnMappingArena *, struct KrnMappingObject *);
 /* Retire a drained, already-unmapped subrange. BeginClose and the caller's

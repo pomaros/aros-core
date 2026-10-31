@@ -171,9 +171,49 @@ static void populate_tests(void)
     assert(!m.resident && memory.removes==1);
 }
 
+static void fixed_reservation_tests(void)
+{
+    const uintptr_t base=0x100000000ULL;
+    struct KrnMappingArena arena, other;
+    struct KrnMappingObject middle, first, last, reject, snapshot, peer;
+    struct KrnMappingPage mp[2], fp[2], lp[2], rp[2], saved[2], pp[2];
+    assert(KrnMappingArenaInitialize(&arena,base,8*4096,4096));
+    assert(KrnMappingArenaInitialize(&other,base,8*4096,4096));
+    assert(KrnMappingReserveAt(&arena,&middle,base+3*4096,2*4096,0,3,0,&arena,mp,2));
+    assert(KrnMappingReserveAt(&arena,&last,base+6*4096,2*4096,0,1,0,&arena,lp,2));
+    assert(KrnMappingReserveAt(&arena,&first,base,2*4096,0,0,0,&arena,fp,2));
+    assert(arena.first==&first && first.next==&middle && middle.next==&last && !last.next);
+    assert(!KrnMappingLookup(&arena,base+2*4096));
+    assert(KrnMappingLookup(&arena,base+4*4096)==&middle);
+    assert(KrnMappingReserveAt(&other,&peer,base+3*4096,2*4096,0,3,0,&other,pp,2));
+    assert(peer.owner!=middle.owner && peer.pages!=middle.pages);
+    memset(&reject,0xa5,sizeof(reject));snapshot=reject;
+    memset(rp,0x5a,sizeof(rp));memcpy(saved,rp,sizeof(saved));
+    assert(!KrnMappingReserveAt(&arena,&reject,base+2*4096,2*4096,0,3,0,&arena,rp,2));
+    assert(!memcmp(&reject,&snapshot,sizeof(reject)) && !memcmp(rp,saved,sizeof(rp)));
+    /* Range crossing the arena boundary must be refused before publication. */
+    assert(!KrnMappingReserveAt(&other,&reject,base+7*4096,2*4096,0,3,0,&other,rp,2));
+    assert(!KrnMappingReserveAt(&arena,&reject,base+2*4096+1,4096,0,3,0,&arena,rp,2));
+    assert(!KrnMappingReserveAt(&arena,&reject,base+2*4096,4096,0,7,0,&arena,rp,2));
+    assert(!KrnMappingReserveAt(&arena,&reject,base+2*4096,4096,0,3,0,&arena,rp,0));
+    assert(!KrnMappingReserveAt(&arena,&last,base+2*4096,4096,0,3,0,&arena,rp,2));
+    assert(!memcmp(&reject,&snapshot,sizeof(reject)) && !memcmp(rp,saved,sizeof(rp)));
+    assert(last.start==base+6*4096 && middle.next==&last);
+    assert(KrnMappingBeginClose(&middle) && KrnMappingRelease(&arena,&middle));
+    assert(KrnMappingReserveAt(&arena,&reject,base+2*4096,3*4096,0,3,0,&arena,rp,2)==0);
+    assert(KrnMappingReserveAt(&arena,&reject,base+2*4096,2*4096,0,3,0,&arena,rp,2));
+    assert(first.next==&reject && reject.next==&last);
+    assert(rp[0].state==KMAP_ABSENT && !rp[0].physical && !reject.resident);
+    struct KrnMappingArena high;
+    uintptr_t highbase=(UINTPTR_MAX & ~(uintptr_t)4095)-4*4096;
+    assert(KrnMappingArenaInitialize(&high,highbase,4*4096,4096));
+    assert(!KrnMappingReserveAt(&high,&middle,highbase+3*4096,4*4096,0,3,0,&high,mp,2));
+    assert(!high.first);
+}
+
 int main(void)
 {
-    object_tests(); reservation_tests(); close_completion_tests(); populate_tests();
+    object_tests(); reservation_tests(); close_completion_tests(); populate_tests(); fixed_reservation_tests();
     puts("mapping-host PASS coalesced=1000 stale-completion=1 writeback=1 close-drain-no-pte=1 populate-preflight=1");
     return 0;
 }

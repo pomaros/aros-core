@@ -14,6 +14,9 @@ cross-CPU synchronization belong to their platform coordinator.
   must acknowledge the required CPU quiescence and TLB invalidation before
   returning. Every alias participating in shared writeback must be included by
   the coordinator; the component cannot discover aliases.
+  `KrnMappingReserveAt` selects an exact address without displacing any existing
+  reservation; first-fit allocation remains available through `KrnMappingReserve`.
+  Both use caller-owned unpublished metadata and publish under the mapping lock.
 - `pager.c` fills a private, unpublished page in task context outside that lock.
   It supports zero backing and positioned reads on a retained private handle,
   detects short reads before the expected EOF, and zeroes the last page's tail.

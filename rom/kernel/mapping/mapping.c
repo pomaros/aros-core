@@ -60,6 +60,26 @@ int KrnMappingReserve(struct KrnMappingArena *a, struct KrnMappingObject *m,
     return 1;
 }
 
+int KrnMappingReserveAt(struct KrnMappingArena *a, struct KrnMappingObject *m,
+    uintptr_t start, size_t length, uint64_t offset, unsigned protection,
+    int shared, void *owner, struct KrnMappingPage *pages, size_t capacity)
+{
+    if (!a || !m || !a->page_size || !length || start<a->start ||
+        start-a->start>=a->length || length>a->length-(start-a->start))
+        return 0;
+    /* Preflight the entire list: m may be linked after the requested hole. */
+    for (struct KrnMappingObject *p=a->first; p; p=p->next) {
+        if (p==m) return 0;
+        if (start<p->start+p->length && p->start<start+length) return 0;
+    }
+    if (!KrnMappingInitialize(m,start,length,a->page_size,offset,protection,
+            shared,owner,pages,capacity)) return 0;
+    struct KrnMappingObject **link=&a->first;
+    while (*link && (*link)->start<start) link=&(*link)->next;
+    m->next=*link;*link=m;
+    return 1;
+}
+
 struct KrnMappingObject *KrnMappingLookup(struct KrnMappingArena *a,
     uintptr_t address)
 {

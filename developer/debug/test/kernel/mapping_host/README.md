@@ -26,6 +26,12 @@ EOF tails, malformed allocator/read results, cancellation and ownership, plus
 negative controls. Its caller must retain callback context and backing handles
 while I/O blocks, then revalidate the request before publishing a returned page.
 
+Exact-address reservations are checked for sorted insertion, independent arenas,
+holes, release/reuse, overflow, alignment, permissions and metadata capacity.
+Rejected requests preserve destination and existing metadata. Two semantic
+controls admit overlapping or out-of-arena reservations and must trigger the
+corresponding assertion; these do not exercise physical allocation or MMU state.
+
 The object runner also runs the domain test for retained execution membership
 and mapping/I/O pins. Both runners refuse dirty input unless
 `--allow-dirty-diagnostic` is specified; that mode records DIAGNOSTIC_PASS.
