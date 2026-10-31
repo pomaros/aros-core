@@ -63,7 +63,7 @@ deferred domain reclamation.
 
 External owner retirement uses eight remove/complete cycles, exceeding the four
 domain slots. Each raw Exec owner is removed while the native parent holds a
-request: the domain closes but retains 1,028 pages until acknowledgement, then
+request: the domain closes but retains 1,029 pages until acknowledgement, then
 all slots/backing drain and stale completions fail. The removed native caller's
 result storage stays untouched. Kernel control slots serialize publication and exclusive reaping through the
 coordinator. Allocation/release execute outside that lock on native stacks,
@@ -90,12 +90,17 @@ checks the alternate SP and retained stack words across worker scheduling.
 Handler replacement/unregistration is refused while a fault is active; zero
 unregisters an idle handler. Code/backing remain immutable and retained until
 channel drain. A nested fault terminates the invocation instead of recursively
-consuming its alternate stack. Native control API v10 identifies this layout.
+consuming its alternate stack. Native control API v11 identifies the per-thread layout.
 
 The kernel keeps address-space allocation records separately from execution
 slots. Table callbacks retain the domain record; accounting counts shared
 backing once and thread stacks per context. Native allocation/release phases
 claim both records before dropping the coordinator. The legacy run wrapper
 still creates one domain per invocation and refuses whole-domain release with
-more than one attached context. Explicit attach/detach admission and distinct
-per-thread stack/TLS addresses require the multi-thread integration workload.
+more than one attached context. Explicit attach/detach admission requires the multi-thread integration workload.
+
+Each execution slot has distinct stack, alternate-stack and TLS virtual addresses
+within a 64 KiB stride. TLS owns a separate zeroed RW/NX physical page rather than
+an offset in domain data. The payload checks a private TLS sentinel across yield,
+callback and fault resumption. Slot-specific stack validators reject other
+contexts' stack ranges. Code and domain-data addresses remain shared-domain VAs.

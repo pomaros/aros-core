@@ -35,13 +35,14 @@ struct Restricted {
     struct Task *owner;
     void *owner_context;
     unsigned abandoned, fault_active;
-    void *stack,*fault_stack;
+    void *stack,*fault_stack,*tls;
+    uint64_t stack_address,fault_address,tls_address;
     uint64_t seed;
     struct AROSRestrictedService service;
 };
 struct RestrictedPublication {
     struct Restricted *slot;
-    void *pool,*code,*data,*stack,*fault_stack;
+    void *pool,*code,*data,*stack,*fault_stack,*tls;
     uint64_t seed;
     size_t code_bytes;
 };
@@ -61,7 +62,8 @@ static uintptr_t call(unsigned svc,uintptr_t arg,struct Task *task,struct Except
 }
 int main(void)
 {
-    struct Restricted stack_owner={.owner=&owner};
+    struct Restricted stack_owner={.owner=&owner,.stack_address=AROS_RESTRICTED_STACK,
+        .fault_address=AROS_RESTRICTED_FAULT_STACK,.tls_address=AROS_RESTRICTED_TLS};
     assert(r_stack_sp(&stack_owner,AROS_RESTRICTED_STACK+R_PAGE));
     assert(!r_stack_sp(&stack_owner,AROS_RESTRICTED_STACK));
     assert(!r_stack_sp(&stack_owner,AROS_RESTRICTED_STACK+1));
@@ -110,6 +112,17 @@ int main(void)
     for (unsigned i=0;i<KBUF_SPACES;++i) {
         slots[i]=(void *)call(R_CLAIM,0,&owner,&context);
         assert(slots[i]==&restricted_slots[i] && slots[i]->state==R_ALLOCATING);
+        assert(slots[i]->stack_address==AROS_RESTRICTED_STACK+i*AROS_RESTRICTED_THREAD_STRIDE);
+        assert(slots[i]->fault_address==AROS_RESTRICTED_FAULT_STACK+i*AROS_RESTRICTED_THREAD_STRIDE);
+        assert(slots[i]->tls_address==AROS_RESTRICTED_TLS+i*AROS_RESTRICTED_THREAD_STRIDE);
+    }
+    for (unsigned i=0;i<KBUF_SPACES;++i) {
+        for (unsigned j=0;j<KBUF_SPACES;++j)
+            assert(r_stack_sp(slots[i],slots[j]->stack_address+R_PAGE)==(i==j));
+        slots[i]->fault_active=1;
+        for (unsigned j=0;j<KBUF_SPACES;++j)
+            assert(r_stack_sp(slots[i],slots[j]->fault_address+R_PAGE)==(i==j));
+        slots[i]->fault_active=0;
     }
     assert(!call(R_CLAIM,0,&other,&foreign));
     assert(!r_slot((uintptr_t)slots[0]+1) && !r_slot(UINTPTR_MAX));
@@ -119,7 +132,7 @@ int main(void)
     assert(life.live==4 && !life.pages && !life.pending);
     for (unsigned i=0;i<KBUF_SPACES;++i) {
         struct RestrictedPublication p={.slot=slots[i],.pool=&owner,
-            .code=&owner,.data=&owner,.stack=&owner,.fault_stack=&owner,.seed=i,.code_bytes=16};
+            .code=&owner,.data=&owner,.stack=&owner,.fault_stack=&owner,.tls=&owner,.seed=i,.code_bytes=16};
         assert(!call(R_PUBLISH,(uintptr_t)&p,&other,&context));
         assert(!call(R_PUBLISH,(uintptr_t)&p,&owner,&foreign));
         assert(call(R_PUBLISH,(uintptr_t)&p,&owner,&context));
@@ -139,7 +152,7 @@ int main(void)
         assert(!call(R_RELEASED,(uintptr_t)slots[i],&other,&foreign));
         assert(!call(R_CLAIM,0,&other,&foreign));
         assert(call(R_LIFETIME,(uintptr_t)&life,&owner,&context));
-        assert(life.live==4 && life.pages==(4-i)*1028 && life.pending==4-i);
+        assert(life.live==4 && life.pages==(4-i)*1029 && life.pending==4-i);
         slots[i]->domain->threads=2;
         assert(!call(R_RELEASED,(uintptr_t)slots[i],&owner,&context));
         assert(slots[i]->state==R_REAPING && slots[i]->domain->threads==2);

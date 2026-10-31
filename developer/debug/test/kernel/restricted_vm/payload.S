@@ -28,6 +28,9 @@
  mrs x9, tpidr_el0
  cmp x9, x20
  b.ne RestrictedFailure
+ ldr x11, [x20]
+ cmp x11, x23
+ b.ne RestrictedFailure
  add x9, x23, #\stage
  VectorCheck v0
  VectorCheck v8
@@ -40,6 +43,9 @@ RestrictedCode:
  mov x23, x0
  lsr x22, x0, #2
  mrs x20, tpidr_el0
+ ldr x9, [x20]
+ cbnz x9, RestrictedFailure
+ str x23, [x20]
  RegisterSeed 0
  mov x0, x19
  svc #0xa545
@@ -285,10 +291,11 @@ RestrictedWriteProbe:
  svc #0xa544
  b RestrictedFailure
 RestrictedFaultHandler:
- /* Dedicated stack lies four pages above DATA, with absent neighbors.
+ /* Dedicated stack ends one page below private TLS, with absent neighbors.
   * Exercise stack memory across the worker's scheduling points. */
  mov x9, sp
- add x10, x19, #5, lsl #12
+ mrs x10, tpidr_el0
+ sub x10, x10, #1, lsl #12
  cmp x9, x10
  b.ne RestrictedFailure
  stp x0, x1, [sp, #-32]!
@@ -486,7 +493,8 @@ RestrictedPolicyHandler:
  mov x21, x2
  mov x22, x3
  mov x9, sp
- add x10, x19, #5, lsl #12
+ mrs x10, tpidr_el0
+ sub x10, x10, #1, lsl #12
  cmp x9, x10
  b.ne RestrictedPolicyFailure
  cmp x20, #1

@@ -189,7 +189,7 @@ static void prove_owner_retirement(void)
         RemTask(task);FreeMem(stack,256*1024);FreeMem(task,sizeof(*task));
         api->lifetime(&held);
         CHECK(held.retired==before.retired+cycle+1 && held.reaped==before.reaped+cycle);
-        CHECK(held.live==1 && held.pending==1 && held.pages==1028);
+        CHECK(held.live==1 && held.pending==1 && held.pages==1029);
         CHECK(api->state(&work)==AROS_RESTRICTED_CANCELLED);
         memset(work.bytes,0x39,8);CHECK(api->complete(&work));
         CHECK(!api->complete(&work) && !api->state(&work));
@@ -225,7 +225,7 @@ int main(void)
     intptr_t address = KrnGetSystemAttr(AROS_RESTRICTED_KATTR_API);
     CHECK(address != -1 && address != 0);
     api = (const void *)address;
-    CHECK(api->version == 10 && api->size == sizeof(*api));
+    CHECK(api->version == 11 && api->size == sizeof(*api));
     /* No worker exists: queued cancellation is deterministic. */
     static struct AROSRestrictedResult queued;
     CHECK(api->run(RestrictedQueued,(size_t)(RestrictedQueuedEnd-RestrictedQueued),12288,&queued));

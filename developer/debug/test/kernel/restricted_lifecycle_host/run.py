@@ -29,9 +29,10 @@ def main():
     actual=''.join(body(source,name) for name in ['r_slot(uintptr_t','r_lifecycle(struct','r_claim_reap(struct','r_stack_sp(const','r_stack_bounds(struct'])
     variants=[('actual',actual)]
     for name,old,new in [
-        ('wrong-active-stack','r->fault_active ? AROS_RESTRICTED_FAULT_STACK : AROS_RESTRICTED_STACK','AROS_RESTRICTED_STACK'),
+        ('wrong-active-stack','r->fault_active ? r->fault_address : r->stack_address','r->stack_address'),
         ('guard-stack-bound','sp>base &&','sp>=base &&'),
-        ('wrong-native-bounds','fault ? AROS_RESTRICTED_FAULT_STACK : AROS_RESTRICTED_STACK','AROS_RESTRICTED_STACK'),
+        ('wrong-native-bounds','fault ? r->fault_address : r->stack_address','r->stack_address'),
+        ('shared-tls-address','AROS_RESTRICTED_TLS+i*AROS_RESTRICTED_THREAD_STRIDE','AROS_RESTRICTED_TLS'),
         ('shared-domain-release','r->domain->threads!=1','0'),
         ('duplicate-reap','owned->state=R_REAPING;',''),
         ('wrong-publisher','r->owner!=task','0'),
