@@ -248,7 +248,7 @@ static void prove_private_memory(void)
     CHECK(api->protect_memory(handles[0],va,3));
     CHECK(api->run_domain(handles[0],0,&result) && result.status==0 && result.value==0);
     CHECK(api->run_domain(handles[1],0,&result) && result.status==0 && result.value==1);
-    api->lifetime(&life);CHECK(!life.live && life.domains==2 && life.pages==2054);
+    api->lifetime(&life);CHECK(!life.live && life.domains==2 && life.pages==2056);
     CHECK(api->release_memory(handles[0],va));
     CHECK(!api->release_memory(handles[0],va));
     CHECK(api->reserve_memory(handles[0],va,4096) && api->commit_memory(handles[0],va,3));
@@ -277,7 +277,7 @@ static void prove_shared_memory(void)
         CHECK(api->commit_shared(domains[i],va,3));
         CHECK(api->run_domain(domains[i],0,&result) && result.status==0 && result.value==i);
     }
-    api->lifetime(&life);CHECK(life.shared_objects==1 && life.pages==2053);
+    api->lifetime(&life);CHECK(life.shared_objects==1 && life.pages==2056);
     CHECK(api->decommit_memory(domains[0],va));
     CHECK(api->commit_shared(domains[0],va,3));
     CHECK(api->run_domain(domains[0],0,&result) && result.status==0 && result.value==2);

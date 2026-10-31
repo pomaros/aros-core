@@ -48,7 +48,7 @@ enum RestrictedState { R_FREE, R_ALLOCATING, R_LIVE, R_REAPING };
 struct RestrictedAllocation {
     struct RestrictedAllocation *next;
     struct AROSRestrictedRegion region;
-    size_t count;
+    size_t count,storage_bytes;
     struct KrnMappingPage *pages;
     uintptr_t *backing;
 };
@@ -67,7 +67,7 @@ struct RestrictedShared {
     struct AROSRestrictedSharedBacking backing;
     void *owner_context,*releaser_context;
     uint64_t handle;
-    size_t count;
+    size_t count,storage_bytes;
     uintptr_t *pages;
 };
 static struct RestrictedShared *restricted_shared;
@@ -75,7 +75,7 @@ static uint64_t shared_generation;
 static void r_shared_lifetime(struct AROSRestrictedLifetime *state)
 {
     for (struct RestrictedShared *b=restricted_shared;b;b=b->next) {
-        ++state->shared_objects;state->pages+=b->count;
+        ++state->shared_objects;state->pages+=b->count+b->storage_bytes/R_PAGE;
     }
 }
 struct Restricted {
@@ -379,7 +379,7 @@ static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned s
         struct RestrictedAllocation *a=p->allocation;
         if (a && AROSRestrictedRegionReserve(&d->space,&a->region,p->address,
             a->count*R_PAGE,a->pages,a->backing,a->count)) {
-            a->next=d->allocations;d->allocations=a;frame->x[0]=1;
+            a->next=d->allocations;d->allocations=a;d->memory_pages+=a->storage_bytes/R_PAGE;frame->x[0]=1;
         }
         return 1;
     }
@@ -402,6 +402,7 @@ static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned s
     else if (p->operation==4 && p->address==a->region.mapping.start &&
         AROSRestrictedRegionDetach(&a->region)) {
         for (size_t i=0;i<a->count;++i) d->memory_pages-=a->backing[i]!=0;
+        d->memory_pages-=a->storage_bytes/R_PAGE;
         *link=a->next;a->next=NULL;p->allocation=a;frame->x[0]=1;
     }
     return 1;
@@ -808,7 +809,7 @@ static void r_free_allocation(struct RestrictedAllocation *a)
     for (size_t i=0;i<a->count;++i)
         if (a->backing[i] && !AROSApplePageFree((void *)a->backing[i],R_PAGE))
             for (;;) __asm__ volatile("wfe");
-    FreeVec(a);
+    if (!AROSApplePageFree(a,a->storage_bytes)) for (;;) __asm__ volatile("wfe");
 }
 static void r_free_domain_backing(struct RestrictedDomain *d)
 {
@@ -854,7 +855,7 @@ static void r_release_shared(struct RestrictedShared *b)
             for (;;) __asm__ volatile("wfe");
     struct RestrictedSharedOperation op={.operation=3,.handle=b->handle};
     if (!r_shared_call(&op)) for (;;) __asm__ volatile("wfe");
-    FreeVec(b);
+    if (!AROSApplePageFree(b,b->storage_bytes)) for (;;) __asm__ volatile("wfe");
 }
 static void r_reap(void)
 {
@@ -1007,18 +1008,25 @@ static int r_memory_call(struct RestrictedMemoryOperation *p)
     __asm__ volatile("svc #0xa567":"+r"(argument)::"memory","cc");
     return argument!=0;
 }
+static size_t r_record_size(size_t header,size_t count,size_t element)
+{
+    if (!header || !element || header>SIZE_MAX-(R_PAGE-1) ||
+        count>(SIZE_MAX-(R_PAGE-1)-header)/element) return 0;
+    return (header+count*element+R_PAGE-1)&~(size_t)(R_PAGE-1);
+}
 static int r_reserve_memory(uint64_t handle,uintptr_t address,size_t length)
 {
     if (!length || (length&(R_PAGE-1)) || address<AROS_RESTRICTED_DYNAMIC_BASE ||
         address>=AROS_RESTRICTED_DYNAMIC_END || length>AROS_RESTRICTED_DYNAMIC_END-address) return 0;
     size_t count=length/R_PAGE;
-    if (count>(SIZE_MAX-sizeof(struct RestrictedAllocation))/(sizeof(struct KrnMappingPage)+sizeof(uintptr_t))) return 0;
+    size_t storage=r_record_size(sizeof(struct RestrictedAllocation),count,sizeof(struct KrnMappingPage)+sizeof(uintptr_t));
+    if (!storage) return 0;
     Forbid();
-    struct RestrictedAllocation *a=AllocVec(sizeof(*a)+count*(sizeof(*a->pages)+sizeof(*a->backing)),MEMF_CLEAR);
+    struct RestrictedAllocation *a=AROSApplePageAllocate(NULL,storage,MEMF_CLEAR);
     if (!a) { Permit();return 0; }
-    a->count=count;a->pages=(void *)(a+1);a->backing=(void *)(a->pages+count);
+    a->count=count;a->storage_bytes=storage;a->pages=(void *)(a+1);a->backing=(void *)(a->pages+count);
     struct RestrictedMemoryOperation op={.handle=handle,.address=address,.allocation=a};
-    int ok=r_memory_call(&op);if (!ok) FreeVec(a);
+    int ok=r_memory_call(&op);if (!ok && !AROSApplePageFree(a,storage)) for (;;) __asm__ volatile("wfe");
     Permit();return ok;
 }
 static int r_commit_memory(uint64_t handle,uintptr_t address,unsigned protection)
@@ -1056,10 +1064,11 @@ static uint64_t r_create_shared(size_t length)
 {
     if (!length || (length&(R_PAGE-1)) || length>AROS_RESTRICTED_DYNAMIC_END-AROS_RESTRICTED_DYNAMIC_BASE) return 0;
     size_t count=length/R_PAGE;
-    if (count>(SIZE_MAX-sizeof(struct RestrictedShared))/sizeof(uintptr_t)) return 0;
-    Forbid();struct RestrictedShared *b=AllocVec(sizeof(*b)+count*sizeof(uintptr_t),MEMF_CLEAR);
+    size_t storage=r_record_size(sizeof(struct RestrictedShared),count,sizeof(uintptr_t));
+    if (!storage) return 0;
+    Forbid();struct RestrictedShared *b=AROSApplePageAllocate(NULL,storage,MEMF_CLEAR);
     if (!b) { Permit();return 0; }
-    b->count=count;b->pages=(void *)(b+1);size_t i;
+    b->count=count;b->storage_bytes=storage;b->pages=(void *)(b+1);size_t i;
     for (i=0;i<count;++i) {
         b->pages[i]=(uintptr_t)AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
         if (!b->pages[i]) break;
@@ -1069,7 +1078,7 @@ static uint64_t r_create_shared(size_t length)
     if (!handle) {
         for (size_t j=0;j<i;++j)
             if (!AROSApplePageFree((void *)b->pages[j],R_PAGE)) for (;;) __asm__ volatile("wfe");
-        FreeVec(b);
+        if (!AROSApplePageFree(b,b->storage_bytes)) for (;;) __asm__ volatile("wfe");
     }
     Permit();return handle;
 }

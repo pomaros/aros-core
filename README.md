@@ -40,6 +40,8 @@ Keep the official AROS remote fetch-only and review generic changes in this fork
 
 - [Restricted space/channel ownership](developer/debug/test/kernel/restricted_space_host/README.md): actual adapter with synthetic PTE memory and semantic close/generation controls.
 
+- [Native metadata allocation](developer/debug/test/kernel/restricted_allocation_host/README.md): extracted allocation wrappers with injected failures and ownership rollback.
+
 ## Licences
 
 AROS is a collection of components under different licences. Preserve each file's notices and consult [LEGAL](LEGAL), [LICENSE](LICENSE), [LICENSE.GPL](LICENSE.GPL), [LICENSE.LGPL](LICENSE.LGPL) and component-specific licence files. This fork does not relicense the upstream code.
