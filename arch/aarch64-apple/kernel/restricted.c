@@ -39,6 +39,7 @@
 #define R_SHARED 0xa568
 #define R_TABLE_GROW 0xa569
 #define R_WAKE 0xa56a
+#define R_THREAD_STATE 0xa56b
 #define R_COOKIE UINT64_C(0x7265737472696374)
 enum RestrictedState { R_FREE, R_ALLOCATING, R_LIVE, R_REAPING };
 /* Address-space allocation lifetime is separate from an execution context.
@@ -941,9 +942,16 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
         frame->x[0]=(uintptr_t)r_claim_reap(context);
         return 1;
     }
-    if (ec==0x15 && svc==R_WAKE) {
+    if (ec==0x15 && (svc==R_WAKE || svc==R_THREAD_STATE)) {
         struct RestrictedDomain *d=r_domain_lookup(frame->x[0]);
-        frame->x[0]=d && d->owner_context==context ? r_wake_channel(d,frame->x[1]) : 0;
+        uint64_t channel=frame->x[1];frame->x[0]=0;
+        if (d && d->owner_context==context) {
+            if (svc==R_WAKE) frame->x[0]=r_wake_channel(d,channel);
+            else for (struct Restricted *r=restricted_slots;r;r=r->next)
+                if (r->domain==d && r->state==R_LIVE && r->service.channel==channel) {
+                    frame->x[0]=AROSAppleRestrictedWaitState(r->owner,r->owner_context);break;
+                }
+        }
         return 1;
     }
     if (ec==0x15 && r_table_transfer(frame,context,svc)) return 1;
@@ -1497,7 +1505,14 @@ static int r_wake_thread(uint64_t handle,uint64_t channel)
     __asm__ volatile("svc #0xa56a":"+r"(domain),"+r"(thread)::"memory","cc");
     return domain!=0;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {26,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread};
+static unsigned r_thread_state(uint64_t handle,uint64_t channel)
+{
+    register uint64_t domain __asm__("x0")=handle;
+    register uint64_t thread __asm__("x1")=channel;
+    __asm__ volatile("svc #0xa56b":"+r"(domain),"+r"(thread)::"memory","cc");
+    return (unsigned)domain;
+}
+const struct AROSRestrictedAPI AROSRestrictedAPI = {26,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

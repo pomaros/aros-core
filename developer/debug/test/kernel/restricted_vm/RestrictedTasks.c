@@ -895,6 +895,109 @@ static void prove_reserved_faults(void)
     CHECK(!life.pages && !life.live && !life.domains);
     bug("[ISOVM] reserved-fault cases=4 read=1 write=1 premature=4 extra_commit=1 re_reserved=1 stale_refused=2 retained_pages=0 PASS\n");
 }
+extern const unsigned char RestrictedWait[],RestrictedWaitEnd[];
+struct WaitForeign { uint64_t domain,channel; };
+static void *wait_foreign_controller(void *argument)
+{
+    struct WaitForeign *p=argument;
+    CHECK(!api->wake_thread(p->domain,p->channel));
+    CHECK(!api->thread_state(p->domain,p->channel));
+    return NULL;
+}
+static void wait_requests(struct AROSRestrictedWork work[2],unsigned phase,unsigned role)
+{
+    unsigned seen=0;
+    for (unsigned polls=0;seen!=3 && polls<1000000;++polls) {
+        struct AROSRestrictedWork next;
+        if (!api->take(&next)) { KrnSwitch();continue; }
+        uint64_t words[4];CHECK(next.length==sizeof(words));memcpy(words,next.bytes,sizeof(words));
+        CHECK(words[0]==phase && words[1]<4 && (words[1]&1)==role);
+        unsigned id=words[1]/2;CHECK(!(seen&(1U<<id)) && words[2]==next.channel);
+        work[id]=next;seen|=1U<<id;
+    }
+    CHECK(seen==3);
+}
+static void wait_parked(uint64_t domain,uint64_t channel)
+{
+    unsigned state=0;
+    for (unsigned polls=0;polls<1000000;++polls) {
+        state=api->thread_state(domain,channel);
+        CHECK(state&AROS_RESTRICTED_THREAD_ACTIVE);
+        if (state&AROS_RESTRICTED_THREAD_PARKED) break;
+        KrnSwitch();
+    }
+    CHECK(state==(AROS_RESTRICTED_THREAD_ACTIVE|AROS_RESTRICTED_THREAD_WAITING|AROS_RESTRICTED_THREAD_PARKED));
+}
+static void prove_waits(void)
+{
+    struct DynamicCodeClient clients[4]={{.seed=0},{.seed=1},{.seed=2},{.seed=3}};
+    uint64_t domains[2],channels[2];pthread_t threads[4];struct AROSRestrictedWork work[2];
+    for (unsigned i=0;i<2;++i) {
+        domains[i]=api->create_domain(RestrictedWait,RestrictedWaitEnd-RestrictedWait,0);CHECK(domains[i]);
+        clients[i*2].domain=clients[i*2+1].domain=domains[i];
+        CHECK(!pthread_create(&threads[i*2],NULL,dynamic_code_client,&clients[i*2]));
+    }
+    wait_requests(work,0,0);
+    for (unsigned i=0;i<2;++i) channels[i]=work[i].channel;
+    for (unsigned i=0;i<2;++i) {
+        CHECK(!api->wake_thread(domains[i],channels[1-i]));
+        CHECK(!api->thread_state(domains[i],channels[1-i]));
+        pthread_t foreign;struct WaitForeign request={domains[i],channels[i]};
+        CHECK(!pthread_create(&foreign,NULL,wait_foreign_controller,&request));CHECK(!pthread_join(foreign,NULL));
+        CHECK(api->wake_thread(domains[i],channels[i])); /* Older epoch must not park. */
+        CHECK(api->complete(&work[i]));
+    }
+    wait_requests(work,1,0);
+    for (unsigned i=0;i<2;++i) CHECK(api->complete(&work[i]));
+    for (unsigned i=0;i<2;++i) {
+        wait_parked(domains[i],channels[i]);
+#if defined(__AROSEXEC_SMP__)
+        CHECK(SetTaskAffinity(__atomic_load_n(&clients[i*2].task,__ATOMIC_ACQUIRE),cpu_masks[1]));
+#endif
+        CHECK(api->wake_thread(domains[i],channels[i]));
+    }
+    wait_requests(work,2,0);
+    for (unsigned i=0;i<2;++i) CHECK(api->complete(&work[i]));
+    for (unsigned i=0;i<2;++i) {
+        wait_parked(domains[i],channels[i]);
+#if defined(__AROSEXEC_SMP__)
+        CHECK(SetTaskAffinity(__atomic_load_n(&clients[i*2].task,__ATOMIC_ACQUIRE),cpu_masks[0]));
+#endif
+        CHECK(!pthread_create(&threads[i*2+1],NULL,dynamic_code_client,&clients[i*2+1]));
+    }
+    wait_requests(work,0,1);
+    for (unsigned i=0;i<2;++i) {
+        uint64_t words[4];memcpy(words,work[i].bytes,sizeof(words));
+        words[2]=channels[i];words[3]=channels[1-i];memcpy(work[i].bytes,words,sizeof(words));
+#if defined(__AROSEXEC_SMP__)
+        CHECK(SetTaskAffinity(__atomic_load_n(&clients[i*2+1].task,__ATOMIC_ACQUIRE),cpu_masks[1]));
+#endif
+        CHECK(api->complete(&work[i]));
+    }
+    wait_requests(work,3,0);
+    for (unsigned i=0;i<2;++i) CHECK(!pthread_join(threads[i*2+1],NULL));
+    for (unsigned i=0;i<2;++i) CHECK(api->complete(&work[i]));
+    for (unsigned i=0;i<2;++i) {
+        wait_parked(domains[i],channels[i]);
+        CHECK(api->close_domain(domains[i])==0);
+    }
+    for (unsigned i=0;i<4;++i) {
+        if (!(i&1)) CHECK(!pthread_join(threads[i],NULL));
+        CHECK(clients[i].result.status==((i&1) ? 0 : -5) && clients[i].result.drained);
+        CHECK(clients[i].result.replies==((i&1) ? 1 : 4));
+        CHECK(clients[i].result.denied==((i&1) ? 2 : 0));
+#if defined(__AROSEXEC_SMP__)
+        CHECK(clients[i].result.cpus==3 && clients[i].result.migrations>=((i&1) ? 1 : 2));
+#endif
+    }
+    for (unsigned i=0;i<2;++i) {
+        CHECK(!api->wake_thread(domains[i],channels[i]));CHECK(!api->thread_state(domains[i],channels[i]));
+        CHECK(api->close_domain(domains[i])==1);
+    }
+    struct AROSRestrictedLifetime life;api->lifetime(&life);CHECK(!life.pages && !life.live && !life.domains);
+    bug("[ISOVM] wait-wake domains=2 threads=4 early=2 controller=2 peer=2 foreign=6 native_refused=4 parked_close=2 contexts=6 retained_pages=0 PASS\n");
+}
+
 int main(void)
 {
     KernelBase = OpenResource((CONST_STRPTR)"kernel.resource");
@@ -991,6 +1094,7 @@ int main(void)
     prove_dynamic_continuations();
     prove_shared_code();
     prove_reserved_faults();
+    prove_waits();
     prove_domain_close();
 #if defined(__AROSEXEC_SMP__)
     prove_task_list_churn();

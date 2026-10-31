@@ -24,7 +24,7 @@ def main():
  if out.exists() or ROOT in out.parents:p.error('fresh output outside source required')
  source=ROOT/'arch/aarch64-apple/kernel/kernel_scheduler.c';generic=ROOT/'arch/aarch64-native/kernel/kernel_scheduler.c';restricted=ROOT/'arch/aarch64-apple/kernel/restricted.c'
  s=source.read_text();g=generic.read_text()
- actual=''.join(function(s,name) for name in ['static struct ExceptionContext *restricted_context(', 'static int restricted_park(struct Task *task)', 'int AROSAppleRestrictedSetWait('])
+ actual=''.join(function(s,name) for name in ['static struct ExceptionContext *restricted_context(', 'static int restricted_park(struct Task *task)', 'int AROSAppleRestrictedSetWait(', 'unsigned AROSAppleRestrictedWaitState('])
  actual+='static void outgoing(struct Task *task) {\n'+block(g[g.index('#ifdef CORE_SCHEDULER_PARK\n        if (task->'):])+'}\n'
  start=g.index('#ifdef CORE_SCHEDULER_PARK\n        /* Native signals')
  actual+='static int incoming(struct Task *newtask) { int taskStateLocked=1;\n'+block(g[start:])+'return 1;\ndispatch_select:return 0; }\n'
@@ -35,12 +35,13 @@ def main():
  actual+=r[start:end]+'default:return 0;} }\n'
  variants=[('actual',actual,None,None)]
  controls=[
+ ('false-parked-observation','(execution->park_flags&AROS_TASK_PARKED) && task->tc_State==TS_WAIT','(execution->park_flags&AROS_TASK_PARKED)', 'AROSAppleRestrictedWaitState(&task,&context)==3','native_signal'),
  ('lost-wake-after-thaw','GetIntETask(task)->iet_FrozenState=TS_READY;','(void)0;', 'iet.iet_FrozenState==TS_READY','ownership'),
  ('stale-wake-generation','frame->x[0]!=r->wake_generation ||','', 'payload(&slot,&frame,&task,&context,AROS_RESTRICTED_WAIT)==1 && !frame.x[0] && !execution.park_flags','generations'),
  ('generation-overflow',' || r->wake_generation==UINT64_MAX) continue;', ') continue;', '!r_wake_channel(&domain,17) && slot.wake_generation==UINT64_MAX','generations'),
  ('foreign-domain','r->domain!=domain ||','', '!r_wake_channel(&other,17) && !r_wake_channel(&domain,18)','generations'),
  ('wake-before-save','execution->park_flags=0;','execution->park_flags=AROS_TASK_PARK_WAIT;', 'task.tc_State==TS_READY && task.tc_Node.list==2 && !execution.park_flags','interleavings'),
- ('missing-park-ack','execution->park_flags|=AROS_TASK_PARKED;','', 'task.tc_State==TS_READY && task.tc_Node.list==2 && !execution.park_flags && ipis==1','interleavings'),
+ ('missing-park-ack','execution->park_flags|=AROS_TASK_PARKED;','', 'AROSAppleRestrictedWaitState(&task,&context)==7','interleavings'),
  ('native-signal-bypass','if (newtask->tc_State==TS_READY && CORE_SCHEDULER_PARK(newtask))','if (0)', '!incoming(&task)','native_signal'),
  ('foreign-context','restricted_context(task)!=context ||','', '!AROSAppleRestrictedSetWait(&task,&foreign,1) && !execution.park_flags','ownership')]
  for name,old,new,assertion,fn in controls:

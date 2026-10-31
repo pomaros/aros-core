@@ -70,13 +70,16 @@ static void save_and_switch(void)
 static void interleavings(void)
 {
  reset();assert(AROSAppleRestrictedSetWait(&task,&context,1));
+ assert(AROSAppleRestrictedWaitState(&task,&context)==3);
  assert(task.tc_State==TS_RUN && task.tc_Node.list==3 && context.saved_x18==0x1818);
  assert(AROSAppleRestrictedSetWait(&task,&context,0));save_and_switch();
  assert(task.tc_State==TS_READY && task.tc_Node.list==2 && !execution.park_flags);
  reset();assert(AROSAppleRestrictedSetWait(&task,&context,1));save_and_switch();
  assert(task.tc_State==TS_WAIT && task.tc_Node.list==1 && context.saved_x18==0x1919);
+ assert(AROSAppleRestrictedWaitState(&task,&context)==7);
  assert(AROSAppleRestrictedSetWait(&task,&context,0));
  assert(task.tc_State==TS_READY && task.tc_Node.list==2 && !execution.park_flags && ipis==1);
+ assert(AROSAppleRestrictedWaitState(&task,&context)==1);
  assert(AROSAppleRestrictedSetWait(&task,&context,0) && ipis==1);
 }
 static void native_signal(void)
@@ -84,7 +87,9 @@ static void native_signal(void)
  reset();AROSAppleRestrictedSetWait(&task,&context,1);save_and_switch();
  /* An ordinary signal moves the task onto Ready; dispatch has removed it
   * under the task lock before this actual hook runs. */
- task.tc_State=TS_READY;task.tc_Node.list=0;task.tc_SpinLock=1;
+ task.tc_State=TS_READY;task.tc_Node.list=2;
+ assert(AROSAppleRestrictedWaitState(&task,&context)==3);
+ task.tc_Node.list=0;task.tc_SpinLock=1;
  assert(!incoming(&task));assert(task.tc_State==TS_WAIT && task.tc_Node.list==1 && !task.tc_SpinLock);
  assert(AROSAppleRestrictedSetWait(&task,&context,0));
  task.tc_Node.list=0;task.tc_SpinLock=1;assert(incoming(&task));task.tc_SpinLock=0;
@@ -92,8 +97,10 @@ static void native_signal(void)
 static void ownership(void)
 {
  reset();assert(!AROSAppleRestrictedSetWait(&task,&foreign,1) && !execution.park_flags);
+ assert(!AROSAppleRestrictedWaitState(&task,&foreign));
  execution.root=0;assert(!AROSAppleRestrictedSetWait(&task,&context,1));
  reset();task.tc_State=TS_REMOVED;assert(!AROSAppleRestrictedSetWait(&task,&context,0));
+ assert(!AROSAppleRestrictedWaitState(&task,&context));
  reset();AROSAppleRestrictedSetWait(&task,&context,1);save_and_switch();task.tc_State=TS_FROZEN;
  assert(AROSAppleRestrictedSetWait(&task,&context,0));assert(task.tc_State==TS_FROZEN && task.tc_Node.list==1 && !ipis);
  assert(iet.iet_FrozenState==TS_READY);

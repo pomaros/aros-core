@@ -10,6 +10,7 @@ struct ExceptionContext;
 /* EL1 coordinator held, local IRQ/FIQ masked; task identity retained until
  * context retirement. No allocation or coordinator acquisition inside. */
 int AROSAppleRestrictedSetWait(struct Task *,struct ExceptionContext *,int);
+unsigned AROSAppleRestrictedWaitState(struct Task *,struct ExceptionContext *);
 void AROSAppleRestrictedCheckStack(struct AROSAppleRuntimeFrame *, struct Task *);
 int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *);
 /* Trusted EL1 only, with PageMapLock and completed remote rendezvous held.

@@ -35,6 +35,9 @@
 #define AROS_RESTRICTED_THREAD_INFO 0xa54b
 #define AROS_RESTRICTED_WAIT 0xa54c
 #define AROS_RESTRICTED_WAKE 0xa54d
+#define AROS_RESTRICTED_THREAD_ACTIVE 1U
+#define AROS_RESTRICTED_THREAD_WAITING 2U
+#define AROS_RESTRICTED_THREAD_PARKED 4U
 #define AROS_RESTRICTED_RUNNING 2
 #define AROS_RESTRICTED_CANCELLED 4
 struct AROSRestrictedResult {
@@ -108,5 +111,9 @@ struct AROSRestrictedAPI {
         size_t fault_bytes,struct AROSRestrictedResult *result);
     /* Controller-only wake of an active member identified by its channel. */
     int (*wake_thread)(uint64_t domain,uint64_t channel);
+    /* Controller snapshot under the scheduler task lock. Zero means stale,
+     * foreign or no active restricted execution. PARKED acknowledges saved
+     * context on the wait list; external native freeze is not PARKED. */
+    unsigned (*thread_state)(uint64_t domain,uint64_t channel);
 };
 #endif

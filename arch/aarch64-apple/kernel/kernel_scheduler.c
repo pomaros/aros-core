@@ -82,3 +82,27 @@ done:
 #endif
     return ok;
 }
+unsigned AROSAppleRestrictedWaitState(struct Task *task,struct ExceptionContext *context)
+{
+    if (!task || !context) return 0;
+#if defined(__AROSEXEC_SMP__)
+    KrnSpinLock(&task->tc_SpinLock,NULL,SPINLOCK_MODE_WRITE);
+#endif
+    unsigned result=0;
+    if (restricted_context(task)==context &&
+        (task->tc_State==TS_RUN || task->tc_State==TS_READY ||
+         task->tc_State==TS_WAIT || task->tc_State==TS_FROZEN)) {
+        struct AROSAppleTaskExecution *execution=AROSAppleTaskExecution(context);
+        if (execution->root) {
+            result=AROS_RESTRICTED_THREAD_ACTIVE;
+            if (execution->park_flags&AROS_TASK_PARK_WAIT)
+                result|=AROS_RESTRICTED_THREAD_WAITING;
+            if ((execution->park_flags&AROS_TASK_PARKED) && task->tc_State==TS_WAIT)
+                result|=AROS_RESTRICTED_THREAD_PARKED;
+        }
+    }
+#if defined(__AROSEXEC_SMP__)
+    KrnSpinUnLock(&task->tc_SpinLock);
+#endif
+    return result;
+}

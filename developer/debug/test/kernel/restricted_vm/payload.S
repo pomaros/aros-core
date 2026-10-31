@@ -1349,3 +1349,128 @@ ReservedFaultFailure:
  svc #0xa541
  b ReservedFaultFailure
 RestrictedReservedFaultEnd:
+
+.balign 16
+.global RestrictedWait, RestrictedWaitEnd
+RestrictedWait:
+ mov x23, x0
+ and x9, x23, #1
+ add x19, x1, x9, lsl #8
+ mov x28, x18
+ svc #0xa54b
+ mov x20, x0
+ mov x21, x1
+ tbnz x23, #0, WaitPeer
+ mov x22, #0
+ bl WaitRequest
+ mov x0, x21
+ mov x27, #0
+ bl WaitChecked
+ mov x22, #1
+WaitNext:
+ svc #0xa54b
+ mov x21, x1
+ bl WaitRequest
+ mov x0, x21
+ mov x27, #1
+ bl WaitChecked
+ add x22, x22, #1
+ cmp x22, #4
+ b.lo WaitNext
+ b WaitFailure
+WaitPeer:
+ mov x22, #0
+ bl WaitRequest
+ ldp x24, x25, [x19, #80]
+ mov x0, x24
+ mov x1, x24
+ svc #0xa56a
+ cmn x0, #1
+ b.ne WaitFailure
+ mov x0, x24
+ svc #0xa56b
+ cmn x0, #1
+ b.ne WaitFailure
+ mov x0, x25
+ svc #0xa54d
+ cbnz x0, WaitFailure
+ mov x0, x24
+ svc #0xa54d
+ cmp x0, #1
+ b.ne WaitFailure
+ mov x0, #0
+ svc #0xa541
+ b WaitFailure
+WaitRequest:
+ stp x22, x23, [x19]
+ stp x20, x21, [x19, #16]
+ mov x0, x19
+ add x1, x19, #64
+ mov x2, #32
+ mov x3, #0
+ svc #0xa542
+ cbz x0, WaitFailure
+ mov x26, x0
+1:
+ mov x0, x26
+ svc #0xa543
+ cbz x0, 1b
+ ldp x9, x10, [x19, #64]
+ cmp x9, x22
+ b.ne WaitFailure
+ cmp x10, x23
+ b.ne WaitFailure
+ svc #0xa540
+ ret
+WaitChecked:
+ mov x25, sp
+ mov x9, #0x999
+ mov x10, #0xaaa
+ movi v8.16b, #0x5a
+ movi v31.16b, #0xa5
+ mov x11, #0xa0000000
+ msr nzcv, x11
+ mov x11, #0x400000
+ msr fpcr, x11
+ mov x11, #0x10
+ msr fpsr, x11
+ svc #0xa54c
+ mrs x11, nzcv
+ cmp x0, x27
+ b.ne WaitFailure
+ mov x12, #0xa0000000
+ cmp x11, x12
+ b.ne WaitFailure
+ cmp x9, #0x999
+ b.ne WaitFailure
+ cmp x10, #0xaaa
+ b.ne WaitFailure
+ cmp x18, x28
+ b.ne WaitFailure
+ mov x11, sp
+ cmp x11, x25
+ b.ne WaitFailure
+ umov x11, v8.d[1]
+ mov x12, #0x5a5a
+ orr x12, x12, x12, lsl #16
+ orr x12, x12, x12, lsl #32
+ cmp x11, x12
+ b.ne WaitFailure
+ umov x11, v31.d[0]
+ mov x12, #0xa5a5
+ orr x12, x12, x12, lsl #16
+ orr x12, x12, x12, lsl #32
+ cmp x11, x12
+ b.ne WaitFailure
+ mrs x11, fpcr
+ cmp x11, #0x400000
+ b.ne WaitFailure
+ mrs x11, fpsr
+ cmp x11, #0x10
+ b.ne WaitFailure
+ ret
+WaitFailure:
+ mov x0, #-9
+ svc #0xa541
+ b WaitFailure
+RestrictedWaitEnd:
