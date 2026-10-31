@@ -10,7 +10,7 @@
 enum KrnMappingAccess { KMAP_READ = 1, KMAP_WRITE = 2, KMAP_EXEC = 4 };
 enum KrnMappingPageState {
     KMAP_ABSENT, KMAP_LOADING, KMAP_CLEAN, KMAP_DIRTY,
-    KMAP_WRITEBACK, KMAP_ERROR
+    KMAP_WRITEBACK, KMAP_ERROR, KMAP_RESERVED
 };
 enum KrnMappingCutResult {
     KMAP_CUT_INVALID, KMAP_CUT_TRIMMED, KMAP_CUT_SPLIT, KMAP_CUT_RELEASED
@@ -35,6 +35,7 @@ struct KrnMappingObject {
     unsigned protection, shared, closing;
     size_t resident, in_flight;
     struct KrnMappingObject *next;
+    unsigned virtual_reservation;
 };
 struct KrnMappingArena {
     uintptr_t start;
@@ -84,6 +85,23 @@ int KrnMappingReserve(struct KrnMappingArena *, struct KrnMappingObject *,
 int KrnMappingReserveAt(struct KrnMappingArena *, struct KrnMappingObject *,
     uintptr_t address, size_t length, uint64_t offset, unsigned protection,
     int shared, void *owner, struct KrnMappingPage *, size_t capacity);
+/* Anonymous virtual reservations start uncommitted, unlike demand-paged file
+ * mappings. address==0 selects first fit; nonzero is exact and never replaces.
+ * Commit changes only RESERVED pages to ABSENT with the requested protection;
+ * existing committed pages are unchanged. It authorizes zero-backed page-in,
+ * not immediate physical allocation: the coordinator supplies KPAGER_ZERO.
+ * Decommit requires all mapping I/O/buffer pins drained, then removes the PTE
+ * with acknowledged invalidation before returning backing to the caller.
+ * It preserves the virtual reservation and refuses file/shared objects.
+ * A failed operation leaves metadata/output unchanged. released is a distinct
+ * trusted output, never an alias of mapping/page storage. No allocation or wait
+ * occurs here; a range coordinator owns rollback of multi-page PTE operations. */
+int KrnMappingReserveVirtual(struct KrnMappingArena *, struct KrnMappingObject *,
+    uintptr_t address, size_t length, void *owner, struct KrnMappingPage *, size_t capacity);
+int KrnMappingCommitRange(struct KrnMappingObject *, uintptr_t address,
+    size_t length, unsigned protection);
+int KrnMappingDecommitPage(struct KrnMappingObject *, size_t page,
+    const struct KrnMappingOps *, uintptr_t *released);
 struct KrnMappingObject *KrnMappingLookup(struct KrnMappingArena *, uintptr_t);
 int KrnMappingRelease(struct KrnMappingArena *, struct KrnMappingObject *);
 /* Retire a drained, already-unmapped subrange. BeginClose and the caller's

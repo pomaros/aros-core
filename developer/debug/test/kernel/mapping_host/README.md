@@ -62,3 +62,19 @@ mapping pin from being released. Explicit stop rejects new fault I/O while
 allowing cleanup I/O against retained mappings. Reclamation additionally needs
 all external references withdrawn. These are internal component contracts;
 native task/DOS integration and its tests are separate work.
+
+Anonymous virtual reservations have an additional combined engine/pager check:
+
+```sh
+python3 developer/debug/test/kernel/mapping_host/virtual.py --out /ABS/FRESH
+```
+
+RESERVED pages do not queue demand page-in. Commit preflights the whole range,
+leaves existing committed pages unchanged and permits zero-backed publication.
+Decommit refuses retained I/O/buffer pins and failed translation removal,
+retains the VA reservation, advances generation and restores RESERVED state.
+Recommit through the actual zero pager wipes the deliberately reused backing.
+Five semantic controls detect ignored pins, omitted removal, implicit demand
+reload, missing range preflight and skipped zeroing. This is HOST evidence;
+range-wide physical rollback, real TLB acknowledgement, allocation and fault
+scheduling belong to the production coordinator and its guest qualification.

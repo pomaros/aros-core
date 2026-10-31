@@ -73,3 +73,13 @@ The host regressions and their limits are described in
 
 The real-MMU buffer fixture and its platform-access oracle are described in
 `developer/debug/test/kernel/user_buffer_qemu/README.md`.
+
+Anonymous virtual reservations use `KrnMappingReserveVirtual`, distinct from
+already committed demand-paged mappings. Their RESERVED pages fault without
+queueing I/O, and cannot be populated or protected into commitment implicitly.
+`KrnMappingCommitRange` atomically enables absent zero-backed pages; it does not
+allocate or change existing committed pages. `KrnMappingDecommitPage` requires
+pins drained and acknowledged translation removal before returning physical
+backing, while preserving the virtual reservation. The coordinator supplies
+zero backing through the pager, owns physical allocation/free and transactional
+range handling, and must not treat component success as hardware qualification.

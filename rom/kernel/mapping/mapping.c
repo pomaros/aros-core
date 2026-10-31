@@ -16,7 +16,7 @@ int KrnMappingInitialize(struct KrnMappingObject *m, uintptr_t start,
         ((protection & (KMAP_WRITE | KMAP_EXEC)) && !(protection & KMAP_READ)))
         return 0;
     *m = (struct KrnMappingObject){start, length, size, length / size, offset,
-        owner, pages, protection, !!shared, 0, 0, 0, NULL};
+        owner, pages, protection, !!shared, 0, 0, 0, NULL, 0};
     for (size_t i = 0; i < m->page_count; ++i)
         pages[i] = (struct KrnMappingPage){0, 0, KMAP_ABSENT, 0, protection};
     return 1;
@@ -78,6 +78,57 @@ int KrnMappingReserveAt(struct KrnMappingArena *a, struct KrnMappingObject *m,
     while (*link && (*link)->start<start) link=&(*link)->next;
     m->next=*link;*link=m;
     return 1;
+}
+
+int KrnMappingReserveVirtual(struct KrnMappingArena *a, struct KrnMappingObject *m,
+    uintptr_t address,size_t length,void *owner,struct KrnMappingPage *pages,size_t capacity)
+{
+    int ok=address ? KrnMappingReserveAt(a,m,address,length,0,0,0,owner,pages,capacity) :
+        KrnMappingReserve(a,m,length,0,0,0,owner,pages,capacity);
+    if (!ok) return 0;
+    m->virtual_reservation=1;
+    for (size_t i=0;i<m->page_count;++i) m->pages[i].state=KMAP_RESERVED;
+    return 1;
+}
+int KrnMappingCommitRange(struct KrnMappingObject *m,uintptr_t address,
+    size_t length,unsigned protection)
+{
+    if (!m || !m->virtual_reservation || m->shared || m->closing || !length ||
+        !m->page_size || (address&(m->page_size-1)) || (length&(m->page_size-1)) ||
+        address<m->start || address-m->start>=m->length ||
+        length>m->length-(address-m->start) || (protection&~7U) ||
+        ((protection&(KMAP_WRITE|KMAP_EXEC))==(KMAP_WRITE|KMAP_EXEC)) ||
+        ((protection&(KMAP_WRITE|KMAP_EXEC)) && !(protection&KMAP_READ))) return 0;
+    size_t first=(address-m->start)/m->page_size,count=length/m->page_size;
+    for (size_t i=first;i<first+count;++i) {
+        struct KrnMappingPage *p=&m->pages[i];
+        if (p->state==KMAP_RESERVED && (p->physical || p->generation==UINT64_MAX)) return 0;
+    }
+    for (size_t i=first;i<first+count;++i) {
+        struct KrnMappingPage *p=&m->pages[i];
+        if (p->state==KMAP_RESERVED) { p->state=KMAP_ABSENT;p->protection=protection; }
+    }
+    return 1;
+}
+int KrnMappingDecommitPage(struct KrnMappingObject *m,size_t index,
+    const struct KrnMappingOps *ops,uintptr_t *released)
+{
+    if (!m || !m->virtual_reservation || m->shared || m->closing || m->in_flight ||
+        index>=m->page_count || !released) return 0;
+    struct KrnMappingPage *p=&m->pages[index];
+    if (p->state==KMAP_RESERVED) { *released=0;return 1; }
+    if (p->generation==UINT64_MAX ||
+        (p->state!=KMAP_ABSENT && p->state!=KMAP_CLEAN &&
+         p->state!=KMAP_DIRTY && p->state!=KMAP_ERROR)) return 0;
+    uintptr_t physical=p->physical;
+    if (physical) {
+        if (!m->resident || (p->state!=KMAP_CLEAN && p->state!=KMAP_DIRTY) ||
+            !ops || !ops->remove ||
+            !ops->remove(ops->context,m->start+index*m->page_size,physical)) return 0;
+        --m->resident;
+    }
+    *p=(struct KrnMappingPage){0,p->generation+1,KMAP_RESERVED,0,p->protection};
+    *released=physical;return 1;
 }
 
 struct KrnMappingObject *KrnMappingLookup(struct KrnMappingArena *a,
@@ -388,6 +439,7 @@ int KrnMappingProtectPage(struct KrnMappingObject *m, size_t index,
         ((protection&(KMAP_WRITE|KMAP_EXEC)) && !(protection&KMAP_READ)))
         return 0;
     struct KrnMappingPage *p=&m->pages[index];
+    if (p->state==KMAP_RESERVED) return 0;
     unsigned actual=p->state==KMAP_DIRTY ? protection : protection&~KMAP_WRITE;
     if (p->physical && !ops->install(ops->context,m->start+index*m->page_size,
             p->physical,actual))
@@ -435,7 +487,7 @@ int KrnMappingPopulate(struct KrnMappingObject *m,uintptr_t address,size_t lengt
     /* A late invalid page must not leave earlier pages newly queued. */
     for (size_t i=first;i<first+count;++i) {
         struct KrnMappingPage *p=&m->pages[i];
-        if (queue && (p->state==KMAP_ERROR ||
+        if (queue && (p->state==KMAP_ERROR || p->state==KMAP_RESERVED ||
             (p->state==KMAP_ABSENT && p->generation==UINT64_MAX))) {
             *page_error=p->error ? p->error : -1;
             return 0;
