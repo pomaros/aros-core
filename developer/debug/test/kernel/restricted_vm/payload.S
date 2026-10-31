@@ -1521,6 +1521,12 @@ RestrictedDynamicCode:
  add x9, x23, #1
  cmp x0, x9
  b.ne DynamicCodeFailure
+ mov x27, #4
+ bl DynamicCodeRequest
+ blr x20
+ add x9, x23, #1
+ cmp x0, x9
+ b.ne DynamicCodeFailure
  mov x0, #0
  svc #0xa541
 DynamicCodeStore:
@@ -1787,6 +1793,11 @@ RestrictedSharedCode:
  bl SharedCodeStore
 1:
  mov x27, #3
+ bl SharedCodeRequest
+ blr x20
+ cmp x0, #77
+ b.ne SharedCodeFailure
+ mov x27, #4
  bl SharedCodeRequest
  blr x20
  cmp x0, #77

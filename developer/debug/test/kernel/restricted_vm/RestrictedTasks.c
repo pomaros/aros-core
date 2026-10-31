@@ -706,27 +706,27 @@ static void prove_dynamic_code(void)
         CHECK(api->commit_memory(clients[i].domain,address,3));
         CHECK(!pthread_create(&threads[i],NULL,dynamic_code_client,&clients[i]));
     }
-    for (unsigned completed=0;completed<6;) {
+    for (unsigned completed=0;completed<8;) {
         struct AROSRestrictedWork work;
         if (!api->take(&work)) { KrnSwitch();continue; }
         uint64_t words[2];CHECK(work.length==sizeof(words));memcpy(words,work.bytes,sizeof(words));
         unsigned id=words[1]==clients[0].seed ? 0 : 1;
-        CHECK(words[1]==clients[id].seed && words[0]==++phases[id] && phases[id]<=3);
+        CHECK(words[1]==clients[id].seed && words[0]==++phases[id] && phases[id]<=4);
         CHECK(!api->protect_memory(clients[id].domain,address,7));
-        CHECK(api->protect_memory(clients[id].domain,address,phases[id]==2 ? 3 : 5));
+        if (phases[id]!=4) CHECK(api->protect_memory(clients[id].domain,address,phases[id]==2 ? 3 : 5));
 #if defined(__AROSEXEC_SMP__)
         if (phases[id]!=2) {
             struct Task *task=__atomic_load_n(&clients[id].task,__ATOMIC_ACQUIRE);CHECK(task);
-            CHECK(SetTaskAffinity(task,cpu_masks[phases[id]==1 ? 1 : 0]));
+            CHECK(SetTaskAffinity(task,cpu_masks[phases[id]==3 ? 0 : 1]));
         }
 #endif
         CHECK(api->complete(&work));++completed;
     }
     for (unsigned i=0;i<2;++i) {
         CHECK(!pthread_join(threads[i],NULL));
-        CHECK(!clients[i].result.status && clients[i].result.drained && clients[i].result.replies==3);
+        CHECK(!clients[i].result.status && clients[i].result.drained && clients[i].result.replies==4);
 #if defined(__AROSEXEC_SMP__)
-        CHECK(clients[i].result.cpus==3 && clients[i].result.migrations>=2);
+        CHECK(clients[i].result.cpus==3 && clients[i].result.migrations>=3);
 #endif
         struct AROSRestrictedResult result={0};
         CHECK(api->run_domain(clients[i].domain,1,&result) && !result.status && result.rejected==1);
@@ -811,7 +811,7 @@ static void prove_shared_code(void)
     CHECK(api->reserve_memory(clients[1].domain,address+4096,4096));
     CHECK(api->attach_shared(clients[1].domain,address+4096,shared));
     for (unsigned i=0;i<2;++i) CHECK(!pthread_create(&threads[i],NULL,dynamic_code_client,&clients[i]));
-    for (unsigned phase=1;phase<=3;++phase) {
+    for (unsigned phase=1;phase<=4;++phase) {
         struct AROSRestrictedWork work[2];unsigned held=0;
         while (held!=3) {
             struct AROSRestrictedWork next;if (!api->take(&next)) { KrnSwitch();continue; }
@@ -823,7 +823,7 @@ static void prove_shared_code(void)
             CHECK(!api->protect_memory(clients[0].domain,address,3));
             CHECK(api->protect_memory(clients[1].domain,address,1));
             CHECK(api->protect_memory(clients[0].domain,address,3));
-        } else {
+        } else if (phase!=4) {
             CHECK(!api->protect_memory(clients[1].domain,address,5));
             CHECK(api->protect_memory(clients[0].domain,address,1));
             for (unsigned i=0;i<2;++i) {
@@ -838,13 +838,17 @@ static void prove_shared_code(void)
                 CHECK(api->commit_shared(clients[1].domain,address+4096,1));
             }
         }
+#if defined(__AROSEXEC_SMP__)
+        if (phase==4) for (unsigned i=0;i<2;++i)
+            CHECK(SetTaskAffinity(__atomic_load_n(&clients[i].task,__ATOMIC_ACQUIRE),cpu_masks[1]));
+#endif
         for (unsigned i=0;i<2;++i) CHECK(api->complete(&work[i]));
     }
     for (unsigned i=0;i<2;++i) {
         CHECK(!pthread_join(threads[i],NULL));
-        CHECK(!clients[i].result.status && clients[i].result.drained && clients[i].result.replies==3);
+        CHECK(!clients[i].result.status && clients[i].result.drained && clients[i].result.replies==4);
 #if defined(__AROSEXEC_SMP__)
-        CHECK(clients[i].result.cpus==3 && clients[i].result.migrations>=2);
+        CHECK(clients[i].result.cpus==3 && clients[i].result.migrations>=3);
 #endif
         struct AROSRestrictedResult result={0};
         CHECK(api->run_domain(clients[i].domain,3,&result) && !result.status && result.rejected==1);
@@ -1388,6 +1392,9 @@ int main(void)
     prove_dynamic_code();
     prove_dynamic_continuations();
     prove_shared_code();
+#if defined(__AROSEXEC_SMP__)
+    bug("[ISOVM] code-revisit private=2 shared=2 original_cpu=1 rewritten_values=4 PASS\n");
+#endif
     prove_reserved_faults();
     prove_waits();
     prove_suspension();
