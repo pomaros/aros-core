@@ -1381,7 +1381,7 @@ int main(void)
     intptr_t address = KrnGetSystemAttr(AROS_RESTRICTED_KATTR_API);
     CHECK(address != -1 && address != 0);
     api = (const void *)address;
-    CHECK(api->version == 31 && api->size == sizeof(*api));
+    CHECK(api->version == 32 && api->size == sizeof(*api));
     extern const unsigned char RestrictedRestore[],RestrictedRestoreEnd[];
     static struct AROSRestrictedResult restored;
     CHECK(api->run(RestrictedRestore,(size_t)(RestrictedRestoreEnd-RestrictedRestore),0,&restored));

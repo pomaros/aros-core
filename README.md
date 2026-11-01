@@ -54,3 +54,16 @@ wrapping or reusing identifiers; callers use the API from task context.
 ## Licences
 
 AROS is a collection of components under different licences. Preserve each file's notices and consult [LEGAL](LEGAL), [LICENSE](LICENSE), [LICENSE.GPL](LICENSE.GPL), [LICENSE.LGPL](LICENSE.LGPL) and component-specific licence files. This fork does not relicense the upstream code.
+
+
+## Managed-domain service work
+
+Restricted API32 adds take_domain(domain,work) for Native controllers that own
+one live managed domain. It leaves other domains' queued requests untouched and
+retains worker-bound completion. Invalid, foreign, unmanaged and closing domains
+are refused before service selection. Legacy take() keeps global-worker semantics.
+The [protected admission HOST gate](developer/debug/test/kernel/restricted_domain_work_host/run.py)
+extracts the production SVC entry filter and owner checks, with semantic negative
+controls. The [space/channel gate](developer/debug/test/kernel/restricted_space_host/run.py)
+checks selection between live spaces with identical virtual buffer addresses.
+HOST evidence does not qualify a compiled kernel or Native execution.
