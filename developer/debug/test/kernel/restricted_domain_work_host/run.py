@@ -8,6 +8,8 @@ ROOT=Path(__file__).resolve().parents[5]
 p=argparse.ArgumentParser(description=__doc__);p.add_argument('--out',type=Path,required=True);a=p.parse_args();out=a.out.resolve()
 if out.exists() or ROOT in out.parents:p.error('fresh output outside checkout required')
 source=ROOT/'arch/aarch64-apple/kernel/restricted.c';text=source.read_text();start=text.index('    if (ec==0x15 && svc==0xa56e) {');end=text.index('\n    if (ec==0x15 && r_table_transfer',start);actual=text[start:end]
+guard_start=text.index('    if (!AROSAppleTaskExecution(context)->root &&');guard_end=text.index('    r_coordinate();',guard_start);guard=text[guard_start:guard_end]
+defines='\n'.join(line for line in text.splitlines() if any(line.startswith('#define '+name+' ') for name in ['R_LIFETIME','R_DOMAIN_CLAIM','R_RESUME','R_DOMAIN_WORK']))
 header='''#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -17,6 +19,9 @@ struct AROSRestrictedSpace {int id;};
 struct RestrictedDomain {uint64_t handle;unsigned managed,state,closing;void *owner_context;struct AROSRestrictedSpace space;};
 struct frame {uint64_t x[31];};
 enum {R_LIVE=2};
+struct execution {unsigned root;};static struct execution execution;
+static struct execution *AROSAppleTaskExecution(void *context){(void)context;return &execution;}
+static int native_admits(void *context,unsigned ec,unsigned svc);
 static struct RestrictedDomain domains[2];static unsigned calls;static int accepted=1;
 static struct Task worker;static int own,foreign;
 static struct AROSRestrictedSpace *selected;
@@ -31,6 +36,7 @@ tests='''\nreturn 0;}
 #define CHECK(x,n) do{if(!(x)){puts("FAIL " n);return 1;}}while(0)
 int main(void)
 {
+ CHECK(native_admits(&own,0x15,0xa56e) && native_admits(&own,0x15,0xa56d) && !native_admits(&own,0x15,0xa56f),"outer-trap-range");
  struct AROSRestrictedWork work,prior;memset(&work,0x5a,sizeof(work));prior=work;
  domains[0]=(struct RestrictedDomain){11,1,R_LIVE,0,&own,{1}};
  domains[1]=(struct RestrictedDomain){22,1,R_LIVE,0,&foreign,{2}};
@@ -51,12 +57,13 @@ int main(void)
  puts("PASS protected domain work admission");return 0;
 }
 '''
-variants=[('actual',actual),('foreign-owner',actual.replace('d->owner_context==context','1')),('unmanaged',actual.replace('d->managed','1')),('nonlive',actual.replace('d->state==R_LIVE','1')),('closing',actual.replace('!d->closing','1')),('wrong-selected-space',actual.replace('&d->space','NULL'))]
+variants=[('actual',actual),('foreign-owner',actual.replace('d->owner_context==context','1')),('unmanaged',actual.replace('d->managed','1')),('nonlive',actual.replace('d->state==R_LIVE','1')),('closing',actual.replace('!d->closing','1')),('wrong-selected-space',actual.replace('&d->space','NULL')),('old-trap-range',actual)]
 out.mkdir(parents=True);sha=lambda f:hashlib.sha256(f.read_bytes()).hexdigest();r={'result':'FAIL','scope':__doc__,'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),'inputs':{str(f):sha(f) for f in [source,Path(__file__).resolve(),ROOT/'arch/aarch64-apple/include/aros/apple/restricted.h']},'cases':[]}
 try:
  for name,body in variants:
-  if name!='actual' and body==actual:raise RuntimeError('mutation did not change source')
-  c=out/(name+'.c');c.write_text(header+body+tests);binary=out/name
+  if name not in ('actual','old-trap-range') and body==actual:raise RuntimeError('mutation did not change source')
+  c=out/(name+'.c');selected_guard=guard.replace('svc>R_DOMAIN_WORK','svc>R_RESUME') if name=='old-trap-range' else guard
+  c.write_text(defines+'\n'+header+body+tests+'\nstatic int native_admits(void *context,unsigned ec,unsigned svc)\n{\n'+selected_guard+'return 1;\n}\n');binary=out/name
   cmd=['clang','-std=c11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-I'+str(ROOT/'arch/aarch64-apple/include'),str(c),'-o',str(binary)]
   build=subprocess.run(cmd,capture_output=True,text=True);(out/(name+'-build.log')).write_text(build.stdout+build.stderr)
   if build.returncode:raise RuntimeError(name+' build failed')

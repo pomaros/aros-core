@@ -43,6 +43,7 @@
 #define R_THREAD_STATE 0xa56b
 #define R_SUSPEND 0xa56c
 #define R_RESUME 0xa56d
+#define R_DOMAIN_WORK 0xa56e
 #define R_COOKIE UINT64_C(0x7265737472696374)
 enum RestrictedState { R_FREE, R_ALLOCATING, R_LIVE, R_REAPING };
 /* Address-space allocation lifetime is separate from an execution context.
@@ -1266,7 +1267,7 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
     unsigned ec=(unsigned)(frame->esr>>26)&63,svc=(unsigned)frame->esr&65535;
     if (!AROSAppleTaskExecution(context)->root &&
         (ec!=0x15 || ((svc<AROS_RESTRICTED_ENTER || svc>R_LIFETIME) &&
-         (svc<R_DOMAIN_CLAIM || svc>R_RESUME)))) return 0;
+         (svc<R_DOMAIN_CLAIM || svc>R_DOMAIN_WORK)))) return 0;
     r_coordinate();
     int handled=r_trap_locked(frame);
     r_uncoordinate();
