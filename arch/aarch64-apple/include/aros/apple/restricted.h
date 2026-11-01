@@ -51,6 +51,26 @@ struct AROSRestrictedContext {
     uint64_t x[31],sp,pc,nzcv;
     uint64_t simd[64],fpcr,fpsr;
 };
+/* Version 33: synchronous exception delivery. EXCEPTION_HANDLER registers an
+ * owned executable handler PC in x0 (0 unregisters); x0 returns 1, or 0 when
+ * refused (active exception or repair, unowned PC). A synchronous exception
+ * that the FAULT_HANDLER repair path does not take (undefined instruction,
+ * instruction or data abort at any address, PC/SP alignment, FP trap, BRK)
+ * enters the handler on the fault stack instead of ending the domain. The
+ * kernel writes this record at the top of the fault stack and sets x0 to its
+ * address, x1 to ESR, x2 to FAR, x3 to the exception generation, SP just below
+ * the record and x30 to 0. The handler continues only through EXIT or
+ * RESTORE_CONTEXT, whose record must lie in the normal stack or owned data and
+ * whose SP must return to the normal stack; the restore clears the exception
+ * state. Every other SVC is denied, and an exception, service, wait or
+ * callback state while the handler runs ends the domain. Delivery needs a fault
+ * stack of at least the record plus 1024 bytes and no active callback, repair,
+ * wait or service request; otherwise the exception ends the domain as before. */
+#define AROS_RESTRICTED_EXCEPTION_HANDLER 0xa551
+struct AROSRestrictedException {
+    struct AROSRestrictedContext context;
+    uint64_t esr,far,generation,reserved;
+};
 #define AROS_RESTRICTED_WAIT_WOKEN 1U
 #define AROS_RESTRICTED_WAIT_EXPIRED 2U
 /* WAIT_FOR takes generation in x0, relative microseconds in x1. Zero duration
@@ -69,6 +89,8 @@ struct AROSRestrictedResult {
     int64_t status;
     uint64_t value, esr, far, pc, yields, denied, replies, rejected, callbacks, resumed, cancelled, close_waits, drained, worker_retirements;
     uint64_t cpus, migrations, snapshot_valid;
+    /* Synchronous exceptions delivered to the registered handler. */
+    uint64_t exceptions;
     /* Present only when snapshot_valid: sole legacy owner or last closing
      * managed context, after all writers and worker leases drain. */
     unsigned char data[4096];

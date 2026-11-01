@@ -118,8 +118,10 @@ struct Restricted {
     unsigned wait_pending,wait_result;
     uint64_t callback_pc;
     struct RestrictedCodeIdentity callback_entry,callback_return,fault_code,handler_code;
-    unsigned callback_active, fault_active;
+    unsigned callback_active, fault_active, exception_active;
     uint64_t fault_handler, fault_generation, fault_page_generation, fault_reservation;
+    uint64_t exception_handler, exception_generation;
+    struct RestrictedCodeIdentity exception_code;
     uintptr_t fault_physical;
     struct AROSAppleRuntimeFrame fault;
     struct AROSAppleRuntimeFrame callback;
@@ -377,8 +379,9 @@ static int r_match_code(const struct Restricted *r,const struct RestrictedCodeId
 }
 static int r_stack_sp(const struct Restricted *r, uint64_t sp)
 {
-    uint64_t base=r->fault_active ? r->fault_address : r->stack_address;
-    size_t bytes=r->fault_active ? r->fault_bytes : r->stack_bytes;
+    unsigned alternate=r->fault_active || r->exception_active;
+    uint64_t base=alternate ? r->fault_address : r->stack_address;
+    size_t bytes=alternate ? r->fault_bytes : r->stack_bytes;
     return sp>base && sp<=base+bytes && !(sp&15);
 }
 /* Coordinator held throughout admission, copy, validation and application.
@@ -422,7 +425,8 @@ static int r_restore_context(struct Restricted *r,struct AROSAppleRuntimeFrame *
         !r_read_context(r,frame->x[0],&context) ||
         (context.nzcv&~UINT64_C(0xf0000000)) ||
         context.fpcr>UINT32_MAX || context.fpsr>UINT32_MAX ||
-        !r_stack_sp(r,context.sp) || !r_capture_code(r,context.pc,&code)) return 0;
+        context.sp<=r->stack_address || context.sp>r->stack_address+r->stack_bytes ||
+        (context.sp&15) || !r_capture_code(r,context.pc,&code)) return 0;
     memcpy(frame->x,context.x,sizeof(frame->x));
     frame->sp=context.sp;frame->elr=context.pc;
     frame->spsr=(frame->spsr&~UINT64_C(0xf0000000))|context.nzcv;
@@ -435,6 +439,42 @@ static void r_stack_bounds(struct Restricted *r, int fault)
     uintptr_t base=fault ? r->fault_address : r->stack_address;
     r->owner->tc_SPLower=(void *)base;
     r->owner->tc_SPUpper=(void *)(base+(fault ? r->fault_bytes : r->stack_bytes));
+}
+/* Synchronous exception classes a registered guest handler may receive. The
+ * SVC class and asynchronous entries never reach this test; other classes
+ * (trapped system registers, external aborts, debug steps) end the domain. */
+static int r_deliverable(unsigned ec)
+{
+    return ec==0x00 || ec==0x20 || ec==0x21 || ec==0x22 || ec==0x24 || ec==0x25 ||
+        ec==0x26 || ec==0x2c || ec==0x3c;
+}
+/* Coordinator held. Writes the faulting context through the kernel alias of the
+ * fault stack and enters the registered handler there. Returns 0 when the
+ * exception must end the domain instead. */
+static int r_deliver_exception(struct Restricted *r,struct AROSAppleRuntimeFrame *frame)
+{
+    struct AROSRestrictedException *record;
+    unsigned ec=(unsigned)(frame->esr>>26)&63;
+    if (!r_deliverable(ec) || !r->exception_handler || r->exception_active ||
+        r->fault_active || r->callback_active || r->wait_pending ||
+        r->service.request.queue || !r->fault_stack ||
+        r->fault_bytes<sizeof(*record)+1024 || r->exception_generation==UINT64_MAX ||
+        !r_match_code(r,&r->exception_code)) return 0;
+    record=(struct AROSRestrictedException *)((unsigned char *)r->fault_stack+r->fault_bytes-sizeof(*record));
+    memset(record,0,sizeof(*record));
+    memcpy(record->context.x,frame->x,sizeof(record->context.x));
+    record->context.sp=frame->sp;record->context.pc=frame->elr;
+    record->context.nzcv=frame->spsr&UINT64_C(0xf0000000);
+    memcpy(record->context.simd,frame->simd,sizeof(record->context.simd));
+    record->context.fpcr=frame->simd[64];record->context.fpsr=frame->simd[65];
+    record->esr=frame->esr;record->far=frame->far;
+    record->generation=++r->exception_generation;
+    r->exception_active=1;++r->result.exceptions;
+    frame->elr=r->exception_handler;
+    frame->x[0]=r->fault_address+r->fault_bytes-sizeof(*record);
+    frame->x[1]=record->esr;frame->x[2]=record->far;frame->x[3]=record->generation;
+    frame->x[30]=0;frame->sp=frame->x[0];r_stack_bounds(r,1);
+    return 1;
 }
 static struct ExceptionContext *r_context(struct Task *task)
 {
@@ -874,7 +914,7 @@ static int r_table_transfer(struct AROSAppleRuntimeFrame *frame,void *context,un
 static void r_finish(struct Restricted *r, struct AROSAppleTaskExecution *execution,
     struct AROSAppleRuntimeFrame *frame, int64_t status)
 {
-    r->callback_active=0;r->fault_active=0;r->suspend_count=0;
+    r->callback_active=0;r->fault_active=0;r->exception_active=0;r->suspend_count=0;
     r_clear_wait(r);
     r->result.status = status;
     r->result.value = *(uint64_t *)r->domain->data;
@@ -941,7 +981,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
             if (ec==0x24 && ((fault>=4 && fault<=7) || fault==15) && !(frame->esr&(UINT64_C(1)<<10)) &&
                 r_capture_code(r,frame->elr,&r->fault_code) && r_stack_sp(r,frame->sp) &&
                 r->fault_handler && r_match_code(r,&r->handler_code) &&
-                !r->fault_active && r->fault_generation!=UINT64_MAX &&
+                !r->fault_active && !r->exception_active && r->fault_generation!=UINT64_MAX &&
                 AROSRestrictedSpaceFaultIdentity(&r->domain->space,frame->far,&physical,&generation,&reservation)) {
                 r->fault_physical=physical;r->fault_page_generation=generation;r->fault_reservation=reservation;
                 r->fault=*frame;r->fault_active=1;++r->fault_generation;
@@ -951,14 +991,25 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
                 frame->sp=r->fault_address+r->fault_bytes;r_stack_bounds(r,1);
                 return 1;
             }
+            if (r_deliver_exception(r,frame)) return 1;
             r_finish(r,execution,frame,-2);
             return 1;
+        }
+        if (r->exception_active && svc!=AROS_RESTRICTED_RESTORE_CONTEXT && svc!=AROS_RESTRICTED_EXIT) {
+            ++r->result.denied;frame->x[0]=UINT64_MAX;return 1;
         }
         switch (svc) {
         case AROS_RESTRICTED_RESTORE_CONTEXT:
             if (!r_restore_context(r,frame)) {
                 ++r->result.rejected;frame->x[0]=0;
+            } else if (r->exception_active) {
+                r->exception_active=0;r_stack_bounds(r,0);
             }
+            return 1;
+        case AROS_RESTRICTED_EXCEPTION_HANDLER:
+            if (r->fault_active || (frame->x[0] && !r_capture_code(r,frame->x[0],&r->exception_code))) {
+                ++r->result.rejected;frame->x[0]=0;
+            } else { r->exception_handler=frame->x[0];frame->x[0]=1; }
             return 1;
         case AROS_RESTRICTED_THREAD_INFO:
             frame->x[0]=r->service.channel;frame->x[1]=r->wake_generation;
@@ -1738,7 +1789,7 @@ static int r_take_domain(uint64_t handle,struct AROSRestrictedWork *work)
     __asm__ volatile("svc #0xa56e":"+r"(domain),"+r"(request)::"memory","cc");
     return domain!=0;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {32,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread,r_read_shared,r_write_shared,r_take_domain};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {33,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread,r_read_shared,r_write_shared,r_take_domain};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

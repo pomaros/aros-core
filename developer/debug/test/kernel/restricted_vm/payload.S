@@ -2994,3 +2994,153 @@ RestoreFailure:
  svc #0xa541
  b .
 RestrictedRestoreEnd:
+
+.balign 16
+/* Synchronous exception delivery: a registered handler receives the complete
+ * faulting context on the fault stack and continues through RESTORE_CONTEXT.
+ * x0 selects the case: 0 data abort then BRK, both continued; 1 no handler;
+ * 2 handler unregistered again; 3 restore from the fault stack refused, exit 5. */
+.global RestrictedException, RestrictedExceptionEnd
+RestrictedException:
+ mov x19, x1
+ mov x20, x0
+ cmp x20, #1
+ b.eq ExceptionFault
+ adr x0, ExceptionHandler
+ svc #0xa551
+ cmp x0, #1
+ b.ne ExceptionFailure
+ cmp x20, #2
+ b.ne ExceptionFault
+ mov x0, #0
+ svc #0xa551
+ cmp x0, #1
+ b.ne ExceptionFailure
+ExceptionFault:
+ mov x22, #0x7000
+ mov x9, #0
+ mov x23, #0x5a5a
+ movk x23, #0xa5a5, lsl #16
+ movk x23, #0x1234, lsl #32
+ movk x23, #0x8765, lsl #48
+ mov x24, sp
+ExceptionLoad:
+ ldr x10, [x22]
+ b ExceptionFailure
+ExceptionResumed:
+ /* The handler advanced PC past the load and set x9; everything else is preserved. */
+ cmp x9, #0x77
+ b.ne ExceptionFailure
+ mov x9, sp
+ cmp x9, x24
+ b.ne ExceptionFailure
+ mov x9, #0x5a5a
+ movk x9, #0xa5a5, lsl #16
+ movk x9, #0x1234, lsl #32
+ movk x9, #0x8765, lsl #48
+ cmp x9, x23
+ b.ne ExceptionFailure
+ mov x9, #0
+ExceptionBreak:
+ brk #0xf000
+ b ExceptionFailure
+ExceptionBreakResumed:
+ cmp x9, #0x78
+ b.ne ExceptionFailure
+ mov x9, #0x77
+ str x9, [x19]
+ mov x0, #0
+ svc #0xa541
+ExceptionHandler:
+ /* x0 record, x1 ESR, x2 FAR, x3 generation; SP at the record on the fault stack. */
+ mov x9, sp
+ cmp x9, x0
+ b.ne ExceptionFailure
+ cbnz x30, ExceptionFailure
+ ldr x9, [x0, #800]
+ cmp x9, x1
+ b.ne ExceptionFailure
+ ldr x9, [x0, #808]
+ cmp x9, x2
+ b.ne ExceptionFailure
+ ldr x9, [x0, #816]
+ cmp x9, x3
+ b.ne ExceptionFailure
+ ldr x9, [x0, #176] /* x22 */
+ cmp x9, x22
+ b.ne ExceptionFailure
+ ldr x9, [x0, #184] /* x23 */
+ cmp x9, x23
+ b.ne ExceptionFailure
+ ldr x9, [x0, #248] /* sp */
+ cmp x9, x24
+ b.ne ExceptionFailure
+ /* Every other service is denied while the handler runs. */
+ mov x25, x0
+ svc #0xa540
+ cmn x0, #1
+ b.ne ExceptionFailure
+ mov x0, x25
+ lsr x9, x1, #26
+ cmp x3, #1
+ b.ne ExceptionSecond
+ cmp x9, #0x24
+ b.ne ExceptionFailure
+ cmp x2, x22
+ b.ne ExceptionFailure
+ adr x9, ExceptionLoad
+ ldr x10, [x0, #256]
+ cmp x9, x10
+ b.ne ExceptionFailure
+ adr x9, ExceptionResumed
+ str x9, [x0, #256]
+ mov x9, #0x77
+ str x9, [x0, #72] /* x9 */
+ b ExceptionRestore
+ExceptionSecond:
+ cmp x3, #2
+ b.ne ExceptionFailure
+ cmp x9, #0x3c
+ b.ne ExceptionFailure
+ and x9, x1, #0xffff
+ cmp x9, #0xf000
+ b.ne ExceptionFailure
+ adr x9, ExceptionBreak
+ ldr x10, [x0, #256]
+ cmp x9, x10
+ b.ne ExceptionFailure
+ adr x9, ExceptionBreakResumed
+ str x9, [x0, #256]
+ mov x9, #0x78
+ str x9, [x0, #72]
+ExceptionRestore:
+ cmp x20, #3
+ b.ne ExceptionCopy
+ /* A record on the fault stack is refused; the handler then ends the domain. */
+ mov x1, #800
+ svc #0xa550
+ cbnz x0, ExceptionFailure
+ mov x0, #5
+ svc #0xa541
+ b ExceptionFailure
+ExceptionCopy:
+ /* Copy the context record into the normal stack below the faulting SP. */
+ sub x11, x24, #1024
+ and x11, x11, #-16
+ mov x12, x11
+ mov x13, x0
+ mov x14, #100
+1:
+ ldr x15, [x13], #8
+ str x15, [x12], #8
+ subs x14, x14, #1
+ b.ne 1b
+ mov x0, x11
+ mov x1, #800
+ svc #0xa550
+ b ExceptionFailure
+ExceptionFailure:
+ mov x0, #-9
+ svc #0xa541
+ b ExceptionFailure
+RestrictedExceptionEnd:

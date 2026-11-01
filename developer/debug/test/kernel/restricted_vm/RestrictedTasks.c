@@ -711,6 +711,27 @@ static void prove_large_stacks(void)
     }
     bug("[ISOVM] large-stacks stack_pages=17 fault_pages=3 repaired=1 guards=4 drained=5 PASS\n");
 }
+extern const unsigned char RestrictedException[],RestrictedExceptionEnd[];
+static void prove_exceptions(void)
+{
+    for (unsigned mode=0;mode<4;++mode) {
+        uint64_t domain=api->create_domain(RestrictedException,
+            RestrictedExceptionEnd-RestrictedException,0);CHECK(domain);
+        struct AROSRestrictedResult result={0};
+        CHECK(api->run_domain_stacks(domain,mode,2*4096,4096,&result));
+        CHECK(result.drained);
+        switch (mode) {
+        case 0: CHECK(result.status==0 && result.value==0x77 && result.exceptions==2 && result.denied==2 && !result.rejected);break;
+        case 1: CHECK(result.status==-2 && !result.exceptions && (result.esr>>26)==0x24 && result.far==0x7000);break;
+        case 2: CHECK(result.status==-2 && !result.exceptions && (result.esr>>26)==0x24);break;
+        default: CHECK(result.status==5 && result.exceptions==1 && result.denied==1 && result.rejected==1);break;
+        }
+        CHECK(api->close_domain(domain)==1);
+        struct AROSRestrictedLifetime life;api->lifetime(&life);
+        CHECK(!life.pages && !life.live && !life.domains);
+    }
+    bug("[ISOVM] exceptions data_abort=1 brk=1 restored=2 denied_while_active=2 unregistered=1 unhandled=1 fault_stack_restore_refused=1 retained_pages=0 PASS\n");
+}
 extern const unsigned char RestrictedLargeCode[],RestrictedLargeCodeEnd[];
 static void prove_large_code(void)
 {
@@ -1381,7 +1402,7 @@ int main(void)
     intptr_t address = KrnGetSystemAttr(AROS_RESTRICTED_KATTR_API);
     CHECK(address != -1 && address != 0);
     api = (const void *)address;
-    CHECK(api->version == 32 && api->size == sizeof(*api));
+    CHECK(api->version == 33 && api->size == sizeof(*api));
     extern const unsigned char RestrictedRestore[],RestrictedRestoreEnd[];
     static struct AROSRestrictedResult restored;
     CHECK(api->run(RestrictedRestore,(size_t)(RestrictedRestoreEnd-RestrictedRestore),0,&restored));
@@ -1468,6 +1489,7 @@ int main(void)
     prove_thread_growth();
     prove_table_growth();
     prove_large_stacks();
+    prove_exceptions();
     prove_large_code();
     prove_dynamic_code();
     prove_dynamic_continuations();

@@ -15,7 +15,7 @@ struct RestrictedCodeIdentity { uint64_t pc,generation,reservation;uintptr_t phy
 struct AROSAppleRuntimeFrame { uint64_t x[31],sp,elr,spsr,esr,far,vector,service,status,task_tls,simd[66],return_ttbr0,entry_ttbr0; };
 struct Restricted {
  struct RestrictedDomain *domain;void *stack;uint64_t stack_address,fault_address;size_t stack_bytes,fault_bytes;
- unsigned fault_active,callback_active,wait_pending;uint64_t callback_pc;
+ unsigned fault_active,callback_active,wait_pending,exception_active;uint64_t callback_pc;
  struct { struct { void *queue; } request; } service;
 };
 static unsigned char stack[8192],data[8192];
@@ -87,6 +87,9 @@ int main(void)
  reset();slot.callback_active=1;refused();
  reset();slot.callback_pc=0x30000;refused();
  reset();slot.fault_active=1;refused();
+ /* A delivered exception restores only into the normal stack, never the fault stack. */
+ reset();slot.exception_active=1;slot.fault_address=0x40000;slot.fault_bytes=4096;publish();assert(r_restore_context(&slot,&frame));
+ reset();slot.exception_active=1;slot.fault_address=0x40000;slot.fault_bytes=4096;input.sp=0x41000;refused();
  reset();slot.wait_pending=1;refused();
  reset();slot.service.request.queue=&slot;refused();
  /* Failure on the second source page must not partially copy the record. */

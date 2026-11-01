@@ -15,7 +15,7 @@ def main():
  p=argparse.ArgumentParser(description=__doc__);p.add_argument('--out',type=Path,required=True);a=p.parse_args();out=a.out.resolve()
  if out.exists() or ROOT in out.parents:p.error('fresh output outside source required')
  source=ROOT/'arch/aarch64-apple/kernel/restricted.c';text=source.read_text()
- actual=''.join(function(text,name) for name in ['r_code_pc(const','r_capture_code(const','r_stack_sp(const','r_read_context(struct','r_restore_context(struct'])
+ actual=''.join(function(text,name) for name in ['r_code_pc(const','r_capture_code(const','r_read_context(struct','r_restore_context(struct'])
  variants=[('actual',actual,None)]
  out.mkdir(parents=True);inputs=[source,HERE/'test.c',Path(__file__),ROOT/'arch/aarch64-apple/include/aros/apple/restricted.h']
  hashes={str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
