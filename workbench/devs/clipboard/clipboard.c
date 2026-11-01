@@ -1,6 +1,8 @@
 /*
     Copyright (C) 1998-2009, The AROS Development Team. All rights reserved.
 
+    Copyright (C) 2026 John KNIPPER.
+
     Clipboard device.
 */
 
@@ -420,8 +422,9 @@ AROS_LH1(void, beginio,
                       CBUn->cu_WriteID == CBUn->cu_PostID)
                 {
                     struct PostRequest pr = {
-                        { NULL, NULL },
-                        FindTask(NULL)
+                        .pr_Waiter = FindTask(NULL),
+                        .pr_Request = ioreq,
+                        .pr_Cancelled = FALSE
                     };
                     
                     /* Make sure we are signalled. */
@@ -446,8 +449,10 @@ AROS_LH1(void, beginio,
                     }
 
                     Forbid();
-                    ReleaseSemaphore(&CBUn->cu_UnitLock);
+                    /* Clear the signal while the request is still protected.
+                     * An abort on another CPU may signal as soon as we unlock. */
                     SetSignal(0, SIGF_SINGLE);
+                    ReleaseSemaphore(&CBUn->cu_UnitLock);
                     Wait(SIGF_SINGLE);
                     Permit();
                     D(bug("Got SIGF_SINGLE [me=%08lx]\n",FindTask(NULL)));
@@ -461,6 +466,14 @@ AROS_LH1(void, beginio,
                     }
 
                     Remove((struct Node*) &pr);
+                    if (pr.pr_Cancelled)
+                    {
+                        ioClip(ioreq)->io_ClipID = -1;
+                        ioClip(ioreq)->io_Actual = 0;
+                        ioreq->io_Error = IOERR_ABORTED;
+                        ReleaseSemaphore(&CBUn->cu_UnitLock);
+                        goto read_done;
+                    }
                 }
 
                 CBUn->cu_ReadID++;
@@ -488,6 +501,7 @@ AROS_LH1(void, beginio,
 
             readCb(ioreq, CBBase);
 
+read_done:
             break;
 
 
@@ -595,12 +609,24 @@ AROS_LH1(LONG, abortio,
 {
     AROS_LIBFUNC_INIT
 
-    /* Keep compiler happy */
-    (void) ioreq;
+    struct PostRequest *request;
     (void) CBBase;
 
-    D(bug("clipboard.device/abortio: ioreq 0x%lx\n",ioreq));
-    /* Nothing to abort */
+    /* Never wait behind an active file transfer. A posted reader releases this
+     * semaphore while sleeping; its stack record is protected by the lock. */
+    if (!CBUn || !AttemptSemaphore(&CBUn->cu_UnitLock))
+        return 0;
+
+    ForeachNode((struct List *)&CBUn->cu_PostRequesters, request)
+    {
+        if (request->pr_Request == ioreq)
+        {
+            request->pr_Cancelled = TRUE;
+            Signal(request->pr_Waiter, SIGF_SINGLE);
+            break;
+        }
+    }
+    ReleaseSemaphore(&CBUn->cu_UnitLock);
     return 0;
 
     AROS_LIBFUNC_EXIT

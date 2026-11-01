@@ -3,6 +3,7 @@
 
 /*
     Copyright © 1995-2008, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER.
     $Id$
 */
 
@@ -35,6 +36,8 @@ struct PostRequest
 {
     struct MinNode  pr_Link;
     struct Task    *pr_Waiter;
+    struct IORequest *pr_Request;
+    BOOL             pr_Cancelled;
 };
 
 struct ClipboardUnit
