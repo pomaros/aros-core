@@ -20,7 +20,7 @@ def main():
  original=source.read_text()
  generic=ROOT/'rom/kernel/mapping/mapping.c';pager=ROOT/'rom/kernel/mapping/pager.c'
  cases=[('baseline','adapter',None,None,None),
-  ('take-space-selection','adapter','(selected && s->space!=selected)','(selected && 0)','take-space-routing'),
+  ('take-space-selection','adapter','(selected && s->space!=selected)','(selected && 0)','take-space-foreign'),
   ('shared-copy-executable','adapter','(write && (p->protection&KMAP_EXEC))','0','shared-copy-executable-refused'),
   ('shared-copy-closing','adapter','b->publication || b->closing ||\n        b->count','b->publication ||\n        b->count','shared-copy-closing-refused'),
   ('shared-copy-alias','adapter','if (begin<other->pages[i]+PAGE && other->pages[i]<end) return 0;','if (begin<other->pages[i]+PAGE && other->pages[i]<end && 0) return 0;','shared-copy-native-alias-refused'),
