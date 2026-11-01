@@ -8,6 +8,7 @@
 #include <aros/apple/restricted.h>
 #define R_PAGE 4096U
 #define KMAP_READ 1
+#define KMAP_WRITE 2
 #define KMAP_EXEC 4
 struct AROSRestrictedSpace { unsigned hardware;uint64_t root,tcr,handle; };
 struct RestrictedDomain { unsigned closing;void *code;size_t code_bytes;struct AROSRestrictedSpace space; };
@@ -73,6 +74,12 @@ int main(void)
  reset();input.pc++;refused();
  reset();executable=0;refused();
  reset();input.sp=0x10000;refused();
+ /* Owned writable pages below SP are admitted stacks; unowned ones are not. */
+ reset();input.sp=0x21000;publish();assert(r_restore_context(&slot,&frame));
+ reset();input.sp=0x22000;publish();assert(r_restore_context(&slot,&frame));
+ reset();input.sp=0x20000;refused();
+ reset();input.sp=0x22010;refused();
+ reset();input.sp=0x21008;refused();
  reset();input.sp=0x12010;refused();
  reset();input.sp--;refused();
  reset();input.nzcv|=1;refused();

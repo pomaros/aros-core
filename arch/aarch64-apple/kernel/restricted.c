@@ -377,12 +377,22 @@ static int r_match_code(const struct Restricted *r,const struct RestrictedCodeId
         current.physical==identity->physical && current.generation==identity->generation &&
         current.reservation==identity->reservation;
 }
+/* The normal stack, or any owned writable page directly below SP: a guest
+ * may switch to stacks it owns (an emulator stack, a fiber), and the kernel
+ * admits them for preemption, restoration and exception delivery alike. */
+static int r_owned_sp(const struct Restricted *r, uint64_t sp)
+{
+    uintptr_t physical;uint64_t generation,reservation;
+    if (!sp || (sp&15)) return 0;
+    if (sp>r->stack_address && sp<=r->stack_address+r->stack_bytes) return 1;
+    return AROSRestrictedSpacePageIdentity(&r->domain->space,(sp-1)&~(uint64_t)(R_PAGE-1),
+        KMAP_WRITE,&physical,&generation,&reservation);
+}
 static int r_stack_sp(const struct Restricted *r, uint64_t sp)
 {
-    unsigned alternate=r->fault_active || r->exception_active;
-    uint64_t base=alternate ? r->fault_address : r->stack_address;
-    size_t bytes=alternate ? r->fault_bytes : r->stack_bytes;
-    return sp>base && sp<=base+bytes && !(sp&15);
+    if (r->fault_active || r->exception_active)
+        return sp>r->fault_address && sp<=r->fault_address+r->fault_bytes && !(sp&15);
+    return r_owned_sp(r,sp);
 }
 /* Coordinator held throughout admission, copy, validation and application.
  * Read only kernel-owned physical aliases, never an untrusted virtual pointer.
@@ -425,8 +435,7 @@ static int r_restore_context(struct Restricted *r,struct AROSAppleRuntimeFrame *
         !r_read_context(r,frame->x[0],&context) ||
         (context.nzcv&~UINT64_C(0xf0000000)) ||
         context.fpcr>UINT32_MAX || context.fpsr>UINT32_MAX ||
-        context.sp<=r->stack_address || context.sp>r->stack_address+r->stack_bytes ||
-        (context.sp&15) || !r_capture_code(r,context.pc,&code)) return 0;
+        !r_owned_sp(r,context.sp) || !r_capture_code(r,context.pc,&code)) return 0;
     memcpy(frame->x,context.x,sizeof(frame->x));
     frame->sp=context.sp;frame->elr=context.pc;
     frame->spsr=(frame->spsr&~UINT64_C(0xf0000000))|context.nzcv;
@@ -439,6 +448,17 @@ static void r_stack_bounds(struct Restricted *r, int fault)
     uintptr_t base=fault ? r->fault_address : r->stack_address;
     r->owner->tc_SPLower=(void *)base;
     r->owner->tc_SPUpper=(void *)(base+(fault ? r->fault_bytes : r->stack_bytes));
+}
+/* Exec's scheduler alerts on a saved SP outside tc_SPLower/tc_SPUpper. Keep
+ * those bounds on the admitted stack: the normal stack, or the owned page
+ * directly below an SP that switched elsewhere. Called after r_stack_sp. */
+static void r_track_stack(struct Restricted *r, uint64_t sp)
+{
+    if (r->fault_active || r->exception_active) return;
+    if (sp>r->stack_address && sp<=r->stack_address+r->stack_bytes) { r_stack_bounds(r,0);return; }
+    uintptr_t base=(sp-1)&~(uint64_t)(R_PAGE-1);
+    r->owner->tc_SPLower=(void *)base;
+    r->owner->tc_SPUpper=(void *)(base+R_PAGE);
 }
 /* Synchronous exception classes a registered guest handler may receive. The
  * SVC class and asynchronous entries never reach this test; other classes
@@ -945,7 +965,7 @@ void AROSAppleRestrictedCheckStack(struct AROSAppleRuntimeFrame *frame,
     r_coordinate();
     if (r->domain->closing) r_finish(r,execution,frame,-5);
     else if (!r_stack_sp(r,frame->sp)) r_finish(r,execution,frame,-3);
-    else r_deliver_wait(r,frame);
+    else { r_track_stack(r,frame->sp);r_deliver_wait(r,frame); }
     r_uncoordinate();
 }
 static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
