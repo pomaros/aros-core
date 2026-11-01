@@ -35,6 +35,8 @@ wrapping or reusing identifiers; callers use the API from task context.
 
 ## Generic diagnostics
 
+- [FAT transfer cache borrows](developer/debug/test/filesys/fat/cache_pins_host/README.md): actual transfer-body HOST checks and a Native DOS many-open-files regression; guest execution requires its own receipt.
+
 - [Restricted AArch64 domain mechanism](developer/debug/test/kernel/restricted_domain_qemu/README.md): real-MMU QEMU checks with semantic negative controls; independent of product boot qualification.
 
 - [Service coordinator ownership](developer/debug/test/kernel/service_host/README.md): sanitized HOST checks for copied requests, cancellation, generation reuse and domain retention.

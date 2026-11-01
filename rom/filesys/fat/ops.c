@@ -993,6 +993,19 @@ create_failed:
     return err;
 }
 
+/* A completed file transfer owns no borrowed cache data. Keep cluster/sector
+ * positions for the next transfer, but let the LRU reuse its range meanwhile.
+ * Otherwise every idle open file pins a range and can exhaust a small cache. */
+static void ReleaseFileCacheBlock(struct IOHandle *ioh)
+{
+    if (ioh->block != NULL)
+    {
+        Cache_FreeBlock(ioh->sb->cache, ioh->block);
+        ioh->block = NULL;
+        ioh->data = NULL;
+    }
+}
+
 LONG OpRead(struct ExtFileLock *lock, UBYTE *data, ULONG want,
     ULONG *read, struct Globals *glob)
 {
@@ -1018,7 +1031,9 @@ LONG OpRead(struct ExtFileLock *lock, UBYTE *data, ULONG want,
             " adjusted want to %ld bytes\n", want));
     }
 
-    if ((err = ReadFileChunk(&(lock->ioh), lock->pos, want, data, read)) == 0)
+    err = ReadFileChunk(&(lock->ioh), lock->pos, want, data, read);
+    ReleaseFileCacheBlock(&lock->ioh);
+    if (err == 0)
     {
         lock->pos += *read;
         D(bug("[fat] read %ld bytes, new file pos is %ld\n", *read,
@@ -1085,8 +1100,11 @@ LONG OpWrite(struct ExtFileLock *lock, UBYTE *data, ULONG want,
     if (lock->ioh.first_cluster == 0xffffffff)
         update_entry = TRUE;
 
-    if ((err = WriteFileChunk(&(lock->ioh), lock->pos, want, data,
-        written)) == 0)
+    err = WriteFileChunk(&(lock->ioh), lock->pos, want, data, written);
+    /* Release even after an I/O error or zero progress, and before directory
+     * metadata needs another range. Dirty state remains owned by the cache. */
+    ReleaseFileCacheBlock(&lock->ioh);
+    if (err == 0)
     {
         ULONG size;
 
