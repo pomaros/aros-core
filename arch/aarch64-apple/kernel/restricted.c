@@ -1139,6 +1139,14 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
         }
         return 1;
     }
+    if (ec==0x15 && svc==0xa56e) {
+        struct RestrictedDomain *d=r_domain_lookup(frame->x[0]);
+        struct AROSRestrictedWork *work=(void *)(uintptr_t)frame->x[1];
+        frame->x[0]=0;
+        if (d && d->managed && d->state==R_LIVE && !d->closing && d->owner_context==context)
+            frame->x[0]=AROSRestrictedServiceTakeSpace(task,context,&d->space,work);
+        return 1;
+    }
     if (ec==0x15 && r_table_transfer(frame,context,svc)) return 1;
     if (ec==0x15 && r_shared_operation(frame,context,svc)) return 1;
     if (ec==0x15 && r_memory(frame,context,svc)) return 1;
@@ -1721,7 +1729,15 @@ static int64_t r_resume_thread(uint64_t handle,uint64_t channel)
     __asm__ volatile("svc #0xa56d":"+r"(domain),"+r"(thread)::"memory","cc");
     return (int64_t)domain;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {31,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread,r_read_shared,r_write_shared};
+static int r_take_domain(uint64_t handle,struct AROSRestrictedWork *work)
+{
+    r_reap();
+    register uint64_t domain __asm__("x0")=handle;
+    register uintptr_t request __asm__("x1")=(uintptr_t)work;
+    __asm__ volatile("svc #0xa56e":"+r"(domain),"+r"(request)::"memory","cc");
+    return domain!=0;
+}
+const struct AROSRestrictedAPI AROSRestrictedAPI = {32,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread,r_read_shared,r_write_shared,r_take_domain};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

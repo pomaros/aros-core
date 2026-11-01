@@ -163,5 +163,10 @@ struct AROSRestrictedAPI {
      * The native controller is trusted to supply accessible scratch memory. */
     int (*read_shared)(uint64_t object,size_t offset,void *buffer,size_t length);
     int (*write_shared)(uint64_t object,size_t offset,const void *buffer,size_t length);
+    /* Version32: copied service work from one live managed domain owned by the
+     * calling Native controller. Invalid/foreign/closing domains return0 and
+     * leave work unchanged. Other domains' requests remain queued. Legacy take
+     * retains global worker semantics; completion binds the original worker. */
+    int (*take_domain)(uint64_t domain,struct AROSRestrictedWork *work);
 };
 #endif

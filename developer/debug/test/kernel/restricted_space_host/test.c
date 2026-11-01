@@ -418,8 +418,37 @@ static void channel_growth(void)
         AROSRestrictedSpaceClose(&space),"channel-growth-drain");
     free(channels);free(data);free(f);
 }
+static void selected_space_tests(void)
+{
+    struct Fixture *f[2];unsigned char *data[2];struct AROSRestrictedSpace spaces[2]={{0}};
+    struct AROSRestrictedService channels[2]={{0}};struct Task workers[2]={{1},{2}};int contexts[2];
+    for(unsigned i=0;i<2;++i) {
+        f[i]=aligned_alloc(PAGE,sizeof(*f[i]));data[i]=aligned_alloc(PAGE,PAGE);
+        CHECK(f[i] && data[i],"take-space-allocation");memset(f[i],0,sizeof(*f[i]));f[i]->used=1;memset(data[i],0,PAGE);data[i][0]=(unsigned char)(0xa0+i);
+        struct AArch64ProtectionOps ops={f[i],resolve,allocate,clean,invalidate,sync_code,NULL};
+        CHECK(AROSRestrictedSpaceInit(&spaces[i],80+i,(uintptr_t)f[i]->tables[0],25|(UINT64_C(5)<<32),(uintptr_t)data[i],&ops),"take-space-init");
+        CHECK(AROSRestrictedServiceInit(&channels[i],&spaces[i],90+i),"take-space-channel");
+        CHECK(AROSRestrictedServiceSubmit(&channels[i],AROS_RESTRICTED_DATA,AROS_RESTRICTED_DATA+128,8),"take-space-submit");
+    }
+    struct AROSRestrictedWork work,original;memset(&work,0x55,sizeof(work));original=work;
+    struct AROSRestrictedSpace foreign={0};
+    CHECK(!AROSRestrictedServiceTakeSpace(&workers[1],&contexts[1],NULL,&work) && !memcmp(&work,&original,sizeof(work)),"take-space-null");
+    CHECK(!AROSRestrictedServiceTakeSpace(&workers[1],&contexts[1],&foreign,&work) && !memcmp(&work,&original,sizeof(work)),"take-space-foreign");
+    CHECK(AROSRestrictedServiceTakeSpace(&workers[1],&contexts[1],&spaces[1],&work) && work.channel==channels[1].channel && work.bytes[0]==0xa1,"take-space-routing");
+    original=work;
+    CHECK(!AROSRestrictedServiceTakeSpace(&workers[1],&contexts[1],&spaces[1],&work) && !memcmp(&work,&original,sizeof(work)),"take-space-keeps-other-queued");
+    CHECK(!AROSRestrictedServiceComplete(&workers[0],&work),"take-space-worker-lease");
+    CHECK(AROSRestrictedServiceComplete(&workers[1],&work) && AROSRestrictedServiceCollect(&channels[1],work.token) && data[1][128]==0xa1 && !data[0][128],"take-space-own-reply");
+    CHECK(AROSRestrictedServiceTakeSpace(&workers[0],&contexts[0],&spaces[0],&work) && work.channel==channels[0].channel && work.bytes[0]==0xa0,"take-space-peer-preserved");
+    CHECK(AROSRestrictedServiceComplete(&workers[0],&work) && AROSRestrictedServiceCollect(&channels[0],work.token) && data[0][128]==0xa0,"take-space-peer-reply");
+    for(unsigned i=0;i<2;++i) {
+        CHECK(AROSRestrictedServiceClose(&channels[i]) && AROSRestrictedSpaceClose(&spaces[i]),"take-space-close");
+        free(f[i]);free(data[i]);
+    }
+}
 int main(void)
 {
+    selected_space_tests();
     struct Fixture *f=aligned_alloc(PAGE,sizeof(*f));
     unsigned char *data=aligned_alloc(PAGE,PAGE);
     CHECK(f && data,"allocation");memset(f,0,sizeof(*f));memset(data,0x31,PAGE);

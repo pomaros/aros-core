@@ -141,6 +141,8 @@ int AROSRestrictedServiceInit(struct AROSRestrictedService *,
 int AROSRestrictedServiceSubmit(struct AROSRestrictedService *,uintptr_t,uintptr_t,size_t);
 int AROSRestrictedServiceCollect(struct AROSRestrictedService *,uint64_t);
 int AROSRestrictedServiceTake(struct Task *,void *,struct AROSRestrictedWork *);
+/* Kernel-selected space only. Refusal never leases another space's request. */
+int AROSRestrictedServiceTakeSpace(struct Task *,void *,struct AROSRestrictedSpace *,struct AROSRestrictedWork *);
 int AROSRestrictedServiceRetireWorker(void *);
 unsigned AROSRestrictedServiceState(struct Task *,const struct AROSRestrictedWork *);
 int AROSRestrictedServiceComplete(struct Task *,const struct AROSRestrictedWork *);

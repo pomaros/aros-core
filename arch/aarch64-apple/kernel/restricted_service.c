@@ -359,17 +359,26 @@ int AROSRestrictedServiceCollect(struct AROSRestrictedService *s,uint64_t token)
     return s && s->space && !s->closing &&
         KrnBufferServiceCollect(&s->request,s->principal,token,&s->space->bufferops);
 }
-int AROSRestrictedServiceTake(struct Task *worker,void *context,struct AROSRestrictedWork *work)
+static int service_take(struct Task *worker,void *context,struct AROSRestrictedSpace *selected,struct AROSRestrictedWork *work)
 {
     if (!worker || !context || !work) return 0;
     for (struct AROSRestrictedService *s=active;s;s=s->next) {
-        if (!s || s->closing || s->worker || s->space->domain.closing || s->request.state!=KS_QUEUED) continue;
+        if ((selected && s->space!=selected) || s->closing || s->worker || s->space->domain.closing || s->request.state!=KS_QUEUED) continue;
         size_t length;
         if (!KrnBufferServiceTake(&s->request,s->request.token,work->bytes,sizeof(work->bytes),&length)) return 0;
         s->worker=worker;s->worker_context=context;work->channel=s->channel;work->token=s->request.token;work->length=length;
         return 1;
     }
     return 0;
+}
+int AROSRestrictedServiceTake(struct Task *worker,void *context,struct AROSRestrictedWork *work)
+{
+    return service_take(worker,context,NULL,work);
+}
+int AROSRestrictedServiceTakeSpace(struct Task *worker,void *context,
+    struct AROSRestrictedSpace *space,struct AROSRestrictedWork *work)
+{
+    return space && service_take(worker,context,space,work);
 }
 unsigned AROSRestrictedServiceState(struct Task *worker,const struct AROSRestrictedWork *work)
 {
