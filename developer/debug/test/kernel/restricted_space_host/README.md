@@ -97,5 +97,7 @@ JIT pages (API34): a private page commits or publishes in the exact JIT class
 as an EL0 writable leaf with UXN clear and PXN set, keeps a writable native
 alias, and proves execute identity through that leaf. Partial classes, direct
 protection changes and shared views are refused; transitions to data and code
-advance the generation. Four mutations remove the class translation, the
+advance the generation. A JIT commit installs the page as data first, since
+execute cache maintenance needs the resident native alias. Five mutations
+remove that ordering, the class translation, the
 writable native alias, the shared refusal and the JIT execute identity.

@@ -221,8 +221,18 @@ int AROSRestrictedRegionCommit(struct AROSRestrictedRegion *r,size_t page,uintpt
         r->shared || r->publication_pending || !pa || (pa&(PAGE-1)) ||
         ((access&~(KMAP_READ|KMAP_WRITE)) && access!=KMAP_JIT_CLASS) ||
         r->backing[page] || physical_in_use(pa)) return 0;
+    /* A JIT page is installed as data first: execute-permission cache
+     * maintenance goes through the owned native alias, which exists only
+     * once the page is resident. The fresh page has no other user. */
+    unsigned initial=access==KMAP_JIT_CLASS ? KMAP_READ|KMAP_WRITE : access;
     r->backing[page]=pa;
-    if (KrnMappingCommitResidentPage(&r->mapping,page,pa,access,&r->space->mapops)) return 1;
+    if (KrnMappingCommitResidentPage(&r->mapping,page,pa,initial,&r->space->mapops)) {
+        uintptr_t released=0;
+        if (access!=KMAP_JIT_CLASS ||
+            KrnMappingProtectPage(&r->mapping,page,access,&r->space->mapops)) return 1;
+        if (!KrnMappingDecommitPage(&r->mapping,page,&r->space->mapops,&released) || released!=pa)
+            for (;;) __asm__ volatile("wfe"); /* a fresh leaf cannot refuse */
+    }
     r->backing[page]=0;return 0;
 }
 int AROSRestrictedRegionDecommit(struct AROSRestrictedRegion *r,size_t page,uintptr_t *released)

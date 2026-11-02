@@ -22,8 +22,19 @@ static uint64_t allocate(void *opaque,unsigned bits)
 static void clean(void *opaque,const void *address,size_t bytes)
 { (void)opaque;(void)address;(void)bytes; }
 static void invalidate(void *opaque) { ++((struct Fixture *)opaque)->invalidations; }
+/* The production synchronize callback reaches the page through the owned
+ * native alias, which the ledger names only once the page is resident. */
+static struct AROSRestrictedRegion *alias_region;
 static void sync_code(void *opaque,uint64_t va,size_t bytes)
-{ ++((struct Fixture *)opaque)->synchronizations;(void)va;(void)bytes; }
+{
+    ++((struct Fixture *)opaque)->synchronizations;(void)bytes;
+    if (alias_region && va>=alias_region->mapping.start &&
+        va-alias_region->mapping.start<alias_region->mapping.length) {
+        size_t page=(va-alias_region->mapping.start)/PAGE;
+        CHECK(alias_region->backing[page] &&
+            alias_region->mapping.pages[page].physical==alias_region->backing[page],"jit-sync-alias-resident");
+    }
+}
 static int page_allocate(void *opaque,size_t size,struct KrnPagerPage *page)
 {
     CHECK(size==PAGE,"region-page-size");*page=(struct KrnPagerPage){(uintptr_t)opaque,opaque};return 1;
@@ -161,6 +172,7 @@ static void jit_tests(void)
     struct AROSRestrictedRegion region={0};struct KrnMappingPage metadata[2];uintptr_t ledger[2]={0};
     uintptr_t va=AROS_RESTRICTED_DYNAMIC_BASE,pa;uint64_t generation,reservation;
     CHECK(AROSRestrictedRegionReserve(&space,&region,va,2*PAGE,metadata,ledger,2),"jit-reserve");
+    alias_region=&region;
     CHECK(!AROSRestrictedRegionCommit(&region,0,(uintptr_t)page,7) &&
         !AROSRestrictedRegionCommit(&region,0,(uintptr_t)page,KMAP_JIT|3) &&
         !AROSRestrictedRegionCommit(&region,0,(uintptr_t)page,KMAP_JIT_CLASS|16) && !ledger[0],"jit-partial-refused");
@@ -188,7 +200,7 @@ static void jit_tests(void)
     uintptr_t released=0;
     CHECK(AROSRestrictedRegionDecommit(&region,0,&released) && released==(uintptr_t)page,"jit-decommit");
     CHECK(AROSRestrictedRegionDetach(&region) && AROSRestrictedSpaceClose(&space),"jit-close");
-    free(page);free(data);free(f);publishing=NULL;
+    free(page);free(data);free(f);publishing=NULL;alias_region=NULL;
 }
 static void shared_publication_tests(void)
 {
