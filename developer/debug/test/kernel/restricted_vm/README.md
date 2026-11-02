@@ -156,3 +156,8 @@ again; publishing it read+execute runs it and makes a write fault. Without a
 JIT mode both commit and protect with read+write+execute are refused. Its
 `jit` marker records the mode. The dynamic-code workload expects the
 read+write+execute refusal only without a JIT mode.
+
+The API34 fault-decline workload reserves a page without committing it. The
+fault handler declines the repair and the exception handler receives the data
+abort; a decline with a forged generation is refused. Its marker is
+`fault-decline`.

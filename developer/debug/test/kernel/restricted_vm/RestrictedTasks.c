@@ -768,6 +768,24 @@ static void prove_jit(void)
     CHECK(!life.pages && !life.live && !life.domains);
     bug("[ISOVM] jit mode=%ld written_executed=4 data_fetch_refused=1 code_write_refused=1 to_code=1 retained_pages=0 PASS\n",(long)mode);
 }
+extern const unsigned char RestrictedDecline[],RestrictedDeclineEnd[];
+/* API 34 fault decline: an unrepaired fault on a reserved page reaches the
+ * exception handler; a forged generation is refused. */
+static void prove_decline(void)
+{
+    for (unsigned mode=0;mode<2;++mode) {
+        uint64_t domain=api->create_domain(RestrictedDecline,RestrictedDeclineEnd-RestrictedDecline,0);CHECK(domain);
+        CHECK(api->reserve_memory(domain,UINT64_C(0x200000000),4096));
+        struct AROSRestrictedResult result={0};
+        CHECK(api->run_domain_stacks(domain,mode,2*4096,4096,&result) && result.drained);
+        if (!mode) CHECK(result.status==0x55 && result.exceptions==1 && !result.resumed);
+        else CHECK(result.status==-8 && !result.exceptions && result.denied>=1);
+        CHECK(api->close_domain(domain)==1);
+    }
+    struct AROSRestrictedLifetime life;api->lifetime(&life);
+    CHECK(!life.pages && !life.live && !life.domains);
+    bug("[ISOVM] fault-decline declined=1 delivered=1 forged_refused=1 retained_pages=0 PASS\n");
+}
 extern const unsigned char RestrictedLargeCode[],RestrictedLargeCodeEnd[];
 static void prove_large_code(void)
 {
@@ -1528,6 +1546,7 @@ int main(void)
     prove_large_stacks();
     prove_exceptions();
     prove_jit();
+    prove_decline();
     prove_large_code();
     prove_dynamic_code();
     prove_dynamic_continuations();

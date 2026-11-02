@@ -32,6 +32,10 @@ static int AROSRestrictedSpacePageIdentity(struct AROSRestrictedSpace *s,uintptr
  *pa=0x8000;*gen=generation;*res=reservation;return 1;
 }
 static void r_stack_bounds(struct Restricted *r,int fault) { r->bounds_fault=fault;++r->bounds_calls; }
+/* Production tracking on the normal stack: bounds back to the normal stack,
+ * nothing while a fault or exception owns the fault stack. */
+static void r_track_stack(struct Restricted *r,uint64_t sp)
+{ (void)sp;if (!r->fault_active && !r->exception_active) r_stack_bounds(r,0); }
 static int r_restore_context(struct Restricted *r,struct AROSAppleRuntimeFrame *frame) { (void)frame;return r->restore_ok; }
 static void r_finish(struct Restricted *r,void *execution,struct AROSAppleRuntimeFrame *frame,int status)
 { (void)execution;r->result.status=status;frame->elr=0; }

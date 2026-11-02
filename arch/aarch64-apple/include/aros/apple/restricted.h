@@ -69,6 +69,16 @@ struct AROSRestrictedContext {
  * stack of at least the record plus 1024 bytes and no active callback, repair,
  * wait or service request; otherwise the exception ends the domain as before. */
 #define AROS_RESTRICTED_EXCEPTION_HANDLER 0xa551
+/* Version 34: a FAULT_HANDLER repair that does not commit the page declines
+ * with x0 = faulting PC and x1 = fault generation (as FAULT_RESUME takes):
+ * the saved fault becomes a synchronous exception for the EXCEPTION_HANDLER,
+ * or ends the domain when none can take it. Refusal returns x0 = UINT64_MAX.
+ * FAULT_RESUME, and every stack admission, accept an owned stack as for
+ * RESTORE_CONTEXT, including an owned reserved page below SP that a demand
+ * commit will back. Together they let a controller commit lazily: pages are
+ * backed on first access by a repair, as Windows charges commit without
+ * backing it. */
+#define AROS_RESTRICTED_FAULT_DECLINE 0xa552
 struct AROSRestrictedException {
     struct AROSRestrictedContext context;
     uint64_t esr,far,generation,reserved;

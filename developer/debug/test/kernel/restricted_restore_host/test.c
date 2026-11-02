@@ -34,6 +34,9 @@ static int AROSRestrictedSpacePageIdentity(struct AROSRestrictedSpace *space,uin
  if (va<0x20000 || va>=0x22000 || (deny_second && va==0x21000)) return 0;
  *pa=(uintptr_t)data+(va-0x20000);return 1;
 }
+/* No reserved pages in this fixture: a stack page is resident or refused. */
+static int AROSRestrictedSpaceFaultIdentity(struct AROSRestrictedSpace *space,uintptr_t va,uintptr_t *pa,uint64_t *gen,uint64_t *res)
+{ (void)space;(void)va;(void)pa;(void)gen;(void)res;return 0; }
 #include "actual.inc"
 static struct RestrictedDomain domain;
 static struct Restricted slot;

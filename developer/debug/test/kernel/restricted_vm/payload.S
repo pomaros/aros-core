@@ -3179,3 +3179,39 @@ JitStore:
  isb
  ret
 RestrictedJitEnd:
+
+/* Fault decline (API 34). The controller reserves 0x200000000 without
+ * committing it. x0 = 0: the fault handler declines and the exception
+ * handler receives the fault, exiting 0x55. x0 = 1: a decline with a wrong
+ * generation is refused and the handler exits -8. */
+.global RestrictedDecline, RestrictedDeclineEnd
+RestrictedDecline:
+ mov x21, x0
+ adr x0, DeclineFault
+ svc #0xa545
+ cbz x0, DeclineFailure
+ adr x0, DeclineException
+ svc #0xa551
+ cbz x0, DeclineFailure
+ movz x20, #2, lsl #32
+ ldr x9, [x20]
+DeclineFailure:
+ mov x0, #-9
+ svc #0xa541
+DeclineFault:
+ cmp x0, x20
+ b.ne DeclineFailure
+ mov x0, x2
+ add x1, x3, x21
+ svc #0xa552
+ mov x0, #-8
+ svc #0xa541
+DeclineException:
+ cmp x2, x20
+ b.ne DeclineFailure
+ lsr x9, x1, #26
+ cmp x9, #0x24
+ b.ne DeclineFailure
+ mov x0, #0x55
+ svc #0xa541
+RestrictedDeclineEnd:

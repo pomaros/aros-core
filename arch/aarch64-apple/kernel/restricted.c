@@ -387,8 +387,13 @@ static int r_owned_sp(const struct Restricted *r, uint64_t sp)
     uintptr_t physical;uint64_t generation,reservation;
     if (!sp || (sp&15)) return 0;
     if (sp>r->stack_address && sp<=r->stack_address+r->stack_bytes) return 1;
-    return AROSRestrictedSpacePageIdentity(&r->domain->space,(sp-1)&~(uint64_t)(R_PAGE-1),
-        KMAP_WRITE,&physical,&generation,&reservation);
+    uintptr_t page=(sp-1)&~(uint64_t)(R_PAGE-1);
+    if (AROSRestrictedSpacePageIdentity(&r->domain->space,page,KMAP_WRITE,
+        &physical,&generation,&reservation)) return 1;
+    /* A stack growing into an owned reserved page that a demand-commit
+     * repair will back: every access there faults first. */
+    return AROSRestrictedSpaceFaultIdentity(&r->domain->space,page,
+        &physical,&generation,&reservation) && !physical;
 }
 static int r_stack_sp(const struct Restricted *r, uint64_t sp)
 {
@@ -1054,7 +1059,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
             if (!r_restore_context(r,frame)) {
                 ++r->result.rejected;frame->x[0]=0;
             } else if (r->exception_active) {
-                r->exception_active=0;r_stack_bounds(r,0);
+                r->exception_active=0;r_track_stack(r,frame->sp);
             }
             return 1;
         case AROS_RESTRICTED_EXCEPTION_HANDLER:
@@ -1156,9 +1161,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
             uintptr_t physical;uint64_t generation,reservation;
             if (!r->fault_active || frame->x[0]!=r->fault.elr ||
                 frame->x[1]!=r->fault_generation || r->service.request.queue ||
-                !r_match_code(r,&r->fault_code) ||
-                r->fault.sp<=r->stack_address || r->fault.sp>r->stack_address+r->stack_bytes ||
-                (r->fault.sp&15) ||
+                !r_match_code(r,&r->fault_code) || !r_owned_sp(r,r->fault.sp) ||
                 !AROSRestrictedSpacePageIdentity(&r->domain->space,r->fault.far,
                     (r->fault.esr&64) ? KMAP_WRITE : KMAP_READ,&physical,&generation,&reservation) ||
                 reservation!=r->fault_reservation ||
@@ -1166,9 +1169,19 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
                  (r->fault_page_generation==UINT64_MAX || generation!=r->fault_page_generation+1))) {
                 ++r->result.denied;frame->x[0]=UINT64_MAX;return 1;
             }
-            *frame=r->fault;r->fault_active=0;r_stack_bounds(r,0);++r->result.resumed;
+            *frame=r->fault;r->fault_active=0;r_track_stack(r,frame->sp);++r->result.resumed;
             return 1;
         }
+        case AROS_RESTRICTED_FAULT_DECLINE:
+            /* The handler has no repair: the fault becomes a synchronous
+             * exception for the registered exception handler. */
+            if (!r->fault_active || frame->x[0]!=r->fault.elr ||
+                frame->x[1]!=r->fault_generation || r->service.request.queue) {
+                ++r->result.denied;frame->x[0]=UINT64_MAX;return 1;
+            }
+            *frame=r->fault;r->fault_active=0;r_track_stack(r,frame->sp);
+            if (!r_deliver_exception(r,frame)) r_finish(r,execution,frame,-2);
+            return 1;
         case AROS_RESTRICTED_CANCEL: {
             unsigned state=r->service.request.state;
             int cancelled=KrnBufferServiceCancel(&r->service.request,r->service.principal,frame->x[0]);

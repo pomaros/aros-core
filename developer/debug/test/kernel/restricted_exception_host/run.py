@@ -31,7 +31,7 @@ def main():
   ('deliver-any-class','ec==0x26 || ec==0x2c || ec==0x3c;','ec==0x26 || ec==0x2c || ec==0x3c || ec==0x18;','refusals'),
   ('deliver-small-stack','r->fault_bytes<sizeof(*record)+1024 ||','','refusals'),
   ('register-during-repair','            if (r->fault_active || (frame->x[0] && !r_capture_code(r,frame->x[0],&r->exception_code))) {','            if (frame->x[0] && !r_capture_code(r,frame->x[0],&r->exception_code)) {','registration'),
-  ('restore-keeps-active','                r->exception_active=0;r_stack_bounds(r,0);','                r_stack_bounds(r,0);','continuation'),
+  ('restore-keeps-active','                r->exception_active=0;r_track_stack(r,frame->sp);','                r_track_stack(r,frame->sp);','continuation'),
   ('deny-nothing-while-active','        if (r->exception_active && svc!=AROS_RESTRICTED_RESTORE_CONTEXT && svc!=AROS_RESTRICTED_EXIT) {','        if (0) {','registration')]:
   assert actual.count(old)==1,(name,actual.count(old));variants.append((name,actual.replace(old,new),expected))
  out.mkdir(parents=True);inputs=[source,HERE/'test.c',Path(__file__),ROOT/'arch/aarch64-apple/include/aros/apple/restricted.h']

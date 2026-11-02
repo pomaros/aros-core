@@ -39,6 +39,10 @@ static int AROSRestrictedServiceCollect(struct Service *s,uint64_t token)
 static void r_finish(struct Restricted *r,void *execution,struct Frame *frame,int status)
 { (void)execution;r->result.status=status;frame->elr=0; }
 static void r_stack_bounds(struct Restricted *r,unsigned fault) { (void)r;(void)fault; }
+/* Stack admission is tested by restricted_restore_host; here the normal stack. */
+static int r_owned_sp(const struct Restricted *r,uint64_t sp)
+{ return sp>r->stack_address && sp<=r->stack_address+r->stack_bytes && !(sp&15); }
+static void r_track_stack(struct Restricted *r,uint64_t sp) { (void)r;(void)sp; }
 #include "actual.inc"
 static struct RestrictedDomain domain;
 static struct Restricted slot;
