@@ -323,6 +323,7 @@ static uint64_t identity_current_el;
 static uint64_t identity_counter_frequency;
 static uint64_t identity_hwcap;
 static uint64_t identity_hwcap2;
+static struct AROSAppleCPUIDRegisters identity_id_registers;
 static char identity_model[AROS_APPLE_IDENTITY_TEXT_BYTES];
 static char identity_compatible[AROS_APPLE_IDENTITY_TEXT_BYTES];
 static int identity_recorded;
@@ -394,6 +395,16 @@ static void record_hwcap(void)
         __asm__ volatile("mrs %0, s3_0_c0_c4_4" : "=r"(zfr0)); /* ZFR0 */
     AROSAArch64DecodeHWCap(isar0, isar1, pfr0, zfr0,
         &identity_hwcap, &identity_hwcap2);
+    struct AROSAppleCPUIDRegisters *r = &identity_id_registers;
+    r->isar0 = isar0; r->isar1 = isar1; r->pfr0 = pfr0; r->zfr0 = zfr0;
+    __asm__ volatile("mrs %0, midr_el1" : "=r"(r->midr));
+    __asm__ volatile("mrs %0, ctr_el0" : "=r"(r->ctr));
+    __asm__ volatile("mrs %0, dczid_el0" : "=r"(r->dczid));
+    __asm__ volatile("mrs %0, id_aa64pfr1_el1" : "=r"(r->pfr1));
+    __asm__ volatile("mrs %0, s3_0_c0_c6_2" : "=r"(r->isar2)); /* ID_AA64ISAR2_EL1 */
+    __asm__ volatile("mrs %0, id_aa64mmfr0_el1" : "=r"(r->mmfr0));
+    __asm__ volatile("mrs %0, id_aa64mmfr1_el1" : "=r"(r->mmfr1));
+    __asm__ volatile("mrs %0, s3_0_c0_c7_2" : "=r"(r->mmfr2)); /* ID_AA64MMFR2_EL1 */
 }
 
 void AROSAppleKernelRecordIdentity(void)
@@ -436,6 +447,9 @@ int AROSAppleKernelIdentity(uint32_t id, intptr_t *value)
     case KATTR_HWCap2:
         *value = (intptr_t)identity_hwcap2;
         return 1;
+    case AROS_APPLE_KATTR_CPU_ID_REGISTERS:
+        *value = (intptr_t)&identity_id_registers;
+        return identity_id_registers.midr != 0;
     case AROS_APPLE_KATTR_BOARD_MODEL:
         *value = (intptr_t)identity_model;
         return identity_model[0] != 0;

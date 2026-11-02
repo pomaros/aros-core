@@ -64,6 +64,17 @@
 #define AROS_APPLE_KATTR_COUNTER_FREQUENCY UINT32_C(0x83f10005)
 #define AROS_APPLE_KATTR_BOARD_MODEL UINT32_C(0x83f10006)
 #define AROS_APPLE_KATTR_BOARD_COMPATIBLE UINT32_C(0x83f10007)
+/* The boot CPU's identification registers, recorded at EL1 with MIDR. The
+ * attribute returns a const struct AROSAppleCPUIDRegisters *. Registers the
+ * CPU does not implement in the ID space read as zero. Windows ARM64
+ * publishes the same values as "CP xxxx" registry values. */
+#define AROS_APPLE_KATTR_CPU_ID_REGISTERS UINT32_C(0x83f10022)
+struct AROSAppleCPUIDRegisters {
+    uint64_t midr, ctr, dczid;
+    uint64_t pfr0, pfr1, zfr0;
+    uint64_t isar0, isar1, isar2;
+    uint64_t mmfr0, mmfr1, mmfr2;
+};
 /* The boot loader's random seed (/chosen/rng-seed), taken once at EL1 and
  * wiped from the tree. The attribute returns a struct AROSAppleBootSeed while
  * length is non-zero; its one consumer, entropy.resource, folds the bytes
