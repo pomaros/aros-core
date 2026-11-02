@@ -48,11 +48,24 @@ struct AROSRestrictedRegion {
     struct AROSRestrictedRegion *next;
     struct KrnMappingObject mapping;
     uintptr_t *backing;
+    /* Open-addressed set of the private backing pages, for constant-time
+     * alias refusal: index_mask+1 slots, a power of two at least twice the
+     * page capacity. Shared views never enter it. */
+    uintptr_t *index;
+    size_t index_mask;
     struct AROSRestrictedSharedBacking *shared;
     uint64_t identity;
     unsigned publication_pending;
     size_t publication_page;
 };
+/* Index slots a region of capacity pages needs: the smallest power of two at
+ * least twice the capacity, or 0 when that overflows. */
+static inline size_t AROSRestrictedIndexSlots(size_t capacity)
+{
+    size_t slots=2;
+    while (slots<2*capacity) { if (slots>SIZE_MAX/2) return 0;slots*=2; }
+    return capacity<=SIZE_MAX/2 ? slots : 0;
+}
 /* Shared anonymous backing is registered once, independently of any space.
  * Initialize transfers ownership of fresh zeroed pages; close stops admission
  * and returns ownership only after every attached view has detached. A region
@@ -88,8 +101,10 @@ int AROSRestrictedRegionCommitShared(struct AROSRestrictedRegion *,size_t,unsign
  * except the JIT class (KMAP_JIT_CLASS): a private page committed or published
  * writable and executable when the platform's JIT mode allows it, which the
  * caller checks. Shared views never take the JIT class. */
+/* index has AROSRestrictedIndexSlots(capacity) zeroed slots and stays alive
+ * with the record arrays; detach leaves it zeroed. */
 int AROSRestrictedRegionReserve(struct AROSRestrictedSpace *,struct AROSRestrictedRegion *,
-    uintptr_t,size_t,struct KrnMappingPage *,uintptr_t *,size_t);
+    uintptr_t,size_t,struct KrnMappingPage *,uintptr_t *,size_t,uintptr_t *index);
 int AROSRestrictedRegionCommit(struct AROSRestrictedRegion *,size_t,uintptr_t,unsigned);
 int AROSRestrictedRegionDecommit(struct AROSRestrictedRegion *,size_t,uintptr_t *);
 int AROSRestrictedRegionProtect(struct AROSRestrictedRegion *,size_t,unsigned);

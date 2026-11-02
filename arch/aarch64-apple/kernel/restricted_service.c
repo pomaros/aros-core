@@ -17,6 +17,33 @@ static struct AROSRestrictedService *channel_lookup(uint64_t handle)
         if (s->channel==handle) return s;
     return NULL;
 }
+/* Private backing index: linear probing at load factor at most one half,
+ * deletion by backward shift, so a lookup ends at the first empty slot. */
+static size_t index_home(uintptr_t pa,size_t mask)
+{ return (size_t)(((uint64_t)(pa>>12)*UINT64_C(0x9e3779b97f4a7c15))>>32)&mask; }
+static int index_contains(const struct AROSRestrictedRegion *r,uintptr_t pa)
+{
+    for (size_t i=index_home(pa,r->index_mask);r->index[i];i=(i+1)&r->index_mask)
+        if (r->index[i]==pa) return 1;
+    return 0;
+}
+static void index_insert(struct AROSRestrictedRegion *r,uintptr_t pa)
+{
+    size_t i=index_home(pa,r->index_mask);
+    while (r->index[i]) i=(i+1)&r->index_mask;
+    r->index[i]=pa;
+}
+static void index_remove(struct AROSRestrictedRegion *r,uintptr_t pa)
+{
+    size_t i=index_home(pa,r->index_mask),mask=r->index_mask;
+    while (r->index[i]!=pa) { if (!r->index[i]) return;i=(i+1)&mask; }
+    for (size_t j=(i+1)&mask;r->index[j];j=(j+1)&mask) {
+        size_t home=index_home(r->index[j],mask);
+        /* Move j into the hole unless its home lies cyclically in (i,j]. */
+        if (((j-home)&mask)>=((j-i)&mask)) { r->index[i]=r->index[j];i=j; }
+    }
+    r->index[i]=0;
+}
 static int physical_in_use(uintptr_t pa)
 {
     for (struct AROSRestrictedSharedBacking *b=shared_backings;b;b=b->next)
@@ -24,8 +51,7 @@ static int physical_in_use(uintptr_t pa)
     for (struct AROSRestrictedSpace *s=spaces;s;s=s->next) {
         if (s->backing==pa) return 1;
         for (struct AROSRestrictedRegion *r=s->regions;r;r=r->next)
-            for (size_t page=0;page<r->mapping.page_count;++page)
-                if (r->backing[page]==pa) return 1;
+            if (index_contains(r,pa)) return 1;
     }
     return 0;
 }
@@ -203,16 +229,19 @@ int AROSRestrictedSpaceInit(struct AROSRestrictedSpace *s,uint64_t principal,
         KrnMappingFault(&s->mapping,AROS_RESTRICTED_DATA,KMAP_WRITE,1,&request,&s->mapops)==KMAP_FAULT_RETRY;
 }
 int AROSRestrictedRegionReserve(struct AROSRestrictedSpace *s,struct AROSRestrictedRegion *r,
-    uintptr_t address,size_t length,struct KrnMappingPage *pages,uintptr_t *backing,size_t capacity)
+    uintptr_t address,size_t length,struct KrnMappingPage *pages,uintptr_t *backing,size_t capacity,
+    uintptr_t *index)
 {
-    if (!s || !r || !pages || !backing || !s->handle || s->domain.closing ||
+    size_t slots=AROSRestrictedIndexSlots(capacity);
+    if (!s || !r || !pages || !backing || !index || !slots || !s->handle || s->domain.closing ||
         r->space || r->next || reservation_generation==UINT64_MAX ||
         !AROSRestrictedRangeValid(address,length) || length/PAGE>capacity) return 0;
     for (size_t i=0;i<length/PAGE;++i) if (backing[i]) return 0;
+    for (size_t i=0;i<slots;++i) if (index[i]) return 0;
     void *identity=KrnBufferLookup(&registry,s->principal,s->handle);
     if (!identity || !KrnMappingReserveVirtual(&s->arena,&r->mapping,address,length,
         identity,pages,capacity)) return 0;
-    r->identity=++reservation_generation;
+    r->identity=++reservation_generation;r->index=index;r->index_mask=slots-1;
     r->space=s;r->backing=backing;r->next=s->regions;s->regions=r;return 1;
 }
 int AROSRestrictedRegionCommit(struct AROSRestrictedRegion *r,size_t page,uintptr_t pa,unsigned access)
@@ -229,7 +258,9 @@ int AROSRestrictedRegionCommit(struct AROSRestrictedRegion *r,size_t page,uintpt
     if (KrnMappingCommitResidentPage(&r->mapping,page,pa,initial,&r->space->mapops)) {
         uintptr_t released=0;
         if (access!=KMAP_JIT_CLASS ||
-            KrnMappingProtectPage(&r->mapping,page,access,&r->space->mapops)) return 1;
+            KrnMappingProtectPage(&r->mapping,page,access,&r->space->mapops)) {
+            index_insert(r,pa);return 1;
+        }
         if (!KrnMappingDecommitPage(&r->mapping,page,&r->space->mapops,&released) || released!=pa)
             for (;;) __asm__ volatile("wfe"); /* a fresh leaf cannot refuse */
     }
@@ -240,7 +271,10 @@ int AROSRestrictedRegionDecommit(struct AROSRestrictedRegion *r,size_t page,uint
     if (!r || !r->space || r->space->domain.closing || page>=r->mapping.page_count || !released || r->publication_pending ||
         (r->shared && r->shared->publication)) return 0;
     if (!KrnMappingDecommitPage(&r->mapping,page,&r->space->mapops,released)) return 0;
-    r->backing[page]=0;if (r->shared) *released=0;return 1;
+    r->backing[page]=0;
+    if (r->shared) *released=0;
+    else if (*released) index_remove(r,*released);
+    return 1;
 }
 int AROSRestrictedRegionProtect(struct AROSRestrictedRegion *r,size_t page,unsigned access)
 {
@@ -297,6 +331,7 @@ int AROSRestrictedRegionDetach(struct AROSRestrictedRegion *r)
         for (size_t i=0;i<r->shared->count;++i) r->backing[i]=0;
         --r->shared->views;r->shared=NULL;
     }
+    for (size_t i=0;i<=r->index_mask;++i) r->index[i]=0;
     *link=r->next;r->next=NULL;r->space=NULL;
     r->publication_pending=0;r->publication_page=0;return 1;
 }

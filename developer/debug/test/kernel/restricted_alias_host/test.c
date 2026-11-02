@@ -39,10 +39,14 @@ int AArch64ProtectPage(const struct AArch64ProtectionOps *ops,uint64_t root,uint
     (void)ops;assert(map_lock && rendezvous && coordinator==native_expected_coordinator && root==123 && tcr==16 && address==protection_operation.address);
     if(native_fail)return 0;native_permissions=permissions;return 1;
 }
+#define AROS_APPLE_JIT_NONE 0
+#define KMAP_JIT_CLASS 15U
+static int jit_mode;
+static int AROSAppleJitMode(void) { return jit_mode; }
 struct RestrictedMemoryOperation { uint64_t handle;uintptr_t address,physical;unsigned operation,protection;void *allocation; };
 static void *publication_context;
 static int owner_context,AROSApplePageMapLock;
-static unsigned forbidden,arrival=1,svc_success=1,svc_calls,missing_context;
+static unsigned forbidden,arrival=1,svc_success=1,svc_calls,missing_context,last_protection;
 static void Forbid(void) { assert(!forbidden);forbidden=1; }
 static void Permit(void) { assert(forbidden && !map_lock && !rendezvous);forbidden=0; }
 static uint64_t AROSApplePageMapAcquire(void) { assert(forbidden && !map_lock && !rendezvous);map_lock=1;return 123; }
@@ -54,8 +58,9 @@ static void *r_context(void *task) { assert(task==&owner_context);return missing
 static uintptr_t memory_svc(struct RestrictedMemoryOperation *op)
 {
     assert(map_lock && rendezvous && publication_context==&owner_context && !coordinator);
-    assert(op->operation==3 && op->handle==7 && op->address==0x200000000ULL && op->protection==5);
-    ++svc_calls;return svc_success;
+    assert(op->operation==3 && op->handle==7 && op->address==0x200000000ULL &&
+        (op->protection==5 || op->protection==KMAP_JIT_CLASS));
+    last_protection=op->protection;++svc_calls;return svc_success;
 }
 #include "actual.inc"
 int main(void)
@@ -89,5 +94,8 @@ int main(void)
     arrival=0;assert(!r_protect_memory(7,0x200000000ULL,5) && svc_calls==1 && !forbidden);
     arrival=1;svc_success=0;assert(!r_protect_memory(7,0x200000000ULL,5) && svc_calls==2 && !forbidden);
     svc_success=1;missing_context=1;assert(!r_protect_memory(7,0x200000000ULL,5) && svc_calls==2 && !forbidden);
+    /* API 34: read+write+execute needs a kernel JIT mode and becomes the JIT class. */
+    missing_context=0;assert(!r_protect_memory(7,0x200000000ULL,7) && svc_calls==2 && !forbidden);
+    jit_mode=2;assert(r_protect_memory(7,0x200000000ULL,7) && svc_calls==3 && last_protection==KMAP_JIT_CLASS);
     puts("PASS arena alias propagation, partial refusal, retry and retired-root exclusion");
 }

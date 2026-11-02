@@ -17,7 +17,7 @@ struct AROSAppleTaskExecution { uint64_t root,user_tls;void *domain;uint64_t res
 struct ExceptionContext { uint64_t x[29],fp,lr,sp,pc,cpsr;void *fpuContext; };
 struct Domain { unsigned closing;void *data; };
 struct Restricted {
- unsigned cookie,callback_active,fault_active,wait_pending,wait_result,suspend_count;uint64_t wait_deadline;struct Task *owner;struct Domain *domain;
+ unsigned cookie,callback_active,fault_active,exception_active,wait_pending,wait_result,suspend_count;uint64_t wait_deadline;struct Task *owner;struct Domain *domain;
  void *native_lower,*native_upper;struct AROSAppleRuntimeFrame native;
  struct { int64_t status;uint64_t value,esr,far,pc; } result;
 };
@@ -32,6 +32,9 @@ static struct AROSAppleTaskExecution *AROSAppleTaskExecution(struct ExceptionCon
 static void r_coordinate(void) { assert(!coordinated);coordinated=1; }
 static void r_uncoordinate(void) { assert(coordinated);coordinated=0; }
 static int r_stack_sp(struct Restricted *r,uint64_t sp) { assert(coordinated);return sp>(uintptr_t)r->owner->tc_SPLower && sp<=(uintptr_t)r->owner->tc_SPUpper; }
+/* Exec bound tracking for admitted owned stacks; the bounds here stay put. */
+static unsigned tracked;
+static void r_track_stack(struct Restricted *r,uint64_t sp) { assert(coordinated && r_stack_sp(r,sp));++tracked; }
 static void cpu_ApplyTaskMasks(uint64_t *s,int nesting) { (void)nesting;*s&=~UINT64_C(0xc0); }
 static void AROSAppleJitRestore(struct Task *task) { (void)task;assert(!coordinated); }
 static void AROSAppleTaskTLSRestore(struct ExceptionContext *c) { assert(c==&saved);task_pointer=0x9000; }

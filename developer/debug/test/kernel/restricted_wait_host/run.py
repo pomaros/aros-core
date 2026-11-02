@@ -31,7 +31,7 @@ def main():
  r=restricted.read_text()
  actual+=''.join(function(r,name) for name in ['static uint64_t r_wait_microseconds(', 'static void r_clear_deadline(', 'static void r_clear_wait(', 'static void r_complete_wait(', 'static void r_deliver_wait(', 'static void r_expire_waits(', 'void AROSAppleRestrictedExpireWaits('])
  actual+=function(r,'static void r_cancel_waiters(struct RestrictedDomain *domain)')+function(r,'static int r_wake_channel(')+function(r,'static int64_t r_suspend_channel(')
- actual+='static int payload(struct Restricted *r,struct AROSAppleRuntimeFrame *frame,struct Task *task,struct ExceptionContext *context,unsigned svc) { switch(svc) {\n'
+ actual+='static int payload(struct Restricted *r,struct AROSAppleRuntimeFrame *frame,struct Task *task,struct ExceptionContext *context,unsigned svc) { unsigned cpu=payload_cpu;switch(svc) {\n'
  start=r.index('        case AROS_RESTRICTED_THREAD_INFO:');end=r.index('        case AROS_RESTRICTED_YIELD:',start)
  actual+=r[start:end]+'default:return 0;} }\n'
  variants=[('actual',actual,None,None)]

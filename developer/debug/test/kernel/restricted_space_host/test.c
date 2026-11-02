@@ -22,6 +22,15 @@ static uint64_t allocate(void *opaque,unsigned bits)
 static void clean(void *opaque,const void *address,size_t bytes)
 { (void)opaque;(void)address;(void)bytes; }
 static void invalidate(void *opaque) { ++((struct Fixture *)opaque)->invalidations; }
+/* Every reservation gets its own zeroed backing index, kept for the run. */
+static int reserve_region(struct AROSRestrictedSpace *s,struct AROSRestrictedRegion *r,uintptr_t va,
+    size_t length,struct KrnMappingPage *pages,uintptr_t *backing,size_t capacity)
+{
+    size_t slots=AROSRestrictedIndexSlots(capacity);
+    uintptr_t *index=r->index && r->index_mask+1==slots ? r->index : calloc(slots ? slots : 1,sizeof(*index));
+    CHECK(index,"index-storage");
+    return AROSRestrictedRegionReserve(s,r,va,length,pages,backing,capacity,index);
+}
 /* The production synchronize callback reaches the page through the owned
  * native alias, which the ledger names only once the page is resident. */
 static struct AROSRestrictedRegion *alias_region;
@@ -85,7 +94,7 @@ static void publication_tests(void)
     CHECK(AROSRestrictedSpaceInit(&space,99,(uintptr_t)f->tables[0],25|(UINT64_C(5)<<32),(uintptr_t)data,&hardware),"publication-space");
     struct AROSRestrictedRegion region={0};struct KrnMappingPage metadata[2];uintptr_t ledger[2]={0};
     uintptr_t va=AROS_RESTRICTED_DYNAMIC_BASE;
-    CHECK(AROSRestrictedRegionReserve(&space,&region,va,2*PAGE,metadata,ledger,2),"publication-reserve");
+    CHECK(reserve_region(&space,&region,va,2*PAGE,metadata,ledger,2),"publication-reserve");
     CHECK(AROSRestrictedRegionCommit(&region,0,(uintptr_t)page,3),"publication-commit");
     uint64_t generation=metadata[0].generation;
     publishing=&region;struct AROSRestrictedPublicationOps ops={NULL,native_publication};
@@ -159,6 +168,42 @@ static void shared_copy_tests(void)
     CHECK(AROSRestrictedSharedClose(&b) && !AROSRestrictedSharedRead(&b,0,output,8),"shared-copy-stale-refused");
     free(pages);
 }
+/* The backing index refuses every owned page and forgets released ones,
+ * across probe chains broken by removals. */
+static void index_tests(void)
+{
+    struct Fixture *f=aligned_alloc(PAGE,sizeof(*f));unsigned char *data=aligned_alloc(PAGE,PAGE);
+    CHECK(f && data,"index-storage");memset(f,0,sizeof(*f));f->used=1;
+    struct AROSRestrictedSpace space={0};
+    struct AArch64ProtectionOps hardware={f,resolve,allocate,clean,invalidate,sync_code,NULL};
+    CHECK(AROSRestrictedSpaceInit(&space,97,(uintptr_t)f->tables[0],25|(UINT64_C(5)<<32),(uintptr_t)data,&hardware),"index-space");
+    enum { N=64 };
+    static struct KrnMappingPage pages[N],other_page[1];static uintptr_t ledger[N],other_ledger[1];
+    struct AROSRestrictedRegion region={0},other={0};uintptr_t va=AROS_RESTRICTED_DYNAMIC_BASE;
+    CHECK(reserve_region(&space,&region,va,N*PAGE,pages,ledger,N) &&
+        reserve_region(&space,&other,va+N*PAGE,PAGE,other_page,other_ledger,1),"index-reserve");
+    /* Twelve pages share one home slot: their probe chain spans removals. */
+    uintptr_t pas[N];unsigned colliding=0;
+    for (uintptr_t candidate=UINT64_C(0x40000000);colliding<12;candidate+=0x1000)
+        if (((((uint64_t)(candidate>>12)*UINT64_C(0x9e3779b97f4a7c15))>>32)&region.index_mask)==5)
+            pas[colliding++]=candidate;
+    for (unsigned i=colliding;i<N;++i) pas[i]=UINT64_C(0x80000000)+(uintptr_t)i*0x5000;
+    for (unsigned i=0;i<N;++i)
+        CHECK(AROSRestrictedRegionCommit(&region,i,pas[i],3),"index-commit");
+    uintptr_t released;
+    for (unsigned i=0;i<N;i+=3) CHECK(AROSRestrictedRegionDecommit(&region,i,&released),"index-decommit");
+    for (unsigned i=0;i<N;++i) {
+        uintptr_t pa=pas[i];
+        if (i%3) CHECK(!AROSRestrictedRegionCommit(&other,0,pa,3),"index-owned-refused");
+        else {
+            CHECK(AROSRestrictedRegionCommit(&other,0,pa,3),"index-released-reusable");
+            CHECK(AROSRestrictedRegionDecommit(&other,0,&released) && released==pa,"index-reuse-decommit");
+        }
+    }
+    CHECK(AROSRestrictedRegionDetach(&region) && AROSRestrictedRegionDetach(&other),"index-detach");
+    for (size_t i=0;i<=region.index_mask;++i) CHECK(!region.index[i],"index-cleared");
+    CHECK(AROSRestrictedSpaceClose(&space),"index-close");free(data);free(f);
+}
 /* D-135 JIT class: committed or published writable and executable on private
  * pages, native alias kept writable, execute identity on the JIT leaf. */
 static void jit_tests(void)
@@ -171,7 +216,7 @@ static void jit_tests(void)
     CHECK(AROSRestrictedSpaceInit(&space,98,(uintptr_t)f->tables[0],25|(UINT64_C(5)<<32),(uintptr_t)data,&hardware),"jit-space");
     struct AROSRestrictedRegion region={0};struct KrnMappingPage metadata[2];uintptr_t ledger[2]={0};
     uintptr_t va=AROS_RESTRICTED_DYNAMIC_BASE,pa;uint64_t generation,reservation;
-    CHECK(AROSRestrictedRegionReserve(&space,&region,va,2*PAGE,metadata,ledger,2),"jit-reserve");
+    CHECK(reserve_region(&space,&region,va,2*PAGE,metadata,ledger,2),"jit-reserve");
     alias_region=&region;
     CHECK(!AROSRestrictedRegionCommit(&region,0,(uintptr_t)page,7) &&
         !AROSRestrictedRegionCommit(&region,0,(uintptr_t)page,KMAP_JIT|3) &&
@@ -215,7 +260,7 @@ static void shared_publication_tests(void)
         CHECK(f[i] && data[i],"shared-publish-storage");memset(f[i],0,sizeof(*f[i]));f[i]->used=1;
         struct AArch64ProtectionOps hw={f[i],resolve,allocate,clean,invalidate,sync_code,NULL};
         CHECK(AROSRestrictedSpaceInit(&spaces[i],200+i,(uintptr_t)f[i]->tables[0],25|(UINT64_C(5)<<32),(uintptr_t)data[i],&hw),"shared-publish-space");
-        CHECK(AROSRestrictedRegionReserve(&spaces[i],&r[i],va,PAGE,&metadata[i],&ledger[i],1) &&
+        CHECK(reserve_region(&spaces[i],&r[i],va,PAGE,&metadata[i],&ledger[i],1) &&
             AROSRestrictedRegionAttachShared(&r[i],&b),"shared-publish-view");
         if (i<2) CHECK(!AROSRestrictedRegionCommitShared(&r[i],0,KMAP_JIT_CLASS) &&
             AROSRestrictedRegionCommitShared(&r[i],0,i ? 1 : 3),"shared-publish-commit");
@@ -279,7 +324,7 @@ static void region_tests(uint64_t va)
         AROS_RESTRICTED_DATA,AROS_RESTRICTED_STACK,AROS_RESTRICTED_DYNAMIC_BASE-PAGE,
         AROS_RESTRICTED_DYNAMIC_END,UINTPTR_MAX-PAGE+1};
     for(unsigned i=0;i<sizeof(refused)/sizeof(refused[0]);++i)
-        CHECK(!AROSRestrictedRegionReserve(&spaces[0],&collision,refused[i],PAGE,cp,cb,1) &&
+        CHECK(!reserve_region(&spaces[0],&collision,refused[i],PAGE,cp,cb,1) &&
             !collision.space && !collision.mapping.length,"low-range-exclusions");
     CHECK(!AROSRestrictedRangeValid(AROS_RESTRICTED_LOW_END-PAGE,2*PAGE) &&
         !AROSRestrictedRangeValid(AROS_RESTRICTED_LOW_BASE,0) &&
@@ -287,14 +332,14 @@ static void region_tests(uint64_t va)
         !AROSRestrictedRangeValid(AROS_RESTRICTED_DYNAMIC_END-PAGE,2*PAGE),"low-range-crossing-overflow");
     const uintptr_t edges[]={AROS_RESTRICTED_LOW_BASE,AROS_RESTRICTED_LOW_END-PAGE};
     for(unsigned i=0;i<2;++i) {
-        CHECK(AROSRestrictedRegionReserve(&spaces[0],&collision,edges[i],PAGE,cp,cb,1),"low-range-edge");
+        CHECK(reserve_region(&spaces[0],&collision,edges[i],PAGE,cp,cb,1),"low-range-edge");
         CHECK(AROSRestrictedRegionDetach(&collision),"low-range-edge-release");
         memset(&collision,0,sizeof(collision));
     }
-    CHECK(AROSRestrictedRegionReserve(&spaces[0],&a,va,3*PAGE,ap,ab,3),"region-reserve");
-    CHECK(AROSRestrictedRegionReserve(&spaces[1],&b,va,PAGE,bp,bb,1),"independent-region-va");
-    CHECK(!AROSRestrictedRegionReserve(&spaces[0],&collision,va,PAGE,cp,cb,1),"region-collision");
-    CHECK(!AROSRestrictedRegionReserve(&spaces[0],&collision,AROS_RESTRICTED_STACK,PAGE,cp,cb,1),"thread-range-excluded");
+    CHECK(reserve_region(&spaces[0],&a,va,3*PAGE,ap,ab,3),"region-reserve");
+    CHECK(reserve_region(&spaces[1],&b,va,PAGE,bp,bb,1),"independent-region-va");
+    CHECK(!reserve_region(&spaces[0],&collision,va,PAGE,cp,cb,1),"region-collision");
+    CHECK(!reserve_region(&spaces[0],&collision,AROS_RESTRICTED_STACK,PAGE,cp,cb,1),"thread-range-excluded");
     CHECK(AROSRestrictedRegionCommit(&a,0,(uintptr_t)pages[0],3),"region-commit");
     CHECK(!AROSRestrictedRegionCommit(&b,0,(uintptr_t)pages[0],3) && !bb[0],"private-alias-refused");
     CHECK(AROSRestrictedRegionCommit(&b,0,(uintptr_t)pages[3],3),"independent-backing");
@@ -362,7 +407,7 @@ static void region_tests(uint64_t va)
     uint64_t generation=ap[0].generation;
     CHECK(AROSRestrictedRegionDecommit(&a,0,&released) && released==(uintptr_t)pages[0] && !ab[0] && ap[0].generation>generation,"region-decommit");
     CHECK(!AArch64MappingPhysical(&spaces[0].hardware,spaces[0].root,tcr,va,&actual),"decommit-unmapped");
-    CHECK(!AROSRestrictedRegionReserve(&spaces[0],&collision,va,PAGE,cp,cb,1),"decommit-keeps-reservation");
+    CHECK(!reserve_region(&spaces[0],&collision,va,PAGE,cp,cb,1),"decommit-keeps-reservation");
     memset(pages[0],0xa5,PAGE);zero_page(pages[0]);
     CHECK(AROSRestrictedRegionCommit(&a,0,(uintptr_t)pages[0],3),"region-recommit");
     for (unsigned i=0;i<PAGE;++i) CHECK(pages[0][i]==0,"region-recommit-zero");
@@ -382,7 +427,7 @@ static void region_tests(uint64_t va)
     uint64_t old_reservation=identity_reservation,old_generation=identity_generation;
     CHECK(AROSRestrictedRegionDetach(&b),"other-region-detach");
     memset(&b,0,sizeof(b));bb[0]=0;
-    CHECK(AROSRestrictedRegionReserve(&spaces[1],&b,va,PAGE,bp,bb,1) &&
+    CHECK(reserve_region(&spaces[1],&b,va,PAGE,bp,bb,1) &&
         AROSRestrictedRegionCommit(&b,0,(uintptr_t)pages[3],3),"reused-reservation");
     CHECK(AROSRestrictedSpacePageIdentity(&spaces[1],va,1,&identity,&identity_generation,&identity_reservation) &&
         identity==(uintptr_t)pages[3] && identity_generation==old_generation &&
@@ -410,7 +455,7 @@ static void shared_tests(void)
         CHECK(f[i] && data[i],"shared-fixture");memset(f[i],0,sizeof(*f[i]));memset(data[i],0,PAGE);f[i]->used=1;
         struct AArch64ProtectionOps ops={f[i],resolve,allocate,clean,invalidate,sync_code,NULL};
         CHECK(AROSRestrictedSpaceInit(&spaces[i],51+i,(uintptr_t)f[i]->tables[0],tcr,(uintptr_t)data[i],&ops),"shared-space");
-        CHECK(AROSRestrictedRegionReserve(&spaces[i],&regions[i],va,PAGE,metadata[i],ledger[i],1),"shared-reserve");
+        CHECK(reserve_region(&spaces[i],&regions[i],va,PAGE,metadata[i],ledger[i],1),"shared-reserve");
         CHECK(!AROSRestrictedRegionCommit(&regions[i],0,(uintptr_t)page,3),"shared-cannot-private-commit");
         CHECK(AROSRestrictedRegionAttachShared(&regions[i],&object),"shared-attach");
         CHECK(!AROSRestrictedRegionAttachShared(&regions[i],&object),"shared-duplicate-view");
@@ -437,7 +482,7 @@ static void shared_tests(void)
     CHECK(AROSRestrictedRegionCommitShared(&regions[1],0,3) && page[0]==0x31,"shared-recommit-preserves-data");
     CHECK(!AROSRestrictedSharedClose(&object) && object.views==1 && object.pages==backing,"shared-close-retained");
     struct AROSRestrictedRegion late={0};struct KrnMappingPage latepage;uintptr_t latebacking=0;
-    CHECK(AROSRestrictedRegionReserve(&spaces[1],&late,va+PAGE,PAGE,&latepage,&latebacking,1),"shared-late-reserve");
+    CHECK(reserve_region(&spaces[1],&late,va+PAGE,PAGE,&latepage,&latebacking,1),"shared-late-reserve");
     CHECK(!AROSRestrictedRegionAttachShared(&late,&object),"shared-close-stops-attach");
     CHECK(AROSRestrictedRegionDetach(&late),"shared-late-detach");
     int (*remove)(void *,uintptr_t,uintptr_t)=spaces[1].mapops.remove;spaces[1].mapops.remove=deny_remove;
@@ -549,5 +594,5 @@ int main(void)
     CHECK(AROSRestrictedSpaceInit(&space,11,root,tcr,(uintptr_t)data,&ops),"space-reuse");
     CHECK(space.handle!=first_handle,"space-generation");
     CHECK(AROSRestrictedSpaceClose(&space),"reused-space-close");
-    free(data);free(f);region_tests(AROS_RESTRICTED_DYNAMIC_BASE);region_tests(UINT64_C(0x7ffe0000));shared_tests();shared_copy_tests();channel_growth();publication_tests();jit_tests();shared_publication_tests();puts("PASS restricted space and channel ownership");return 0;
+    free(data);free(f);region_tests(AROS_RESTRICTED_DYNAMIC_BASE);region_tests(UINT64_C(0x7ffe0000));shared_tests();shared_copy_tests();channel_growth();publication_tests();index_tests();jit_tests();shared_publication_tests();puts("PASS restricted space and channel ownership");return 0;
 }

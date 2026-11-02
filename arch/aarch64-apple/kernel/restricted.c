@@ -56,7 +56,7 @@ struct RestrictedAllocation {
     struct AROSRestrictedRegion region;
     size_t count,storage_bytes;
     struct KrnMappingPage *pages;
-    uintptr_t *backing;
+    uintptr_t *backing,*index;
 };
 struct RestrictedTableChunk {
     struct RestrictedTableChunk *next;
@@ -800,7 +800,7 @@ static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned s
         if (a && (p->address >= AROS_RESTRICTED_LOW_END ||
             AROSAppleKernelTransitionRangeAvailable(p->address,a->count*R_PAGE)) &&
             AROSRestrictedRegionReserve(&d->space,&a->region,p->address,
-            a->count*R_PAGE,a->pages,a->backing,a->count)) {
+            a->count*R_PAGE,a->pages,a->backing,a->count,a->index)) {
             a->next=d->allocations;d->allocations=a;d->memory_pages+=a->storage_bytes/R_PAGE;
             d->memory_metadata_pages+=a->storage_bytes/R_PAGE;frame->x[0]=1;
         }
@@ -1670,13 +1670,17 @@ static size_t r_record_size(size_t header,size_t count,size_t element)
 static int r_reserve_memory(uint64_t handle,uintptr_t address,size_t length)
 {
     if (!AROSRestrictedRangeValid(address,length)) return 0;
-    size_t count=length/R_PAGE;
-    size_t storage=r_record_size(sizeof(struct RestrictedAllocation),count,sizeof(struct KrnMappingPage)+sizeof(uintptr_t));
+    size_t count=length/R_PAGE,slots=AROSRestrictedIndexSlots(count);
+    /* Page metadata, backing ledger and the backing index's slots. */
+    if (!slots || slots>(SIZE_MAX-sizeof(struct RestrictedAllocation))/sizeof(uintptr_t)) return 0;
+    size_t storage=r_record_size(sizeof(struct RestrictedAllocation)+slots*sizeof(uintptr_t),count,
+        sizeof(struct KrnMappingPage)+sizeof(uintptr_t));
     if (!storage) return 0;
     Forbid();
     struct RestrictedAllocation *a=AROSApplePageAllocate(NULL,storage,MEMF_CLEAR);
     if (!a) { Permit();return 0; }
     a->count=count;a->storage_bytes=storage;a->pages=(void *)(a+1);a->backing=(void *)(a->pages+count);
+    a->index=a->backing+count;
     struct RestrictedMemoryOperation op={.handle=handle,.address=address,.allocation=a};
     int ok=r_memory_call(&op);if (!ok && !AROSApplePageFree(a,storage)) for (;;) __asm__ volatile("wfe");
     Permit();return ok;

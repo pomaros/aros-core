@@ -57,6 +57,8 @@ static unsigned coordinator;
 static uint64_t r_wait_clock(void) { return fake_now; }
 static void r_coordinate(void) { assert(!coordinator);coordinator=1; }
 static void r_uncoordinate(void) { assert(coordinator);coordinator=0; }
+/* The CPU executing the trap, which r_trap_locked computes. */
+static unsigned payload_cpu;
 #include "actual.inc"
 static void reset(void)
 {
@@ -117,8 +119,9 @@ static void generations(void)
 {
  reset();struct RestrictedDomain domain={0},other={0};
  struct Restricted slot={NULL,&domain,R_LIVE,{17},&task,&context,0};restricted_slots=&slot;
+ payload_cpu=3;
  struct AROSAppleRuntimeFrame frame={0};assert(payload(&slot,&frame,&task,&context,AROS_RESTRICTED_THREAD_INFO)==1);
- assert(frame.x[0]==17 && frame.x[1]==0);
+ assert(frame.x[0]==17 && frame.x[1]==0 && frame.x[2]==3);
  assert(!r_wake_channel(&other,17) && !r_wake_channel(&domain,18));
  assert(r_wake_channel(&domain,17) && slot.wake_generation==1);
  frame.x[0]=0;assert(payload(&slot,&frame,&task,&context,AROS_RESTRICTED_WAIT)==1 && !frame.x[0] && !execution.park_flags);
