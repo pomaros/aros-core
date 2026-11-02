@@ -3144,3 +3144,38 @@ ExceptionFailure:
  svc #0xa541
  b ExceptionFailure
 RestrictedExceptionEnd:
+
+/* JIT pages (API 34). The controller commits 0x200000000 read+write+execute.
+ * x0 = 0: write "mov w0,#0x42; ret", clean/invalidate, call it, rewrite it to
+ * return 0x43 in place, call again; exit with the sum (0x85).
+ * x0 = 1: call the page as it is and exit with its result. */
+.global RestrictedJit, RestrictedJitEnd
+RestrictedJit:
+ movz x20, #2, lsl #32
+ cbnz x0, JitCallOnly
+ mov x23, #0x42
+ bl JitStore
+ blr x20
+ mov x24, x0
+ mov x23, #0x43
+ bl JitStore
+ blr x20
+ add x0, x24, x0
+ svc #0xa541
+JitCallOnly:
+ blr x20
+ svc #0xa541
+JitStore:
+ mov x9, #0x52800000
+ orr x9, x9, x23, lsl #5
+ movz x10, #0x03c0, lsl #32
+ movk x10, #0xd65f, lsl #48
+ orr x9, x9, x10
+ str x9, [x20]
+ dc cvau, x20
+ dsb ish
+ ic ivau, x20
+ dsb ish
+ isb
+ ret
+RestrictedJitEnd:

@@ -11,6 +11,7 @@
 #include <exec/lists.h>
 #include <aros/debug.h>
 #include <aros/apple/restricted.h>
+#include <aros/apple/jit.h>
 #if defined(__AROSEXEC_SMP__)
 #include <proto/task.h>
 #include <resources/task.h>
@@ -732,6 +733,41 @@ static void prove_exceptions(void)
     }
     bug("[ISOVM] exceptions data_abort=1 brk=1 restored=2 denied_while_active=2 unregistered=1 unhandled=1 fault_stack_restore_refused=1 retained_pages=0 PASS\n");
 }
+extern const unsigned char RestrictedJit[],RestrictedJitEnd[];
+/* API 34 JIT pages: read+write+execute only with a kernel JIT mode. */
+static void prove_jit(void)
+{
+    const uintptr_t address=UINT64_C(0x200000000);
+    intptr_t mode=KrnGetSystemAttr(AROS_APPLE_KATTR_JIT_MODE);
+    uint64_t domain=api->create_domain(RestrictedJit,RestrictedJitEnd-RestrictedJit,0);CHECK(domain);
+    CHECK(api->reserve_memory(domain,address,4096));
+    if (mode==AROS_APPLE_JIT_NONE) {
+        CHECK(!api->commit_memory(domain,address,7));
+        CHECK(api->commit_memory(domain,address,3) && !api->protect_memory(domain,address,7));
+        CHECK(api->close_domain(domain)==1);
+        bug("[ISOVM] jit mode=none commit_refused=1 protect_refused=1 PASS\n");
+        return;
+    }
+    struct AROSRestrictedResult result={0};
+    CHECK(api->commit_memory(domain,address,7));
+    CHECK(api->run_domain(domain,0,&result) && result.drained && result.status==0x85);
+    CHECK(api->protect_memory(domain,address,3));
+    memset(&result,0,sizeof(result));
+    CHECK(api->run_domain(domain,1,&result) && result.status==-2 && (result.esr>>26)==0x20 && result.far==address);
+    CHECK(api->protect_memory(domain,address,7));
+    memset(&result,0,sizeof(result));
+    CHECK(api->run_domain(domain,0,&result) && result.status==0x85);
+    CHECK(api->protect_memory(domain,address,5));
+    memset(&result,0,sizeof(result));
+    CHECK(api->run_domain(domain,1,&result) && result.status==0x43);
+    memset(&result,0,sizeof(result));
+    CHECK(api->run_domain(domain,0,&result) && result.status==-2 && (result.esr>>26)==0x24 && result.far==address);
+    CHECK(api->protect_memory(domain,address,7) && api->decommit_memory(domain,address));
+    CHECK(api->close_domain(domain)==1);
+    struct AROSRestrictedLifetime life;api->lifetime(&life);
+    CHECK(!life.pages && !life.live && !life.domains);
+    bug("[ISOVM] jit mode=%ld written_executed=4 data_fetch_refused=1 code_write_refused=1 to_code=1 retained_pages=0 PASS\n",(long)mode);
+}
 extern const unsigned char RestrictedLargeCode[],RestrictedLargeCodeEnd[];
 static void prove_large_code(void)
 {
@@ -791,7 +827,8 @@ static void prove_dynamic_code(void)
         uint64_t words[2];CHECK(work.length==sizeof(words));memcpy(words,work.bytes,sizeof(words));
         unsigned id=words[1]==clients[0].seed ? 0 : 1;
         CHECK(words[1]==clients[id].seed && words[0]==++phases[id] && phases[id]<=4);
-        CHECK(!api->protect_memory(clients[id].domain,address,7));
+        if (KrnGetSystemAttr(AROS_APPLE_KATTR_JIT_MODE)==AROS_APPLE_JIT_NONE)
+            CHECK(!api->protect_memory(clients[id].domain,address,7));
         if (phases[id]!=4) CHECK(api->protect_memory(clients[id].domain,address,phases[id]==2 ? 3 : 5));
 #if defined(__AROSEXEC_SMP__)
         if (phases[id]!=2) {
@@ -1402,7 +1439,7 @@ int main(void)
     intptr_t address = KrnGetSystemAttr(AROS_RESTRICTED_KATTR_API);
     CHECK(address != -1 && address != 0);
     api = (const void *)address;
-    CHECK(api->version == 33 && api->size == sizeof(*api));
+    CHECK(api->version == 34 && api->size == sizeof(*api));
     extern const unsigned char RestrictedRestore[],RestrictedRestoreEnd[];
     static struct AROSRestrictedResult restored;
     CHECK(api->run(RestrictedRestore,(size_t)(RestrictedRestoreEnd-RestrictedRestore),0,&restored));
@@ -1490,6 +1527,7 @@ int main(void)
     prove_table_growth();
     prove_large_stacks();
     prove_exceptions();
+    prove_jit();
     prove_large_code();
     prove_dynamic_code();
     prove_dynamic_continuations();

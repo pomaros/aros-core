@@ -166,7 +166,12 @@ static int install(void *opaque,uintptr_t va,uintptr_t pa,unsigned protection)
 {
     struct AROSRestrictedSpace *s=opaque;uint64_t actual;
     if (!owns_page(s,va,pa)) return 0;
-    unsigned access=protection|AARCH64_PROTECT_USER;
+    /* The engine's JIT class becomes the hardware JIT class; every other
+     * protection keeps its W^X meaning at EL0. */
+    unsigned access=protection==KMAP_JIT_CLASS ?
+        AARCH64_PROTECT_JIT|AARCH64_PROTECT_READ|AARCH64_PROTECT_WRITE|
+            AARCH64_PROTECT_EXEC|AARCH64_PROTECT_USER :
+        protection|AARCH64_PROTECT_USER;
     if (AArch64MappingPhysical(&s->hardware,s->root,s->tcr,va,&actual))
         return actual==pa && AArch64RemapPage(&s->hardware,s->root,s->tcr,va,pa,access);
     return AArch64MapPage(&s->hardware,s->root,s->tcr,va,pa,access,1);
@@ -213,7 +218,8 @@ int AROSRestrictedRegionReserve(struct AROSRestrictedSpace *s,struct AROSRestric
 int AROSRestrictedRegionCommit(struct AROSRestrictedRegion *r,size_t page,uintptr_t pa,unsigned access)
 {
     if (!r || !r->space || r->space->domain.closing || page>=r->mapping.page_count ||
-        r->shared || r->publication_pending || !pa || (pa&(PAGE-1)) || (access&~(KMAP_READ|KMAP_WRITE)) ||
+        r->shared || r->publication_pending || !pa || (pa&(PAGE-1)) ||
+        ((access&~(KMAP_READ|KMAP_WRITE)) && access!=KMAP_JIT_CLASS) ||
         r->backing[page] || physical_in_use(pa)) return 0;
     r->backing[page]=pa;
     if (KrnMappingCommitResidentPage(&r->mapping,page,pa,access,&r->space->mapops)) return 1;
@@ -241,9 +247,8 @@ int AROSRestrictedRegionPublish(struct AROSRestrictedRegion *r,size_t page,
 {
     if (!r || !r->space || r->space->domain.closing ||
         r->mapping.closing || r->mapping.in_flight || !r->mapping.virtual_reservation ||
-        page>=r->mapping.page_count || !ops || !ops->protect_native || (access&~7U) ||
-        ((access&(KMAP_WRITE|KMAP_EXEC))==(KMAP_WRITE|KMAP_EXEC)) ||
-        ((access&(KMAP_WRITE|KMAP_EXEC)) && !(access&KMAP_READ)) ||
+        page>=r->mapping.page_count || !ops || !ops->protect_native ||
+        !KrnMappingProtectionValid(access,!r->shared) ||
         (r->publication_pending && r->publication_page!=page)) return 0;
     unsigned other_execute;
     if (!shared_publication_policy(r,page,access,&other_execute)) return 0;
@@ -258,7 +263,9 @@ int AROSRestrictedRegionPublish(struct AROSRestrictedRegion *r,size_t page,
     if (!r->publication_pending) ++p->generation;
     r->publication_pending=1;r->publication_page=page;
     if (r->shared) r->shared->publication=r;
-    unsigned native=((access&KMAP_EXEC) || other_execute) ? KMAP_READ : KMAP_READ|KMAP_WRITE;
+    /* A JIT page is private: its native alias stays writable like data. */
+    unsigned native=access==KMAP_JIT_CLASS ? KMAP_READ|KMAP_WRITE :
+        ((access&KMAP_EXEC) || other_execute) ? KMAP_READ : KMAP_READ|KMAP_WRITE;
     if (!ops->protect_native(ops->context,p->physical,native) ||
         !KrnMappingProtectPage(&r->mapping,page,access,&r->space->mapops)) return 0;
     if (r->shared) r->shared->publication=NULL;
@@ -299,7 +306,11 @@ int AROSRestrictedSpacePageIdentity(struct AROSRestrictedSpace *s,uintptr_t addr
     uintptr_t va=address&~(uintptr_t)(PAGE-1);uint64_t actual;
     if (!p->physical || (p->state!=KMAP_CLEAN && p->state!=KMAP_DIRTY) ||
         (access && !(p->protection&access)) || !owns_page(s,va,p->physical)) return 0;
-    int ok=access ? AArch64UserPagePhysical(&s->hardware,s->root,s->tcr,va,access,1,&actual) :
+    /* Execute identity of a JIT page proves the JIT leaf: the page is owned
+     * and current, its contents are the guest's to change. */
+    unsigned hardware=access==KMAP_EXEC && p->protection==KMAP_JIT_CLASS ?
+        AARCH64_PROTECT_JIT : access;
+    int ok=access ? AArch64UserPagePhysical(&s->hardware,s->root,s->tcr,va,hardware,1,&actual) :
         AArch64MappingPhysical(&s->hardware,s->root,s->tcr,va,&actual);
     if (!ok || actual!=p->physical) return 0;
     uint64_t identity=0;

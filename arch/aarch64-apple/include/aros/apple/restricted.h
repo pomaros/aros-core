@@ -136,7 +136,16 @@ struct AROSRestrictedAPI {
      * zero means committed no-access. protect_memory additionally accepts
      * read+execute (5) for committed pages through a quiesced publication
      * transaction. Shared publication requires every writable peer to be revoked;
-     * writers are refused while any peer executes. Commit never grants execute. Dynamic code
+     * writers are refused while any peer executes. Commit never grants execute,
+     * except version 34's JIT pages: commit_memory and protect_memory accept
+     * read+write+execute (7) on private pages when the kernel has a JIT mode
+     * (AROS_APPLE_KATTR_JIT_MODE, <aros/apple/jit.h>), and refuse it otherwise.
+     * Such a page is genuinely writable and executable on a VM guest (RWX
+     * mode); in SPRR mode the kernel switches the thread between writing and
+     * executing JIT pages on the faulting access, and a JIT-page instruction
+     * that writes a JIT page faults. Shared views never become JIT pages. A
+     * JIT page's execute identity proves ownership and generation, not
+     * immutable contents. Dynamic code
      * can supply callbacks and fault continuations: saved code identity must
      * still match when entered/restored. Replacement or revocation fails closed.
      * Release requires the reservation base.

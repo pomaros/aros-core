@@ -28,8 +28,13 @@ not automatically reclaimed by leaf unmap. A real platform must bound/account
 that address-space ownership, or detach/prune with the required synchronization.
 It must not equate the number of allocate calls with successfully linked pages.
 
-Eleven separately compiled semantic mutants must fail C assertions: wrong
-unmap owner, accepting the JIT bit, dropping byte offsets, ignoring physical
+The exact D-135 JIT class maps as an EL0 writable leaf with UXN clear and PXN
+set; partial JIT classes stay refused. JIT admission accepts only that leaf, and
+execute admission never accepts it.
+
+Fifteen separately compiled semantic mutants must fail C assertions: wrong
+unmap owner, accepting a partial JIT class, JIT admission without PXN or of a
+read-only leaf, dropping byte offsets, ignoring physical
 width, accepting tagged geometry, incorrect privileged alias access, missing
 user/read-only admission checks, and ignoring UXN or writable executable leaves. Compilation failure or an unrelated sanitizer crash
 is not an accepted negative control. Inputs are hashed before/after replay;

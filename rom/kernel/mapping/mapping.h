@@ -7,7 +7,21 @@
 #include <stdint.h>
 #include <stddef.h>
 
-enum KrnMappingAccess { KMAP_READ = 1, KMAP_WRITE = 2, KMAP_EXEC = 4 };
+/* KMAP_JIT is the platform's JIT page class (D-135): exactly
+ * KMAP_READ | KMAP_WRITE | KMAP_EXEC | KMAP_JIT, admitted only for resident
+ * pages of a private anonymous virtual reservation (CommitResidentPage and
+ * ProtectPage). Every other protection is W^X. The platform's install
+ * callback gives the class its meaning; callers check the JIT mode first. */
+enum KrnMappingAccess { KMAP_READ = 1, KMAP_WRITE = 2, KMAP_EXEC = 4, KMAP_JIT = 8 };
+#define KMAP_JIT_CLASS (KMAP_READ | KMAP_WRITE | KMAP_EXEC | KMAP_JIT)
+static inline int KrnMappingProtectionValid(unsigned protection, int jit)
+{
+    if (protection == KMAP_JIT_CLASS)
+        return jit;
+    return !(protection & ~7U) &&
+        (protection & (KMAP_WRITE | KMAP_EXEC)) != (KMAP_WRITE | KMAP_EXEC) &&
+        (!(protection & (KMAP_WRITE | KMAP_EXEC)) || (protection & KMAP_READ));
+}
 enum KrnMappingPageState {
     KMAP_ABSENT, KMAP_LOADING, KMAP_CLEAN, KMAP_DIRTY,
     KMAP_WRITEBACK, KMAP_ERROR, KMAP_RESERVED

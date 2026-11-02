@@ -18,6 +18,10 @@
 #define PA_HIGH (UINT64_C(1) << 48)
 #define DATA_PA UINT64_C(0x40000000)
 #define SENTINEL UINT64_C(0xdeadbeef)
+#define AP_EL0 (UINT64_C(1) << 6)
+#define AP_RO (UINT64_C(1) << 7)
+#define JIT_CLASS (AARCH64_PROTECT_JIT|AARCH64_PROTECT_READ|AARCH64_PROTECT_WRITE| \
+    AARCH64_PROTECT_EXEC|AARCH64_PROTECT_USER)
 struct Table { uint64_t pa, *words; };
 struct Fixture {
     struct Table tables[MAX_TABLES];
@@ -168,15 +172,18 @@ static void permissions(unsigned page)
         AARCH64_PROTECT_READ|AARCH64_PROTECT_WRITE,
         AARCH64_PROTECT_READ|AARCH64_PROTECT_EXEC,
         AARCH64_PROTECT_READ|AARCH64_PROTECT_EXEC|AARCH64_PROTECT_USER,
-        AARCH64_PROTECT_READ|AARCH64_PROTECT_EXEC|AARCH64_PROTECT_USER|AARCH64_PROTECT_EXEC_BOTH};
-    const unsigned bad[]={2,4,6,7,32,63,64,16,17,21};
+        AARCH64_PROTECT_READ|AARCH64_PROTECT_EXEC|AARCH64_PROTECT_USER|AARCH64_PROTECT_EXEC_BOTH,
+        JIT_CLASS};
+    /* JIT alone, partial JIT classes, JIT without EL0, JIT with EXEC_BOTH. */
+    const unsigned bad[]={2,4,6,7,32,63,64,16,17,21,33,43,39,47|16,45};
     for (unsigned k=0;k<sizeof(good)/sizeof(*good);++k) {
         struct Fixture f;init(&f,page,48);struct AArch64ProtectionOps o=ops(&f);
         assert(AArch64MapPage(&o,f.root,f.tcr,f.va,DATA_PA,good[k],7));
         uint64_t d=*slot_at(&f,f.va,3);
         if (good[k]&AARCH64_PROTECT_EXEC) {
             assert(f.synchronizations==1);
-            if (good[k]&AARCH64_PROTECT_EXEC_BOTH) assert(!(d&(PXN|UXN)));
+            if (good[k]==JIT_CLASS) assert((d&PXN) && !(d&UXN) && (d&AP_EL0) && !(d&AP_RO));
+            else if (good[k]&AARCH64_PROTECT_EXEC_BOTH) assert(!(d&(PXN|UXN)));
             else if (good[k]&AARCH64_PROTECT_USER) assert((d&PXN) && !(d&UXN));
             else assert(!(d&PXN) && (d&UXN));
         }
@@ -383,6 +390,17 @@ static void user_admission(unsigned page)
     assert(AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,4,1,&pa) && pa==DATA_PA);
     *entry=original & ~UXN;pa=SENTINEL;
     assert(!AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,4,1,&pa) && pa==SENTINEL);
+    /* JIT admission: exactly the writable EL0 leaf with UXN clear, PXN set. */
+    *entry=(original & ~UXN) | PXN;
+    assert(AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,AARCH64_PROTECT_JIT,1,&pa) && pa==DATA_PA);
+    *entry=original & ~(UXN|PXN);pa=SENTINEL;
+    assert(!AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,AARCH64_PROTECT_JIT,1,&pa) && pa==SENTINEL);
+    *entry=(original | PXN | AP_RO) & ~UXN;pa=SENTINEL;
+    assert(!AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,AARCH64_PROTECT_JIT,1,&pa) && pa==SENTINEL);
+    *entry=original | PXN | UXN;pa=SENTINEL;
+    assert(!AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,AARCH64_PROTECT_JIT,1,&pa) && pa==SENTINEL);
+    *entry=original;pa=SENTINEL;
+    assert(!AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,AARCH64_PROTECT_JIT,1,&pa) && pa==SENTINEL);
     const uint64_t malformed[]={original & ~UINT64_C(1),original & ~(UINT64_C(1)<<10),
         original | GUARD,original | CONTIG,original | PA_HIGH,original & ~UINT64_C(0x1c)};
     for(unsigned i=0;i<sizeof(malformed)/sizeof(*malformed);++i) {

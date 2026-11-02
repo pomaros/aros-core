@@ -8,7 +8,7 @@
 #define PAGE 256U
 #define BASE 0x10000U
 #define CHECK(x,n) do { if (!(x)) { puts("FAIL " n);exit(1); } } while (0)
-struct Backing { unsigned allocations,removes,fail_remove;uintptr_t mapped;unsigned char bytes[PAGE] __attribute__((aligned(PAGE))); };
+struct Backing { unsigned allocations,removes,fail_remove,protection;uintptr_t mapped;unsigned char bytes[PAGE] __attribute__((aligned(PAGE))); };
 static int allocate(void *opaque,size_t size,struct KrnPagerPage *page)
 {
     struct Backing *b=opaque;CHECK(size==PAGE,"page-size");++b->allocations;
@@ -18,12 +18,14 @@ static void release(void *opaque,struct KrnPagerPage *page,size_t size)
 { (void)opaque;(void)page;(void)size; }
 static int install(void *opaque,uintptr_t va,uintptr_t pa,unsigned protection)
 {
-    struct Backing *b=opaque;CHECK(va==BASE && pa==(uintptr_t)b->bytes && !(protection&KMAP_EXEC),"install-input");
-    b->mapped=pa;return 1;
+    struct Backing *b=opaque;
+    CHECK(va>=BASE && va<BASE+4*PAGE && pa==(uintptr_t)b->bytes &&
+        (!(protection&KMAP_EXEC) || protection==KMAP_JIT_CLASS),"install-input");
+    b->mapped=pa;b->protection=protection;return 1;
 }
 static int remove_page(void *opaque,uintptr_t va,uintptr_t pa)
 {
-    struct Backing *b=opaque;CHECK(va==BASE && pa==b->mapped,"remove-input");
+    struct Backing *b=opaque;CHECK(va>=BASE && va<BASE+4*PAGE && pa==b->mapped,"remove-input");
     if (b->fail_remove) return 0;
     ++b->removes;b->mapped=0;return 1;
 }
@@ -72,6 +74,25 @@ int main(void)
     for (unsigned i=0;i<PAGE;++i) CHECK(b.bytes[i]==0,"recommit-zero-bytes");
     CHECK(KrnMappingDecommitPage(&m,0,&maps,&released),"final-decommit");
     CHECK(KrnMappingDecommitPage(&m,0,NULL,&released) && !released,"decommit-idempotent");
+    /* JIT class: resident pages of the anonymous reservation only. */
+    CHECK(!KrnMappingCommitRange(&m,BASE+PAGE,PAGE,KMAP_JIT_CLASS),"jit-lazy-refused");
+    CHECK(!KrnMappingCommitResidentPage(&m,1,(uintptr_t)b.bytes,KMAP_JIT|3,&maps) &&
+        !KrnMappingCommitResidentPage(&m,1,(uintptr_t)b.bytes,7,&maps) &&
+        !KrnMappingCommitResidentPage(&m,1,(uintptr_t)b.bytes,KMAP_JIT_CLASS|16,&maps) && !b.mapped,"jit-partial-refused");
+    CHECK(KrnMappingCommitResidentPage(&m,1,(uintptr_t)b.bytes,KMAP_JIT_CLASS,&maps) &&
+        b.protection==KMAP_JIT_CLASS && p[1].state==KMAP_DIRTY,"jit-commit");
+    CHECK(KrnMappingProtectPage(&m,1,3,&maps) && b.protection==3,"jit-to-data");
+    CHECK(KrnMappingProtectPage(&m,1,KMAP_JIT_CLASS,&maps) && b.protection==KMAP_JIT_CLASS,"data-to-jit");
+    CHECK(KrnMappingDecommitPage(&m,1,&maps,&released) && released==(uintptr_t)b.bytes,"jit-decommit");
+    CHECK(!KrnMappingProtectPage(&m,1,KMAP_JIT_CLASS,&maps),"jit-reserved-refused");
+    struct KrnMappingObject file;struct KrnMappingPage fp[1];
+    CHECK(!KrnMappingInitialize(&file,BASE+2*PAGE,PAGE,PAGE,0,KMAP_JIT_CLASS,0,&b,fp,1),"jit-object-refused");
+    CHECK(KrnMappingReserveAt(&arena,&file,BASE+2*PAGE,PAGE,0,3,0,&b,fp,1),"file-reserve");
+    CHECK(KrnMappingFault(&file,BASE+2*PAGE,KMAP_WRITE,1,&request,&maps)==KMAP_FAULT_QUEUE &&
+        KrnMappingComplete(&request,(uintptr_t)b.bytes,0,&maps),"file-resident");
+    CHECK(!KrnMappingProtectPage(&file,0,KMAP_JIT_CLASS,&maps) && b.protection!=KMAP_JIT_CLASS,"jit-file-refused");
+    CHECK(KrnMappingBeginClose(&file) && KrnMappingReleasePage(&file,0,&maps)==(uintptr_t)b.bytes &&
+        KrnMappingRelease(&arena,&file),"file-release");
     CHECK(KrnMappingBeginClose(&m) && KrnMappingRelease(&arena,&m) && !arena.first,"release-reservation");
     puts("PASS virtual reserve commit decommit zero reuse");return 0;
 }

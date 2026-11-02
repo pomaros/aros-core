@@ -57,8 +57,14 @@ static int root_valid(const struct MappingWalk *walk, uint64_t ttbr0)
         physical_valid(walk, ttbr0 & walk->mask);
 }
 
+/* The D-135 JIT class: exactly read, write and execute at EL0. */
+#define JIT_CLASS (AARCH64_PROTECT_JIT | AARCH64_PROTECT_READ | \
+    AARCH64_PROTECT_WRITE | AARCH64_PROTECT_EXEC | AARCH64_PROTECT_USER)
+
 static int permissions_valid(unsigned permissions)
 {
+    if (permissions == JIT_CLASS)
+        return 1;
     return !(permissions & ~31U) &&
         (!((permissions & (AARCH64_PROTECT_WRITE | AARCH64_PROTECT_EXEC))) ||
             (permissions & AARCH64_PROTECT_READ)) &&
@@ -211,7 +217,7 @@ int AArch64UserPagePhysical(const struct AArch64ProtectionOps *ops,
     struct MappingWalk walk;
     if (!ops || !ops->resolve || !physical || normal_index > 7 ||
         (access != AARCH64_PROTECT_READ && access != AARCH64_PROTECT_WRITE &&
-         access != AARCH64_PROTECT_EXEC) ||
+         access != AARCH64_PROTECT_EXEC && access != AARCH64_PROTECT_JIT) ||
         !geometry(tcr,va,0,&walk)) return 0;
     uint64_t *slot = leaf(ops,ttbr0,&walk,va,0);
     if (!slot || !descriptor_address_valid(&walk,*slot) ||
@@ -220,6 +226,8 @@ int AArch64UserPagePhysical(const struct AArch64ProtectionOps *ops,
         !(*slot & (UINT64_C(1) << 6)) ||
         (access == AARCH64_PROTECT_WRITE && (*slot & (UINT64_C(1) << 7))) ||
         (access == AARCH64_PROTECT_EXEC && ((*slot & M_UXN) || !(*slot & (UINT64_C(1) << 7)))) ||
+        (access == AARCH64_PROTECT_JIT && ((*slot & M_UXN) || !(*slot & M_PXN) ||
+            (*slot & (UINT64_C(1) << 7)))) ||
         ((*slot >> 2) & 7) != normal_index) return 0;
     *physical = *slot & walk.mask;
     return 1;

@@ -82,7 +82,7 @@ static void publication_tests(void)
     native_calls=0;region.mapping.in_flight=1;
     CHECK(!AROSRestrictedRegionPublish(&region,0,5,&ops) && !native_calls,"publication-pinned-refused");
     region.mapping.in_flight=0;
-    for (unsigned access=0;access<16;++access) if (access!=0 && access!=1 && access!=3 && access!=5)
+    for (unsigned access=0;access<32;++access) if (access!=0 && access!=1 && access!=3 && access!=5 && access!=KMAP_JIT_CLASS)
         CHECK(!AROSRestrictedRegionPublish(&region,0,access,&ops) && !native_calls,"publication-permissions");
     region.shared=(void *)1;
     CHECK(!AROSRestrictedRegionPublish(&region,0,5,&ops) && !native_calls,"publication-shared-refused");region.shared=NULL;
@@ -148,6 +148,48 @@ static void shared_copy_tests(void)
     CHECK(AROSRestrictedSharedClose(&b) && !AROSRestrictedSharedRead(&b,0,output,8),"shared-copy-stale-refused");
     free(pages);
 }
+/* D-135 JIT class: committed or published writable and executable on private
+ * pages, native alias kept writable, execute identity on the JIT leaf. */
+static void jit_tests(void)
+{
+    struct Fixture *f=aligned_alloc(PAGE,sizeof(*f));
+    unsigned char *data=aligned_alloc(PAGE,PAGE),*page=aligned_alloc(PAGE,PAGE);
+    CHECK(f && data && page,"jit-storage");memset(f,0,sizeof(*f));f->used=1;
+    struct AROSRestrictedSpace space={0};
+    struct AArch64ProtectionOps hardware={f,resolve,allocate,clean,invalidate,sync_code,NULL};
+    CHECK(AROSRestrictedSpaceInit(&space,98,(uintptr_t)f->tables[0],25|(UINT64_C(5)<<32),(uintptr_t)data,&hardware),"jit-space");
+    struct AROSRestrictedRegion region={0};struct KrnMappingPage metadata[2];uintptr_t ledger[2]={0};
+    uintptr_t va=AROS_RESTRICTED_DYNAMIC_BASE,pa;uint64_t generation,reservation;
+    CHECK(AROSRestrictedRegionReserve(&space,&region,va,2*PAGE,metadata,ledger,2),"jit-reserve");
+    CHECK(!AROSRestrictedRegionCommit(&region,0,(uintptr_t)page,7) &&
+        !AROSRestrictedRegionCommit(&region,0,(uintptr_t)page,KMAP_JIT|3) &&
+        !AROSRestrictedRegionCommit(&region,0,(uintptr_t)page,KMAP_JIT_CLASS|16) && !ledger[0],"jit-partial-refused");
+    unsigned syncs=f->synchronizations;
+    CHECK(AROSRestrictedRegionCommit(&region,0,(uintptr_t)page,KMAP_JIT_CLASS) &&
+        metadata[0].protection==KMAP_JIT_CLASS,"jit-commit");
+    uint64_t leaf=publication_leaf(&space,va);
+    CHECK((leaf&64) && !(leaf&128) && !(leaf&(UINT64_C(1)<<54)) && (leaf&(UINT64_C(1)<<53)) &&
+        f->synchronizations>syncs,"jit-commit-leaf");
+    CHECK(AROSRestrictedSpacePageIdentity(&space,va+8,4,&pa,&generation,&reservation) &&
+        pa==(uintptr_t)page && reservation==region.identity,"jit-execute-identity");
+    CHECK(AROSRestrictedSpacePageIdentity(&space,va,2,&pa,&generation,&reservation),"jit-write-identity");
+    CHECK(!AROSRestrictedRegionProtect(&region,0,KMAP_JIT_CLASS) && !AROSRestrictedRegionProtect(&region,0,3),"jit-direct-protect-refused");
+    publishing=&region;struct AROSRestrictedPublicationOps ops={NULL,native_publication};
+    fail_native=0;fail_install=0;native_calls=0;
+    CHECK(AROSRestrictedRegionPublish(&region,0,3,&ops) && native_policy==3 && metadata[0].generation==generation+1,"jit-to-data");
+    CHECK(!AROSRestrictedSpacePageIdentity(&space,va,4,&pa,&generation,&reservation),"jit-data-not-executable");
+    native_policy=0;
+    CHECK(AROSRestrictedRegionPublish(&region,0,KMAP_JIT_CLASS,&ops) && native_policy==3 &&
+        metadata[0].protection==KMAP_JIT_CLASS,"jit-native-writable");
+    CHECK(AROSRestrictedSpacePageIdentity(&space,va,4,&pa,&generation,&reservation),"jit-republished-identity");
+    CHECK(AROSRestrictedRegionPublish(&region,0,5,&ops) && native_policy==1,"jit-to-code");
+    leaf=publication_leaf(&space,va);CHECK((leaf&128) && !(leaf&(UINT64_C(1)<<54)),"jit-code-leaf");
+    CHECK(AROSRestrictedRegionPublish(&region,0,KMAP_JIT_CLASS,&ops) && native_policy==3,"code-to-jit");
+    uintptr_t released=0;
+    CHECK(AROSRestrictedRegionDecommit(&region,0,&released) && released==(uintptr_t)page,"jit-decommit");
+    CHECK(AROSRestrictedRegionDetach(&region) && AROSRestrictedSpaceClose(&space),"jit-close");
+    free(page);free(data);free(f);publishing=NULL;
+}
 static void shared_publication_tests(void)
 {
     struct Fixture *f[3];unsigned char *data[3],*page=aligned_alloc(PAGE,PAGE);
@@ -163,7 +205,8 @@ static void shared_publication_tests(void)
         CHECK(AROSRestrictedSpaceInit(&spaces[i],200+i,(uintptr_t)f[i]->tables[0],25|(UINT64_C(5)<<32),(uintptr_t)data[i],&hw),"shared-publish-space");
         CHECK(AROSRestrictedRegionReserve(&spaces[i],&r[i],va,PAGE,&metadata[i],&ledger[i],1) &&
             AROSRestrictedRegionAttachShared(&r[i],&b),"shared-publish-view");
-        if (i<2) CHECK(AROSRestrictedRegionCommitShared(&r[i],0,i ? 1 : 3),"shared-publish-commit");
+        if (i<2) CHECK(!AROSRestrictedRegionCommitShared(&r[i],0,KMAP_JIT_CLASS) &&
+            AROSRestrictedRegionCommitShared(&r[i],0,i ? 1 : 3),"shared-publish-commit");
     }
     uint64_t copy_value=0x1122334455667788,copy_read=0;
     CHECK(AROSRestrictedSharedWrite(&b,0,&copy_value,8),"shared-copy-data-write");
@@ -171,6 +214,7 @@ static void shared_publication_tests(void)
     fail_native=0;native_calls=0;publishing=&r[1];
     CHECK(!AROSRestrictedRegionPublish(&r[1],0,5,&ops) && !native_calls,"shared-publish-write-conflict");
     CHECK(AROSRestrictedRegionProtect(&r[0],0,1),"shared-publish-drop-writer");
+    CHECK(!AROSRestrictedRegionPublish(&r[1],0,KMAP_JIT_CLASS,&ops) && !native_calls,"jit-shared-publish-refused");
     CHECK(AROSRestrictedRegionPublish(&r[1],0,5,&ops) && native_policy==1,"shared-publish-rx");
     CHECK(!AROSRestrictedSharedWrite(&b,0,&copy_value,8),"shared-copy-executable-refused");
     CHECK(AROSRestrictedSharedRead(&b,0,&copy_read,8) && copy_read==copy_value,"shared-copy-executable-readable");
@@ -493,5 +537,5 @@ int main(void)
     CHECK(AROSRestrictedSpaceInit(&space,11,root,tcr,(uintptr_t)data,&ops),"space-reuse");
     CHECK(space.handle!=first_handle,"space-generation");
     CHECK(AROSRestrictedSpaceClose(&space),"reused-space-close");
-    free(data);free(f);region_tests(AROS_RESTRICTED_DYNAMIC_BASE);region_tests(UINT64_C(0x7ffe0000));shared_tests();shared_copy_tests();channel_growth();publication_tests();shared_publication_tests();puts("PASS restricted space and channel ownership");return 0;
+    free(data);free(f);region_tests(AROS_RESTRICTED_DYNAMIC_BASE);region_tests(UINT64_C(0x7ffe0000));shared_tests();shared_copy_tests();channel_growth();publication_tests();jit_tests();shared_publication_tests();puts("PASS restricted space and channel ownership");return 0;
 }

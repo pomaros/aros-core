@@ -20,8 +20,12 @@
  * resolve; a zeroed descriptor is the only available leaf state. The normal
  * MAIR index is a platform assertion, not validated from its numerical value.
  * Supports TTBR0 <=48-bit 4K/16K, IPS <=48-bit, with no EPD0/TBI0/HA/HD/DS.
- * Table roots are page-aligned. This API refuses JIT32 as well as W+X;
- * executable leaf support does not establish safety of other physical aliases.
+ * Table roots are page-aligned. This API refuses W+X except the exact D-135
+ * JIT class (AARCH64_PROTECT_JIT | READ | WRITE | EXEC | USER): an EL0
+ * writable leaf with UXN clear and PXN set, whose meaning the platform
+ * decides (SPRR remapping or a VM guest's genuine RWX). Callers admit it only
+ * when the platform's JIT mode allows it. Executable leaf support does not
+ * establish safety of other physical aliases.
  */
 int AArch64MapPage(const struct AArch64ProtectionOps *, uint64_t ttbr0,
     uint64_t tcr, uint64_t virtual_address, uint64_t physical_address,
@@ -45,7 +49,7 @@ int AArch64UnmapPrivilegedPage(const struct AArch64ProtectionOps *, uint64_t ttb
 /* Change permissions only for the exact existing physical owner; supports a
  * retained invalid guard too. Never replaces backing or splits a block. Uses
  * the current protection engine under the same caller-held lock/quiescence
- * interval, but intentionally refuses that engine's special JIT32 mode. */
+ * interval. The JIT class is accepted only in its exact form, as above. */
 int AArch64RemapPage(const struct AArch64ProtectionOps *, uint64_t ttbr0,
     uint64_t tcr, uint64_t virtual_address, uint64_t expected_physical,
     unsigned permissions);
@@ -80,8 +84,9 @@ int AArch64TranslateResident(const struct AArch64ProtectionOps *, uint64_t ttbr0
  * Only resolve is required; no root switch, allocation or cache/TLB mutation.
  * Caller serializes mutations and independently verifies ownership, full page
  * size and expected backing. This proves access, not lifetime or ownership.
- * Output is unchanged on refusal. Access is READ, WRITE or EXEC; EXEC requires
- * a read-only leaf with UXN clear. */
+ * Output is unchanged on refusal. Access is READ, WRITE, EXEC or JIT; EXEC
+ * requires a read-only leaf with UXN clear, JIT exactly the JIT class leaf
+ * (writable, UXN clear, PXN set). EXEC never admits a JIT leaf. */
 int AArch64UserPagePhysical(const struct AArch64ProtectionOps *, uint64_t ttbr0,
     uint64_t tcr, uint64_t virtual_address, unsigned access,
     unsigned normal_index, uint64_t *physical);

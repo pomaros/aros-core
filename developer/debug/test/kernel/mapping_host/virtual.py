@@ -19,7 +19,8 @@ def main():
  ('decommit-remove','mapping.c','!ops->remove(ops->context,m->start+index*m->page_size,physical)','0','decommit-remove-refusal'),
  ('decommit-demand','mapping.c','*p=(struct KrnMappingPage){0,p->generation+1,KMAP_RESERVED,0,p->protection};','*p=(struct KrnMappingPage){0,p->generation+1,KMAP_ABSENT,0,p->protection};','decommit-no-demand-reload'),
  ('commit-preflight','mapping.c','p->state==KMAP_RESERVED && (p->physical || p->generation==UINT64_MAX)','p->state==KMAP_RESERVED && (p->physical || 0)','commit-preflight'),
- ('zero-fill','pager.c','bytes[i]=0;','bytes[i]=0xa5;','zero-bytes')]
+ ('zero-fill','pager.c','bytes[i]=0;','bytes[i]=0xa5;','zero-bytes'),
+ ('jit-file','mapping.c','if (protection==KMAP_JIT_CLASS && !anonymous) return 0;','','install-input')]
  try:
   for name,file,before,after,oracle in cases:
    sources={n:SRC/n for n in ['mapping.c','pager.c']}

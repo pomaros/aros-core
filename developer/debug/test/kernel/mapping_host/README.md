@@ -78,3 +78,8 @@ Five semantic controls detect ignored pins, omitted removal, implicit demand
 reload, missing range preflight and skipped zeroing. This is HOST evidence;
 range-wide physical rollback, real TLB acknowledgement, allocation and fault
 scheduling belong to the production coordinator and its guest qualification.
+
+The virtual reservation suite also checks the D-135 JIT class: it is admitted
+only for resident pages of a private anonymous reservation, in its exact
+read+write+execute form, and refused for lazy commits, mapping objects and
+file-backed pages.

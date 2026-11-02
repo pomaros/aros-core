@@ -11,9 +11,7 @@ int KrnMappingInitialize(struct KrnMappingObject *m, uintptr_t start,
         (start & (size - 1)) || (length & (size - 1)) ||
         (offset & (size - 1)) || length > UINTPTR_MAX - start ||
         length > UINT64_MAX - offset || length / size > capacity ||
-        (protection & ~7U) ||
-        ((protection & (KMAP_WRITE | KMAP_EXEC)) == (KMAP_WRITE | KMAP_EXEC)) ||
-        ((protection & (KMAP_WRITE | KMAP_EXEC)) && !(protection & KMAP_READ)))
+        !KrnMappingProtectionValid(protection, 0))
         return 0;
     *m = (struct KrnMappingObject){start, length, size, length / size, offset,
         owner, pages, protection, !!shared, 0, 0, 0, NULL, 0};
@@ -96,9 +94,8 @@ int KrnMappingCommitRange(struct KrnMappingObject *m,uintptr_t address,
     if (!m || !m->virtual_reservation || m->shared || m->closing || !length ||
         !m->page_size || (address&(m->page_size-1)) || (length&(m->page_size-1)) ||
         address<m->start || address-m->start>=m->length ||
-        length>m->length-(address-m->start) || (protection&~7U) ||
-        ((protection&(KMAP_WRITE|KMAP_EXEC))==(KMAP_WRITE|KMAP_EXEC)) ||
-        ((protection&(KMAP_WRITE|KMAP_EXEC)) && !(protection&KMAP_READ))) return 0;
+        length>m->length-(address-m->start) ||
+        !KrnMappingProtectionValid(protection,0)) return 0;
     size_t first=(address-m->start)/m->page_size,count=length/m->page_size;
     for (size_t i=first;i<first+count;++i) {
         struct KrnMappingPage *p=&m->pages[i];
@@ -115,9 +112,7 @@ int KrnMappingCommitResidentPage(struct KrnMappingObject *m,size_t index,
 {
     if (!m || !m->virtual_reservation || m->shared || m->closing ||
         index>=m->page_count || !physical || !m->page_size ||
-        (physical&(m->page_size-1)) || (protection&~7U) ||
-        ((protection&(KMAP_WRITE|KMAP_EXEC))==(KMAP_WRITE|KMAP_EXEC)) ||
-        ((protection&(KMAP_WRITE|KMAP_EXEC)) && !(protection&KMAP_READ)) ||
+        (physical&(m->page_size-1)) || !KrnMappingProtectionValid(protection,1) ||
         !ops || !ops->install || m->resident>=m->page_count) return 0;
     struct KrnMappingPage *p=&m->pages[index];
     if (p->state!=KMAP_RESERVED || p->physical || p->generation==UINT64_MAX ||
@@ -450,9 +445,7 @@ int KrnMappingProtectPage(struct KrnMappingObject *m, size_t index,
     unsigned protection, const struct KrnMappingOps *ops)
 {
     if (!m || index>=m->page_count || m->closing || !ops || !ops->install ||
-        (protection&~7U) || ((protection&(KMAP_WRITE|KMAP_EXEC))==
-            (KMAP_WRITE|KMAP_EXEC)) ||
-        ((protection&(KMAP_WRITE|KMAP_EXEC)) && !(protection&KMAP_READ)))
+        !KrnMappingProtectionValid(protection,1))
         return 0;
     struct KrnMappingPage *p=&m->pages[index];
     if (p->state==KMAP_RESERVED) return 0;
@@ -460,6 +453,8 @@ int KrnMappingProtectPage(struct KrnMappingObject *m, size_t index,
      * grant write so native buffer output does not depend on a user fault. */
     unsigned anonymous=m->virtual_reservation && !m->shared && p->physical &&
         (p->state==KMAP_CLEAN || p->state==KMAP_DIRTY);
+    /* JIT pages have no write-fault path: resident anonymous pages only. */
+    if (protection==KMAP_JIT_CLASS && !anonymous) return 0;
     unsigned actual=(p->state==KMAP_DIRTY || anonymous) ? protection : protection&~KMAP_WRITE;
     if (p->physical && !ops->install(ops->context,m->start+index*m->page_size,
             p->physical,actual))

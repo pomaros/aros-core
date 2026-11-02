@@ -84,7 +84,10 @@ int AROSRestrictedRegionCommitShared(struct AROSRestrictedRegion *,size_t,unsign
  * Shared views never transfer page ownership on decommit/detach: decommit
  * returns zero and successful detach clears borrowed backing entries. Close
  * the backing object separately to reclaim its pages. Executable permissions
- * require the native code-publication protocol below, never ordinary commit. */
+ * require the native code-publication protocol below, never ordinary commit,
+ * except the JIT class (KMAP_JIT_CLASS): a private page committed or published
+ * writable and executable when the platform's JIT mode allows it, which the
+ * caller checks. Shared views never take the JIT class. */
 int AROSRestrictedRegionReserve(struct AROSRestrictedSpace *,struct AROSRestrictedRegion *,
     uintptr_t,size_t,struct KrnMappingPage *,uintptr_t *,size_t);
 int AROSRestrictedRegionCommit(struct AROSRestrictedRegion *,size_t,uintptr_t,unsigned);
@@ -126,7 +129,8 @@ void AROSRestrictedSpaceStop(struct AROSRestrictedSpace *);
 int AROSRestrictedSpaceClose(struct AROSRestrictedSpace *);
 int AROSRestrictedSpaceProtect(struct AROSRestrictedSpace *, unsigned);
 /* access is 0 (owned resident page, including a guard), 1 (read), 2 (write)
- * or 4 (execute, hardware read-only and UXN clear).
+ * or 4 (execute: hardware read-only and UXN clear, or the hardware JIT leaf
+ * of a JIT-class page).
  * Validate both the backing ledger and live PTE; return page identity/generation and reservation incarnation
  * without dereferencing an untrusted guest VA. */
 int AROSRestrictedSpacePageIdentity(struct AROSRestrictedSpace *,uintptr_t,unsigned,

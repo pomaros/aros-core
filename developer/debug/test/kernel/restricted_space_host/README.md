@@ -92,3 +92,10 @@ unaligned scratch buffers. Three semantic mutations remove executable, closing
 and alias checks. Atomic-width checks here verify contents, not SMP contention.
 The native restricted-task workload separately exercises the public API owner
 gate and controller updates observed through a read-only guest mapping.
+
+JIT pages (API34): a private page commits or publishes in the exact JIT class
+as an EL0 writable leaf with UXN clear and PXN set, keeps a writable native
+alias, and proves execute identity through that leaf. Partial classes, direct
+protection changes and shared views are refused; transitions to data and code
+advance the generation. Four mutations remove the class translation, the
+writable native alias, the shared refusal and the JIT execute identity.

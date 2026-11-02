@@ -17,6 +17,7 @@
 #include "kernel_intr.h"
 #include "kernel_syscall.h"
 #include "page_allocator.h"
+#include "jit_protect.h"
 #if defined(__AROSEXEC_SMP__)
 #include "smp.h"
 #include "cpu_monitor.h"
@@ -495,6 +496,34 @@ static int r_deliver_exception(struct Restricted *r,struct AROSAppleRuntimeFrame
     frame->x[1]=record->esr;frame->x[2]=record->far;frame->x[3]=record->generation;
     frame->x[30]=0;frame->sp=frame->x[0];r_stack_bounds(r,1);
     return 1;
+}
+/* A JIT-class page: owned, current, writable and executable in the ledger. */
+static int r_jit_page(const struct Restricted *r,uint64_t address)
+{
+    uintptr_t physical;uint64_t generation,reservation;
+    return AROSRestrictedSpacePageIdentity(&r->domain->space,address,KMAP_WRITE,
+            &physical,&generation,&reservation) &&
+        AROSRestrictedSpacePageIdentity(&r->domain->space,address,KMAP_EXEC,
+            &physical,&generation,&reservation);
+}
+/* SPRR JIT mode (M1): JIT pages are r-x, or rw- while the task writes.
+ * Windows translators never toggle, so the switch follows the faulting
+ * access: a write to a JIT page switches the thread to writing, a fetch
+ * from one switches it back. An instruction in a JIT page that writes a JIT
+ * page cannot be satisfied either way; it is delivered as a fault. */
+static int r_jit_switch(struct Restricted *r,struct Task *task,
+    struct ExceptionContext *context,struct AROSAppleRuntimeFrame *frame,
+    unsigned ec,unsigned fault)
+{
+    if (AROSAppleJitMode()!=AROS_APPLE_JIT_SPRR || (fault&0x3c)!=0x0c) return 0;
+    int writing=(context->Flags&ECF_JITWRITE)!=0;
+    if (ec==0x24 && !writing && (frame->esr&(UINT64_C(1)<<6)) &&
+        !(frame->esr&(UINT64_C(1)<<10)) && r_jit_page(r,frame->far) &&
+        !r_jit_page(r,frame->elr))
+        return AROSAppleJitSetWritable(task,1)!=UINT64_MAX;
+    if (ec==0x20 && writing && r_jit_page(r,frame->elr))
+        return AROSAppleJitSetWritable(task,0)!=UINT64_MAX;
+    return 0;
 }
 static struct ExceptionContext *r_context(struct Task *task)
 {
@@ -994,6 +1023,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
         if (ec != 0x15) {
             uintptr_t physical;uint64_t generation,reservation;
             unsigned fault=(unsigned)frame->esr&63;
+            if (r_jit_switch(r,task,context,frame,ec,fault)) return 1;
             /* Owned resident or reserved data pages can enter a repair handler.
              * Missing tables/pages produce translation faults; RO writes permission faults.
              * No instruction, external, alignment or unowned-address exception
@@ -1650,9 +1680,18 @@ static int r_reserve_memory(uint64_t handle,uintptr_t address,size_t length)
     int ok=r_memory_call(&op);if (!ok && !AROSApplePageFree(a,storage)) for (;;) __asm__ volatile("wfe");
     Permit();return ok;
 }
+/* API 34: read+write+execute (7) asks for the D-135 JIT class, admitted only
+ * when the kernel has a JIT mode; every other protection keeps W^X. */
+static int r_jit_protection(unsigned protection,unsigned *access)
+{
+    if (protection!=7) { *access=protection;return 1; }
+    if (AROSAppleJitMode()==AROS_APPLE_JIT_NONE) return 0;
+    *access=KMAP_JIT_CLASS;return 1;
+}
 static int r_commit_memory(uint64_t handle,uintptr_t address,unsigned protection)
 {
-    if (protection&~3U) return 0;
+    if ((protection&~3U) && protection!=7) return 0;
+    if (!r_jit_protection(protection,&protection)) return 0;
     Forbid();void *page=AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
     if (!page) { Permit();return 0; }
     struct RestrictedMemoryOperation op={.handle=handle,.address=address,
@@ -1671,6 +1710,7 @@ static int r_decommit_memory(uint64_t handle,uintptr_t address)
 }
 static int r_protect_memory(uint64_t handle,uintptr_t address,unsigned protection)
 {
+    if (!r_jit_protection(protection,&protection)) return 0;
     Forbid();struct RestrictedMemoryOperation op={.handle=handle,.address=address,.operation=3,.protection=protection};
     int ok=0;
     uint64_t saved=AROSApplePageMapAcquire();
@@ -1809,7 +1849,7 @@ static int r_take_domain(uint64_t handle,struct AROSRestrictedWork *work)
     __asm__ volatile("svc #0xa56e":"+r"(domain),"+r"(request)::"memory","cc");
     return domain!=0;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {33,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread,r_read_shared,r_write_shared,r_take_domain};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {34,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread,r_read_shared,r_write_shared,r_take_domain};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

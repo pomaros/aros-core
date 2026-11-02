@@ -62,7 +62,11 @@ def main():
   ('shared-owned-detach','adapter','r->backing[i]=0;','r->backing[i]=r->shared->pages[i];','shared-detach-no-ownership'),
   ('shared-closing-attach','adapter','!shared_registered(b) || b->closing ||','!shared_registered(b) ||','shared-close-stops-attach'),
   ('shared-untracked-pa','adapter','if (b->pages[i]==pa) return 1;','if (b->pages[i]==pa) return 0;','shared-duplicate-pa'),
-  ('recommit-zero','pager','bytes[i]=0;','bytes[i]=0xa5;','region-recommit-zero')]
+  ('recommit-zero','pager','bytes[i]=0;','bytes[i]=0xa5;','region-recommit-zero'),
+  ('jit-native-readonly','adapter','access==KMAP_JIT_CLASS ? KMAP_READ|KMAP_WRITE :','access==KMAP_JIT_CLASS ? KMAP_READ :','jit-native-writable'),
+  ('jit-shared','adapter','!KrnMappingProtectionValid(access,!r->shared)','!KrnMappingProtectionValid(access,1)','jit-shared-publish-refused'),
+  ('jit-identity-exec','adapter','access==KMAP_EXEC && p->protection==KMAP_JIT_CLASS ?\n        AARCH64_PROTECT_JIT : access;','access;','jit-execute-identity'),
+  ('jit-install-class','adapter','unsigned access=protection==KMAP_JIT_CLASS ?','unsigned access=0 ?','jit-commit')]
  try:
   for name,target,before,after,oracle in cases:
    used=source;used_pager=pager

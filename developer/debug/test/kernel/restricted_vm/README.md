@@ -147,3 +147,12 @@ write faults, executable-view write refusal, a guest write read back by the
 controller, closing/stale refusal and complete resource drain. Its separate
 `shared-copy` marker is required when qualifying this capability. Compilation
 and HOST checks do not establish this runtime result.
+
+The API34 JIT workload commits a private page read+write+execute. With a
+kernel JIT mode the payload writes a function, cleans and invalidates the
+caches at EL0, calls it, rewrites it in place and calls it again. Turning the
+page into data makes a fetch fault; turning it back into a JIT page runs it
+again; publishing it read+execute runs it and makes a write fault. Without a
+JIT mode both commit and protect with read+write+execute are refused. Its
+`jit` marker records the mode. The dynamic-code workload expects the
+read+write+execute refusal only without a JIT mode.
