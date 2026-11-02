@@ -5,6 +5,7 @@
 #include <aros/config.h>
 #include <aros/kernel.h>
 #include <aros/apple/startup.h>
+#include <aros/apple/jit.h>
 #include <exec/execbase.h>
 #include <exec/memory.h>
 #include <exec/tasks.h>
