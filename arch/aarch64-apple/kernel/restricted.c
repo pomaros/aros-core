@@ -667,7 +667,7 @@ static void r_invalidate(void *unused)
 static const void *r_execution_alias(struct RestrictedDomain *d,uint64_t va,size_t bytes)
 {
     if (!bytes) return NULL;
-    if (va>=AROS_RESTRICTED_CODE) {
+    if (va>=AROS_RESTRICTED_CODE && va<AROS_RESTRICTED_CODE_END) {
         size_t storage=r_code_storage(d->code_bytes);
         if (!d->code || va-AROS_RESTRICTED_CODE>=storage ||
             bytes>storage-(va-AROS_RESTRICTED_CODE)) return NULL;

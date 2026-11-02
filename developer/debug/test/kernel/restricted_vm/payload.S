@@ -3145,14 +3145,14 @@ ExceptionFailure:
  b ExceptionFailure
 RestrictedExceptionEnd:
 
-/* JIT pages (API 34). The controller commits 0x200000000 read+write+execute.
- * x0 = 0: write "mov w0,#0x42; ret", clean/invalidate, call it, rewrite it to
- * return 0x43 in place, call again; exit with the sum (0x85).
- * x0 = 1: call the page as it is and exit with its result. */
+/* JIT pages (API 34). The controller commits the page x0 & ~0xfff
+ * read+write+execute. x0 bit 0 clear: write "mov w0,#0x42; ret",
+ * clean/invalidate, call it, rewrite it to return 0x43 in place, call again;
+ * exit with the sum (0x85). Bit 0 set: call the page and exit with its result. */
 .global RestrictedJit, RestrictedJitEnd
 RestrictedJit:
- movz x20, #2, lsl #32
- cbnz x0, JitCallOnly
+ and x20, x0, #~0xfff
+ tbnz x0, #0, JitCallOnly
  mov x23, #0x42
  bl JitStore
  blr x20

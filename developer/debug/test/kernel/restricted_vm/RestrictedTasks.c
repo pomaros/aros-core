@@ -735,38 +735,48 @@ static void prove_exceptions(void)
 }
 extern const unsigned char RestrictedJit[],RestrictedJitEnd[];
 /* API 34 JIT pages: read+write+execute only with a kernel JIT mode. */
+static void prove_jit_at(uintptr_t address,intptr_t mode)
+{
+    uint64_t domain=api->create_domain(RestrictedJit,RestrictedJitEnd-RestrictedJit,0);CHECK(domain);
+    CHECK(api->reserve_memory(domain,address,4096));
+    struct AROSRestrictedResult result={0};
+    CHECK(api->commit_memory(domain,address,7));
+    CHECK(api->run_domain(domain,address,&result) && result.drained && result.status==0x85);
+    CHECK(api->protect_memory(domain,address,3));
+    memset(&result,0,sizeof(result));
+    CHECK(api->run_domain(domain,address|1,&result) && result.status==-2 && (result.esr>>26)==0x20 && result.far==address);
+    CHECK(api->protect_memory(domain,address,7));
+    memset(&result,0,sizeof(result));
+    CHECK(api->run_domain(domain,address,&result) && result.status==0x85);
+    CHECK(api->protect_memory(domain,address,5));
+    memset(&result,0,sizeof(result));
+    CHECK(api->run_domain(domain,address|1,&result) && result.status==0x43);
+    memset(&result,0,sizeof(result));
+    CHECK(api->run_domain(domain,address,&result) && result.status==-2 && (result.esr>>26)==0x24 && result.far==address);
+    CHECK(api->protect_memory(domain,address,7) && api->decommit_memory(domain,address));
+    CHECK(api->close_domain(domain)==1);
+    (void)mode;
+}
+/* API 34 JIT pages: read+write+execute only with a kernel JIT mode, in the
+ * dynamic and the high window. */
 static void prove_jit(void)
 {
     const uintptr_t address=UINT64_C(0x200000000);
     intptr_t mode=KrnGetSystemAttr(AROS_APPLE_KATTR_JIT_MODE);
-    uint64_t domain=api->create_domain(RestrictedJit,RestrictedJitEnd-RestrictedJit,0);CHECK(domain);
-    CHECK(api->reserve_memory(domain,address,4096));
     if (mode==AROS_APPLE_JIT_NONE) {
+        uint64_t domain=api->create_domain(RestrictedJit,RestrictedJitEnd-RestrictedJit,0);CHECK(domain);
+        CHECK(api->reserve_memory(domain,address,4096));
         CHECK(!api->commit_memory(domain,address,7));
         CHECK(api->commit_memory(domain,address,3) && !api->protect_memory(domain,address,7));
         CHECK(api->close_domain(domain)==1);
         bug("[ISOVM] jit mode=none commit_refused=1 protect_refused=1 PASS\n");
         return;
     }
-    struct AROSRestrictedResult result={0};
-    CHECK(api->commit_memory(domain,address,7));
-    CHECK(api->run_domain(domain,0,&result) && result.drained && result.status==0x85);
-    CHECK(api->protect_memory(domain,address,3));
-    memset(&result,0,sizeof(result));
-    CHECK(api->run_domain(domain,1,&result) && result.status==-2 && (result.esr>>26)==0x20 && result.far==address);
-    CHECK(api->protect_memory(domain,address,7));
-    memset(&result,0,sizeof(result));
-    CHECK(api->run_domain(domain,0,&result) && result.status==0x85);
-    CHECK(api->protect_memory(domain,address,5));
-    memset(&result,0,sizeof(result));
-    CHECK(api->run_domain(domain,1,&result) && result.status==0x43);
-    memset(&result,0,sizeof(result));
-    CHECK(api->run_domain(domain,0,&result) && result.status==-2 && (result.esr>>26)==0x24 && result.far==address);
-    CHECK(api->protect_memory(domain,address,7) && api->decommit_memory(domain,address));
-    CHECK(api->close_domain(domain)==1);
+    prove_jit_at(address,mode);
+    prove_jit_at(UINT64_C(0x1000000000),mode);
     struct AROSRestrictedLifetime life;api->lifetime(&life);
     CHECK(!life.pages && !life.live && !life.domains);
-    bug("[ISOVM] jit mode=%ld written_executed=4 data_fetch_refused=1 code_write_refused=1 to_code=1 retained_pages=0 PASS\n",(long)mode);
+    bug("[ISOVM] jit mode=%ld windows=2 written_executed=4 data_fetch_refused=1 code_write_refused=1 to_code=1 retained_pages=0 PASS\n",(long)mode);
 }
 extern const unsigned char RestrictedDecline[],RestrictedDeclineEnd[];
 /* API 34 fault decline: an unrepaired fault on a reserved page reaches the
