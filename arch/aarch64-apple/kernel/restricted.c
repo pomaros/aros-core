@@ -70,7 +70,7 @@ struct RestrictedDomain {
     void *code, *data;
     struct RestrictedTableChunk *tables;
     size_t table_pages,table_used,table_metadata_pages,table_shortage;
-    unsigned threads, managed, closing;
+    unsigned threads, managed, closing, high_window;
     void *owner_context, *releaser_context;
     uint64_t root;
     size_t code_bytes, memory_pages, memory_metadata_pages;
@@ -728,6 +728,10 @@ static int r_prepare_domain(struct RestrictedDomain *d,uint64_t source)
     for (size_t offset=0;offset<storage;offset+=R_PAGE)
         if (!AArch64MapPage(&ops,root,tcr,AROS_RESTRICTED_CODE+offset,(uintptr_t)d->code+offset,
             AARCH64_PROTECT_READ|AARCH64_PROTECT_EXEC|AARCH64_PROTECT_USER,1)) return 0;
+    /* API 34: the high window exists only where the kernel template maps
+     * nothing (above RAM on QEMU and on M1 machines up to 32 GB). */
+    d->high_window=AArch64RangeUnmapped(&ops,root,tcr,AROS_RESTRICTED_HIGH_BASE,
+        AROS_RESTRICTED_HIGH_END-AROS_RESTRICTED_HIGH_BASE);
     return AROSRestrictedSpaceInit(&d->space,(uintptr_t)d,root,tcr,(uintptr_t)d->data,&ops);
 }
 static int r_prepare(struct Restricted *r,uint64_t source)
@@ -802,7 +806,8 @@ static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned s
     if (!d || d->closing || d->owner_context!=context) return 1;
     if (p->operation==0) {
         struct RestrictedAllocation *a=p->allocation;
-        if (a && (p->address >= AROS_RESTRICTED_LOW_END ||
+        if (a && (p->address < AROS_RESTRICTED_HIGH_BASE || d->high_window) &&
+            (p->address >= AROS_RESTRICTED_LOW_END ||
             AROSAppleKernelTransitionRangeAvailable(p->address,a->count*R_PAGE)) &&
             AROSRestrictedRegionReserve(&d->space,&a->region,p->address,
             a->count*R_PAGE,a->pages,a->backing,a->count,a->index)) {

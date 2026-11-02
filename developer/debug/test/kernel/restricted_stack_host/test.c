@@ -10,7 +10,7 @@
 #include <aros/apple/restricted.h>
 struct Space { int hardware; uint64_t handle,root,tcr; };
 struct RestrictedDomain {
-    unsigned closing,managed;
+    unsigned closing,managed,high_window;
     void *code,*data;size_t code_bytes;
     uint64_t root;
     struct Space space;
@@ -34,6 +34,10 @@ static int AArch64CountPrivilegedRoot(const struct AArch64ProtectionOps *o,uint6
 { (void)o;(void)root;(void)tcr;assert(budget==SIZE_MAX);*count=4;return 1; }
 static int AArch64ClonePrivilegedRoot(const struct AArch64ProtectionOps *o,uint64_t root,uint64_t tcr,size_t budget,uint64_t *result)
 { (void)o;(void)root;(void)tcr;assert(budget==4);*result=1;return 1; }
+#define AROS_RESTRICTED_HIGH_BASE UINT64_C(0x1000000000)
+#define AROS_RESTRICTED_HIGH_END UINT64_C(0x2000000000)
+static int AArch64RangeUnmapped(const struct AArch64ProtectionOps *o,uint64_t root,uint64_t tcr,uint64_t va,uint64_t length)
+{ (void)o;(void)root;(void)tcr;assert(va==AROS_RESTRICTED_HIGH_BASE && length==AROS_RESTRICTED_HIGH_END-va);return 1; }
 static int AROSRestrictedSpaceInit(struct Space *s,uintptr_t owner,uint64_t root,uint64_t tcr,uintptr_t data,const struct AArch64ProtectionOps *o)
 { (void)owner;(void)data;(void)o;s->root=root;s->handle=1;s->tcr=tcr;return 1; }
 static int AArch64MapPage(void *ops,uint64_t root,uint64_t tcr,uint64_t va,uint64_t pa,unsigned protection,int fresh)

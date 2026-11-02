@@ -233,6 +233,43 @@ int AArch64UserPagePhysical(const struct AArch64ProtectionOps *ops,
     return 1;
 }
 
+static int range_unmapped(const struct AArch64ProtectionOps *ops,
+    const struct MappingWalk *walk, uint64_t table_pa, unsigned level,
+    uint64_t va, uint64_t end)
+{
+    uint64_t *table = ops->resolve(ops->context, table_pa);
+    unsigned shift = walk->page_bits + walk->stride * (3 - level);
+    if (!table)
+        return 0;
+    while (va < end) {
+        uint64_t span = UINT64_C(1) << shift;
+        uint64_t next = (va | (span - 1)) + 1;
+        uint64_t desc = table[(va >> shift) & (walk->count - 1)];
+        if (!next || next > end)
+            next = end;
+        /* Any nonzero leaf, block or guard occupies the range; a table is
+         * inspected only over the part of its span the range covers. */
+        if (desc && (level == 3 || (desc & M_TABLE) != M_TABLE ||
+                (desc & (M_TABLE_RESTRICTIONS | M_GUARDED | M_CONTIGUOUS)) ||
+                !descriptor_address_valid(walk, desc) ||
+                !range_unmapped(ops, walk, desc & walk->mask, level + 1, va, next)))
+            return 0;
+        va = next;
+    }
+    return 1;
+}
+
+int AArch64RangeUnmapped(const struct AArch64ProtectionOps *ops,
+    uint64_t ttbr0, uint64_t tcr, uint64_t va, uint64_t length)
+{
+    struct MappingWalk walk;
+    if (!ops || !ops->resolve || !length || !geometry(tcr, va, 0, &walk) ||
+        (length & (walk.size - 1)) || length > (UINT64_C(1) << walk.va_bits) - va ||
+        !root_valid(&walk, ttbr0))
+        return 0;
+    return range_unmapped(ops, &walk, ttbr0 & walk.mask, walk.first, va, va + length);
+}
+
 int AArch64RemapPage(const struct AArch64ProtectionOps *ops, uint64_t ttbr0,
     uint64_t tcr, uint64_t va, uint64_t expected_physical, unsigned permissions)
 {

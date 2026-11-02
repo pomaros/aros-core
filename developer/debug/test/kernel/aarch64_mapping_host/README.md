@@ -32,7 +32,8 @@ The exact D-135 JIT class maps as an EL0 writable leaf with UXN clear and PXN
 set; partial JIT classes stay refused. JIT admission accepts only that leaf, and
 execute admission never accepts it.
 
-Fifteen separately compiled semantic mutants must fail C assertions: wrong
+Seventeen separately compiled semantic mutants must fail C assertions: a range
+check that ignores leaves or skips tables, wrong
 unmap owner, accepting a partial JIT class, JIT admission without PXN or of a
 read-only leaf, dropping byte offsets, ignoring physical
 width, accepting tagged geometry, incorrect privileged alias access, missing

@@ -23,6 +23,8 @@ EXPECTED_ASSERTIONS={
     'allow-readonly-output':('!AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,2,1,&pa) && pa==SENTINEL','user_admission'),
     'wrong-unmap-owner':('!AArch64UnmapPage(&o,f.root,f.tcr,f.va,DATA_PA+((uint64_t)1<<page))','basic'),
     'permit-jit-bit':('!AArch64MapPage(&o,f.root,f.tcr,f.va,DATA_PA,bad[k],1)','permissions'),
+    'range-ignores-leaf':('!AArch64RangeUnmapped(&query,f.root,f.tcr,f.va,size)','range_unmapped'),
+    'range-skips-tables':('!AArch64RangeUnmapped(&query,f.root,f.tcr,f.va,size)','range_unmapped'),
     'jit-ignores-pxn':('!AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,AARCH64_PROTECT_JIT,1,&pa) && pa==SENTINEL','user_admission'),
     'jit-admits-readonly':('!AArch64UserPagePhysical(&query,f.root,f.tcr,f.va,AARCH64_PROTECT_JIT,1,&pa) && pa==SENTINEL','user_admission'),
     'drop-translation-offset':('AArch64TranslateResident(&o,f.root,f.tcr,f.va+123,&pa) && pa==DATA_PA+123','basic'),
@@ -59,6 +61,8 @@ def main():
       'allow-readonly-output':('(access == AARCH64_PROTECT_WRITE && (*slot & (UINT64_C(1) << 7))) ||','0 ||'),
       'wrong-unmap-owner':('(*slot & walk.mask) != pa ||','0 ||'),
       'permit-jit-bit':('!(permissions & ~31U)','!(permissions & ~63U)'),
+      'range-ignores-leaf':('if (desc && (level == 3 ||','if (desc && level < 3 && ('),
+      'range-skips-tables':('!range_unmapped(ops, walk, desc & walk->mask, level + 1, va, next)))','0))'),
       'jit-ignores-pxn':('!(*slot & M_PXN) ||','0 ||'),
       'jit-admits-readonly':('''!(*slot & M_PXN) ||
             (*slot & (UINT64_C(1) << 7)))) ||''','''!(*slot & M_PXN))) ||'''),

@@ -141,7 +141,9 @@ struct AROSRestrictedAPI {
     int (*run_domain)(uint64_t handle,uint64_t seed,struct AROSRestrictedResult *);
     int (*close_domain)(uint64_t handle);
     /* Version 29 additionally admits [0x10000,0x100000000); the original
-     * [0x200000000,0x400000000) window remains. A reservation must fit wholly
+     * [0x200000000,0x400000000) window remains. Version 34 adds
+     * [0x1000000000,0x2000000000) where the kernel's page-table template maps
+     * nothing; reservations there are refused otherwise. A reservation must fit wholly
      * inside one window. Null, bootstrap/thread space and code stay excluded.
      * Controller-only private anonymous memory. Reserve an aligned fixed range;
      * commit/decommit/protect operate on one 4096-byte page. Read=1, write=2;

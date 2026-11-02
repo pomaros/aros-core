@@ -493,13 +493,40 @@ static void low_clone_eviction(unsigned page, unsigned bits)
     assert(AArch64MappingPhysical(&o,source,f.tcr,f.va,&pa) && pa==f.va);
     finish(&f);
 }
+/* Range emptiness: leaves, guards and blocks occupy; empty tables do not. */
+static void range_unmapped(unsigned page)
+{
+    struct Fixture f;init(&f,page,48);struct AArch64ProtectionOps o=ops(&f);
+    struct AArch64ProtectionOps query={.context=&f,.resolve=resolve};
+    uint64_t size=UINT64_C(1)<<page,far=UINT64_C(1)<<40;
+    assert(AArch64RangeUnmapped(&query,f.root,f.tcr,f.va,size));
+    assert(AArch64MapPage(&o,f.root,f.tcr,f.va,DATA_PA,3,1));
+    assert(!AArch64RangeUnmapped(&query,f.root,f.tcr,f.va,size));
+    assert(!AArch64RangeUnmapped(&query,f.root,f.tcr,f.va-size,3*size));
+    assert(AArch64RangeUnmapped(&query,f.root,f.tcr,f.va+size,4*size));
+    assert(AArch64RangeUnmapped(&query,f.root,f.tcr,f.va-4*size,4*size));
+    assert(AArch64RangeUnmapped(&query,f.root,f.tcr,far,UINT64_C(1)<<36));
+    assert(AArch64RemapPage(&o,f.root,f.tcr,f.va,DATA_PA,0));
+    assert(!AArch64RangeUnmapped(&query,f.root,f.tcr,f.va,size)); /* guard */
+    assert(AArch64UnmapPage(&o,f.root,f.tcr,f.va,DATA_PA));
+    assert(AArch64RangeUnmapped(&query,f.root,f.tcr,f.va-size,3*size)); /* empty table */
+    uint64_t *parent=slot_at(&f,f.va,2),saved=*parent;
+    *parent=DATA_PA|1|(UINT64_C(1)<<10);                                 /* block */
+    assert(!AArch64RangeUnmapped(&query,f.root,f.tcr,f.va,size));
+    *parent=saved;
+    assert(!AArch64RangeUnmapped(&query,f.root,f.tcr,f.va,0));
+    assert(!AArch64RangeUnmapped(&query,f.root,f.tcr,f.va+1,size));
+    assert(!AArch64RangeUnmapped(&query,f.root,f.tcr,f.va,size+1));
+    assert(!AArch64RangeUnmapped(&query,f.root,f.tcr,(UINT64_C(1)<<48)-size,2*size));
+    finish(&f);
+}
 int main(void)
 {
     const unsigned widths[]={25,30,32,39,42,48};
     for (unsigned page=12;page<=14;page+=2) {
         for (unsigned i=0;i<sizeof(widths)/sizeof(*widths);++i) basic(page,widths[i]);
         low_clone_eviction(page,39);low_clone_eviction(page,48);
-        privileged_alias(page);user_admission(page);permissions(page);allocation_failures(page);invalid_geometry(page);corruption(page);parent_and_blocks(page);callback_contract(page);address_widths(page);
+        privileged_alias(page);user_admission(page);range_unmapped(page);permissions(page);allocation_failures(page);invalid_geometry(page);corruption(page);parent_and_blocks(page);callback_contract(page);address_widths(page);
     }
     printf("[AARCH64-MAPPING-HOST] result=PASS cases=%u granules=4K,16K actual-production-walks=1 native=NOT_RUN\n",cases);
     return 0;

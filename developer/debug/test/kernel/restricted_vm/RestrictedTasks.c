@@ -1535,6 +1535,18 @@ int main(void)
     prove_shared_domains();
     prove_private_memory(UINT64_C(0x200000000));
     prove_private_memory(UINT64_C(0x7ffe0000));
+    /* API 34 high window, free of kernel mappings on QEMU: the same private
+     * memory checks, then its bounds. */
+    prove_private_memory(UINT64_C(0x1000000000));
+    {
+        uint64_t domain=api->create_domain(RestrictedMemory,(size_t)(RestrictedMemoryEnd-RestrictedMemory),0);
+        CHECK(domain && api->reserve_memory(domain,UINT64_C(0x1ffffff000),4096));
+        CHECK(!api->reserve_memory(domain,UINT64_C(0x1fffffe000),12288));
+        CHECK(!api->reserve_memory(domain,UINT64_C(0x2000000000),4096));
+        CHECK(!api->reserve_memory(domain,UINT64_C(0xffffff000),8192));
+        CHECK(api->close_domain(domain)==1);
+        bug("[ISOVM] high-window base=0x1000000000 private_memory=1 edge=1 outside_refused=3 PASS\n");
+    }
     bug("[ISOVM] low-address fixed=0x7ffe0000 domains=2 zero=3 isolated=2 recommit=1 guard_fault=1 foreign=5 exclusions=4 kernel_exclusions=2 retained_pages=0 PASS\n");
     prove_shared_memory();
     prove_shared_copy();

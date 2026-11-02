@@ -70,6 +70,13 @@ int AArch64RemapPrivilegedPage(const struct AArch64ProtectionOps *, uint64_t ttb
 int AArch64MappingPhysical(const struct AArch64ProtectionOps *, uint64_t ttbr0,
     uint64_t tcr, uint64_t virtual_address, uint64_t *physical);
 
+/* Read-only check that no descriptor maps any part of [va, va+length): every
+ * covering entry is zero, or a plain table whose covered part is recursively
+ * zero. Leaves, blocks, guards and restricted tables count as mapped. Only
+ * resolve is required; page-aligned range inside the configured VA size. */
+int AArch64RangeUnmapped(const struct AArch64ProtectionOps *, uint64_t ttbr0,
+    uint64_t tcr, uint64_t va, uint64_t length);
+
 /* Read-only TTBR0 translation of valid resident page/block descriptors. Keeps
  * the byte offset; does not check access permissions, fault pages in, allocate
  * tables or accept invalid guard descriptors. Only resolve is required.

@@ -161,3 +161,7 @@ The API34 fault-decline workload reserves a page without committing it. The
 fault handler declines the repair and the exception handler receives the data
 abort; a decline with a forged generation is refused. Its marker is
 `fault-decline`.
+
+The API34 high window [0x1000000000,0x2000000000) repeats the private-memory
+workload there and checks its bounds: the last page reserves, ranges crossing
+either end are refused. Its marker is `high-window`.
