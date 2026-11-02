@@ -1064,7 +1064,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
             return 1;
         case AROS_RESTRICTED_THREAD_INFO:
             frame->x[0]=r->service.channel;frame->x[1]=r->wake_generation;
-            return 1;
+            frame->x[2]=cpu;return 1;
         case AROS_RESTRICTED_CLOCK:
             frame->x[0]=r_wait_clock();return 1;
         case AROS_RESTRICTED_WAIT:

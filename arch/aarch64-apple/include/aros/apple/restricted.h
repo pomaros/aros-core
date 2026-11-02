@@ -27,7 +27,9 @@
 #define AROS_RESTRICTED_CANCEL 0xa548
 #define AROS_RESTRICTED_STATUS 0xa549
 #define AROS_RESTRICTED_PROTECT_MEMORY 0xa54a
-/* INFO returns channel in x0 and wake generation in x1. WAIT takes the
+/* INFO returns channel in x0 and wake generation in x1; version 34 adds the
+ * index of the CPU executing the call in x2 (a hint: the thread may migrate
+ * right after). WAIT takes the
  * observed generation in x0: 0 means changed/exhausted/refused, 1 means woken.
  * Query again after wake; signals are coalesced by generation, not counted.
  * WAKE takes a same-domain channel in x0, returns 1 on success, else 0.
