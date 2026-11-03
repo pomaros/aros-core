@@ -168,10 +168,33 @@ static void avs_retire_fence(uint32_t ctx_id, uint32_t ring_idx, uint64_t fence_
     pthread_mutex_unlock(&avs_lock);
 }
 
+static avs_dump_emit avs_logger;
+static void *avs_logger_data;
+
 static void avs_log(UNUSED enum virgl_log_level_flags level, const char *message,
                     UNUSED void *data)
 {
-    fprintf(stderr, "[venus] %s", message);
+    if (avs_logger)
+    {
+        char line[256];
+        size_t n = strlen(message);
+
+        while (n && (message[n - 1] == '\n' || message[n - 1] == '\r'))
+            n--;
+        if (n >= sizeof(line))
+            n = sizeof(line) - 1;
+        memcpy(line, message, n);
+        line[n] = 0;
+        avs_logger(line, avs_logger_data);
+    }
+    else
+        fprintf(stderr, "[venus] %s", message);
+}
+
+void avs_set_logger(avs_dump_emit emit, void *data)
+{
+    avs_logger = emit;
+    avs_logger_data = data;
 }
 
 static const struct vkr_renderer_callbacks avs_callbacks =
@@ -555,4 +578,28 @@ bool avs_submit(struct avs_client *c, const struct avs_batch *batches, uint32_t 
         if (!avs_submit_batch(c, &batches[i]))
             return false;
     return true;
+}
+
+void avs_dump_state(avs_dump_emit emit, void *data)
+{
+    struct avs_client *c;
+    char line[128];
+    uint32_t i;
+
+    for (c = avs_clients; c; c = c->next)
+        for (i = 0; i < AVS_MAX_TIMELINES; i++)
+        {
+            struct avs_submit *submit;
+            unsigned pending = 0;
+
+            for (submit = c->timelines[i].head; submit; submit = submit->next)
+                pending++;
+            if (!pending)
+                continue;
+            snprintf(line, sizeof(line), "client=%u timeline=%u pending_submits=%u first_sync=%u value=%llu",
+                     c->ctx_id, i, pending, c->timelines[i].head->count ? c->timelines[i].head->syncs[0]->id : 0,
+                     c->timelines[i].head->count ? (unsigned long long)c->timelines[i].head->values[0] : 0ULL);
+            emit(line, data);
+        }
+    vkr_renderer_dump(emit, data);
 }

@@ -75,6 +75,14 @@ bool avs_submit(struct avs_client *client, const struct avs_batch *batches,
 bool avs_sync_ready(struct avs_client *client, bool any, const uint32_t *sync_ids,
                     const uint64_t *values, uint32_t count);
 
+/* Diagnostic for a host that sees no progress: one line per client timeline
+   with pending submits, then every ring and sync queue of the renderer */
+typedef void (*avs_dump_emit)(const char *line, void *data);
+void avs_dump_state(avs_dump_emit emit, void *data);
+/* The renderer's log lines (decoder and ring failures) go to emit instead of
+   stderr; NULL restores stderr */
+void avs_set_logger(avs_dump_emit emit, void *data);
+
 /*
     The renderer's side, for the process that hosts it.
 

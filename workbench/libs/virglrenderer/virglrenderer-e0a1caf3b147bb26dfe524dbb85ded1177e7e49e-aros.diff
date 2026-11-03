@@ -1,7 +1,6 @@
-diff --git a/src/mesa/util/libsync.h b/src/mesa/util/libsync.h
-index 863df4e..2f6e8ca 100644
---- a/src/mesa/util/libsync.h
-+++ b/src/mesa/util/libsync.h
+diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/mesa/util/libsync.h virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/mesa/util/libsync.h
+--- virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/mesa/util/libsync.h	2026-10-22 04:11:08
++++ virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/mesa/util/libsync.h	2026-11-03 14:06:36
 @@ -30,6 +30,14 @@
  
  #include <assert.h>
@@ -17,16 +16,15 @@ index 863df4e..2f6e8ca 100644
  #include <poll.h>
  #include <stdbool.h>
  #include <stdint.h>
-@@ -205,4 +213,5 @@ static inline int sync_accumulate(const char *name, int *fd1, int fd2)
+@@ -205,4 +213,5 @@
  #pragma GCC diagnostic pop
  #endif
  
 +#endif /* __AROS__ */
  #endif
-diff --git a/src/mesa/util/os_misc.c b/src/mesa/util/os_misc.c
-index ca9bf7d..06decaf 100644
---- a/src/mesa/util/os_misc.c
-+++ b/src/mesa/util/os_misc.c
+diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/mesa/util/os_misc.c virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/mesa/util/os_misc.c
+--- virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/mesa/util/os_misc.c	2026-10-22 04:11:08
++++ virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/mesa/util/os_misc.c	2026-11-03 14:06:36
 @@ -68,6 +68,9 @@
  #  include <kernel/OS.h>
  #elif DETECT_OS_WINDOWS
@@ -37,7 +35,7 @@ index ca9bf7d..06decaf 100644
  #else
  #error unexpected platform in os_sysinfo.c
  #endif
-@@ -267,6 +270,9 @@ os_get_total_physical_memory(uint64_t *size)
+@@ -267,6 +270,9 @@
     ret = GlobalMemoryStatusEx(&status);
     *size = status.ullTotalPhys;
     return (ret == TRUE);
@@ -47,7 +45,7 @@ index ca9bf7d..06decaf 100644
  #else
  #error unexpected platform in os_sysinfo.c
     return false;
-@@ -353,6 +359,9 @@ os_get_page_size(uint64_t *size)
+@@ -353,6 +359,9 @@
     mib[0] = CTL_HW;
     mib[1] = HW_PAGESIZE;
     return (sysctl(mib, 2, size, &len, NULL, 0) == 0);
@@ -57,11 +55,20 @@ index ca9bf7d..06decaf 100644
  #else
  #error unexpected platform in os_sysinfo.c
     return false;
-diff --git a/src/mesa/util/u_thread.h b/src/mesa/util/u_thread.h
-index 366c8e9..a90bcc3 100644
---- a/src/mesa/util/u_thread.h
-+++ b/src/mesa/util/u_thread.h
-@@ -249,7 +249,7 @@ util_set_current_thread_affinity(const uint32_t *mask,
+diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/mesa/util/u_thread.h virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/mesa/util/u_thread.h
+--- virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/mesa/util/u_thread.h	2026-10-22 04:11:08
++++ virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/mesa/util/u_thread.h	2026-11-03 18:58:49
+@@ -146,6 +146,9 @@
+    pthread_setname_np(name);
+ #elif DETECT_OS_HAIKU
+    rename_thread(find_thread(NULL), name);
++#elif defined(__AROS__)
++   /* The exec task name, shown by the stall reports of a host */
++   pthread_setname_np(pthread_self(), name);
+ #else
+ #warning Not sure how to call pthread_setname_np
+ #endif
+@@ -249,7 +252,7 @@
  static inline int64_t
  util_thread_get_time_nano(UNUSED thrd_t thread)
  {
@@ -70,11 +77,9 @@ index 366c8e9..a90bcc3 100644
     struct timespec ts;
     clockid_t cid;
  
-diff --git a/src/venus/vkr_aros.c b/src/venus/vkr_aros.c
-new file mode 100644
-index 0000000..d7a66e2
---- /dev/null
-+++ b/src/venus/vkr_aros.c
+diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_aros.c virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_aros.c
+--- virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_aros.c	1970-01-01 00:00:00
++++ virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_aros.c	2026-11-03 14:06:36
 @@ -0,0 +1,48 @@
 +/*
 + * Copyright (c) 2026 John Knipper
@@ -124,11 +129,9 @@ index 0000000..d7a66e2
 +   vkr_aros_shm->close(shm->shm_fd);
 +   free(shm);
 +}
-diff --git a/src/venus/vkr_aros.h b/src/venus/vkr_aros.h
-new file mode 100644
-index 0000000..46318cb
---- /dev/null
-+++ b/src/venus/vkr_aros.h
+diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_aros.h virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_aros.h
+--- virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_aros.h	1970-01-01 00:00:00
++++ virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_aros.h	2026-11-03 14:06:36
 @@ -0,0 +1,42 @@
 +/*
 + * Copyright (c) 2026 John Knipper
@@ -172,10 +175,9 @@ index 0000000..46318cb
 +#define getpagesize() 4096
 +
 +#endif /* VKR_AROS_H */
-diff --git a/src/venus/vkr_common.h b/src/venus/vkr_common.h
-index be9abd3..33ab439 100644
---- a/src/venus/vkr_common.h
-+++ b/src/venus/vkr_common.h
+diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_common.h virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_common.h
+--- virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_common.h	2026-10-22 04:11:08
++++ virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_common.h	2026-11-03 14:06:36
 @@ -36,6 +36,10 @@
  
  #include "vkr_renderer.h"
@@ -187,10 +189,9 @@ index be9abd3..33ab439 100644
  /* cap instance and device api versions to this */
  #define VKR_MAX_API_VERSION VK_API_VERSION_1_4
  
-diff --git a/src/venus/vkr_context.c b/src/venus/vkr_context.c
-index cc82c42..9cfcd37 100644
---- a/src/venus/vkr_context.c
-+++ b/src/venus/vkr_context.c
+diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_context.c virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_context.c
+--- virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_context.c	2026-10-22 04:11:08
++++ virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_context.c	2026-11-03 14:06:36
 @@ -5,7 +5,9 @@
  
  #include "vkr_context.h"
@@ -201,17 +202,17 @@ index cc82c42..9cfcd37 100644
  #include <sys/types.h>
  #include <unistd.h>
  
-@@ -189,10 +191,17 @@ static inline void
+@@ -189,10 +191,17 @@
  vkr_context_free_resource(struct hash_entry *entry)
  {
     struct vkr_resource *res = entry->data;
 +#ifdef __AROS__
-+   if (res->fd_type == VIRGL_RESOURCE_FD_SHM)
+    if (res->fd_type == VIRGL_RESOURCE_FD_SHM)
 +      vkr_aros_shm->unmap(res->u.data, res->size);
 +   else if (res->u.fd >= 0)
 +      vkr_aros_shm->close(res->u.fd);
 +#else
-    if (res->fd_type == VIRGL_RESOURCE_FD_SHM)
++   if (res->fd_type == VIRGL_RESOURCE_FD_SHM)
        munmap(res->u.data, res->size);
     else if (res->u.fd >= 0)
        close(res->u.fd);
@@ -219,7 +220,7 @@ index cc82c42..9cfcd37 100644
     free(res);
  }
  
-@@ -261,6 +270,20 @@ vkr_context_import_resource_from_shm(struct vkr_context *ctx,
+@@ -261,6 +270,20 @@
  {
     assert(!vkr_context_get_resource(ctx, res_id));
  
@@ -240,7 +241,7 @@ index cc82c42..9cfcd37 100644
     void *mmap_ptr = mmap(NULL, blob_size, PROT_WRITE | PROT_READ, MAP_SHARED, fd, 0);
     if (mmap_ptr == MAP_FAILED)
        return false;
-@@ -273,6 +296,7 @@ vkr_context_import_resource_from_shm(struct vkr_context *ctx,
+@@ -273,6 +296,7 @@
  
     close(fd);
     return true;
@@ -248,7 +249,7 @@ index cc82c42..9cfcd37 100644
  }
  
  static bool
-@@ -289,6 +313,19 @@ vkr_context_create_resource_from_shm(struct vkr_context *ctx,
+@@ -289,6 +313,19 @@
     const size_t page_size = getpagesize();
     const uint64_t alloc_size = (blob_size + page_size - 1) & ~(page_size - 1);
  
@@ -268,7 +269,7 @@ index cc82c42..9cfcd37 100644
     int fd = os_create_anonymous_file(alloc_size, "vkr-shmem");
     if (fd < 0)
        return false;
-@@ -305,6 +342,7 @@ vkr_context_create_resource_from_shm(struct vkr_context *ctx,
+@@ -305,6 +342,7 @@
        close(fd);
        return false;
     }
@@ -276,11 +277,27 @@ index cc82c42..9cfcd37 100644
  
     *out_blob = (struct virgl_context_blob){
        .type = VIRGL_RESOURCE_FD_SHM,
-diff --git a/src/venus/vkr_device.c b/src/venus/vkr_device.c
-index 603f45b..276738c 100644
---- a/src/venus/vkr_device.c
-+++ b/src/venus/vkr_device.c
-@@ -137,6 +137,7 @@ vkr_dispatch_vkCreateDevice(struct vn_dispatch_context *dispatch,
+diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_cs.h virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_cs.h
+--- virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_cs.h	2026-10-22 04:11:08
++++ virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_cs.h	2026-11-03 19:38:38
+@@ -209,7 +209,12 @@
+ static inline void
+ vkr_cs_decoder_set_fatal(const struct vkr_cs_decoder *dec)
+ {
+-   *((struct vkr_cs_decoder *)dec)->fatal_error = true;
++   struct vkr_cs_decoder *d = (struct vkr_cs_decoder *)dec;
++
++   /* AROS: name the spot, as several generated callers are silent */
++   vkr_log("decoder fatal: %zu bytes left of the command stream",
++           (size_t)(d->end - d->cur));
++   *d->fatal_error = true;
+ }
+ 
+ static inline bool
+diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_device.c virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_device.c
+--- virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_device.c	2026-10-22 04:11:08
++++ virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_device.c	2026-11-03 14:06:36
+@@ -137,6 +137,7 @@
     ext_count += physical_dev->KHR_external_memory_fd;
     ext_count += physical_dev->EXT_external_memory_dma_buf;
     ext_count += physical_dev->KHR_external_fence_fd;
@@ -288,7 +305,7 @@ index 603f45b..276738c 100644
     if (ext_count > args->pCreateInfo->enabledExtensionCount) {
        exts = malloc(sizeof(*exts) * ext_count);
        if (!exts) {
-@@ -160,6 +161,8 @@ vkr_dispatch_vkCreateDevice(struct vn_dispatch_context *dispatch,
+@@ -160,6 +161,8 @@
           exts[ext_count++] = "VK_EXT_external_memory_dma_buf";
        if (physical_dev->KHR_external_fence_fd)
           exts[ext_count++] = "VK_KHR_external_fence_fd";
@@ -297,11 +314,10 @@ index 603f45b..276738c 100644
  
        ((VkDeviceCreateInfo *)args->pCreateInfo)->ppEnabledExtensionNames = exts;
        ((VkDeviceCreateInfo *)args->pCreateInfo)->enabledExtensionCount = ext_count;
-diff --git a/src/venus/vkr_device_memory.c b/src/venus/vkr_device_memory.c
-index 7d57c7c..04dba88 100644
---- a/src/venus/vkr_device_memory.c
-+++ b/src/venus/vkr_device_memory.c
-@@ -303,6 +303,9 @@ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
+diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_device_memory.c virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_device_memory.c
+--- virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_device_memory.c	2026-10-22 04:11:08
++++ virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_device_memory.c	2026-11-03 14:06:36
+@@ -303,6 +303,9 @@
     struct vkr_mtl_shm *mtl_shm = NULL;
     VkExportMemoryAllocateInfo local_export_info;
     VkImportMemoryMetalHandleInfoEXT local_metal_import;
@@ -311,7 +327,7 @@ index 7d57c7c..04dba88 100644
  
     if ((property_flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) && !res_info) {
        /* An implementation can support dma_buf import along with opaque fd export/import.
-@@ -352,6 +355,27 @@ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
+@@ -352,6 +355,27 @@
                    align(alloc_info->allocationSize, getpagesize());
              }
           }
@@ -339,7 +355,7 @@ index 7d57c7c..04dba88 100644
        } else if (physical_dev->EXT_external_memory_metal) {
           /* Allocate shm and wrap as a MTLBuffer for import. */
           mtl_shm = vkr_mtl_shm_alloc(dev->mtl_device, alloc_info->allocationSize);
-@@ -574,7 +598,11 @@ vkr_device_memory_export_blob(struct vkr_device_memory *mem,
+@@ -574,7 +598,11 @@
        mem->exported = true;
        *out_blob = (struct virgl_context_blob){
           .type = VIRGL_RESOURCE_FD_SHM,
@@ -351,11 +367,10 @@ index 7d57c7c..04dba88 100644
           .map_info = map_info,
        };
        return out_blob->u.fd >= 0;
-diff --git a/src/venus/vkr_metal_helpers.h b/src/venus/vkr_metal_helpers.h
-index 4f5208b..0ec5841 100644
---- a/src/venus/vkr_metal_helpers.h
-+++ b/src/venus/vkr_metal_helpers.h
-@@ -43,7 +43,27 @@ vkr_mtl_shm_alloc(void *mtl_device, uint64_t size);
+diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_metal_helpers.h virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_metal_helpers.h
+--- virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_metal_helpers.h	2026-10-22 04:11:08
++++ virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_metal_helpers.h	2026-11-03 14:06:36
+@@ -43,7 +43,27 @@
  void
  vkr_mtl_shm_free(struct vkr_mtl_shm *shm);
  
@@ -384,11 +399,10 @@ index 4f5208b..0ec5841 100644
  
  static inline void *
  vkr_metal_get_device(VkDevice vk_device, PFN_vkGetDeviceProcAddr GetDeviceProcAddr)
-diff --git a/src/venus/vkr_physical_device.c b/src/venus/vkr_physical_device.c
-index 0d63a0b..631da80 100644
---- a/src/venus/vkr_physical_device.c
-+++ b/src/venus/vkr_physical_device.c
-@@ -168,6 +168,21 @@ vkr_physical_device_init_id_properties(struct vkr_physical_device *physical_dev)
+diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_physical_device.c virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_physical_device.c
+--- virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_physical_device.c	2026-10-22 04:11:08
++++ virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_physical_device.c	2026-11-03 14:20:13
+@@ -168,6 +168,21 @@
  static void
  vkr_physical_device_init_memory_properties(struct vkr_physical_device *physical_dev)
  {
@@ -410,7 +424,7 @@ index 0d63a0b..631da80 100644
     struct vn_physical_device_proc_table *vk = &physical_dev->proc_table;
  
     VkPhysicalDevice handle = physical_dev->base.handle.physical_device;
-@@ -315,6 +330,8 @@ vkr_physical_device_init_extensions(struct vkr_physical_device *physical_dev)
+@@ -315,6 +330,8 @@
           physical_dev->KHR_external_fence_fd = true;
        else if (!strcmp(props->extensionName, "VK_EXT_external_memory_metal"))
           physical_dev->EXT_external_memory_metal = true;
@@ -419,7 +433,7 @@ index 0d63a0b..631da80 100644
        else if (!strcmp(props->extensionName, "VK_EXT_metal_objects"))
           physical_dev->EXT_metal_objects = true;
        else if (!strcmp(props->extensionName, "VK_KHR_portability_subset"))
-@@ -361,7 +378,14 @@ vkr_physical_device_init_extensions(struct vkr_physical_device *physical_dev)
+@@ -361,7 +378,14 @@
      *
      * TODO: Remove after mesa!40478 has had sufficient distro uptake.
      */
@@ -434,7 +448,7 @@ index 0d63a0b..631da80 100644
        VkExtensionProperties *new_exts =
           realloc(exts, sizeof(*exts) * (advertised_count + 1));
        if (new_exts) {
-@@ -389,6 +413,7 @@ vkr_physical_device_init_properties(struct vkr_physical_device *physical_dev)
+@@ -389,6 +413,7 @@
  
     VkPhysicalDeviceProperties *props = &physical_dev->properties;
     props->apiVersion = vkr_api_version_cap_minor(props->apiVersion, VKR_MAX_API_VERSION);
@@ -442,11 +456,10 @@ index 0d63a0b..631da80 100644
  }
  
  static inline void
-diff --git a/src/venus/vkr_physical_device.h b/src/venus/vkr_physical_device.h
-index 8ec55a6..3559981 100644
---- a/src/venus/vkr_physical_device.h
-+++ b/src/venus/vkr_physical_device.h
-@@ -29,6 +29,8 @@ struct vkr_physical_device {
+diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_physical_device.h virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_physical_device.h
+--- virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_physical_device.h	2026-10-22 04:11:08
++++ virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_physical_device.h	2026-11-03 14:06:36
+@@ -29,6 +29,8 @@
     bool KHR_external_semaphore_fd;
  
     bool EXT_external_memory_metal;
@@ -455,11 +468,115 @@ index 8ec55a6..3559981 100644
     bool EXT_metal_objects;
  
     VkPhysicalDeviceMemoryProperties memory_properties;
-diff --git a/src/venus/vkr_ring.c b/src/venus/vkr_ring.c
-index 0d4899e..57a711f 100644
---- a/src/venus/vkr_ring.c
-+++ b/src/venus/vkr_ring.c
-@@ -204,8 +204,8 @@ vkr_ring_relax(uint32_t *iter)
+diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_renderer.c virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_renderer.c
+--- virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_renderer.c	2026-10-22 04:11:08
++++ virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_renderer.c	2026-11-03 19:38:38
+@@ -10,6 +10,11 @@
+ #include "venus_hw.h"
+ 
+ #include "vkr_context.h"
++#include "vkr_queue.h"
++#include "vkr_ring.h"
++#ifdef __AROS__
++#include <exec/tasks.h>
++#endif
+ 
+ struct vkr_renderer_state {
+    const struct vkr_renderer_callbacks *cbs;
+@@ -240,4 +245,68 @@
+    struct vkr_context *ctx = vkr_renderer_lookup_context(ctx_id);
+    if (ctx)
+       vkr_context_destroy_resource(ctx, res_id);
++}
++
++/* Diagnostic for a host that sees no progress: every ring and sync queue of
++ * every context, without locks, so that it also works when one is held.
++ */
++void
++vkr_renderer_dump(void (*emit)(const char *line, void *data), void *data)
++{
++   char line[256];
++
++   list_for_each_entry (struct vkr_context, ctx, &vkr_state.contexts, head) {
++      snprintf(line, sizeof(line), "ctx=%u wait_ring id=%" PRIu64 " seqno=%u fatal=%d",
++               ctx->ctx_id, ctx->wait_ring.id, ctx->wait_ring.seqno, ctx->cs_fatal_error);
++      emit(line, data);
++      list_for_each_entry (struct vkr_ring, ring, &ctx->rings, head) {
++         const uint32_t head = atomic_load(ring->control.head);
++         const uint32_t tail = atomic_load(ring->control.tail);
++         uint32_t cmd = 0;
++         if (head != tail)
++            memcpy(&cmd, ring->buffer.data + (head & ring->buffer.mask), sizeof(cmd));
++         snprintf(line, sizeof(line),
++                  "ring=%" PRIu64 " head=%u tail=%u cur=%u status=%#x started=%d pending_notify=%d"
++                  " cmd_at_head=%u virtqueue_seqno=%" PRIu64,
++                  ring->id, head, tail, ring->buffer.cur, atomic_load(ring->control.status),
++                  ring->started, ring->pending_notify, cmd, ring->virtqueue_seqno);
++         emit(line, data);
++         if (head != tail) {
++            /* the raw words of the command at the head, up to one line */
++            size_t n = 0;
++            n += snprintf(line + n, sizeof(line) - n, "ring=%" PRIu64 " head_words=", ring->id);
++            for (uint32_t i = 0; i < 24 && n + 10 < sizeof(line) && i * 4 < tail - head; i++) {
++               uint32_t w;
++               memcpy(&w, ring->buffer.data + ((head + i * 4) & ring->buffer.mask), sizeof(w));
++               n += snprintf(line + n, sizeof(line) - n, "%x ", w);
++            }
++            emit(line, data);
++         }
++#ifdef __AROS__
++         {
++            const struct Task *task = ring->task;
++            if (task)
++               snprintf(line, sizeof(line),
++                        "ring=%" PRIu64 " task=%p state=%u wait=%#lx received=%#lx sp=%p succ=%p exit_ret=%d",
++                        ring->id, (void *)task, task->tc_State, (unsigned long)task->tc_SigWait,
++                        (unsigned long)task->tc_SigRecvd, task->tc_SPReg, (void *)task->tc_Node.ln_Succ,
++                        ring->exit_ret);
++            else
++               snprintf(line, sizeof(line), "ring=%" PRIu64 " task=none (thread never ran)", ring->id);
++            emit(line, data);
++         }
++#endif
++      }
++      for (uint32_t i = 0; i < ARRAY_SIZE(ctx->sync_queues); i++) {
++         const struct vkr_queue *queue = ctx->sync_queues[i];
++         unsigned pending = 0;
++         if (!queue)
++            continue;
++         list_for_each_entry (struct vkr_queue_sync, sync, &queue->sync_thread.syncs, head)
++            pending++;
++         snprintf(line, sizeof(line), "queue=%u ring_idx=%u pending_syncs=%u join=%d", i,
++                  queue->ring_idx, pending, queue->sync_thread.join);
++         emit(line, data);
++      }
++   }
+ }
+diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_renderer.h virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_renderer.h
+--- virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_renderer.h	2026-10-22 04:11:08
++++ virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_renderer.h	2026-11-03 18:58:49
+@@ -74,4 +74,7 @@
+ void
+ vkr_renderer_destroy_resource(uint32_t ctx_id, uint32_t res_id);
+ 
++void
++vkr_renderer_dump(void (*emit)(const char *line, void *data), void *data);
++
+ #endif /* VKR_RENDERER_H */
+diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_ring.c virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_ring.c
+--- virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_ring.c	2026-10-22 04:11:08
++++ virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_ring.c	2026-11-03 19:18:53
+@@ -4,6 +4,9 @@
+  */
+ 
+ #include "vkr_ring.h"
++#ifdef __AROS__
++#include <proto/exec.h>
++#endif
+ 
+ #include <stdio.h>
+ #include <sys/resource.h>
+@@ -204,8 +207,8 @@
        .tv_sec = us / 1000000,
        .tv_nsec = (us % 1000000) * 1000,
     };
@@ -470,10 +587,13 @@ index 0d4899e..57a711f 100644
     nanosleep(&ts, NULL);
  #else
     clock_nanosleep(CLOCK_MONOTONIC, 0, &ts, NULL);
-@@ -254,7 +254,12 @@ vkr_ring_thread(void *arg)
+@@ -254,7 +257,15 @@
  
     snprintf(thread_name, ARRAY_SIZE(thread_name), "vkr-ring-%d", ctx->ctx_id);
     u_thread_setname(thread_name);
++#ifdef __AROS__
++   ring->task = FindTask(NULL);
++#endif
 +#ifdef __AROS__
 +   /* No process priorities to map the guest's request onto */
 +   if (false) {
@@ -483,3 +603,30 @@ index 0d4899e..57a711f 100644
  #ifdef DEBUG
        /* Currently venus doesn't forward the CAP_SYS_NICE request upon forking, so
         * requesting a high priority outside of the normal range would be at the best
+@@ -344,6 +355,11 @@
+       vkr_ring_set_status_bits(ring, VK_RING_STATUS_FATAL_BIT_MESA);
+       vkr_context_on_ring_fatal(ctx);
+    }
++#ifdef __AROS__
++   ring->exit_ret = ret;
++   vkr_log("ring %" PRIu64 " thread exits ret=%d started=%d cur=%u", ring->id, ret,
++           ring->started, ring->buffer.cur);
++#endif
+ 
+    return ret;
+ }
+diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_ring.h virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_ring.h
+--- virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_ring.h	2026-10-22 04:11:08
++++ virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_ring.h	2026-11-03 19:18:53
+@@ -102,6 +102,11 @@
+    atomic_bool pending_notify;
+    atomic_bool monitor;
+    uint64_t virtqueue_seqno;
++#ifdef __AROS__
++   /* the exec task of the ring thread, for a host's stall report */
++   void *task;
++   int exit_ret;
++#endif
+ };
+ 
+ struct vkr_ring *
