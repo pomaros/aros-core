@@ -25,6 +25,11 @@
 #include "pthread_intern.h"
 #include "debug.h"
 
+/* POSIX code sizes its threads for the stacks other systems give by default
+   (8 MiB on Linux, 512 KiB on macOS); a shell process often runs on a few
+   tens of KiB. A worker never gets less than this unless it asks for it. */
+#define PTHREAD_DEFAULT_STACK (1024 * 1024)
+
 /****************************************************************************
     NAME */
         int pthread_attr_init(
@@ -35,7 +40,8 @@
 /*  FUNCTION
         Initialize a caller-provided thread attribute object. Clear its fields,
         select a joinable worker with no supplied stack, copy the current task
-        priority, and set the stack size to the current task's stack extent.
+        priority, and set the stack size to the current task's stack extent,
+        or 1 MiB when the current task's stack is smaller.
 
     INPUTS
         attr - Non-NULL writable attribute object to initialize.
@@ -46,8 +52,10 @@
     NOTES
         Include <pthread.h>; link with pthread. Call in task context. No stack
         or thread is allocated. The default size comes from tc_SPUpper minus
-        tc_SPLower; it is not a fixed PTHREAD_STACK_MIN allocation. Set an
-        appropriate size explicitly when the new worker needs a different one.
+        tc_SPLower, raised to 1 MiB: POSIX code expects the stacks other
+        systems give a new thread, while a shell process often runs on a few
+        tens of KiB. Set an appropriate size explicitly when the new worker
+        needs a different one.
         pthread_create() copies the object, so it need not outlive creation.
         Destroy it with pthread_attr_destroy() when no longer needed.
         Do not modify an object concurrently with a reader.
@@ -77,6 +85,8 @@
     NewGetTaskAttrs(task, &attr->stacksize, sizeof(attr->stacksize), TASKINFOTYPE_STACKSIZE, TAG_DONE);
 #else
     attr->stacksize = (UBYTE *)task->tc_SPUpper - (UBYTE *)task->tc_SPLower;
+    if (attr->stacksize < PTHREAD_DEFAULT_STACK)
+        attr->stacksize = PTHREAD_DEFAULT_STACK;
 #endif
 
     return 0;
