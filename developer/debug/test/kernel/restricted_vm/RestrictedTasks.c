@@ -399,8 +399,16 @@ static void prove_shared_view(void)
     CHECK(api->close_domain(domain)==1 && api->close_shared(object));
     pthread_t owner;CHECK(!pthread_create(&owner,NULL,orphan_view,NULL));
     CHECK(!pthread_join(owner,NULL));
-    struct AROSRestrictedLifetime life;api->lifetime(&life);
-    CHECK(!life.live && !life.domains && !life.shared_objects && !life.pages);
+    /* Ownership ends at the kernel retirement hook, which can follow the
+     * join; the reaper then unmaps the view before the object goes */
+    struct AROSRestrictedLifetime life;
+    for (unsigned attempts=0;;++attempts) {
+        api->lifetime(&life);
+        CHECK(!life.domains && !life.live);
+        if (!life.shared_objects) break;
+        CHECK(life.shared_objects==1 && attempts<100000);KrnSwitch();
+    }
+    CHECK(!life.pages);
     bug("[ISOVM] shared-view native_reads=2 native_writes=2 one_view=1 copy_alias_refused=1 exec_refused=1 close_refused=1 orphan_reaped=1 retained_pages=0 PASS\n");
 }
 static void prove_region_faults(void)
