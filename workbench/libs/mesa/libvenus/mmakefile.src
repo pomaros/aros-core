@@ -1,0 +1,94 @@
+#   Generate libvulkan_virtio.a - Mesa's Venus Vulkan driver with the AROS transport
+#
+#   The driver encodes Vulkan commands for a Venus renderer and reaches it
+#   through the avs interface (vn_renderer_aros.c, <venus/avs.h>).
+
+include $(SRCDIR)/config/aros.cfg
+
+CUR_MESADIR := src/virtio/vulkan
+include $(SRCDIR)/$(CURDIR)/../mesa.cfg
+
+VN_GENDIR := $(top_builddir)/$(CUR_MESADIR)
+VK_GENDIR := $(top_builddir)/src/vulkan
+
+VN_SOURCE_NAMES := \
+            vn_acceleration_structure \
+            vn_buffer \
+            vn_command_buffer \
+            vn_common \
+            vn_cs \
+            vn_descriptor_set \
+            vn_device \
+            vn_device_memory \
+            vn_feedback \
+            vn_host_copy \
+            vn_icd \
+            vn_image \
+            vn_instance \
+            vn_physical_device \
+            vn_pipeline \
+            vn_query_pool \
+            vn_queue \
+            vn_render_pass \
+            vn_ring \
+            vn_renderer_internal \
+            vn_renderer_util
+
+VN_SOURCES_C := \
+            $(addprefix $(top_srcdir)/$(CUR_MESADIR)/,$(VN_SOURCE_NAMES)) \
+            $(SRCDIR)/$(CURDIR)/../vn_renderer_aros \
+            $(top_srcdir)/src/util/xmlconfig \
+            $(VN_GENDIR)/vn_entrypoints
+
+#MM mesa3d-linklib-venus : mesa3d-generate-venus mesa3d-linklib-vulkan-runtime mesa3d-linklib-mesautil mesa3d-linklib-mesa-generated workbench-libs-vkr-includes
+#MM mesa3d-generate-venus : mesa3d-generate-vulkan-runtime
+
+# aros_include: the few Linux headers Venus includes, as AROS answers them
+USER_INCLUDES += \
+            -I$(SRCDIR)/$(CURDIR)/aros_include \
+            -iquote $(SRCDIR)/$(CURDIR)/../aros_compat \
+            -iquote $(top_srcdir)/$(CUR_MESADIR) \
+            -I$(SRCDIR)/$(CURDIR)/../aros_compat \
+            -I$(top_srcdir)/include \
+            -I$(top_srcdir)/include/drm-uapi \
+            -I$(top_srcdir)/src \
+            -I$(top_srcdir)/src/util \
+            -I$(top_srcdir)/src/virtio \
+            -I$(top_srcdir)/src/virtio/virtio-gpu \
+            -I$(top_srcdir)/src/virtio/venus-protocol \
+            -I$(top_srcdir)/src/vulkan/runtime \
+            -I$(top_srcdir)/src/vulkan/util \
+            -I$(top_srcdir)/src/vulkan/wsi \
+            -I$(VK_GENDIR)/wsi \
+            -I$(top_srcdir)/src/gallium/include \
+            -I$(top_builddir)/src \
+            -I$(top_builddir)/src/util \
+            -I$(top_builddir)/src/mesa/main \
+            -I$(VK_GENDIR)/runtime \
+            -I$(VK_GENDIR)/util \
+            -I$(VN_GENDIR) \
+            -I$(AROS_INCLUDES)
+
+USER_CPPFLAGS += -DNO_AMIGA_LINKAGE_TYPES -DWITH_XMLCONFIG=0 \
+                 -DPACKAGE_VERSION=\"$(MESAGLVERSION)\" -DNDEBUG
+USER_CFLAGS += $(MESA_NOWARNFLAGS)
+
+%build_linklib mmake=mesa3d-linklib-venus libname=vulkan_virtio \
+    libdir=$(top_libdir) objdir=$(top_builddir)/$(CUR_MESADIR) \
+    files="$(VN_SOURCES_C)"
+
+#MM
+mesa3d-generate-venus :
+	@$(ECHO) "Generating Venus entrypoints..."
+	@$(MKDIR) -p $(VN_GENDIR)
+	@PYTHONPATH="$(top_srcdir)/src/vulkan/util:$(top_srcdir)/src/util:$(top_srcdir)/src:$$PYTHONPATH" && \
+	export PYTHONPATH && \
+	python3 $(top_srcdir)/src/vulkan/util/vk_entrypoints_gen.py \
+	  --xml $(top_srcdir)/src/vulkan/registry/vk.xml --proto --weak \
+	  --prefix vn --beta false \
+	  --out-h "$(VN_GENDIR)/vn_entrypoints.h" \
+	  --out-c "$(VN_GENDIR)/vn_entrypoints.c"
+	@python3 $(top_srcdir)/src/util/driconf_static.py $(top_srcdir)/src/util/00-mesa-defaults.conf \
+	  $(VN_GENDIR)/driconf_static.h
+
+%common

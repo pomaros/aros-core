@@ -1,0 +1,54 @@
+include $(SRCDIR)/config/aros.cfg
+include $(SRCDIR)/workbench/libs/mesa/mesa.cfg
+
+# Mesa allocates through stdc and posixc directly. The Vulkan runtime is
+# linked whole (see lavapipe.hidd); the renderer lives in venusrenderer.library.
+USER_LDFLAGS := \
+            -L$(top_libdir) \
+            -L$(AROS_DEVELOPER)/lib \
+            -Wl,--start-group \
+            -Wl,--whole-archive \
+            -lvulkan_virtio \
+            -lvulkan_wsi \
+            -lvulkan_runtime \
+            -Wl,--no-whole-archive \
+            -lcompiler \
+            -lgalliumauxiliary \
+            -lmesautil \
+            -lz \
+            -lpthread \
+            -lposixc_rel \
+            -lstdc_rel
+ifneq ($(TARGET_LIBATOMIC),)
+USER_LDFLAGS += $(TARGET_CXX_LIBS)
+endif
+USER_LDFLAGS += -Wl,--end-group
+
+VENUS_HIDD_FILES := \
+            venus_init \
+            $(SRCDIR)/workbench/hidds/vulkan/mesa_icd
+
+#MM- workbench-hidds : hidd-venus
+#MM hidd-venus : includes hidd-vulkan workbench-libs-z-linklib linklibs-libatomic mesa3d-linklib-venus mesa3d-linklib-compiler linklibs-galliumauxiliary workbench-libs-venus
+
+USER_INCLUDES += \
+            -iquote $(SRCDIR)/$(CURDIR) \
+            -iquote $(SRCDIR)/workbench/hidds/vulkan \
+            -I$(top_srcdir)/include \
+            -I$(top_srcdir)/src \
+            -I$(top_srcdir)/src/vulkan/runtime \
+            -I$(top_srcdir)/src/vulkan/util \
+            -I$(top_srcdir)/src/gallium/include \
+            -I$(top_builddir)/src \
+            -I$(top_builddir)/src/compiler \
+            -I$(top_builddir)/src/compiler/nir \
+            -I$(top_builddir)/src/util \
+            -I$(top_builddir)/src/vulkan/runtime \
+            -I$(top_builddir)/src/vulkan/util
+
+USER_CPPFLAGS += -DNO_AMIGA_LINKAGE_TYPES
+
+%build_module mmake=hidd-venus modname=venus modtype=hidd \
+   files="$(VENUS_HIDD_FILES)" uselibs="venusrenderer"
+
+%common
