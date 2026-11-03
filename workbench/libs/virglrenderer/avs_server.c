@@ -474,6 +474,17 @@ int avs_sync_wait(struct avs_client *c, bool any, uint64_t timeout_ns,
     return result;
 }
 
+bool avs_sync_ready(struct avs_client *c, bool any, const uint32_t *ids,
+                    const uint64_t *values, uint32_t count)
+{
+    bool ready;
+
+    pthread_mutex_lock(&avs_lock);
+    ready = avs_wait_done(c, any, ids, values, count);
+    pthread_mutex_unlock(&avs_lock);
+    return ready;
+}
+
 static bool avs_submit_batch(struct avs_client *c, const struct avs_batch *b)
 {
     struct avs_submit *submit = NULL;

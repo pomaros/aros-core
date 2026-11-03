@@ -5,7 +5,8 @@
 
     The driver talks to the renderer through the avs interface: directly
     when the renderer runs in the same process, through a forwarding
-    implementation from an isolated domain. Shared memory comes mapped;
+    implementation from an isolated domain (a Windows process on AROS
+    builds this file with VN_AROS_TRANSPORT). Shared memory comes mapped;
     syncs are the renderer's 64-bit counters. Modelled on the vtest
     transport, without its socket.
 */
@@ -13,10 +14,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef __AROS__
 #include <proto/exec.h>
+#endif
 
 #include "virtio/virtio-gpu/venus_hw.h"
-#include "drm-uapi/virtgpu_drm.h"
 #include "util/sparse_array.h"
 #include "util/u_process.h"
 
@@ -28,12 +30,14 @@
 #define AROS_VENUS_PCI_VENDOR_ID 0x1af4
 #define AROS_VENUS_PCI_DEVICE_ID 0x1050
 
+#ifdef __AROS__
 /* A thread's identity for the watchdog: its task */
 long
 vn_aros_gettid(void)
 {
    return (long)(uintptr_t)FindTask(NULL);
 }
+#endif
 
 struct aros_shmem {
    struct vn_renderer_shmem base;

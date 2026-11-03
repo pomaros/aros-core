@@ -70,6 +70,11 @@ int avs_sync_wait(struct avs_client *client, bool any, uint64_t timeout_ns,
 bool avs_submit(struct avs_client *client, const struct avs_batch *batches,
                 uint32_t count);
 
+/* Without waiting: whether every sync (any one, with any) has reached its
+   value, for a host that must not block, such as a process controller */
+bool avs_sync_ready(struct avs_client *client, bool any, const uint32_t *sync_ids,
+                    const uint64_t *values, uint32_t count);
+
 /*
     The renderer's side, for the process that hosts it.
 
