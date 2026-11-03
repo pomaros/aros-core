@@ -14,6 +14,10 @@
           until a range of it is committed, a commit backs only what is not
           backed yet, a decommit gives the pages back, neither applies
           outside a reservation, and freeing it gives everything back.
+          Foreign runs map pages the window does not own, at a run of
+          their own: Free, Commit and Decommit refuse them, unmapping takes
+          exactly the run back and never gives its pages to the pool, and a
+          table failure leaves neither run nor mapping behind.
 */
 #include <assert.h>
 #include <stdint.h>
@@ -31,6 +35,7 @@ void AROSAppleRuntimeIRQRestore(uint64_t mask) { (void)mask; }
 #define MAXBLOCKS 64UL                 /* what the simulated Exec can give */
 #define PAGES (MAXBLOCKS * BLOCK / PG)
 #define PHYS_BASE (64UL << 30)
+#define FOREIGN_BASE (PHYS_BASE + MAXBLOCKS * BLOCK)  /* pages the window does not own */
 static uint64_t *mapped;               /* window page -> physical, 0 if none */
 static unsigned char *executable_page; /* window page made executable */
 static unsigned char page_mapped[PAGES], cleared[PAGES];
@@ -63,6 +68,10 @@ static int map(void *c, uintptr_t va, uint64_t physical)
     unsigned long p = page_index(physical);
     (void)c;
     assert(va % PG == 0 && w < WPAGES && mapped[w] == 0);
+    if (physical >= FOREIGN_BASE) {
+        if (maps >= map_fail_after) return 0;
+        maps++; mapped[w] = physical; return 1;
+    }
     assert(physical % PG == 0 && p < PAGES && block_out[p / (BLOCK / PG)] && !page_mapped[p]);
     if (maps >= map_fail_after) return 0;
     maps++; mapped[w] = physical; page_mapped[p] = 1; cleared[p] = 0; return 1;
@@ -73,7 +82,7 @@ static uint64_t unmap(void *c, uintptr_t va, int *executable)
     (void)c;
     *executable = p != 0 && executable_page[w];
     executable_page[w] = 0;
-    if (p) page_mapped[page_index(p)] = 0;
+    if (p && p < FOREIGN_BASE) page_mapped[page_index(p)] = 0;
     mapped[w] = 0; return p;
 }
 static void clear(void *c, uintptr_t va)
@@ -244,6 +253,55 @@ int main(void)
         backed(r, 64 * PG);
         assert(AROSAppleCodeWindowDecommit(&ops, r, 64 * PG) == 1 && lent_count() == base_lent);
         assert(AROSAppleCodeWindowFree(&ops, r, 64 * PG) && in_use() == base_use);
+    }
+    /* Foreign runs: the owner's pages, mapped, never the pool's */
+    {
+        uintptr_t pages[5];
+        unsigned long base_lent = lent_count();
+        uint64_t base_use = in_use(), w;
+        char *f, *g;
+
+        for (i = 0; i < 5; i++) pages[i] = FOREIGN_BASE + (uintptr_t)(4 - i) * 3 * PG;
+        f = AROSAppleCodeWindowMapForeign(&ops, pages, 5);
+        assert(f != NULL);
+        w = ((uintptr_t)f - AROS_APPLE_CODE_WINDOW_BASE) / PG;
+        for (i = 0; i < 5; i++) assert(mapped[w + i] == pages[i]);
+        assert(lent_count() == base_lent && in_use() == base_use);
+        /* Not window memory: no free, commit or decommit applies */
+        assert(!AROSAppleCodeWindowFree(&ops, f, 5 * PG));
+        assert(AROSAppleCodeWindowCommit(&ops, f, PG) == -1);
+        assert(AROSAppleCodeWindowDecommit(&ops, f, PG) == 0);
+        /* A request no longer gets the run; a second run follows it */
+        g = AROSAppleCodeWindowMapForeign(&ops, pages, 2);
+        assert(g == f + 5 * PG);
+        /* Only exactly one run unmaps */
+        assert(!AROSAppleCodeWindowUnmapForeign(&ops, f, 4));
+        assert(!AROSAppleCodeWindowUnmapForeign(&ops, f + PG, 4));
+        assert(!AROSAppleCodeWindowUnmapForeign(&ops, f, 7));
+        assert(!AROSAppleCodeWindowUnmapForeign(&ops, g, 1));
+        assert(AROSAppleCodeWindowUnmapForeign(&ops, f, 5));
+        for (i = 0; i < 5; i++) assert(mapped[w + i] == 0);
+        assert(!AROSAppleCodeWindowUnmapForeign(&ops, f, 5));
+        assert(mapped[w + 5] == pages[0] && mapped[w + 6] == pages[1]);
+        assert(AROSAppleCodeWindowUnmapForeign(&ops, g, 2));
+        /* The freed run is reused; nothing went to the pool */
+        assert(lent_count() == base_lent && in_use() == base_use);
+        a = AROSAppleCodeWindowAllocate(&ops, NULL, PG);
+        assert(a == f && AROSAppleCodeWindowFree(&ops, a, PG));
+        /* Invalid pages and table failures leave nothing behind */
+        pages[2] = 0;
+        assert(AROSAppleCodeWindowMapForeign(&ops, pages, 5) == NULL);
+        pages[2] = FOREIGN_BASE + 1;
+        assert(AROSAppleCodeWindowMapForeign(&ops, pages, 5) == NULL);
+        pages[2] = FOREIGN_BASE + 6 * PG;
+        map_fail_after = maps + 3;
+        assert(AROSAppleCodeWindowMapForeign(&ops, pages, 5) == NULL);
+        map_fail_after = (unsigned long)-1;
+        for (i = 0; i < 5; i++) assert(mapped[w + i] == 0);
+        f = AROSAppleCodeWindowMapForeign(&ops, pages, 5);
+        assert(f == (char *)(AROS_APPLE_CODE_WINDOW_BASE + w * PG));
+        assert(AROSAppleCodeWindowUnmapForeign(&ops, f, 5));
+        assert(lent_count() == base_lent && in_use() == base_use);
     }
     printf("CODEWINDOW: PASS (%lu blocks taken from Exec, %lu given back, %lu kept)\n",
         blocks_taken, blocks_given, (unsigned long)blocks_held());

@@ -51,6 +51,8 @@ struct PoolBlock {
 static uint64_t window_reserved[WINDOW_PAGES / 64U];
 static uint64_t window_live[WINDOW_PAGES / 64U];
 static uint64_t window_lazy[WINDOW_PAGES / 64U];     /* pages of reservations */
+static uint64_t window_foreign[WINDOW_PAGES / 64U];  /* pages of foreign runs */
+static uint64_t window_foreign_end[WINDOW_PAGES / 64U]; /* each run's last page */
 static struct PoolBlock *pool_hash[POOL_HASH];
 static struct PoolBlock *pool_partial;
 static uint32_t pool_empty_blocks;
@@ -426,6 +428,82 @@ int AROSAppleCodeWindowDecommit(const struct AROSAppleCodeWindowOps *ops,
     if (!lazy)
         return 0;
     unback(ops, first, pages);
+    return 1;
+}
+
+void *AROSAppleCodeWindowMapForeign(const struct AROSAppleCodeWindowOps *ops,
+    const uintptr_t *physical, uint32_t pages)
+{
+    uint32_t first = 0, index;
+    uint64_t saved;
+    int found;
+
+    if (ops == NULL || physical == NULL || pages == 0 || pages > WINDOW_PAGES)
+        return NULL;
+    for (index = 0; index < pages; ++index)
+        if (physical[index] == 0 || (physical[index] & (AROS_APPLE_PAGE_SIZE - 1U)) != 0)
+            return NULL;
+    saved = AROSAppleMemoryLockAcquire(&window_lock);
+    found = reserve_run(NULL, pages, &first);
+    if (found) {
+        for (index = 0; index < pages; ++index)
+            page_bitmap_set(window_foreign, first + index, 1);
+        page_bitmap_set(window_foreign_end, first + pages - 1U, 1);
+    }
+    AROSAppleMemoryLockRelease(&window_lock, saved);
+    if (!found)
+        return NULL;
+    for (index = 0; index < pages; ++index)
+        if (!ops->map(ops->context, page_address(first + index), physical[index]))
+            break;
+    if (index == pages)
+        return (void *)page_address(first);
+
+    /* Out of tables: take the run back without touching its owner's pages */
+    while (index-- > 0) {
+        int executable = 0;
+        (void)ops->unmap(ops->context, page_address(first + index), &executable);
+    }
+    saved = AROSAppleMemoryLockAcquire(&window_lock);
+    for (index = 0; index < pages; ++index)
+        page_bitmap_set(window_foreign, first + index, 0);
+    page_bitmap_set(window_foreign_end, first + pages - 1U, 0);
+    AROSAppleMemoryLockRelease(&window_lock, saved);
+    release(first, pages);
+    return NULL;
+}
+
+int AROSAppleCodeWindowUnmapForeign(const struct AROSAppleCodeWindowOps *ops,
+    void *address, uint32_t pages)
+{
+    uint32_t first, count, index;
+    uint64_t saved;
+    int whole;
+
+    if (ops == NULL || pages == 0 ||
+        ((uintptr_t)address & (AROS_APPLE_PAGE_SIZE - 1U)) != 0 ||
+        !range_of(address, (uintptr_t)pages * AROS_APPLE_PAGE_SIZE, &first, &count))
+        return 0;
+    /* Exactly one run: every page foreign, its end here and nowhere before,
+     * and no foreign page continuing it from before its start */
+    saved = AROSAppleMemoryLockAcquire(&window_lock);
+    whole = page_bitmap_next(window_foreign, first, first + pages, 0) == first + pages &&
+        page_bitmap_next(window_foreign_end, first, first + pages, 1) == first + pages - 1U &&
+        (first == 0 || !page_bitmap_test(window_foreign, first - 1U) ||
+         page_bitmap_test(window_foreign_end, first - 1U));
+    if (whole) {
+        for (index = 0; index < pages; ++index)
+            page_bitmap_set(window_foreign, first + index, 0);
+        page_bitmap_set(window_foreign_end, first + pages - 1U, 0);
+    }
+    AROSAppleMemoryLockRelease(&window_lock, saved);
+    if (!whole)
+        return 0;
+    for (index = 0; index < pages; ++index) {
+        int executable = 0;
+        (void)ops->unmap(ops->context, page_address(first + index), &executable);
+    }
+    release(first, pages);
     return 1;
 }
 

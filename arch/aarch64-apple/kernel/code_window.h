@@ -73,6 +73,17 @@ int AROSAppleCodeWindowCommit(const struct AROSAppleCodeWindowOps *ops,
 int AROSAppleCodeWindowDecommit(const struct AROSAppleCodeWindowOps *ops,
     void *address, uintptr_t length);
 void AROSAppleCodeWindowGetStats(struct AROSAppleCodeWindowStats *stats);
+/* Foreign pages: physical pages the window does not own, such as a
+ * restricted domain's shared backing, mapped read-write and not executable
+ * at a run of their own for a native view of them. The window never takes
+ * or gives them: unmapping hands them back to their owner untouched, and
+ * Free, Commit and Decommit refuse a foreign run. MapForeign returns NULL
+ * when no run is free or a table cannot be allocated; UnmapForeign returns
+ * 0 unless [address, pages) is exactly one foreign run. */
+void *AROSAppleCodeWindowMapForeign(const struct AROSAppleCodeWindowOps *ops,
+    const uintptr_t *physical, uint32_t pages);
+int AROSAppleCodeWindowUnmapForeign(const struct AROSAppleCodeWindowOps *ops,
+    void *address, uint32_t pages);
 
 /* The kernel's page source and mappings (code_window_kernel.c) */
 extern const struct AROSAppleCodeWindowOps AROSAppleCodeWindowKernelOps;
