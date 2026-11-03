@@ -38,6 +38,7 @@ USER_LDFLAGS += -Wl,--end-group
 
 LAVAPIPE_HIDD_FILES := \
             lavapipe_init \
+            $(SRCDIR)/workbench/hidds/vulkan/mesa_icd \
             $(SRCDIR)/workbench/hidds/llvmpipe/llvmpipe_llvm_rtti
 
 # Like llvmpipe.hidd, lavapipe needs the target-side LLVM libraries.
@@ -48,6 +49,7 @@ LAVAPIPE_HIDD_FILES := \
 
 USER_INCLUDES += \
             -iquote $(SRCDIR)/$(CURDIR) \
+            -iquote $(SRCDIR)/workbench/hidds/vulkan \
             -I$(top_srcdir)/include \
             -I$(top_srcdir)/src \
             -I$(top_srcdir)/src/vulkan/runtime \

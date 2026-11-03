@@ -189,6 +189,11 @@ static BOOL run_cycle(struct cycle *c)
         }
     }
     CHECK(vkEnumeratePhysicalDevices(instance, &count, &pd));
+    if (!count)
+    {
+        printf("[W-GFX] no physical device\n");
+        goto out;
+    }
     vkGetPhysicalDeviceProperties(pd, &props);
     strncpy(c->device, props.deviceName, sizeof(c->device) - 1);
     c->api = props.apiVersion;

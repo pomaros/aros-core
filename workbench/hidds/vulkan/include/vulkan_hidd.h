@@ -389,6 +389,13 @@ BOOL VulkanHidd_IsGPUPSPLoaded(uint8_t pci_bus,
                                uint32_t vendor_id,
                                uint32_t device_id);
 
+/*
+ * The callbacks (and the driver data they take) of the first registered GPU
+ * of a driver class, whatever the preferred GPU is; NULL when there is none.
+ */
+const struct VulkanDriverCallbacks *VulkanHidd_FindDriver(const char *class_id,
+                                                          APTR *driver_data);
+
 #define HiddVulkanAttrBase __IHidd_Vulkan
 
 #ifndef __OOP_NOATTRBASES__

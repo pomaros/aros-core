@@ -16,6 +16,8 @@
 
 #include "vulkan_intern.h"
 
+#include <string.h>
+
 /* Global pointer so driver HIDDs can register GPUs via VulkanHidd_RegisterGPU() */
 static struct vulkanstaticdata *vulkan_global_sd = NULL;
 
@@ -138,6 +140,44 @@ AROS_LH5(BOOL, VulkanHidd_IsGPUPSPLoaded,
     if (!vulkan_global_sd) return FALSE;
     return VulkanIsGPUPSPLoaded(vulkan_global_sd, pci_bus, pci_dev_num,
                                 pci_func, vendor_id, device_id);
+
+    AROS_LIBFUNC_EXIT
+}
+
+/*
+ * The callbacks of the first registered GPU of a driver class, for a client
+ * that must use that driver whatever the preferred GPU is: a Venus renderer
+ * runs its commands on a native driver, never on Venus itself. NULL when
+ * no GPU of that class is registered.
+ *
+ * Library slot 8.
+ */
+AROS_LH2(const struct VulkanDriverCallbacks *, VulkanHidd_FindDriver,
+    AROS_LHA(const char *, class_id,    A0),
+    AROS_LHA(APTR *,       driver_data, A1),
+    LIBBASETYPEPTR, VulkanHiddBase, 8, HiddVulkan)
+{
+    AROS_LIBFUNC_INIT
+
+    const struct VulkanDriverCallbacks *found = NULL;
+    ULONG i;
+
+    if (!vulkan_global_sd || !class_id)
+        return NULL;
+    ObtainSemaphoreShared(&vulkan_global_sd->registry_lock);
+    for (i = 0; i < VULKAN_MAX_GPUS && !found; i++)
+    {
+        struct VulkanGPUEntry *e = &vulkan_global_sd->gpus[i];
+
+        if (e->in_use && strcmp(e->class_id, class_id) == 0)
+        {
+            found = &e->callbacks;
+            if (driver_data)
+                *driver_data = e->driver_data;
+        }
+    }
+    ReleaseSemaphore(&vulkan_global_sd->registry_lock);
+    return found;
 
     AROS_LIBFUNC_EXIT
 }
