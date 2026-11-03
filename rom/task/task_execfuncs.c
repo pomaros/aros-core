@@ -127,16 +127,15 @@ AROS_LH1(void, RemTask,
     struct ETask *et = (struct ETask *)findTask->tc_UnionETask.tc_ETask;
     IPTR *tsstorage = NULL;
 
+    /* A task removing itself never returns from Exec's RemTask, so its slot
+     * storage goes before the call. It is detached under Forbid(), as
+     * GetParentTaskStorageSlot() reads another task's storage. */
     if (et)
-        tsstorage = et->et_Reserved[ETASK_RSVD_SLOTID];
-
-    D(bug("[TaskRes] %s: Calling original Exec->RemTask()\n", __func__));
-
-    if (TaskResBase->trb_RemTask)
     {
-        AROS_CALL1(void, TaskResBase->trb_RemTask,
-                    AROS_LCA(struct Task *,     findTask,      A1),
-                    struct ExecBase *, SysBase);
+        Forbid();
+        tsstorage = et->et_Reserved[ETASK_RSVD_SLOTID];
+        et->et_Reserved[ETASK_RSVD_SLOTID] = NULL;
+        Permit();
     }
 
     if (tsstorage)
@@ -145,6 +144,15 @@ AROS_LH1(void, RemTask,
               __func__, tsstorage, tsstorage ? (ULONG)tsstorage[__TS_FIRSTSLOT] : 0
         );)
         FreeMem(tsstorage, tsstorage[__TS_FIRSTSLOT] * sizeof(tsstorage[0]));
+    }
+
+    D(bug("[TaskRes] %s: Calling original Exec->RemTask()\n", __func__));
+
+    if (TaskResBase->trb_RemTask)
+    {
+        AROS_CALL1(void, TaskResBase->trb_RemTask,
+                    AROS_LCA(struct Task *,     findTask,      A1),
+                    struct ExecBase *, SysBase);
     }
 
     return;
