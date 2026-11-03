@@ -42,6 +42,10 @@ struct PosixCIntBase
     APTR internalpool;
     int32_t flags;
 
+    /* the C runtime bases this instance opened itself (__threadhook.c) */
+    struct Library *published_stdc;
+    struct Library *published_stdcio;
+
     struct Device *timerBase;
     struct timerequest timerReq;
     struct MsgPort timerPort;

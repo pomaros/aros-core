@@ -50,15 +50,39 @@ ADD2EXPUNGELIB(context_expunge, 2);
 static int __posixc_publish_stdbases(struct PosixCIntBase *PosixCBase)
 {
     if (PosixCBase->PosixCBase.StdCBase == NULL)
-        PosixCBase->PosixCBase.StdCBase =
-            (struct StdCBase *)OpenLibrary((CONST_STRPTR)"stdc.library", 0);
+        PosixCBase->PosixCBase.StdCBase = (struct StdCBase *)
+            (PosixCBase->published_stdc = OpenLibrary((CONST_STRPTR)"stdc.library", 0));
     if (PosixCBase->PosixCBase.StdCIOBase == NULL)
-        PosixCBase->PosixCBase.StdCIOBase =
-            (struct StdCIOBase *)OpenLibrary((CONST_STRPTR)"stdcio.library", 0);
+        PosixCBase->PosixCBase.StdCIOBase = (struct StdCIOBase *)
+            (PosixCBase->published_stdcio = OpenLibrary((CONST_STRPTR)"stdcio.library", 0));
 
     return TRUE;
+}
+
+/* Close only what the open hook opened: relative opens close their own.
+   Every thread's instance is opened and closed once, so a base kept open
+   here would keep that thread's C runtime instance for good. Close hooks
+   run from the highest priority down: this one runs last, after every
+   hook that may still call into stdc or stdcio. */
+static void __posixc_unpublish_stdbases(struct PosixCIntBase *PosixCBase)
+{
+    if (PosixCBase->published_stdcio)
+    {
+        if (PosixCBase->PosixCBase.StdCIOBase == (struct StdCIOBase *)PosixCBase->published_stdcio)
+            PosixCBase->PosixCBase.StdCIOBase = NULL;
+        CloseLibrary(PosixCBase->published_stdcio);
+        PosixCBase->published_stdcio = NULL;
+    }
+    if (PosixCBase->published_stdc)
+    {
+        if (PosixCBase->PosixCBase.StdCBase == (struct StdCBase *)PosixCBase->published_stdc)
+            PosixCBase->PosixCBase.StdCBase = NULL;
+        CloseLibrary(PosixCBase->published_stdc);
+        PosixCBase->published_stdc = NULL;
+    }
 }
 
 /* Relative library opens normally populate these public fields before all
    OpenLib hooks. Publish any missing explicit opens before returning the base. */
 ADD2OPENLIB(__posixc_publish_stdbases, 90);
+ADD2CLOSELIB(__posixc_unpublish_stdbases, -100);
