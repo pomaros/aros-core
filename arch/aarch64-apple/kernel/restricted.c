@@ -13,6 +13,7 @@
 #include <string.h>
 #include "restricted.h"
 #include "restricted_service.h"
+#include "code_window.h"
 #include "task_tls.h"
 #include "kernel_cpu.h"
 #include "kernel_intr.h"
@@ -872,11 +873,23 @@ static int r_shared_operation(struct AROSAppleRuntimeFrame *frame,void *context,
     struct RestrictedShared **link=&restricted_shared;
     if (p->operation==4) {
         while (*link && ((*link)->owner_context || (*link)->releaser_context || (*link)->backing.views)) link=&(*link)->next;
+    } else if (p->operation==11) {
+        /* A retired controller's native view, for the reaper to unmap */
+        while (*link && ((*link)->owner_context || (*link)->releaser_context ||
+                         !(*link)->backing.native_view || (*link)->backing.native_pending)) link=&(*link)->next;
     } else {
         while (*link && (*link)->handle!=p->handle) link=&(*link)->next;
     }
     struct RestrictedShared *b=*link;
     if (!b) return 1;
+    if (p->operation==9 && !b->owner_context && !b->releaser_context) {
+        /* The reaper ends a retired controller's view */
+        frame->x[0]=AROSRestrictedSharedViewAbort(&b->backing);return 1;
+    }
+    if (p->operation==11) {
+        frame->x[0]=AROSRestrictedSharedViewEnd(&b->backing,&p->address);
+        p->record=b;p->handle=b->handle;return 1;
+    }
     if (p->operation==3) {
         if (b->releaser_context==context && b->backing.pages==NULL) {
             *link=b->next;frame->x[0]=1;
@@ -884,6 +897,15 @@ static int r_shared_operation(struct AROSAppleRuntimeFrame *frame,void *context,
         return 1;
     }
     if (b->releaser_context || (p->operation!=4 && b->owner_context!=context)) return 1;
+    if (p->operation>=7 && p->operation<=10) {
+        /* API 35 native view steps; the mapping itself is the caller's */
+        if (p->operation==7) frame->x[0]=AROSRestrictedSharedViewBegin(&b->backing);
+        else if (p->operation==8) frame->x[0]=AROSRestrictedSharedViewCommit(&b->backing,p->address);
+        else if (p->operation==9) frame->x[0]=AROSRestrictedSharedViewAbort(&b->backing);
+        else frame->x[0]=AROSRestrictedSharedViewEnd(&b->backing,&p->address);
+        p->record=b;
+        return 1;
+    }
     if (p->operation==5 || p->operation==6) {
         frame->x[0]=p->operation==5 ?
             AROSRestrictedSharedWrite(&b->backing,p->offset,p->buffer,p->length) :
@@ -1464,6 +1486,15 @@ static void r_release_shared(struct RestrictedShared *b)
     if (!r_shared_call(&op)) for (;;) __asm__ volatile("wfe");
     if (!AROSApplePageFree(b,b->storage_bytes)) for (;;) __asm__ volatile("wfe");
 }
+/* With a view ended (pending), unmap it and let the object go on */
+static void r_unmap_view(struct RestrictedSharedOperation *ended)
+{
+    struct RestrictedShared *b=ended->record;
+    if (!AROSAppleCodeWindowUnmapForeign(&AROSAppleCodeWindowKernelOps,
+            (void *)ended->address,(uint32_t)b->count)) for (;;) __asm__ volatile("wfe");
+    struct RestrictedSharedOperation done={.operation=9,.handle=ended->handle};
+    if (!r_shared_call(&done)) for (;;) __asm__ volatile("wfe");
+}
 static void r_reap(void)
 {
     Forbid();
@@ -1478,6 +1509,12 @@ static void r_reap(void)
         __asm__ volatile("svc #0xa565":"+r"(ready)::"x1","memory","cc");
         if (!ready) break;
         r_release_domain((void *)ready);
+    }
+    /* A retired controller's native views go before its objects can */
+    for (;;) {
+        struct RestrictedSharedOperation op={.operation=11};
+        if (!r_shared_call(&op)) break;
+        r_unmap_view(&op);
     }
     for (;;) {
         struct RestrictedSharedOperation op={.operation=4};
@@ -1797,6 +1834,27 @@ static int r_close_shared(uint64_t handle)
     Permit();return ok;
 }
 
+/* API 35: the controller's native view of a shared object, read-write and
+ * never executable, in the code window */
+static void *r_map_shared(uint64_t handle)
+{
+    void *address=NULL;
+    Forbid();struct RestrictedSharedOperation op={.operation=7,.handle=handle};
+    if (r_shared_call(&op)) {
+        struct RestrictedShared *b=op.record;
+        address=AROSAppleCodeWindowMapForeign(&AROSAppleCodeWindowKernelOps,b->pages,(uint32_t)b->count);
+        struct RestrictedSharedOperation done={.operation=address?8:9,.handle=handle,.address=(uintptr_t)address};
+        if (!r_shared_call(&done)) for (;;) __asm__ volatile("wfe");
+    }
+    Permit();return address;
+}
+static int r_unmap_shared(uint64_t handle)
+{
+    Forbid();struct RestrictedSharedOperation op={.operation=10,.handle=handle};
+    int ok=r_shared_call(&op)!=0;
+    if (ok) { op.handle=handle;r_unmap_view(&op); }
+    Permit();return ok;
+}
 static int r_read_shared(uint64_t handle,size_t offset,void *buffer,size_t length)
 {
     Forbid();struct RestrictedSharedOperation op={.operation=6,.handle=handle,.offset=offset,.length=length,.buffer=buffer};
@@ -1872,7 +1930,7 @@ static int r_take_domain(uint64_t handle,struct AROSRestrictedWork *work)
     __asm__ volatile("svc #0xa56e":"+r"(domain),"+r"(request)::"memory","cc");
     return domain!=0;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {34,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread,r_read_shared,r_write_shared,r_take_domain};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {35,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread,r_read_shared,r_write_shared,r_take_domain,r_map_shared,r_unmap_shared};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

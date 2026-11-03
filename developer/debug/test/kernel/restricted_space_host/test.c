@@ -305,6 +305,78 @@ static void shared_publication_tests(void)
     }
     CHECK(AROSRestrictedSharedClose(&b),"shared-publish-final-close");free(page);fail_native=0;
 }
+/* API 35 native view: one per object, counted as a view, never beside an
+ * executable page, never with executable publication, never a copy buffer */
+static void native_view_tests(void)
+{
+    struct Fixture *f=aligned_alloc(PAGE,sizeof(*f));
+    unsigned char *data=aligned_alloc(PAGE,PAGE),*page=aligned_alloc(PAGE,PAGE),*view=aligned_alloc(PAGE,PAGE);
+    CHECK(f && data && page && view,"view-storage");memset(f,0,sizeof(*f));f->used=1;memset(page,0,PAGE);
+    uintptr_t backing=(uintptr_t)page,address=0;uint64_t value=0x5a5a,read_back=0;
+    struct AROSRestrictedSharedBacking b={0};
+    CHECK(AROSRestrictedSharedInitialize(&b,&backing,1),"view-object");
+    struct AROSRestrictedSpace space={0};struct AROSRestrictedRegion r={0};
+    struct KrnMappingPage metadata[1];uintptr_t ledger[1]={0};
+    struct AArch64ProtectionOps hw={f,resolve,allocate,clean,invalidate,sync_code,NULL};
+    CHECK(AROSRestrictedSpaceInit(&space,300,(uintptr_t)f->tables[0],25|(UINT64_C(5)<<32),(uintptr_t)data,&hw),"view-space");
+    CHECK(reserve_region(&space,&r,AROS_RESTRICTED_DYNAMIC_BASE,PAGE,metadata,ledger,1) &&
+        AROSRestrictedRegionAttachShared(&r,&b) && AROSRestrictedRegionCommitShared(&r,0,1),"view-domain-reader");
+    CHECK(!AROSRestrictedSharedViewCommit(&b,(uintptr_t)view) && !AROSRestrictedSharedViewAbort(&b) &&
+        !AROSRestrictedSharedViewEnd(&b,&address),"view-steps-need-begin");
+    CHECK(AROSRestrictedSharedViewBegin(&b) && b.views==2 && b.native_pending,"view-begin-counts");
+    CHECK(!AROSRestrictedSharedViewBegin(&b),"view-one-pending");
+    CHECK(!AROSRestrictedSharedViewEnd(&b,&address),"view-end-needs-commit");
+    CHECK(!AROSRestrictedSharedViewCommit(&b,(uintptr_t)view+1),"view-commit-aligned");
+    CHECK(AROSRestrictedSharedViewCommit(&b,(uintptr_t)view) && b.native_view==(uintptr_t)view,"view-commit");
+    CHECK(!AROSRestrictedSharedViewBegin(&b),"view-one-per-object");
+    /* The view is a writable peer: no executable publication */
+    struct AROSRestrictedPublicationOps ops={NULL,native_publication};
+    publishing=&r;fail_native=0;native_calls=0;
+    CHECK(!AROSRestrictedRegionPublish(&r,0,5,&ops) && !native_calls,"view-refuses-exec-publication");
+    /* Copies keep working, but never through the view */
+    CHECK(AROSRestrictedSharedWrite(&b,0,&value,8) && AROSRestrictedSharedRead(&b,0,&read_back,8) &&
+        read_back==value,"view-copies-still-work");
+    CHECK(!AROSRestrictedSharedRead(&b,0,view+8,8),"view-copy-buffer-refused");
+    /* Ending: still a peer until the mapping is gone */
+    CHECK(AROSRestrictedSharedViewEnd(&b,&address) && address==(uintptr_t)view &&
+        !b.native_view && b.native_pending,"view-end-returns-address");
+    CHECK(!AROSRestrictedRegionPublish(&r,0,5,&ops) && !native_calls,"view-ending-refuses-exec");
+    CHECK(!AROSRestrictedSharedViewEnd(&b,&address),"view-end-once");
+    CHECK(AROSRestrictedSharedViewAbort(&b) && b.views==1 && !b.native_pending,"view-abort-uncounts");
+    /* The view keeps the object open; ending it lets the object close */
+    CHECK(AROSRestrictedSharedViewBegin(&b) && AROSRestrictedSharedViewCommit(&b,(uintptr_t)view),"view-again");
+    CHECK(!AROSRestrictedSharedClose(&b) && b.closing && b.views==2,"view-keeps-object");
+    CHECK(!AROSRestrictedSharedViewBegin(&b),"view-closing-refused");
+    CHECK(AROSRestrictedSharedViewEnd(&b,&address) && AROSRestrictedSharedViewAbort(&b) && b.views==1,"view-ends-while-closing");
+    CHECK(!AROSRestrictedSharedViewBegin(&b),"view-closing-still-refused");
+    CHECK(AROSRestrictedRegionDetach(&r) && AROSRestrictedSpaceClose(&space),"view-space-close");
+    CHECK(AROSRestrictedSharedClose(&b),"view-object-close");
+    free(view);free(page);free(data);free(f);publishing=NULL;
+}
+/* A view is refused while a domain executes the object */
+static void native_view_exec_tests(void)
+{
+    struct Fixture *f=aligned_alloc(PAGE,sizeof(*f));
+    unsigned char *data=aligned_alloc(PAGE,PAGE),*page=aligned_alloc(PAGE,PAGE);
+    CHECK(f && data && page,"view-exec-storage");memset(f,0,sizeof(*f));f->used=1;
+    uintptr_t backing=(uintptr_t)page;
+    struct AROSRestrictedSharedBacking b={0};
+    CHECK(AROSRestrictedSharedInitialize(&b,&backing,1),"view-exec-object");
+    struct AROSRestrictedSpace space={0};struct AROSRestrictedRegion r={0};
+    struct KrnMappingPage metadata[1];uintptr_t ledger[1]={0};
+    struct AArch64ProtectionOps hw={f,resolve,allocate,clean,invalidate,sync_code,NULL};
+    CHECK(AROSRestrictedSpaceInit(&space,301,(uintptr_t)f->tables[0],25|(UINT64_C(5)<<32),(uintptr_t)data,&hw),"view-exec-space");
+    CHECK(reserve_region(&space,&r,AROS_RESTRICTED_DYNAMIC_BASE,PAGE,metadata,ledger,1) &&
+        AROSRestrictedRegionAttachShared(&r,&b) && AROSRestrictedRegionCommitShared(&r,0,1),"view-exec-reader");
+    struct AROSRestrictedPublicationOps ops={NULL,native_publication};
+    publishing=&r;fail_native=0;
+    CHECK(AROSRestrictedRegionPublish(&r,0,5,&ops),"view-exec-published");
+    CHECK(!AROSRestrictedSharedViewBegin(&b) && b.views==1 && !b.native_pending,"view-refused-beside-exec");
+    CHECK(AROSRestrictedRegionPublish(&r,0,1,&ops),"view-exec-unpublished");
+    CHECK(AROSRestrictedSharedViewBegin(&b) && AROSRestrictedSharedViewAbort(&b),"view-after-exec");
+    CHECK(AROSRestrictedRegionDetach(&r) && AROSRestrictedSpaceClose(&space) && AROSRestrictedSharedClose(&b),"view-exec-close");
+    free(page);free(data);free(f);publishing=NULL;
+}
 static void region_tests(uint64_t va)
 {
     struct Fixture *f[2];unsigned char *data[2],*pages[5];
@@ -594,5 +666,5 @@ int main(void)
     CHECK(AROSRestrictedSpaceInit(&space,11,root,tcr,(uintptr_t)data,&ops),"space-reuse");
     CHECK(space.handle!=first_handle,"space-generation");
     CHECK(AROSRestrictedSpaceClose(&space),"reused-space-close");
-    free(data);free(f);region_tests(AROS_RESTRICTED_DYNAMIC_BASE);region_tests(UINT64_C(0x7ffe0000));shared_tests();shared_copy_tests();channel_growth();publication_tests();index_tests();jit_tests();shared_publication_tests();puts("PASS restricted space and channel ownership");return 0;
+    free(data);free(f);region_tests(AROS_RESTRICTED_DYNAMIC_BASE);region_tests(UINT64_C(0x7ffe0000));shared_tests();shared_copy_tests();channel_growth();publication_tests();index_tests();jit_tests();shared_publication_tests();native_view_tests();native_view_exec_tests();puts("PASS restricted space and channel ownership");return 0;
 }

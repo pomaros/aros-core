@@ -13,6 +13,10 @@ struct AROSRestrictedSharedBacking {
     size_t count,views;
     struct AROSRestrictedRegion *publication;
     unsigned closing;
+    /* API 35: the controller's native view, counted in views. Pending while
+     * it is being mapped or unmapped; both refuse executable publication. */
+    uintptr_t native_view;
+    unsigned native_pending;
 };
 /* Low fixed mappings exclude null and the complete bootstrap/thread window. */
 #define AROS_RESTRICTED_LOW_BASE UINT64_C(0x10000)
@@ -87,6 +91,18 @@ int AROSRestrictedSharedClose(struct AROSRestrictedSharedBacking *);
  * publishing. Aligned eight-byte transfers are atomic and fully fenced. */
 int AROSRestrictedSharedRead(struct AROSRestrictedSharedBacking *,size_t,void *,size_t);
 int AROSRestrictedSharedWrite(struct AROSRestrictedSharedBacking *,size_t,const void *,size_t);
+/* API 35 native view, in three coordinator steps around an uncoordinated
+ * mapping. Begin admits one view of an open object with no executable page
+ * and no publication, counts it and makes it pending; Commit records the
+ * mapped address; Abort ends a pending view, mapped or not. End starts the
+ * teardown of a committed view: it returns the address and leaves the view
+ * pending until Abort, once the mapping is gone. A pending or committed view
+ * refuses executable publication, keeps the object open and refuses copies
+ * through a native buffer inside it. */
+int AROSRestrictedSharedViewBegin(struct AROSRestrictedSharedBacking *);
+int AROSRestrictedSharedViewCommit(struct AROSRestrictedSharedBacking *,uintptr_t);
+int AROSRestrictedSharedViewAbort(struct AROSRestrictedSharedBacking *);
+int AROSRestrictedSharedViewEnd(struct AROSRestrictedSharedBacking *,uintptr_t *);
 int AROSRestrictedRegionAttachShared(struct AROSRestrictedRegion *,struct AROSRestrictedSharedBacking *);
 int AROSRestrictedRegionCommitShared(struct AROSRestrictedRegion *,size_t,unsigned);
 /* Native owned-page adapter. The caller supplies zeroed record/backing arrays,

@@ -71,6 +71,8 @@ static int shared_publication_policy(struct AROSRestrictedRegion *r,size_t page,
     struct AROSRestrictedSharedBacking *b=r->shared;
     if (!shared_registered(b) || (b->closing && (access&KMAP_EXEC)) || page>=b->count ||
         (b->publication && b->publication!=r)) return 0;
+    /* A native view is a writable peer of every page */
+    if ((access&KMAP_EXEC) && (b->native_view || b->native_pending)) return 0;
     for (struct AROSRestrictedSpace *s=spaces;s;s=s->next)
         for (struct AROSRestrictedRegion *v=s->regions;v;v=v->next) {
             if (v==r || v->shared!=b || !v->backing[page]) continue;
@@ -90,6 +92,7 @@ int AROSRestrictedSharedInitialize(struct AROSRestrictedSharedBacking *b,uintptr
         for (size_t j=0;j<i;++j) if (pages[j]==pages[i]) return 0;
     }
     b->pages=pages;b->count=count;b->views=0;b->closing=0;b->publication=NULL;
+    b->native_view=0;b->native_pending=0;
     b->next=shared_backings;shared_backings=b;return 1;
 }
 /* Coordinator-serialized access through owned backing, never a guest VA.
@@ -103,10 +106,14 @@ static int shared_copy(struct AROSRestrictedSharedBacking *b,size_t offset,
         (length && (!buffer || (uintptr_t)buffer>UINTPTR_MAX-length))) return 0;
     if (!length) return 1;
     uintptr_t begin=(uintptr_t)buffer,end=begin+length;
-    /* Native scratch storage must not alias any registered shared backing. */
-    for (struct AROSRestrictedSharedBacking *other=shared_backings;other;other=other->next)
+    /* Native scratch storage must not alias any registered shared backing,
+     * through its pages or a native view. */
+    for (struct AROSRestrictedSharedBacking *other=shared_backings;other;other=other->next) {
         for (size_t i=0;i<other->count;++i)
             if (begin<other->pages[i]+PAGE && other->pages[i]<end) return 0;
+        if (other->native_view && begin<other->native_view+other->count*PAGE &&
+            other->native_view<end) return 0;
+    }
     size_t first=offset/PAGE,last=(offset+length-1)/PAGE;
     for (size_t page=first;page<=last;++page) {
         if (!b->pages[page] || (b->pages[page]&(PAGE-1))) return 0;
@@ -150,6 +157,35 @@ int AROSRestrictedSharedClose(struct AROSRestrictedSharedBacking *b)
     struct AROSRestrictedSharedBacking **link=&shared_backings;
     while (*link!=b) link=&(*link)->next;
     *link=b->next;b->next=NULL;b->pages=NULL;b->count=0;return 1;
+}
+int AROSRestrictedSharedViewBegin(struct AROSRestrictedSharedBacking *b)
+{
+    if (!b || b->closing || !shared_registered(b) || b->publication ||
+        b->native_view || b->native_pending || b->views==SIZE_MAX) return 0;
+    /* No page may be executable through any domain view */
+    for (struct AROSRestrictedSpace *space=spaces;space;space=space->next)
+        for (struct AROSRestrictedRegion *r=space->regions;r;r=r->next) {
+            if (r->shared!=b) continue;
+            for (size_t page=0;page<b->count;++page)
+                if (r->backing[page] && (r->mapping.pages[page].protection&KMAP_EXEC)) return 0;
+        }
+    b->native_pending=1;++b->views;return 1;
+}
+int AROSRestrictedSharedViewCommit(struct AROSRestrictedSharedBacking *b,uintptr_t address)
+{
+    if (!b || !shared_registered(b) || !b->native_pending || b->native_view ||
+        !address || (address&(PAGE-1))) return 0;
+    b->native_pending=0;b->native_view=address;return 1;
+}
+int AROSRestrictedSharedViewAbort(struct AROSRestrictedSharedBacking *b)
+{
+    if (!b || !shared_registered(b) || !b->native_pending || b->native_view || !b->views) return 0;
+    b->native_pending=0;--b->views;return 1;
+}
+int AROSRestrictedSharedViewEnd(struct AROSRestrictedSharedBacking *b,uintptr_t *address)
+{
+    if (!b || !address || !shared_registered(b) || !b->native_view || b->native_pending) return 0;
+    *address=b->native_view;b->native_view=0;b->native_pending=1;return 1;
 }
 int AROSRestrictedRegionAttachShared(struct AROSRestrictedRegion *r,struct AROSRestrictedSharedBacking *b)
 {

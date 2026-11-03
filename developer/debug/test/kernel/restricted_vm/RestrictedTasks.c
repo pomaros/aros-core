@@ -365,6 +365,44 @@ static void prove_shared_memory(void)
     bug("[ISOVM] shared-memory domains=2 views=2 shared_values=5 private_permissions=1 decommit_preserved=1 orphan=1 retained_pages=0 PASS\n");
 }
 extern const unsigned char RestrictedRegionFault[],RestrictedRegionFaultEnd[];
+static void *orphan_view(void *unused)
+{
+    (void)unused;uint64_t object=api->create_shared(4096);
+    CHECK(object && api->map_shared(object));return NULL;
+}
+/* API 35: the owner's native view sees the domain's writes and the domain
+ * sees the view's; one view per object; no copy through it; no executable
+ * publication and no close while it exists; a retired owner's view goes */
+static void prove_shared_view(void)
+{
+    const uintptr_t va=UINT64_C(0x200000000);
+    uint64_t object=api->create_shared(8192),actual=0;
+    CHECK(object);
+    uint64_t domain=api->create_domain(RestrictedMemory,RestrictedMemoryEnd-RestrictedMemory,0);
+    CHECK(domain && api->reserve_memory(domain,va,8192));
+    CHECK(api->attach_shared(domain,va,object) && api->commit_shared(domain,va,3));
+    volatile uint64_t *view=api->map_shared(object);
+    CHECK(view && !api->map_shared(object));
+    view[0]=300;view[1024]=0x77;
+    struct AROSRestrictedResult result;
+    CHECK(api->run_domain(domain,0,&result) && !result.status && result.value==300);
+    CHECK(view[0]==301 && view[1024]==0x77);
+    CHECK(api->read_shared(object,0,&actual,sizeof(actual)) && actual==301);
+    CHECK(!api->read_shared(object,0,(void *)(view+2),8));
+    CHECK(!api->protect_memory(domain,va,5));
+    view[0]=400;
+    CHECK(api->run_domain(domain,0,&result) && !result.status && result.value==400 && view[0]==401);
+    CHECK(api->unmap_shared(object) && !api->unmap_shared(object));
+    CHECK(api->protect_memory(domain,va,5) && api->protect_memory(domain,va,3));
+    CHECK(api->map_shared(object) && !api->close_shared(object));
+    CHECK(!api->map_shared(object) && api->unmap_shared(object));
+    CHECK(api->close_domain(domain)==1 && api->close_shared(object));
+    pthread_t owner;CHECK(!pthread_create(&owner,NULL,orphan_view,NULL));
+    CHECK(!pthread_join(owner,NULL));
+    struct AROSRestrictedLifetime life;api->lifetime(&life);
+    CHECK(!life.live && !life.domains && !life.shared_objects && !life.pages);
+    bug("[ISOVM] shared-view native_reads=2 native_writes=2 one_view=1 copy_alias_refused=1 exec_refused=1 close_refused=1 orphan_reaped=1 retained_pages=0 PASS\n");
+}
 static void prove_region_faults(void)
 {
     const uintptr_t va=UINT64_C(0x200000000);
@@ -1467,7 +1505,7 @@ int main(void)
     intptr_t address = KrnGetSystemAttr(AROS_RESTRICTED_KATTR_API);
     CHECK(address != -1 && address != 0);
     api = (const void *)address;
-    CHECK(api->version == 34 && api->size == sizeof(*api));
+    CHECK(api->version == 35 && api->size == sizeof(*api));
     extern const unsigned char RestrictedRestore[],RestrictedRestoreEnd[];
     static struct AROSRestrictedResult restored;
     CHECK(api->run(RestrictedRestore,(size_t)(RestrictedRestoreEnd-RestrictedRestore),0,&restored));
@@ -1560,6 +1598,7 @@ int main(void)
     bug("[ISOVM] low-address fixed=0x7ffe0000 domains=2 zero=3 isolated=2 recommit=1 guard_fault=1 foreign=5 exclusions=4 kernel_exclusions=2 retained_pages=0 PASS\n");
     prove_shared_memory();
     prove_shared_copy();
+    prove_shared_view();
     prove_region_faults();
     prove_replaced_fault();
     prove_domain_growth();

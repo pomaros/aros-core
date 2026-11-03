@@ -213,5 +213,20 @@ struct AROSRestrictedAPI {
      * leave work unchanged. Other domains' requests remain queued. Legacy take
      * retains global worker semantics; completion binds the original worker. */
     int (*take_domain)(uint64_t domain,struct AROSRestrictedWork *work);
+    /* Version 35: the owner's native view of a shared object, for a native
+     * peer that must read and write the memory a domain sees as it changes,
+     * such as a Venus renderer and its rings. One view per object: a native
+     * address of the whole object, read-write and never executable, NULL on
+     * refusal (not the owner, closing, publishing, a view already, a page
+     * executable in a domain, or no window space). While the view exists,
+     * no page of the object can be published executable, close_shared
+     * returns 0 as for a domain view, and copies refuse a native buffer
+     * inside it. The view does not follow decommit: the object keeps its
+     * pages. unmap_shared ends the view (1, or 0 when there is none). A
+     * controller that retires with a view leaves it to be unmapped with its
+     * orphan objects. Contents are shared with the domain without
+     * synchronization: the native peer validates what it reads. */
+    void *(*map_shared)(uint64_t object);
+    int (*unmap_shared)(uint64_t object);
 };
 #endif
