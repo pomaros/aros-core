@@ -14,7 +14,7 @@ VK_GENDIR := $(top_builddir)/$(CUR_MESADIR)
 VK_RT_GENDIR := $(VK_GENDIR)/runtime
 VK_UTIL_GENDIR := $(VK_GENDIR)/util
 
-#MM mesa3d-linklib-vulkan-runtime : mesa3d-generate-vulkan-runtime includes linklibs-galliumauxiliary mesa3d-linklib-mesautil mesa3d-linklib-compiler
+#MM mesa3d-linklib-vulkan-runtime : mesa3d-generate-vulkan-runtime mesa3d-generate-vulkan-shaders includes linklibs-galliumauxiliary mesa3d-linklib-mesautil mesa3d-linklib-compiler
 
 # Runtime sources from src/vulkan/runtime/
 VK_RUNTIME_SOURCES := \
@@ -67,7 +67,27 @@ VK_RUNTIME_SOURCES := \
     $(top_srcdir)/$(CUR_MESADIR)/runtime/vk_synchronization \
     $(top_srcdir)/$(CUR_MESADIR)/runtime/vk_sync_timeline \
     $(top_srcdir)/$(CUR_MESADIR)/runtime/vk_video \
-    $(top_srcdir)/$(CUR_MESADIR)/runtime/vk_ycbcr_conversion
+    $(top_srcdir)/$(CUR_MESADIR)/runtime/vk_ycbcr_conversion \
+    $(top_srcdir)/$(CUR_MESADIR)/runtime/rmv/vk_rmv_common \
+    $(top_srcdir)/$(CUR_MESADIR)/runtime/rmv/vk_rmv_exporter \
+    $(top_srcdir)/$(CUR_MESADIR)/runtime/vk_acceleration_structure \
+    $(top_srcdir)/$(CUR_MESADIR)/runtime/radix_sort/common/vk/barrier \
+    $(top_srcdir)/$(CUR_MESADIR)/runtime/radix_sort/common/util \
+    $(top_srcdir)/$(CUR_MESADIR)/runtime/radix_sort/radix_sort_u64 \
+    $(top_srcdir)/$(CUR_MESADIR)/runtime/radix_sort/radix_sort_vk
+
+# Acceleration structure builds run on the device: their compute shaders are
+# SPIR-V compiled at build time, as Mesa's meson build does with glslang.
+VK_BVH_SHADERS := lbvh_generate_ir lbvh_main leaf morton ploc_internal hploc_internal
+VK_RADIX_SHADERS := init fill histogram prefix scatter_0_even scatter_0_odd scatter_1_even scatter_1_odd
+VK_BVH_EXTENSIONS := GL_GOOGLE_include_directive \
+    GL_EXT_shader_explicit_arithmetic_types_int8 GL_EXT_shader_explicit_arithmetic_types_int16 \
+    GL_EXT_shader_explicit_arithmetic_types_int32 GL_EXT_shader_explicit_arithmetic_types_int64 \
+    GL_EXT_shader_explicit_arithmetic_types_float16 GL_EXT_scalar_block_layout \
+    GL_EXT_buffer_reference GL_EXT_buffer_reference2 GL_KHR_memory_scope_semantics \
+    GL_KHR_shader_subgroup_arithmetic GL_KHR_shader_subgroup_basic GL_KHR_shader_subgroup_shuffle \
+    GL_KHR_shader_subgroup_ballot GL_KHR_shader_subgroup_clustered GL_KHR_shader_subgroup_vote \
+    GL_EXT_shader_atomic_int64 GL_EXT_spirv_intrinsics
 
 # Vulkan util sources (non-generated)
 VK_UTIL_SOURCES := \
@@ -110,6 +130,8 @@ USER_INCLUDES += \
     -iquote $(top_builddir)/src/compiler/glsl \
     -iquote $(top_builddir)/src/compiler/nir \
     -iquote $(VK_RT_GENDIR) \
+    -iquote $(top_srcdir)/$(CUR_MESADIR)/runtime/bvh \
+    -iquote $(top_srcdir)/$(CUR_MESADIR)/runtime/radix_sort \
     -iquote $(VK_UTIL_GENDIR) \
     -I $(SRCDIR)/$(CURDIR)/../aros_compat \
     -I $(top_srcdir)/$(CUR_MESADIR)/runtime \
@@ -191,5 +213,20 @@ mesa3d-generate-vulkan-runtime :
 	  --out-c "$(VK_RT_GENDIR)/vk_format_info.c" \
 	  --out-h "$(VK_RT_GENDIR)/vk_format_info.h"
 	@$(ECHO) "Vulkan runtime headers generated."
+
+#MM
+mesa3d-generate-vulkan-shaders :
+	@$(ECHO) "Compiling Vulkan runtime shaders..."
+	@$(MKDIR) -p $(VK_RT_GENDIR)/bvh $(VK_RT_GENDIR)/radix_sort/shaders
+	@for s in $(VK_BVH_SHADERS); do \
+	  glslangValidator -V -I$(top_srcdir)/$(CUR_MESADIR)/runtime/bvh -I$(top_srcdir)/src/compiler/spirv \
+	    --target-env spirv1.5 -x --quiet $(foreach e,$(VK_BVH_EXTENSIONS),'-P#extension $(e) : require') \
+	    -o $(VK_RT_GENDIR)/bvh/$$s.spv.h $(top_srcdir)/$(CUR_MESADIR)/runtime/bvh/$$s.comp >/dev/null || exit 1; \
+	done
+	@for s in $(VK_RADIX_SHADERS); do \
+	  glslangValidator -V --target-env spirv1.5 -x --quiet -DRS_KEYVAL_DWORDS=2 \
+	    -o $(VK_RT_GENDIR)/radix_sort/shaders/$$s.comp.spv.h \
+	    $(top_srcdir)/$(CUR_MESADIR)/runtime/radix_sort/shaders/$$s.comp >/dev/null || exit 1; \
+	done
 
 %common

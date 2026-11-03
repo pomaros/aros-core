@@ -1,0 +1,69 @@
+include $(SRCDIR)/config/aros.cfg
+include $(SRCDIR)/workbench/libs/mesa/mesa.cfg
+
+# Mesa allocates through stdc and posixc directly: stdc records each block's
+# pool, so a block may be freed from any module. No allocator override.
+#
+# The target-side LLVM archives, by path (see llvmpipe.hidd). The Vulkan
+# runtime and WSI are linked whole, as Mesa does: the driver's entrypoint
+# tables name their common implementations by weak references, which do not
+# pull archive members in.
+LLVM_LIBS := $(wildcard $(AROS_DEVELOPER)/lib/libLLVM*.a)
+
+USER_LDFLAGS := $(TARGET_CXX_LDFLAGS) \
+            -L$(top_libdir) \
+            -L$(AROS_DEVELOPER)/lib \
+            -Wl,--start-group \
+            -Wl,--whole-archive \
+            -llavapipe \
+            -lgalliumvm \
+            -lvulkan_wsi \
+            -lvulkan_runtime \
+            -Wl,--no-whole-archive \
+            -lllvmpipe \
+            -lcompiler \
+            -lgalliumdrawllvm \
+            -lgalliumtess \
+            -lgalliumauxiliary \
+            -lmesautil \
+            $(LLVM_LIBS) \
+            -lz \
+            -lpthread \
+            -lposixc_rel \
+            -lstdc_rel
+ifneq ($(TARGET_LIBATOMIC),)
+USER_LDFLAGS += $(TARGET_CXX_LIBS)
+endif
+USER_LDFLAGS += -Wl,--end-group
+
+LAVAPIPE_HIDD_FILES := \
+            lavapipe_init \
+            $(SRCDIR)/workbench/hidds/llvmpipe/llvmpipe_llvm_rtti
+
+# Like llvmpipe.hidd, lavapipe needs the target-side LLVM libraries.
+#MM- workbench-hidds : hidd-lavapipe-$(AROS_TOOLCHAIN)-$(AROS_TARGET_TOOLCHAIN)
+#MM- hidd-lavapipe-llvm-yes : hidd-lavapipe
+
+#MM hidd-lavapipe : includes hidd-vulkan workbench-libs-z-linklib mesa3dgl-linklibs linklibs-libatomic mesa3d-linklib-lavapipe mesa3d-linklib-galliumdrawllvm mesa3d-linklib-galliumtess
+
+USER_INCLUDES += \
+            -iquote $(SRCDIR)/$(CURDIR) \
+            -I$(top_srcdir)/include \
+            -I$(top_srcdir)/src \
+            -I$(top_srcdir)/src/vulkan/runtime \
+            -I$(top_srcdir)/src/vulkan/util \
+            -I$(top_srcdir)/src/gallium/include \
+            -I$(top_srcdir)/src/gallium/auxiliary \
+            -I$(top_builddir)/src \
+            -I$(top_builddir)/src/compiler \
+            -I$(top_builddir)/src/compiler/nir \
+            -I$(top_builddir)/src/util \
+            -I$(top_builddir)/src/vulkan/runtime \
+            -I$(top_builddir)/src/vulkan/util
+
+USER_CPPFLAGS += -DNO_AMIGA_LINKAGE_TYPES
+
+%build_module mmake=hidd-lavapipe modname=lavapipe modtype=hidd \
+   files="$(LAVAPIPE_HIDD_FILES)" alwayscxxlink=yes uselibs=""
+
+%common

@@ -1,0 +1,129 @@
+#   Generate liblavapipe.a - Mesa's Vulkan driver over llvmpipe
+#
+#   The lavapipe frontend, its generated entrypoints and the static
+#   software pipe-loader: one llvmpipe screen over the null winsys.
+#   lavapipe.hidd links it with llvmpipe, gallivm, the Vulkan runtime/WSI
+#   and the target-side LLVM.
+
+include $(SRCDIR)/config/aros.cfg
+
+CUR_MESADIR := src/gallium/frontends/lavapipe
+include $(SRCDIR)/$(CURDIR)/../mesa.cfg
+
+ifeq ($(OPT_LLVM),)
+ifneq ($(TARGET_LLVM_VER),)
+OPT_LLVM := $(TARGET_LLVM_VER)
+else
+OPT_LLVM := 11.0.0
+endif
+endif
+LLVM_VERSION_MAJOR := $(word 1,$(subst ., ,$(OPT_LLVM)))
+LLVM_VERSION_MINOR := $(word 2,$(subst ., ,$(OPT_LLVM)))
+LLVM_VERSION_HEX := 0x$(shell printf "%02x%02x" $(LLVM_VERSION_MAJOR) $(LLVM_VERSION_MINOR))
+
+LVP_GENDIR := $(top_builddir)/$(CUR_MESADIR)
+VK_GENDIR := $(top_builddir)/src/vulkan
+
+LVP_SOURCE_NAMES := \
+            nir/lvp_nir_lower_cooperative_matrix \
+            nir/lvp_nir_lower_exec_graph \
+            nir/lvp_nir_lower_input_attachments \
+            nir/lvp_nir_lower_pipeline_layout \
+            nir/lvp_nir_lower_ray_queries \
+            nir/lvp_nir_lower_sparse_residency \
+            nir/lvp_nir_opt_robustness \
+            nir/lvp_nir_ray_tracing \
+            lvp_acceleration_structure \
+            lvp_device \
+            lvp_device_generated_commands \
+            lvp_cmd_buffer \
+            lvp_descriptor_set \
+            lvp_execute \
+            lvp_util \
+            lvp_image \
+            lvp_formats \
+            lvp_pipe_sync \
+            lvp_pipeline \
+            lvp_pipeline_cache \
+            lvp_query \
+            lvp_ray_tracing_pipeline \
+            lvp_wsi
+
+LVP_SOURCES_C := \
+            $(addprefix $(top_srcdir)/$(CUR_MESADIR)/,$(LVP_SOURCE_NAMES)) \
+            $(top_srcdir)/src/gallium/auxiliary/pipe-loader/pipe_loader \
+            $(top_srcdir)/src/gallium/auxiliary/pipe-loader/pipe_loader_sw \
+            $(top_srcdir)/src/gallium/winsys/sw/null/null_sw_winsys \
+            $(top_srcdir)/src/gallium/winsys/sw/wrapper/wrapper_sw_winsys \
+            $(top_srcdir)/src/gallium/targets/lavapipe/lavapipe_target \
+            $(top_srcdir)/src/util/xmlconfig \
+            $(LVP_GENDIR)/lvp_entrypoints
+
+#MM- mesa3d-linklibs-lavapipe : mesa3d-linklib-lavapipe
+#MM mesa3d-linklib-lavapipe : mesa3d-generate-lavapipe mesa3d-linklib-llvmpipe mesa3d-linklib-vulkan-wsi mesa3d-linklib-vulkan-runtime
+#MM mesa3d-generate-lavapipe : mesa3d-generate-vulkan-runtime mesa3d-generate-vulkan-wsi
+
+USER_INCLUDES += \
+            -I$(SRCDIR)/compiler/crt/posixc/include/aros/posixc \
+            -iquote $(SRCDIR)/$(CURDIR)/../aros_compat \
+            -iquote $(top_srcdir)/$(CUR_MESADIR) \
+            -iquote $(top_srcdir)/src/gallium/include \
+            -iquote $(top_srcdir)/src/gallium/auxiliary \
+            -iquote $(top_srcdir)/src/gallium/auxiliary/util \
+            -iquote $(top_srcdir)/src/gallium/drivers \
+            -iquote $(top_srcdir)/src/gallium/drivers/llvmpipe \
+            -iquote $(top_srcdir)/src/gallium/winsys \
+            -iquote $(top_srcdir)/src/compiler \
+            -iquote $(top_srcdir)/src/compiler/nir \
+            -iquote $(top_srcdir)/src/util \
+            -iquote $(top_srcdir)/src/vulkan/runtime \
+            -iquote $(top_srcdir)/src/vulkan/util \
+            -iquote $(top_srcdir)/src/vulkan/wsi \
+            -I$(SRCDIR)/$(CURDIR)/../aros_compat \
+            -I$(top_srcdir)/include \
+            -I$(top_srcdir)/src \
+            -I$(top_srcdir)/src/gallium/include \
+            -I$(top_srcdir)/src/gallium/auxiliary \
+            -I$(top_srcdir)/src/vulkan/runtime \
+            -I$(top_srcdir)/src/vulkan/util \
+            -I$(top_srcdir)/src/vulkan/wsi \
+            -I$(top_builddir)/src \
+            -I$(top_builddir)/src/compiler \
+            -I$(top_builddir)/src/compiler/nir \
+            -I$(top_builddir)/src/util \
+            -I$(top_builddir)/src/mesa/main \
+            -I$(VK_GENDIR)/runtime \
+            -I$(VK_GENDIR)/util \
+            -I$(VK_GENDIR)/wsi \
+            -I$(LVP_GENDIR) \
+            -I$(AROS_INCLUDES) \
+            -I$(PORTSDIR)/llvm/llvm-$(OPT_LLVM).src/include
+
+USER_CPPFLAGS += -DGALLIUM_LLVMPIPE -DGALLIUM_STATIC_TARGETS=1 \
+                 -DDRAW_LLVM_AVAILABLE=1 -DLLVM_AVAILABLE \
+                 -DHAVE_LLVM=$(LLVM_VERSION_HEX) \
+                 -DMESA_LLVM_VERSION_STRING=\"$(OPT_LLVM)\" \
+                 -DPACKAGE_VERSION=\"$(MESAGLVERSION)\" \
+                 -DNO_AMIGA_LINKAGE_TYPES -DWITH_XMLCONFIG=0 \
+                 -DNDEBUG
+USER_CFLAGS += $(MESA_NOWARNFLAGS)
+
+%build_linklib mmake=mesa3d-linklib-lavapipe libname=lavapipe \
+    libdir=$(top_libdir) objdir=$(top_builddir)/$(CUR_MESADIR) \
+    files="$(LVP_SOURCES_C)"
+
+#MM
+mesa3d-generate-lavapipe :
+	@$(ECHO) "Generating lavapipe entrypoints..."
+	@$(MKDIR) -p $(LVP_GENDIR)
+	@PYTHONPATH="$(top_srcdir)/src/vulkan/util:$(top_srcdir)/src/util:$(top_srcdir)/src:$$PYTHONPATH" && \
+	export PYTHONPATH && \
+	python3 $(top_srcdir)/src/vulkan/util/vk_entrypoints_gen.py \
+	  --xml $(top_srcdir)/src/vulkan/registry/vk.xml --proto --weak \
+	  --prefix lvp --beta false \
+	  --out-h "$(LVP_GENDIR)/lvp_entrypoints.h" \
+	  --out-c "$(LVP_GENDIR)/lvp_entrypoints.c"
+	@python3 $(top_srcdir)/src/util/driconf_static.py $(top_srcdir)/src/util/00-mesa-defaults.conf \
+	  $(LVP_GENDIR)/driconf_static.h
+
+%common

@@ -1,0 +1,15 @@
+include $(SRCDIR)/config/aros.cfg
+
+# VulkanTriangle - one triangle through the loader and whichever driver
+# registered, every pixel checked, shown and read back in a window.
+%build_prog mmake=hidd-vulkan-vulkantriangle \
+    progname=VulkanTriangle \
+    files=VulkanTriangle \
+    targetdir=$(AROS_TESTS)/vulkan \
+    uselibs="vulkan"
+
+#MM- workbench-hidds : hidd-vulkan-vulkantriangle
+#MM hidd-vulkan-vulkantriangle : includes hidd-vulkan-loader
+
+%common
+
