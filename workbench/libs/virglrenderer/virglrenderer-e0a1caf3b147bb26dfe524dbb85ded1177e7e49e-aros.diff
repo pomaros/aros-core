@@ -1,0 +1,485 @@
+diff --git a/src/mesa/util/libsync.h b/src/mesa/util/libsync.h
+index 863df4e..2f6e8ca 100644
+--- a/src/mesa/util/libsync.h
++++ b/src/mesa/util/libsync.h
+@@ -30,6 +30,14 @@
+ 
+ #include <assert.h>
+ #include <errno.h>
++#if defined(__AROS__)
++/* No sync files on AROS: every operation reports that it is unsupported */
++#include <stdbool.h>
++static inline int sync_wait(int fd, int timeout) { (void)fd; (void)timeout; errno = ENOSYS; return -1; }
++static inline int sync_merge(const char *name, int fd1, int fd2) { (void)name; (void)fd1; (void)fd2; errno = ENOSYS; return -1; }
++static inline bool sync_valid_fd(int fd) { (void)fd; return false; }
++static inline int sync_accumulate(const char *name, int *fd1, int fd2) { (void)name; (void)fd1; (void)fd2; errno = ENOSYS; return -1; }
++#else
+ #include <poll.h>
+ #include <stdbool.h>
+ #include <stdint.h>
+@@ -205,4 +213,5 @@ static inline int sync_accumulate(const char *name, int *fd1, int fd2)
+ #pragma GCC diagnostic pop
+ #endif
+ 
++#endif /* __AROS__ */
+ #endif
+diff --git a/src/mesa/util/os_misc.c b/src/mesa/util/os_misc.c
+index ca9bf7d..06decaf 100644
+--- a/src/mesa/util/os_misc.c
++++ b/src/mesa/util/os_misc.c
+@@ -68,6 +68,9 @@
+ #  include <kernel/OS.h>
+ #elif DETECT_OS_WINDOWS
+ #  include <windows.h>
++#elif defined(__AROS__)
++#  include <unistd.h>
++#  include <proto/exec.h>
+ #else
+ #error unexpected platform in os_sysinfo.c
+ #endif
+@@ -267,6 +270,9 @@ os_get_total_physical_memory(uint64_t *size)
+    ret = GlobalMemoryStatusEx(&status);
+    *size = status.ullTotalPhys;
+    return (ret == TRUE);
++#elif defined(__AROS__)
++   *size = AvailMem(MEMF_TOTAL);
++   return true;
+ #else
+ #error unexpected platform in os_sysinfo.c
+    return false;
+@@ -353,6 +359,9 @@ os_get_page_size(uint64_t *size)
+    mib[0] = CTL_HW;
+    mib[1] = HW_PAGESIZE;
+    return (sysctl(mib, 2, size, &len, NULL, 0) == 0);
++#elif defined(__AROS__)
++   *size = 4096;
++   return true;
+ #else
+ #error unexpected platform in os_sysinfo.c
+    return false;
+diff --git a/src/mesa/util/u_thread.h b/src/mesa/util/u_thread.h
+index 366c8e9..a90bcc3 100644
+--- a/src/mesa/util/u_thread.h
++++ b/src/mesa/util/u_thread.h
+@@ -249,7 +249,7 @@ util_set_current_thread_affinity(const uint32_t *mask,
+ static inline int64_t
+ util_thread_get_time_nano(UNUSED thrd_t thread)
+ {
+-#if defined(HAVE_PTHREAD) && !defined(__APPLE__) && !defined(__HAIKU__)
++#if defined(HAVE_PTHREAD) && !defined(__APPLE__) && !defined(__HAIKU__) && !defined(__AROS__)
+    struct timespec ts;
+    clockid_t cid;
+ 
+diff --git a/src/venus/vkr_aros.c b/src/venus/vkr_aros.c
+new file mode 100644
+index 0000000..d7a66e2
+--- /dev/null
++++ b/src/venus/vkr_aros.c
+@@ -0,0 +1,48 @@
++/*
++ * Copyright (c) 2026 John Knipper
++ * SPDX-License-Identifier: MIT
++ */
++
++#include "vkr_common.h"
++
++#include "vkr_aros.h"
++#include "vkr_metal_helpers.h"
++
++const struct vkr_aros_shm_ops *vkr_aros_shm;
++
++void
++vkr_aros_set_shm_ops(const struct vkr_aros_shm_ops *ops)
++{
++   vkr_aros_shm = ops;
++}
++
++/* Host-visible device memory is the embedder's shared memory, imported
++ * with VK_EXT_external_memory_host; the Metal path's structure carries it. */
++struct vkr_mtl_shm *
++vkr_mtl_shm_alloc(void *alignment, uint64_t size)
++{
++   struct vkr_mtl_shm *shm = calloc(1, sizeof(*shm));
++   size_t align = (size_t)(uintptr_t)alignment;
++
++   if (!shm || !vkr_aros_shm)
++      goto fail;
++   shm->shm_size = (size + align - 1) & ~(uint64_t)(align - 1);
++   shm->shm_ptr = vkr_aros_shm->create(shm->shm_size, align, &shm->shm_fd);
++   if (!shm->shm_ptr)
++      goto fail;
++   return shm;
++
++fail:
++   free(shm);
++   return NULL;
++}
++
++void
++vkr_mtl_shm_free(struct vkr_mtl_shm *shm)
++{
++   if (!shm)
++      return;
++   vkr_aros_shm->unmap(shm->shm_ptr, shm->shm_size);
++   vkr_aros_shm->close(shm->shm_fd);
++   free(shm);
++}
+diff --git a/src/venus/vkr_aros.h b/src/venus/vkr_aros.h
+new file mode 100644
+index 0000000..46318cb
+--- /dev/null
++++ b/src/venus/vkr_aros.h
+@@ -0,0 +1,42 @@
++/*
++ * Copyright (c) 2026 John Knipper
++ * SPDX-License-Identifier: MIT
++ */
++
++#ifndef VKR_AROS_H
++#define VKR_AROS_H
++
++#include <stddef.h>
++#include <stdint.h>
++
++/*
++ * Shared memory between the Venus renderer and its client on AROS.
++ *
++ * AROS has no file descriptors to pass memory around. The embedder that
++ * hosts the renderer supplies the memory both sides see and names each
++ * region by a handle, which travels wherever virglrenderer passes an fd.
++ * A loopback embedder can hand out ordinary memory; one serving an
++ * isolated domain hands out pages that domain maps too.
++ */
++struct vkr_aros_shm_ops {
++   /* Memory the client can map: returns the renderer's address and the
++    * handle for the client, or NULL. */
++   void *(*create)(size_t size, size_t alignment, int *handle);
++   /* The renderer's address for a region the client created. */
++   void *(*import)(int handle, size_t size);
++   /* Another reference to a region, for a second recipient. */
++   int (*share)(int handle);
++   /* Drops a handle; the region goes when its last handle and mapping do. */
++   void (*close)(int handle);
++   /* Drops the renderer's mapping. */
++   void (*unmap)(void *ptr, size_t size);
++};
++
++extern const struct vkr_aros_shm_ops *vkr_aros_shm;
++
++void
++vkr_aros_set_shm_ops(const struct vkr_aros_shm_ops *ops);
++
++#define getpagesize() 4096
++
++#endif /* VKR_AROS_H */
+diff --git a/src/venus/vkr_common.h b/src/venus/vkr_common.h
+index be9abd3..33ab439 100644
+--- a/src/venus/vkr_common.h
++++ b/src/venus/vkr_common.h
+@@ -36,6 +36,10 @@
+ 
+ #include "vkr_renderer.h"
+ 
++#ifdef __AROS__
++#include "vkr_aros.h"
++#endif
++
+ /* cap instance and device api versions to this */
+ #define VKR_MAX_API_VERSION VK_API_VERSION_1_4
+ 
+diff --git a/src/venus/vkr_context.c b/src/venus/vkr_context.c
+index cc82c42..9cfcd37 100644
+--- a/src/venus/vkr_context.c
++++ b/src/venus/vkr_context.c
+@@ -5,7 +5,9 @@
+ 
+ #include "vkr_context.h"
+ 
++#ifndef __AROS__
+ #include <sys/mman.h>
++#endif
+ #include <sys/types.h>
+ #include <unistd.h>
+ 
+@@ -189,10 +191,17 @@ static inline void
+ vkr_context_free_resource(struct hash_entry *entry)
+ {
+    struct vkr_resource *res = entry->data;
++#ifdef __AROS__
++   if (res->fd_type == VIRGL_RESOURCE_FD_SHM)
++      vkr_aros_shm->unmap(res->u.data, res->size);
++   else if (res->u.fd >= 0)
++      vkr_aros_shm->close(res->u.fd);
++#else
+    if (res->fd_type == VIRGL_RESOURCE_FD_SHM)
+       munmap(res->u.data, res->size);
+    else if (res->u.fd >= 0)
+       close(res->u.fd);
++#endif
+    free(res);
+ }
+ 
+@@ -261,6 +270,20 @@ vkr_context_import_resource_from_shm(struct vkr_context *ctx,
+ {
+    assert(!vkr_context_get_resource(ctx, res_id));
+ 
++#ifdef __AROS__
++   void *mmap_ptr = vkr_aros_shm->import(fd, blob_size);
++   if (!mmap_ptr)
++      return false;
++
++   if (!vkr_context_import_resource_internal(ctx, res_id, blob_size,
++                                             VIRGL_RESOURCE_FD_SHM, -1, mmap_ptr)) {
++      vkr_aros_shm->unmap(mmap_ptr, blob_size);
++      return false;
++   }
++
++   vkr_aros_shm->close(fd);
++   return true;
++#else
+    void *mmap_ptr = mmap(NULL, blob_size, PROT_WRITE | PROT_READ, MAP_SHARED, fd, 0);
+    if (mmap_ptr == MAP_FAILED)
+       return false;
+@@ -273,6 +296,7 @@ vkr_context_import_resource_from_shm(struct vkr_context *ctx,
+ 
+    close(fd);
+    return true;
++#endif
+ }
+ 
+ static bool
+@@ -289,6 +313,19 @@ vkr_context_create_resource_from_shm(struct vkr_context *ctx,
+    const size_t page_size = getpagesize();
+    const uint64_t alloc_size = (blob_size + page_size - 1) & ~(page_size - 1);
+ 
++#ifdef __AROS__
++   int fd = -1;
++   void *mmap_ptr = vkr_aros_shm->create(alloc_size, page_size, &fd);
++   if (!mmap_ptr)
++      return false;
++
++   if (!vkr_context_import_resource_internal(ctx, res_id, alloc_size,
++                                             VIRGL_RESOURCE_FD_SHM, -1, mmap_ptr)) {
++      vkr_aros_shm->unmap(mmap_ptr, alloc_size);
++      vkr_aros_shm->close(fd);
++      return false;
++   }
++#else
+    int fd = os_create_anonymous_file(alloc_size, "vkr-shmem");
+    if (fd < 0)
+       return false;
+@@ -305,6 +342,7 @@ vkr_context_create_resource_from_shm(struct vkr_context *ctx,
+       close(fd);
+       return false;
+    }
++#endif
+ 
+    *out_blob = (struct virgl_context_blob){
+       .type = VIRGL_RESOURCE_FD_SHM,
+diff --git a/src/venus/vkr_device.c b/src/venus/vkr_device.c
+index 603f45b..276738c 100644
+--- a/src/venus/vkr_device.c
++++ b/src/venus/vkr_device.c
+@@ -137,6 +137,7 @@ vkr_dispatch_vkCreateDevice(struct vn_dispatch_context *dispatch,
+    ext_count += physical_dev->KHR_external_memory_fd;
+    ext_count += physical_dev->EXT_external_memory_dma_buf;
+    ext_count += physical_dev->KHR_external_fence_fd;
++   ext_count += physical_dev->EXT_external_memory_host;
+    if (ext_count > args->pCreateInfo->enabledExtensionCount) {
+       exts = malloc(sizeof(*exts) * ext_count);
+       if (!exts) {
+@@ -160,6 +161,8 @@ vkr_dispatch_vkCreateDevice(struct vn_dispatch_context *dispatch,
+          exts[ext_count++] = "VK_EXT_external_memory_dma_buf";
+       if (physical_dev->KHR_external_fence_fd)
+          exts[ext_count++] = "VK_KHR_external_fence_fd";
++      if (physical_dev->EXT_external_memory_host)
++         exts[ext_count++] = "VK_EXT_external_memory_host";
+ 
+       ((VkDeviceCreateInfo *)args->pCreateInfo)->ppEnabledExtensionNames = exts;
+       ((VkDeviceCreateInfo *)args->pCreateInfo)->enabledExtensionCount = ext_count;
+diff --git a/src/venus/vkr_device_memory.c b/src/venus/vkr_device_memory.c
+index 7d57c7c..04dba88 100644
+--- a/src/venus/vkr_device_memory.c
++++ b/src/venus/vkr_device_memory.c
+@@ -303,6 +303,9 @@ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
+    struct vkr_mtl_shm *mtl_shm = NULL;
+    VkExportMemoryAllocateInfo local_export_info;
+    VkImportMemoryMetalHandleInfoEXT local_metal_import;
++#ifdef __AROS__
++   VkImportMemoryHostPointerInfoEXT local_host_import;
++#endif
+ 
+    if ((property_flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) && !res_info) {
+       /* An implementation can support dma_buf import along with opaque fd export/import.
+@@ -352,6 +355,27 @@ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
+                   align(alloc_info->allocationSize, getpagesize());
+             }
+          }
++#ifdef __AROS__
++      } else if (physical_dev->EXT_external_memory_host) {
++         /* Allocate the embedder's shared memory and import its pages. */
++         mtl_shm = vkr_mtl_shm_alloc(
++            (void *)(uintptr_t)physical_dev->min_imported_host_pointer_alignment,
++            alloc_info->allocationSize);
++         if (!mtl_shm) {
++            args->ret = VK_ERROR_OUT_OF_HOST_MEMORY;
++            return;
++         }
++
++         local_host_import = (VkImportMemoryHostPointerInfoEXT){
++            .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT,
++            .pNext = alloc_info->pNext,
++            .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
++            .pHostPointer = mtl_shm->shm_ptr,
++         };
++         alloc_info->pNext = &local_host_import;
++         alloc_info->allocationSize = mtl_shm->shm_size;
++         valid_fd_types = 1 << VIRGL_RESOURCE_FD_SHM;
++#endif
+       } else if (physical_dev->EXT_external_memory_metal) {
+          /* Allocate shm and wrap as a MTLBuffer for import. */
+          mtl_shm = vkr_mtl_shm_alloc(dev->mtl_device, alloc_info->allocationSize);
+@@ -574,7 +598,11 @@ vkr_device_memory_export_blob(struct vkr_device_memory *mem,
+       mem->exported = true;
+       *out_blob = (struct virgl_context_blob){
+          .type = VIRGL_RESOURCE_FD_SHM,
++#ifdef __AROS__
++         .u.fd = vkr_aros_shm->share(mem->mtl_shm->shm_fd),
++#else
+          .u.fd = os_dupfd_cloexec(mem->mtl_shm->shm_fd),
++#endif
+          .map_info = map_info,
+       };
+       return out_blob->u.fd >= 0;
+diff --git a/src/venus/vkr_metal_helpers.h b/src/venus/vkr_metal_helpers.h
+index 4f5208b..0ec5841 100644
+--- a/src/venus/vkr_metal_helpers.h
++++ b/src/venus/vkr_metal_helpers.h
+@@ -43,7 +43,27 @@ vkr_mtl_shm_alloc(void *mtl_device, uint64_t size);
+ void
+ vkr_mtl_shm_free(struct vkr_mtl_shm *shm);
+ 
+-#else /* !__APPLE__ */
++#elif defined(__AROS__)
++
++#include <stdint.h>
++
++/* On AROS the structure carries the embedder's shared memory (vkr_aros.c);
++ * the first argument is the import alignment. */
++static inline void *
++vkr_metal_get_device(VkDevice vk_device, PFN_vkGetDeviceProcAddr GetDeviceProcAddr)
++{
++   (void)vk_device;
++   (void)GetDeviceProcAddr;
++   return NULL;
++}
++
++struct vkr_mtl_shm *
++vkr_mtl_shm_alloc(void *alignment, uint64_t size);
++
++void
++vkr_mtl_shm_free(struct vkr_mtl_shm *shm);
++
++#else /* !__APPLE__ && !__AROS__ */
+ 
+ static inline void *
+ vkr_metal_get_device(VkDevice vk_device, PFN_vkGetDeviceProcAddr GetDeviceProcAddr)
+diff --git a/src/venus/vkr_physical_device.c b/src/venus/vkr_physical_device.c
+index 0d63a0b..631da80 100644
+--- a/src/venus/vkr_physical_device.c
++++ b/src/venus/vkr_physical_device.c
+@@ -168,6 +168,21 @@ vkr_physical_device_init_id_properties(struct vkr_physical_device *physical_dev)
+ static void
+ vkr_physical_device_init_memory_properties(struct vkr_physical_device *physical_dev)
+ {
++   /* Known once the extensions are: the import alignment for host memory */
++   if (physical_dev->EXT_external_memory_host) {
++      VkPhysicalDeviceExternalMemoryHostPropertiesEXT host = {
++         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT,
++      };
++      VkPhysicalDeviceProperties2 props2 = {
++         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
++         .pNext = &host,
++      };
++      physical_dev->proc_table.GetPhysicalDeviceProperties2(
++         physical_dev->base.handle.physical_device, &props2);
++      physical_dev->min_imported_host_pointer_alignment =
++         host.minImportedHostPointerAlignment;
++   }
++
+    struct vn_physical_device_proc_table *vk = &physical_dev->proc_table;
+ 
+    VkPhysicalDevice handle = physical_dev->base.handle.physical_device;
+@@ -315,6 +330,8 @@ vkr_physical_device_init_extensions(struct vkr_physical_device *physical_dev)
+          physical_dev->KHR_external_fence_fd = true;
+       else if (!strcmp(props->extensionName, "VK_EXT_external_memory_metal"))
+          physical_dev->EXT_external_memory_metal = true;
++      else if (!strcmp(props->extensionName, "VK_EXT_external_memory_host"))
++         physical_dev->EXT_external_memory_host = true;
+       else if (!strcmp(props->extensionName, "VK_EXT_metal_objects"))
+          physical_dev->EXT_metal_objects = true;
+       else if (!strcmp(props->extensionName, "VK_KHR_portability_subset"))
+@@ -361,7 +378,14 @@ vkr_physical_device_init_extensions(struct vkr_physical_device *physical_dev)
+     *
+     * TODO: Remove after mesa!40478 has had sufficient distro uptake.
+     */
++#ifdef __AROS__
++   /* AROS maps blobs from the embedder's shared memory (vkr_aros.c), as
++    * macOS does with Metal: advertise the fd extension the same way. */
++   if ((physical_dev->EXT_external_memory_metal || physical_dev->EXT_external_memory_host) &&
++       !physical_dev->KHR_external_memory_fd) {
++#else
+    if (physical_dev->EXT_external_memory_metal && !physical_dev->KHR_external_memory_fd) {
++#endif
+       VkExtensionProperties *new_exts =
+          realloc(exts, sizeof(*exts) * (advertised_count + 1));
+       if (new_exts) {
+@@ -389,6 +413,7 @@ vkr_physical_device_init_properties(struct vkr_physical_device *physical_dev)
+ 
+    VkPhysicalDeviceProperties *props = &physical_dev->properties;
+    props->apiVersion = vkr_api_version_cap_minor(props->apiVersion, VKR_MAX_API_VERSION);
++
+ }
+ 
+ static inline void
+diff --git a/src/venus/vkr_physical_device.h b/src/venus/vkr_physical_device.h
+index 8ec55a6..3559981 100644
+--- a/src/venus/vkr_physical_device.h
++++ b/src/venus/vkr_physical_device.h
+@@ -29,6 +29,8 @@ struct vkr_physical_device {
+    bool KHR_external_semaphore_fd;
+ 
+    bool EXT_external_memory_metal;
++   bool EXT_external_memory_host;
++   VkDeviceSize min_imported_host_pointer_alignment;
+    bool EXT_metal_objects;
+ 
+    VkPhysicalDeviceMemoryProperties memory_properties;
+diff --git a/src/venus/vkr_ring.c b/src/venus/vkr_ring.c
+index 0d4899e..57a711f 100644
+--- a/src/venus/vkr_ring.c
++++ b/src/venus/vkr_ring.c
+@@ -204,8 +204,8 @@ vkr_ring_relax(uint32_t *iter)
+       .tv_sec = us / 1000000,
+       .tv_nsec = (us % 1000000) * 1000,
+    };
+-#ifdef __APPLE__
+-   /* macOS does not implement clock_nanosleep; a unified path is TBD */
++#if defined(__APPLE__) || defined(__AROS__)
++   /* macOS and AROS do not implement clock_nanosleep; a unified path is TBD */
+    nanosleep(&ts, NULL);
+ #else
+    clock_nanosleep(CLOCK_MONOTONIC, 0, &ts, NULL);
+@@ -254,7 +254,12 @@ vkr_ring_thread(void *arg)
+ 
+    snprintf(thread_name, ARRAY_SIZE(thread_name), "vkr-ring-%d", ctx->ctx_id);
+    u_thread_setname(thread_name);
++#ifdef __AROS__
++   /* No process priorities to map the guest's request onto */
++   if (false) {
++#else
+    if (ring->prio_valid && setpriority(PRIO_PROCESS, 0, ring->prio)) {
++#endif
+ #ifdef DEBUG
+       /* Currently venus doesn't forward the CAP_SYS_NICE request upon forking, so
+        * requesting a high priority outside of the normal range would be at the best

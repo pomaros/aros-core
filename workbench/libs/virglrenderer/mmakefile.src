@@ -1,0 +1,96 @@
+#
+#   venusrenderer.library - virglrenderer's Venus renderer for AROS
+#
+#   vkr decodes the Venus protocol that Mesa's Venus driver encodes and
+#   runs the commands on a native Vulkan driver. avs_server.c serves it to
+#   clients through the avs interface (<venus/avs.h>); avs_local.c gives a
+#   renderer and its clients in one process their shared memory. vkr is a
+#   static library of its own: it carries virglrenderer's copy of Mesa's
+#   utilities, which must not meet a Mesa driver's in one module.
+#
+
+include $(SRCDIR)/config/aros.cfg
+
+VIRGL_VERSION := e0a1caf3b147bb26dfe524dbb85ded1177e7e49e
+VIRGL_ARCHBASE := virglrenderer-$(VIRGL_VERSION)
+VIRGL_REPOSITORIES := https://gitlab.freedesktop.org/virgl/virglrenderer/-/archive/$(VIRGL_VERSION)
+VIRGL_SRCDIR := $(PORTSDIR)/virglrenderer/$(VIRGL_ARCHBASE)
+
+VENUS_PROTOCOL_ARCHBASE := venus-protocol-v1.1.3
+VENUS_PROTOCOL_REPOSITORIES := https://gitlab.freedesktop.org/virgl/venus-protocol/-/archive/v1.1.3
+VENUS_PROTOCOL_SRCDIR := $(PORTSDIR)/virglrenderer/$(VENUS_PROTOCOL_ARCHBASE)
+
+VKR_GENDIR := $(GENDIR)/$(CURDIR)/generated
+
+%fetch mmake=virglrenderer-fetch archive=$(VIRGL_ARCHBASE) destination=$(PORTSDIR)/virglrenderer \
+    location=$(PORTSSOURCEDIR) archive_origins=$(VIRGL_REPOSITORIES) suffixes="tar.gz" \
+    patches_specs=$(VIRGL_ARCHBASE)-aros.diff:$(VIRGL_ARCHBASE):-p1
+
+%fetch mmake=venus-protocol-fetch archive=$(VENUS_PROTOCOL_ARCHBASE) destination=$(PORTSDIR)/virglrenderer \
+    location=$(PORTSSOURCEDIR) archive_origins=$(VENUS_PROTOCOL_REPOSITORIES) suffixes="tar.gz" \
+    patches_specs=::
+
+%create_patch mmake=virglrenderer-create-patch \
+    archive=$(VIRGL_ARCHBASE) suffixes="tar.gz" \
+    destination=$(PORTSDIR)/virglrenderer
+
+#MM- workbench-libs : workbench-libs-venus
+#MM workbench-libs-venus : includes linklibs-pthread workbench-libs-vkr
+#MM workbench-libs-vkr : includes linklibs-pthread workbench-libs-vkr-generate
+#MM workbench-libs-vkr-generate : virglrenderer-fetch venus-protocol-fetch
+#MM- includes-copy : workbench-libs-vkr-includes
+
+%copy_includes mmake=workbench-libs-vkr-includes path=venus dir=include/venus includes="avs.h"
+
+VKR_MESA_UTIL := anon_file bitscan hash_table os_file os_misc ralloc \
+            u_cpu_detect u_debug u_hash_table u_math
+
+VKR_VENUS := vkr_acceleration_structure vkr_allocator vkr_aros vkr_buffer \
+            vkr_command_buffer vkr_common vkr_context vkr_cs vkr_descriptor_heap \
+            vkr_descriptor_set vkr_device vkr_device_memory vkr_host_copy vkr_image \
+            vkr_instance vkr_library vkr_physical_device vkr_pipeline vkr_query_pool \
+            vkr_queue vkr_render_pass vkr_renderer vkr_ring vkr_transport
+
+VKR_SOURCES := \
+            $(addprefix $(VIRGL_SRCDIR)/src/mesa/util/,$(VKR_MESA_UTIL)) \
+            $(addprefix $(VIRGL_SRCDIR)/src/venus/,$(VKR_VENUS)) \
+            $(VIRGL_SRCDIR)/src/virgl_util
+
+USER_INCLUDES := \
+            -include $(VKR_GENDIR)/config.h \
+            -I$(VKR_GENDIR) \
+            -I$(VENUS_PROTOCOL_SRCDIR)/include \
+            -I$(VIRGL_SRCDIR)/src \
+            -I$(VIRGL_SRCDIR)/src/mesa \
+            -I$(VIRGL_SRCDIR)/src/mesa/util \
+            -I$(VIRGL_SRCDIR)/src/mesa/compat \
+            -I$(VIRGL_SRCDIR)/src/venus \
+            -I$(VIRGL_SRCDIR)/src/drm \
+            -I$(VIRGL_SRCDIR)/src/drm/drm-uapi \
+            -I$(SRCDIR)/$(CURDIR)/include
+
+USER_CFLAGS := -std=gnu11 -D_GNU_SOURCE -Wno-unused-function -Wno-unused-variable
+
+%build_linklib mmake=workbench-libs-vkr libname=vkr \
+    objdir=$(GENDIR)/$(CURDIR)/obj files="$(VKR_SOURCES)"
+
+USER_LDFLAGS := -L$(AROS_DEVELOPER)/lib -Wl,--start-group -lvkr -lpthread \
+            -lposixc_rel -lstdc_rel -Wl,--end-group
+
+%build_module mmake=workbench-libs-venus modname=venusrenderer modtype=library \
+    files="avs_server avs_local" uselibs=""
+
+#MM
+workbench-libs-vkr-generate :
+	@$(ECHO) "Generating the Venus renderer protocol..."
+	@$(MKDIR) -p $(VKR_GENDIR)
+	@$(ECHO) "/* generated for AROS */" > $(VKR_GENDIR)/banner
+	@$(PYTHON) $(VENUS_PROTOCOL_SRCDIR)/vn_protocol.py --outdir $(VKR_GENDIR) \
+	    --banner $(VKR_GENDIR)/banner --renderer
+	@$(PYTHON) $(VIRGL_SRCDIR)/src/venus/vkr_device_object.py -o $(VKR_GENDIR) \
+	    $(VIRGL_SRCDIR)/src/venus/vkr_device_object.json
+	@$(CP) $(SRCDIR)/$(CURDIR)/config-aros.h $(VKR_GENDIR)/config.h
+	@printf '#define VIRGL_MAJOR_VERSION 1\n#define VIRGL_MINOR_VERSION 2\n#define VIRGL_MICRO_VERSION 0\n' \
+	    > $(VKR_GENDIR)/virgl-version.h
+
+%common
