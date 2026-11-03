@@ -383,10 +383,10 @@ static void prove_shared_view(void)
     CHECK(api->attach_shared(domain,va,object) && api->commit_shared(domain,va,3));
     volatile uint64_t *view=api->map_shared(object);
     CHECK(view && !api->map_shared(object));
-    view[0]=300;view[1024]=0x77;
+    view[0]=300;view[512]=0x77;
     struct AROSRestrictedResult result;
     CHECK(api->run_domain(domain,0,&result) && !result.status && result.value==300);
-    CHECK(view[0]==301 && view[1024]==0x77);
+    CHECK(view[0]==301 && view[512]==0x77);
     CHECK(api->read_shared(object,0,&actual,sizeof(actual)) && actual==301);
     CHECK(!api->read_shared(object,0,(void *)(view+2),8));
     CHECK(!api->protect_memory(domain,va,5));
