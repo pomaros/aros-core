@@ -17,43 +17,56 @@ static struct AROSRestrictedService *channel_lookup(uint64_t handle)
         if (s->channel==handle) return s;
     return NULL;
 }
-/* Private backing index: linear probing at load factor at most one half,
- * deletion by backward shift, so a lookup ends at the first empty slot. */
-static size_t index_home(uintptr_t pa,size_t mask)
-{ return (size_t)(((uint64_t)(pa>>12)*UINT64_C(0x9e3779b97f4a7c15))>>32)&mask; }
-static int index_contains(const struct AROSRestrictedRegion *r,uintptr_t pa)
+/* Index of every private backing page of every region, for constant-time
+ * alias refusal: open addressing with linear probing, deletion by backward
+ * shift, so a lookup ends at the first empty slot. Shared views never enter it. */
+#define INDEX_MASK (AROS_RESTRICTED_INDEX_SLOTS-1)
+_Static_assert((AROS_RESTRICTED_INDEX_SLOTS&INDEX_MASK)==0,"index slots are a power of two");
+static uintptr_t backing_index[AROS_RESTRICTED_INDEX_SLOTS];
+static size_t index_home(uintptr_t pa)
+{ return (size_t)(((uint64_t)(pa>>12)*UINT64_C(0x9e3779b97f4a7c15))>>32)&INDEX_MASK; }
+static int index_contains(uintptr_t pa)
 {
-    for (size_t i=index_home(pa,r->index_mask);r->index[i];i=(i+1)&r->index_mask)
-        if (r->index[i]==pa) return 1;
+    for (size_t i=index_home(pa);backing_index[i];i=(i+1)&INDEX_MASK)
+        if (backing_index[i]==pa) return 1;
     return 0;
 }
-static void index_insert(struct AROSRestrictedRegion *r,uintptr_t pa)
+static void index_insert(uintptr_t pa)
 {
-    size_t i=index_home(pa,r->index_mask);
-    while (r->index[i]) i=(i+1)&r->index_mask;
-    r->index[i]=pa;
+    size_t i=index_home(pa);
+    while (backing_index[i]) i=(i+1)&INDEX_MASK;
+    backing_index[i]=pa;
 }
-static void index_remove(struct AROSRestrictedRegion *r,uintptr_t pa)
+static void index_remove(uintptr_t pa)
 {
-    size_t i=index_home(pa,r->index_mask),mask=r->index_mask;
-    while (r->index[i]!=pa) { if (!r->index[i]) return;i=(i+1)&mask; }
-    for (size_t j=(i+1)&mask;r->index[j];j=(j+1)&mask) {
-        size_t home=index_home(r->index[j],mask);
+    size_t i=index_home(pa);
+    while (backing_index[i]!=pa) { if (!backing_index[i]) return;i=(i+1)&INDEX_MASK; }
+    for (size_t j=(i+1)&INDEX_MASK;backing_index[j];j=(j+1)&INDEX_MASK) {
+        size_t home=index_home(backing_index[j]);
         /* Move j into the hole unless its home lies cyclically in (i,j]. */
-        if (((j-home)&mask)>=((j-i)&mask)) { r->index[i]=r->index[j];i=j; }
+        if (((j-home)&INDEX_MASK)>=((j-i)&INDEX_MASK)) { backing_index[i]=backing_index[j];i=j; }
     }
-    r->index[i]=0;
+    backing_index[i]=0;
+}
+/* Backing entry of a page, NULL while its chunk is missing. */
+static uintptr_t *backing_at(const struct AROSRestrictedRegion *r,size_t page)
+{
+    if (page>=r->mapping.page_count) return NULL;
+    uintptr_t *chunk=r->backing[page/r->mapping.chunk_pages];
+    return chunk ? &chunk[page%r->mapping.chunk_pages] : NULL;
+}
+static uintptr_t backing_of(const struct AROSRestrictedRegion *r,size_t page)
+{
+    uintptr_t *entry=backing_at(r,page);
+    return entry ? *entry : 0;
 }
 static int physical_in_use(uintptr_t pa)
 {
     for (struct AROSRestrictedSharedBacking *b=shared_backings;b;b=b->next)
         for (size_t i=0;i<b->count;++i) if (b->pages[i]==pa) return 1;
-    for (struct AROSRestrictedSpace *s=spaces;s;s=s->next) {
+    for (struct AROSRestrictedSpace *s=spaces;s;s=s->next)
         if (s->backing==pa) return 1;
-        for (struct AROSRestrictedRegion *r=s->regions;r;r=r->next)
-            if (index_contains(r,pa)) return 1;
-    }
-    return 0;
+    return index_contains(pa);
 }
 static int shared_registered(struct AROSRestrictedSharedBacking *backing)
 {
@@ -75,9 +88,10 @@ static int shared_publication_policy(struct AROSRestrictedRegion *r,size_t page,
     if ((access&KMAP_EXEC) && (b->native_view || b->native_pending)) return 0;
     for (struct AROSRestrictedSpace *s=spaces;s;s=s->next)
         for (struct AROSRestrictedRegion *v=s->regions;v;v=v->next) {
-            if (v==r || v->shared!=b || !v->backing[page]) continue;
-            struct KrnMappingPage *p=&v->mapping.pages[page];
-            if (p->physical!=b->pages[page] || p->physical!=v->backing[page]) return 0;
+            uintptr_t backing=backing_of(v,page);
+            if (v==r || v->shared!=b || !backing) continue;
+            struct KrnMappingPage *p=KrnMappingPageAt(&v->mapping,page);
+            if (!p || p->physical!=b->pages[page] || p->physical!=backing) return 0;
             if ((access&KMAP_EXEC) && (p->protection&KMAP_WRITE)) return 0;
             if ((access&KMAP_WRITE) && (p->protection&KMAP_EXEC)) return 0;
             if (p->protection&KMAP_EXEC) *other_execute=1;
@@ -119,9 +133,10 @@ static int shared_copy(struct AROSRestrictedSharedBacking *b,size_t offset,
         if (!b->pages[page] || (b->pages[page]&(PAGE-1))) return 0;
         for (struct AROSRestrictedSpace *space=spaces;space;space=space->next)
             for (struct AROSRestrictedRegion *r=space->regions;r;r=r->next) {
-                if (r->shared!=b || !r->backing[page]) continue;
-                struct KrnMappingPage *p=&r->mapping.pages[page];
-                if (p->physical!=b->pages[page] || r->backing[page]!=b->pages[page] ||
+                uintptr_t backing=backing_of(r,page);
+                if (r->shared!=b || !backing) continue;
+                struct KrnMappingPage *p=KrnMappingPageAt(&r->mapping,page);
+                if (!p || p->physical!=b->pages[page] || backing!=b->pages[page] ||
                     (write && (p->protection&KMAP_EXEC))) return 0;
             }
     }
@@ -167,7 +182,7 @@ int AROSRestrictedSharedViewBegin(struct AROSRestrictedSharedBacking *b)
         for (struct AROSRestrictedRegion *r=space->regions;r;r=r->next) {
             if (r->shared!=b) continue;
             for (size_t page=0;page<b->count;++page)
-                if (r->backing[page] && (r->mapping.pages[page].protection&KMAP_EXEC)) return 0;
+                if (backing_of(r,page) && (KrnMappingPageAt(&r->mapping,page)->protection&KMAP_EXEC)) return 0;
         }
     b->native_pending=1;++b->views;return 1;
 }
@@ -192,20 +207,24 @@ int AROSRestrictedRegionAttachShared(struct AROSRestrictedRegion *r,struct AROSR
     if (!r || !r->space || r->space->domain.closing || r->mapping.closing ||
         r->shared || !b || !shared_registered(b) || b->closing || b->publication ||
         b->views==SIZE_MAX || b->count!=r->mapping.page_count) return 0;
-    for (size_t i=0;i<r->mapping.page_count;++i)
-        if (r->backing[i] || r->mapping.pages[i].state!=KMAP_RESERVED) return 0;
+    for (size_t i=0;i<r->mapping.page_count;++i) {
+        const struct KrnMappingPage *p=KrnMappingPageAt(&r->mapping,i);
+        if (backing_of(r,i) || (p && p->state!=KMAP_RESERVED)) return 0;
+    }
     r->shared=b;++b->views;return 1;
 }
 int AROSRestrictedRegionCommitShared(struct AROSRestrictedRegion *r,size_t page,unsigned access)
 {
     if (!r || !r->space || r->space->domain.closing || !r->shared ||
         !shared_registered(r->shared) || r->shared->closing ||
-        page>=r->mapping.page_count || r->backing[page] || (access&~3U)) return 0;
+        page>=r->mapping.page_count || (access&~3U)) return 0;
+    uintptr_t *backing=backing_at(r,page);
+    if (!backing || *backing) return 0;
     unsigned other_execute;
     if (r->shared->publication || !shared_publication_policy(r,page,access,&other_execute)) return 0;
-    uintptr_t pa=r->shared->pages[page];r->backing[page]=pa;
+    uintptr_t pa=r->shared->pages[page];*backing=pa;
     if (KrnMappingCommitResidentPage(&r->mapping,page,pa,access,&r->space->mapops)) return 1;
-    r->backing[page]=0;return 0;
+    *backing=0;return 0;
 }
 static int owns_page(struct AROSRestrictedSpace *s,uintptr_t va,uintptr_t pa)
 {
@@ -213,7 +232,7 @@ static int owns_page(struct AROSRestrictedSpace *s,uintptr_t va,uintptr_t pa)
     if (va==AROS_RESTRICTED_DATA) return pa==s->backing;
     for (struct AROSRestrictedRegion *r=s->regions;r;r=r->next)
         if (va>=r->mapping.start && va-r->mapping.start<r->mapping.length)
-            return r->space==s && r->backing[(va-r->mapping.start)/PAGE]==pa;
+            return r->space==s && backing_of(r,(va-r->mapping.start)/PAGE)==pa;
     return 0;
 }
 static unsigned char *admit(void *opaque,const struct KrnBufferSpace *space,
@@ -265,58 +284,72 @@ int AROSRestrictedSpaceInit(struct AROSRestrictedSpace *s,uint64_t principal,
         KrnMappingFault(&s->mapping,AROS_RESTRICTED_DATA,KMAP_WRITE,1,&request,&s->mapops)==KMAP_FAULT_RETRY;
 }
 int AROSRestrictedRegionReserve(struct AROSRestrictedSpace *s,struct AROSRestrictedRegion *r,
-    uintptr_t address,size_t length,struct KrnMappingPage *pages,uintptr_t *backing,size_t capacity,
-    uintptr_t *index)
+    uintptr_t address,size_t length,struct KrnMappingPage **chunks,uintptr_t **backing,
+    size_t chunk_pages,size_t capacity)
 {
-    size_t slots=AROSRestrictedIndexSlots(capacity);
-    if (!s || !r || !pages || !backing || !index || !slots || !s->handle || s->domain.closing ||
-        r->space || r->next || reservation_generation==UINT64_MAX ||
+    if (!s || !r || !chunks || !backing || !chunk_pages || !s->handle ||
+        s->domain.closing || r->space || r->next || reservation_generation==UINT64_MAX ||
         !AROSRestrictedRangeValid(address,length) || length/PAGE>capacity) return 0;
-    for (size_t i=0;i<length/PAGE;++i) if (backing[i]) return 0;
-    for (size_t i=0;i<slots;++i) if (index[i]) return 0;
+    for (size_t i=0;i<(length/PAGE+chunk_pages-1)/chunk_pages;++i) if (backing[i]) return 0;
     void *identity=KrnBufferLookup(&registry,s->principal,s->handle);
-    if (!identity || !KrnMappingReserveVirtual(&s->arena,&r->mapping,address,length,
-        identity,pages,capacity)) return 0;
-    r->identity=++reservation_generation;r->index=index;r->index_mask=slots-1;
+    if (!identity || !KrnMappingReserveVirtualChunked(&s->arena,&r->mapping,address,length,
+        identity,chunks,chunk_pages)) return 0;
+    r->identity=++reservation_generation;
     r->space=s;r->backing=backing;r->next=s->regions;s->regions=r;return 1;
+}
+int AROSRestrictedRegionChunkMissing(const struct AROSRestrictedRegion *r,size_t page)
+{
+    return r && r->space && KrnMappingChunkMissing(&r->mapping,page);
+}
+int AROSRestrictedRegionAttachChunk(struct AROSRestrictedRegion *r,size_t page,
+    struct KrnMappingPage *pages,uintptr_t *backing)
+{
+    if (!pages || !backing || !AROSRestrictedRegionChunkMissing(r,page) ||
+        r->space->domain.closing || r->backing[page/r->mapping.chunk_pages]) return 0;
+    for (size_t i=0;i<r->mapping.chunk_pages;++i) if (backing[i]) return 0;
+    if (!KrnMappingAttachChunk(&r->mapping,page,pages)) return 0;
+    r->backing[page/r->mapping.chunk_pages]=backing;return 1;
 }
 int AROSRestrictedRegionCommit(struct AROSRestrictedRegion *r,size_t page,uintptr_t pa,unsigned access)
 {
     if (!r || !r->space || r->space->domain.closing || page>=r->mapping.page_count ||
         r->shared || r->publication_pending || !pa || (pa&(PAGE-1)) ||
-        ((access&~(KMAP_READ|KMAP_WRITE)) && access!=KMAP_JIT_CLASS) ||
-        r->backing[page] || physical_in_use(pa)) return 0;
+        ((access&~(KMAP_READ|KMAP_WRITE)) && access!=KMAP_JIT_CLASS)) return 0;
+    uintptr_t *backing=backing_at(r,page);
+    if (!backing || *backing || physical_in_use(pa)) return 0;
     /* A JIT page is installed as data first: execute-permission cache
      * maintenance goes through the owned native alias, which exists only
      * once the page is resident. The fresh page has no other user. */
     unsigned initial=access==KMAP_JIT_CLASS ? KMAP_READ|KMAP_WRITE : access;
-    r->backing[page]=pa;
+    *backing=pa;
     if (KrnMappingCommitResidentPage(&r->mapping,page,pa,initial,&r->space->mapops)) {
         uintptr_t released=0;
         if (access!=KMAP_JIT_CLASS ||
             KrnMappingProtectPage(&r->mapping,page,access,&r->space->mapops)) {
-            index_insert(r,pa);return 1;
+            index_insert(pa);return 1;
         }
         if (!KrnMappingDecommitPage(&r->mapping,page,&r->space->mapops,&released) || released!=pa)
             for (;;) __asm__ volatile("wfe"); /* a fresh leaf cannot refuse */
     }
-    r->backing[page]=0;return 0;
+    *backing=0;return 0;
 }
 int AROSRestrictedRegionDecommit(struct AROSRestrictedRegion *r,size_t page,uintptr_t *released)
 {
     if (!r || !r->space || r->space->domain.closing || page>=r->mapping.page_count || !released || r->publication_pending ||
         (r->shared && r->shared->publication)) return 0;
     if (!KrnMappingDecommitPage(&r->mapping,page,&r->space->mapops,released)) return 0;
-    r->backing[page]=0;
+    uintptr_t *backing=backing_at(r,page);
+    if (backing) *backing=0;
     if (r->shared) *released=0;
-    else if (*released) index_remove(r,*released);
+    else if (*released) index_remove(*released);
     return 1;
 }
 int AROSRestrictedRegionProtect(struct AROSRestrictedRegion *r,size_t page,unsigned access)
 {
     unsigned other_execute;
     return r && r->space && !r->space->domain.closing && !r->publication_pending &&
-        page<r->mapping.page_count && !(r->mapping.pages[page].protection&KMAP_EXEC) &&
+        page<r->mapping.page_count && KrnMappingPageAt(&r->mapping,page) &&
+        !(KrnMappingPageAt(&r->mapping,page)->protection&KMAP_EXEC) &&
         !(access&~(KMAP_READ|KMAP_WRITE)) &&
         (!r->shared || !r->shared->publication) &&
         shared_publication_policy(r,page,access,&other_execute) &&
@@ -332,8 +365,8 @@ int AROSRestrictedRegionPublish(struct AROSRestrictedRegion *r,size_t page,
         (r->publication_pending && r->publication_page!=page)) return 0;
     unsigned other_execute;
     if (!shared_publication_policy(r,page,access,&other_execute)) return 0;
-    struct KrnMappingPage *p=&r->mapping.pages[page];
-    if (!p->physical || p->physical!=r->backing[page] ||
+    struct KrnMappingPage *p=KrnMappingPageAt(&r->mapping,page);
+    if (!p || !p->physical || p->physical!=backing_of(r,page) ||
         (r->shared && p->physical!=r->shared->pages[page]) ||
         (p->state!=KMAP_CLEAN && p->state!=KMAP_DIRTY) ||
         (!r->publication_pending && p->generation==UINT64_MAX)) return 0;
@@ -358,16 +391,22 @@ int AROSRestrictedRegionDetach(struct AROSRestrictedRegion *r)
     struct AROSRestrictedRegion **link=&s->regions;
     while (*link && *link!=r) link=&(*link)->next;
     if (!*link || !KrnMappingBeginClose(&r->mapping)) return 0;
-    for (size_t i=0;i<r->mapping.page_count;++i)
-        if (r->mapping.pages[i].physical &&
-            KrnMappingReleasePage(&r->mapping,i,&s->mapops)!=r->backing[i]) return 0;
+    for (size_t i=0;i<r->mapping.page_count;++i) {
+        const struct KrnMappingPage *p=KrnMappingPageAt(&r->mapping,i);
+        if (!p || !p->physical) continue;
+        uintptr_t released=KrnMappingReleasePage(&r->mapping,i,&s->mapops);
+        if (released!=backing_of(r,i)) return 0;
+        if (!r->shared) index_remove(released);
+    }
     if (!KrnMappingRelease(&s->arena,&r->mapping)) return 0;
     if (r->shared) {
         if (r->shared->publication==r) r->shared->publication=NULL;
-        for (size_t i=0;i<r->shared->count;++i) r->backing[i]=0;
+        for (size_t i=0;i<r->shared->count;++i) {
+            uintptr_t *backing=backing_at(r,i);
+            if (backing) *backing=0;
+        }
         --r->shared->views;r->shared=NULL;
     }
-    for (size_t i=0;i<=r->index_mask;++i) r->index[i]=0;
     *link=r->next;r->next=NULL;r->space=NULL;
     r->publication_pending=0;r->publication_page=0;return 1;
 }
@@ -383,9 +422,9 @@ int AROSRestrictedSpacePageIdentity(struct AROSRestrictedSpace *s,uintptr_t addr
     if (!s || !s->handle || s->domain.closing || !physical || !generation || !reservation || (access!=0 && access!=KMAP_READ && access!=KMAP_WRITE && access!=KMAP_EXEC)) return 0;
     struct KrnMappingObject *m=KrnMappingLookup(&s->arena,address);
     if (!m || m->closing) return 0;
-    size_t index=(address-m->start)/PAGE;struct KrnMappingPage *p=&m->pages[index];
+    size_t index=(address-m->start)/PAGE;struct KrnMappingPage *p=KrnMappingPageAt(m,index);
     uintptr_t va=address&~(uintptr_t)(PAGE-1);uint64_t actual;
-    if (!p->physical || (p->state!=KMAP_CLEAN && p->state!=KMAP_DIRTY) ||
+    if (!p || !p->physical || (p->state!=KMAP_CLEAN && p->state!=KMAP_DIRTY) ||
         (access && !(p->protection&access)) || !owns_page(s,va,p->physical)) return 0;
     /* Execute identity of a JIT page proves the JIT leaf: the page is owned
      * and current, its contents are the guest's to change. */
@@ -408,15 +447,17 @@ int AROSRestrictedSpaceFaultIdentity(struct AROSRestrictedSpace *s,uintptr_t add
     if (!s || !s->handle || s->domain.closing || !physical || !generation || !reservation) return 0;
     struct KrnMappingObject *m=KrnMappingLookup(&s->arena,address);
     if (!m || m->closing || !m->virtual_reservation) return 0;
-    size_t index=(address-m->start)/PAGE;struct KrnMappingPage *p=&m->pages[index];
-    if (p->state!=KMAP_RESERVED || p->physical || p->generation==UINT64_MAX) return 0;
+    size_t index=(address-m->start)/PAGE;struct KrnMappingPage *p=KrnMappingPageAt(m,index);
+    /* A page without a chunk is reserved at the reservation's generation. */
+    if (p && (p->state!=KMAP_RESERVED || p->physical || p->generation==UINT64_MAX)) return 0;
     uint64_t actual;
     if (AArch64MappingPhysical(&s->hardware,s->root,s->tcr,address&~(uintptr_t)(PAGE-1),&actual)) return 0;
     for (struct AROSRestrictedRegion *r=s->regions;r;r=r->next)
         if (&r->mapping==m) {
-            if (!r->identity || r->backing[index] || r->publication_pending ||
+            if (!r->identity || backing_of(r,index) || r->publication_pending ||
                 (r->shared && r->shared->publication)) return 0;
-            *physical=0;*generation=p->generation;*reservation=r->identity;return 1;
+            *physical=0;*generation=p ? p->generation : m->reserved_generation;
+            *reservation=r->identity;return 1;
         }
     return 0;
 }

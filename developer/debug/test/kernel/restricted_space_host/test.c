@@ -22,14 +22,15 @@ static uint64_t allocate(void *opaque,unsigned bits)
 static void clean(void *opaque,const void *address,size_t bytes)
 { (void)opaque;(void)address;(void)bytes; }
 static void invalidate(void *opaque) { ++((struct Fixture *)opaque)->invalidations; }
-/* Every reservation gets its own zeroed backing index, kept for the run. */
+/* One chunk of capacity pages, attached at once: the callers' metadata and
+ * ledger stay flat arrays, kept for the run. chunk_tests covers real chunks. */
 static int reserve_region(struct AROSRestrictedSpace *s,struct AROSRestrictedRegion *r,uintptr_t va,
     size_t length,struct KrnMappingPage *pages,uintptr_t *backing,size_t capacity)
 {
-    size_t slots=AROSRestrictedIndexSlots(capacity);
-    uintptr_t *index=r->index && r->index_mask+1==slots ? r->index : calloc(slots ? slots : 1,sizeof(*index));
-    CHECK(index,"index-storage");
-    return AROSRestrictedRegionReserve(s,r,va,length,pages,backing,capacity,index);
+    struct KrnMappingPage **chunks=calloc(1,sizeof(*chunks));uintptr_t **tables=calloc(1,sizeof(*tables));
+    CHECK(chunks && tables,"chunk-tables");
+    return AROSRestrictedRegionReserve(s,r,va,length,chunks,tables,capacity,capacity) &&
+        AROSRestrictedRegionAttachChunk(r,0,pages,backing);
 }
 /* The production synchronize callback reaches the page through the owned
  * native alias, which the ledger names only once the page is resident. */
@@ -40,8 +41,8 @@ static void sync_code(void *opaque,uint64_t va,size_t bytes)
     if (alias_region && va>=alias_region->mapping.start &&
         va-alias_region->mapping.start<alias_region->mapping.length) {
         size_t page=(va-alias_region->mapping.start)/PAGE;
-        CHECK(alias_region->backing[page] &&
-            alias_region->mapping.pages[page].physical==alias_region->backing[page],"jit-sync-alias-resident");
+        CHECK(alias_region->backing[0][page] &&
+            KrnMappingPageAt(&alias_region->mapping,page)->physical==alias_region->backing[0][page],"jit-sync-alias-resident");
     }
 }
 static int page_allocate(void *opaque,size_t size,struct KrnPagerPage *page)
@@ -74,9 +75,9 @@ static uint64_t publication_leaf(struct AROSRestrictedSpace *s,uintptr_t va)
 static int native_publication(void *context,uintptr_t pa,unsigned policy)
 {
     (void)context;++native_calls;
-    CHECK(publishing->publication_pending && !publishing->mapping.pages[0].protection &&
+    CHECK(publishing->publication_pending && !KrnMappingPageAt(&publishing->mapping,0)->protection &&
         !(publication_leaf(publishing->space,publishing->mapping.start)&1),"publication-revoked-before-native");
-    CHECK(pa==publishing->backing[0],"publication-native-identity");
+    CHECK(pa==publishing->backing[0][0],"publication-native-identity");
     if (fail_native) return 0;native_policy=policy;return 1;
 }
 static int publication_fault(void *context,uintptr_t va,uintptr_t pa,unsigned access)
@@ -185,7 +186,7 @@ static void index_tests(void)
     /* Twelve pages share one home slot: their probe chain spans removals. */
     uintptr_t pas[N];unsigned colliding=0;
     for (uintptr_t candidate=UINT64_C(0x40000000);colliding<12;candidate+=0x1000)
-        if (((((uint64_t)(candidate>>12)*UINT64_C(0x9e3779b97f4a7c15))>>32)&region.index_mask)==5)
+        if (((((uint64_t)(candidate>>12)*UINT64_C(0x9e3779b97f4a7c15))>>32)&(AROS_RESTRICTED_INDEX_SLOTS-1))==5)
             pas[colliding++]=candidate;
     for (unsigned i=colliding;i<N;++i) pas[i]=UINT64_C(0x80000000)+(uintptr_t)i*0x5000;
     for (unsigned i=0;i<N;++i)
@@ -201,8 +202,54 @@ static void index_tests(void)
         }
     }
     CHECK(AROSRestrictedRegionDetach(&region) && AROSRestrictedRegionDetach(&other),"index-detach");
-    for (size_t i=0;i<=region.index_mask;++i) CHECK(!region.index[i],"index-cleared");
+    /* The index belongs to the service: detach must forget the region's pages. */
+    memset(&other,0,sizeof(other));other_ledger[0]=0;
+    CHECK(reserve_region(&space,&other,va+N*PAGE,PAGE,other_page,other_ledger,1),"index-reserve-after-detach");
+    for (unsigned i=0;i<N;++i) {
+        CHECK(AROSRestrictedRegionCommit(&other,0,pas[i],3),"index-detach-forgets");
+        CHECK(AROSRestrictedRegionDecommit(&other,0,&released) && released==pas[i],"index-detach-decommit");
+    }
+    CHECK(AROSRestrictedRegionDetach(&other),"index-final-detach");
     CHECK(AROSRestrictedSpaceClose(&space),"index-close");free(data);free(f);
+}
+/* A reservation holds no page record: a commit needs the page's chunk, which
+ * then serves every page it covers until the region detaches. */
+static void chunk_tests(void)
+{
+    struct Fixture *f=aligned_alloc(PAGE,sizeof(*f));unsigned char *data=aligned_alloc(PAGE,PAGE);
+    CHECK(f && data,"chunk-storage");memset(f,0,sizeof(*f));f->used=1;
+    struct AROSRestrictedSpace space={0};
+    struct AArch64ProtectionOps hardware={f,resolve,allocate,clean,invalidate,sync_code,NULL};
+    CHECK(AROSRestrictedSpaceInit(&space,96,(uintptr_t)f->tables[0],25|(UINT64_C(5)<<32),(uintptr_t)data,&hardware),"chunk-space");
+    enum { CHUNK=2,PAGES=3 };
+    struct KrnMappingPage *chunks[2]={0},records[2][CHUNK];uintptr_t *tables[2]={0},ledger[2][CHUNK]={{0}};
+    struct AROSRestrictedRegion region={0};uintptr_t va=AROS_RESTRICTED_DYNAMIC_BASE,released=123;
+    uintptr_t first=UINT64_C(0xa0000000),second=UINT64_C(0xa0001000),physical;uint64_t generation=1,reservation;
+    CHECK(AROSRestrictedRegionReserve(&space,&region,va,PAGES*PAGE,chunks,tables,CHUNK,PAGES),"chunk-reserve");
+    CHECK(AROSRestrictedRegionChunkMissing(&region,0) && AROSRestrictedRegionChunkMissing(&region,2) &&
+        !AROSRestrictedRegionChunkMissing(&region,PAGES),"chunk-missing");
+    CHECK(!AROSRestrictedRegionCommit(&region,0,first,3),"chunk-commit-refused");
+    CHECK(AROSRestrictedRegionDecommit(&region,0,&released) && !released,"chunk-decommit-missing");
+    CHECK(!AROSRestrictedRegionProtect(&region,0,3),"chunk-protect-refused");
+    CHECK(AROSRestrictedSpaceFaultIdentity(&space,va,&physical,&generation,&reservation) &&
+        !physical && !generation && reservation==region.identity,"chunk-reserved-identity");
+    ledger[0][1]=1;
+    CHECK(!AROSRestrictedRegionAttachChunk(&region,0,records[0],ledger[0]) &&
+        AROSRestrictedRegionChunkMissing(&region,0),"chunk-attach-dirty-refused");
+    ledger[0][1]=0;
+    CHECK(!AROSRestrictedRegionAttachChunk(&region,PAGES,records[0],ledger[0]),"chunk-attach-outside");
+    CHECK(AROSRestrictedRegionAttachChunk(&region,1,records[0],ledger[0]) &&
+        !AROSRestrictedRegionChunkMissing(&region,0) && AROSRestrictedRegionChunkMissing(&region,2),"chunk-attach");
+    CHECK(!AROSRestrictedRegionAttachChunk(&region,0,records[1],ledger[1]),"chunk-attach-once");
+    CHECK(AROSRestrictedRegionCommit(&region,1,first,3) && ledger[0][1]==first &&
+        records[0][1].physical==first && !records[0][0].physical,"chunk-commit");
+    CHECK(!AROSRestrictedRegionCommit(&region,2,first,3),"chunk-commit-tail-refused");
+    CHECK(AROSRestrictedRegionAttachChunk(&region,2,records[1],ledger[1]) &&
+        AROSRestrictedRegionCommit(&region,2,second,3) && ledger[1][0]==second,"chunk-commit-tail");
+    CHECK(AROSRestrictedSpaceFaultIdentity(&space,va+2*PAGE,&physical,&generation,&reservation) &&
+        physical==second,"chunk-resident-identity");
+    CHECK(AROSRestrictedRegionDetach(&region) && !region.space,"chunk-detach");
+    CHECK(AROSRestrictedSpaceClose(&space),"chunk-close");free(data);free(f);
 }
 /* D-135 JIT class: committed or published writable and executable on private
  * pages, native alias kept writable, execute identity on the JIT leaf. */
@@ -666,5 +713,5 @@ int main(void)
     CHECK(AROSRestrictedSpaceInit(&space,11,root,tcr,(uintptr_t)data,&ops),"space-reuse");
     CHECK(space.handle!=first_handle,"space-generation");
     CHECK(AROSRestrictedSpaceClose(&space),"reused-space-close");
-    free(data);free(f);region_tests(AROS_RESTRICTED_DYNAMIC_BASE);region_tests(UINT64_C(0x7ffe0000));shared_tests();shared_copy_tests();channel_growth();publication_tests();index_tests();jit_tests();shared_publication_tests();native_view_tests();native_view_exec_tests();puts("PASS restricted space and channel ownership");return 0;
+    free(data);free(f);region_tests(AROS_RESTRICTED_DYNAMIC_BASE);region_tests(UINT64_C(0x7ffe0000));shared_tests();shared_copy_tests();channel_growth();publication_tests();index_tests();chunk_tests();jit_tests();shared_publication_tests();native_view_tests();native_view_exec_tests();puts("PASS restricted space and channel ownership");return 0;
 }

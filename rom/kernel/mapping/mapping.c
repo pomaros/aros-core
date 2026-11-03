@@ -3,21 +3,49 @@
  */
 #include "mapping.h"
 
-int KrnMappingInitialize(struct KrnMappingObject *m, uintptr_t start,
-    size_t length, size_t size, uint64_t offset, unsigned protection,
-    int shared, void *owner, struct KrnMappingPage *pages, size_t capacity)
+struct KrnMappingPage *KrnMappingPageAt(const struct KrnMappingObject *m, size_t i)
 {
-    if (!m || !pages || !size || (size & (size - 1)) || !start || !length ||
-        (start & (size - 1)) || (length & (size - 1)) ||
+    if (!m || i >= m->page_count)
+        return NULL;
+    if (!m->chunks)
+        return &m->pages[i];
+    struct KrnMappingPage *chunk = m->chunks[i / m->chunk_pages];
+    return chunk ? &chunk[i % m->chunk_pages] : NULL;
+}
+
+/* Flat records when pages is given, otherwise chunks of chunk_pages. */
+static int initialize(struct KrnMappingObject *m, uintptr_t start,
+    size_t length, size_t size, uint64_t offset, unsigned protection,
+    int shared, void *owner, struct KrnMappingPage *pages, size_t capacity,
+    struct KrnMappingPage **chunks, size_t chunk_pages)
+{
+    if (!m || (!pages && !chunks) || !size || (size & (size - 1)) || !start ||
+        !length || (start & (size - 1)) || (length & (size - 1)) ||
         (offset & (size - 1)) || length > UINTPTR_MAX - start ||
         length > UINT64_MAX - offset || length / size > capacity ||
         !KrnMappingProtectionValid(protection, 0))
         return 0;
+    if (chunks) {
+        if (pages || !chunk_pages)
+            return 0;
+        for (size_t i = 0; i < (length / size + chunk_pages - 1) / chunk_pages; ++i)
+            if (chunks[i])
+                return 0;
+    }
     *m = (struct KrnMappingObject){start, length, size, length / size, offset,
-        owner, pages, protection, !!shared, 0, 0, 0, NULL, 0};
-    for (size_t i = 0; i < m->page_count; ++i)
+        owner, pages, protection, !!shared, 0, 0, 0, NULL, 0, chunks,
+        chunks ? chunk_pages : 0, 0};
+    for (size_t i = 0; pages && i < m->page_count; ++i)
         pages[i] = (struct KrnMappingPage){0, 0, KMAP_ABSENT, 0, protection};
     return 1;
+}
+
+int KrnMappingInitialize(struct KrnMappingObject *m, uintptr_t start,
+    size_t length, size_t size, uint64_t offset, unsigned protection,
+    int shared, void *owner, struct KrnMappingPage *pages, size_t capacity)
+{
+    return pages && initialize(m, start, length, size, offset, protection,
+        shared, owner, pages, capacity, NULL, 0);
 }
 
 int KrnMappingArenaInitialize(struct KrnMappingArena *a, uintptr_t start,
@@ -30,9 +58,10 @@ int KrnMappingArenaInitialize(struct KrnMappingArena *a, uintptr_t start,
     return 1;
 }
 
-int KrnMappingReserve(struct KrnMappingArena *a, struct KrnMappingObject *m,
+static int reserve(struct KrnMappingArena *a, struct KrnMappingObject *m,
     size_t length, uint64_t offset, unsigned protection, int shared,
-    void *owner, struct KrnMappingPage *pages, size_t capacity)
+    void *owner, struct KrnMappingPage *pages, size_t capacity,
+    struct KrnMappingPage **chunks, size_t chunk_pages)
 {
     if (!a || !m || !a->page_size || !length || length > a->length)
         return 0;
@@ -50,17 +79,25 @@ int KrnMappingReserve(struct KrnMappingArena *a, struct KrnMappingObject *m,
         link=&p->next;
     }
     if (length > a->start+a->length-start ||
-        !KrnMappingInitialize(m,start,length,a->page_size,offset,protection,
-            shared,owner,pages,capacity))
+        !initialize(m,start,length,a->page_size,offset,protection,
+            shared,owner,pages,capacity,chunks,chunk_pages))
         return 0;
     m->next=*link;
     *link=m;
     return 1;
 }
 
-int KrnMappingReserveAt(struct KrnMappingArena *a, struct KrnMappingObject *m,
+int KrnMappingReserve(struct KrnMappingArena *a, struct KrnMappingObject *m,
+    size_t length, uint64_t offset, unsigned protection, int shared,
+    void *owner, struct KrnMappingPage *pages, size_t capacity)
+{
+    return pages && reserve(a,m,length,offset,protection,shared,owner,pages,capacity,NULL,0);
+}
+
+static int reserve_at(struct KrnMappingArena *a, struct KrnMappingObject *m,
     uintptr_t start, size_t length, uint64_t offset, unsigned protection,
-    int shared, void *owner, struct KrnMappingPage *pages, size_t capacity)
+    int shared, void *owner, struct KrnMappingPage *pages, size_t capacity,
+    struct KrnMappingPage **chunks, size_t chunk_pages)
 {
     if (!a || !m || !a->page_size || !length || start<a->start ||
         start-a->start>=a->length || length>a->length-(start-a->start))
@@ -70,12 +107,19 @@ int KrnMappingReserveAt(struct KrnMappingArena *a, struct KrnMappingObject *m,
         if (p==m) return 0;
         if (start<p->start+p->length && p->start<start+length) return 0;
     }
-    if (!KrnMappingInitialize(m,start,length,a->page_size,offset,protection,
-            shared,owner,pages,capacity)) return 0;
+    if (!initialize(m,start,length,a->page_size,offset,protection,
+            shared,owner,pages,capacity,chunks,chunk_pages)) return 0;
     struct KrnMappingObject **link=&a->first;
     while (*link && (*link)->start<start) link=&(*link)->next;
     m->next=*link;*link=m;
     return 1;
+}
+
+int KrnMappingReserveAt(struct KrnMappingArena *a, struct KrnMappingObject *m,
+    uintptr_t start, size_t length, uint64_t offset, unsigned protection,
+    int shared, void *owner, struct KrnMappingPage *pages, size_t capacity)
+{
+    return pages && reserve_at(a,m,start,length,offset,protection,shared,owner,pages,capacity,NULL,0);
 }
 
 int KrnMappingReserveVirtual(struct KrnMappingArena *a, struct KrnMappingObject *m,
@@ -88,10 +132,32 @@ int KrnMappingReserveVirtual(struct KrnMappingArena *a, struct KrnMappingObject 
     for (size_t i=0;i<m->page_count;++i) m->pages[i].state=KMAP_RESERVED;
     return 1;
 }
+int KrnMappingReserveVirtualChunked(struct KrnMappingArena *a, struct KrnMappingObject *m,
+    uintptr_t address,size_t length,void *owner,struct KrnMappingPage **chunks,size_t chunk_pages)
+{
+    if (!chunks || !chunk_pages) return 0;
+    int ok=address ? reserve_at(a,m,address,length,0,0,0,owner,NULL,SIZE_MAX,chunks,chunk_pages) :
+        reserve(a,m,length,0,0,0,owner,NULL,SIZE_MAX,chunks,chunk_pages);
+    if (!ok) return 0;
+    m->virtual_reservation=1;
+    return 1;
+}
+int KrnMappingChunkMissing(const struct KrnMappingObject *m,size_t page)
+{
+    return m && m->chunks && page<m->page_count && !m->chunks[page/m->chunk_pages];
+}
+int KrnMappingAttachChunk(struct KrnMappingObject *m,size_t page,struct KrnMappingPage *records)
+{
+    if (!records || !KrnMappingChunkMissing(m,page) || m->closing) return 0;
+    for (size_t i=0;i<m->chunk_pages;++i)
+        records[i]=(struct KrnMappingPage){0,m->reserved_generation,KMAP_RESERVED,0,m->protection};
+    m->chunks[page/m->chunk_pages]=records;
+    return 1;
+}
 int KrnMappingCommitRange(struct KrnMappingObject *m,uintptr_t address,
     size_t length,unsigned protection)
 {
-    if (!m || !m->virtual_reservation || m->shared || m->closing || !length ||
+    if (!m || !m->virtual_reservation || m->shared || m->closing || m->chunks || !length ||
         !m->page_size || (address&(m->page_size-1)) || (length&(m->page_size-1)) ||
         address<m->start || address-m->start>=m->length ||
         length>m->length-(address-m->start) ||
@@ -114,8 +180,8 @@ int KrnMappingCommitResidentPage(struct KrnMappingObject *m,size_t index,
         index>=m->page_count || !physical || !m->page_size ||
         (physical&(m->page_size-1)) || !KrnMappingProtectionValid(protection,1) ||
         !ops || !ops->install || m->resident>=m->page_count) return 0;
-    struct KrnMappingPage *p=&m->pages[index];
-    if (p->state!=KMAP_RESERVED || p->physical || p->generation==UINT64_MAX ||
+    struct KrnMappingPage *p=KrnMappingPageAt(m,index);
+    if (!p || p->state!=KMAP_RESERVED || p->physical || p->generation==UINT64_MAX ||
         !ops->install(ops->context,m->start+index*m->page_size,physical,protection)) return 0;
     *p=(struct KrnMappingPage){physical,p->generation+1,
         (protection&KMAP_WRITE) ? KMAP_DIRTY : KMAP_CLEAN,0,protection};
@@ -126,8 +192,8 @@ int KrnMappingDecommitPage(struct KrnMappingObject *m,size_t index,
 {
     if (!m || !m->virtual_reservation || m->shared || m->closing || m->in_flight ||
         index>=m->page_count || !released) return 0;
-    struct KrnMappingPage *p=&m->pages[index];
-    if (p->state==KMAP_RESERVED) { *released=0;return 1; }
+    struct KrnMappingPage *p=KrnMappingPageAt(m,index);
+    if (!p || p->state==KMAP_RESERVED) { *released=0;return 1; }
     if (p->generation==UINT64_MAX ||
         (p->state!=KMAP_ABSENT && p->state!=KMAP_CLEAN &&
          p->state!=KMAP_DIRTY && p->state!=KMAP_ERROR)) return 0;
@@ -185,7 +251,7 @@ enum KrnMappingCutResult KrnMappingCut(struct KrnMappingArena *a,
     struct KrnMappingObject *right, struct KrnMappingPage *right_pages,
     size_t right_capacity)
 {
-    if (!a || !m || !m->closing || m->in_flight || !length ||
+    if (!a || !m || !m->closing || m->in_flight || m->chunks || !length ||
         !m->page_size || (address&(m->page_size-1)) ||
         (length&(m->page_size-1)) || address<m->start ||
         address-m->start>=m->length || length>m->length-(address-m->start))
@@ -261,20 +327,20 @@ enum KrnMappingCutResult KrnMappingCut(struct KrnMappingArena *a,
 }
 
 static void request(struct KrnMappingRequest *r, struct KrnMappingObject *m,
-    size_t index)
+    size_t index, const struct KrnMappingPage *p)
 {
     r->mapping = m;
     r->page = index;
-    r->generation = m->pages[index].generation;
+    r->generation = p->generation;
 }
 
 static struct KrnMappingPage *match(const struct KrnMappingRequest *r,
     unsigned state)
 {
-    if (!r || !r->mapping || r->page >= r->mapping->page_count)
+    if (!r || !r->mapping)
         return NULL;
-    struct KrnMappingPage *p = &r->mapping->pages[r->page];
-    return p->state == state && p->generation == r->generation ? p : NULL;
+    struct KrnMappingPage *p = KrnMappingPageAt(r->mapping, r->page);
+    return p && p->state == state && p->generation == r->generation ? p : NULL;
 }
 
 enum KrnMappingFaultResult KrnMappingFault(struct KrnMappingObject *m,
@@ -288,8 +354,8 @@ enum KrnMappingFaultResult KrnMappingFault(struct KrnMappingObject *m,
     if (!r || !ops || !ops->install || m->closing || !access)
         return KMAP_FAULT_TRAP;
     size_t index = (address - m->start) / m->page_size;
-    struct KrnMappingPage *p = &m->pages[index];
-    if (access & ~p->protection)
+    struct KrnMappingPage *p = KrnMappingPageAt(m, index);
+    if (!p || (access & ~p->protection))
         return KMAP_FAULT_TRAP;
     switch (p->state) {
     case KMAP_ABSENT:
@@ -298,11 +364,11 @@ enum KrnMappingFaultResult KrnMappingFault(struct KrnMappingObject *m,
         ++p->generation;
         p->state = KMAP_LOADING;
         ++m->in_flight;
-        request(r, m, index);
+        request(r, m, index, p);
         return KMAP_FAULT_QUEUE;
     case KMAP_LOADING:
     case KMAP_WRITEBACK:
-        request(r, m, index);
+        request(r, m, index, p);
         return KMAP_FAULT_WAIT;
     case KMAP_CLEAN:
         if (access & KMAP_WRITE) {
@@ -365,8 +431,8 @@ int KrnMappingBeginWriteback(struct KrnMappingObject *m, size_t index,
     if (!m || index >= m->page_count || !r || !ops || !ops->install ||
         !m->shared)
         return 0;
-    struct KrnMappingPage *p = &m->pages[index];
-    if (p->state != KMAP_DIRTY || p->generation == UINT64_MAX ||
+    struct KrnMappingPage *p = KrnMappingPageAt(m, index);
+    if (!p || p->state != KMAP_DIRTY || p->generation == UINT64_MAX ||
         !ops->install(ops->context, m->start + index * m->page_size,
             p->physical, p->protection & ~KMAP_WRITE))
         return 0;
@@ -374,7 +440,7 @@ int KrnMappingBeginWriteback(struct KrnMappingObject *m, size_t index,
     p->state = KMAP_WRITEBACK;
     ++p->generation;
     ++m->in_flight;
-    request(r, m, index);
+    request(r, m, index, p);
     return 1;
 }
 
@@ -423,7 +489,7 @@ int KrnMappingBeginWritebackBatch(struct KrnMappingRequest *requests,size_t coun
              * PTE updates. Metadata becomes faultable DIRTY again. */
             for (size_t j=0;j<i;++j) {
                 struct KrnMappingRequest *prior=&requests[j];
-                prior->mapping->pages[prior->page].state=KMAP_DIRTY;
+                KrnMappingPageAt(prior->mapping,prior->page)->state=KMAP_DIRTY;
                 --prior->mapping->in_flight;
             }
             return 0;
@@ -447,8 +513,8 @@ int KrnMappingProtectPage(struct KrnMappingObject *m, size_t index,
     if (!m || index>=m->page_count || m->closing || !ops || !ops->install ||
         !KrnMappingProtectionValid(protection,1))
         return 0;
-    struct KrnMappingPage *p=&m->pages[index];
-    if (p->state==KMAP_RESERVED) return 0;
+    struct KrnMappingPage *p=KrnMappingPageAt(m,index);
+    if (!p || p->state==KMAP_RESERVED) return 0;
     /* Anonymous committed pages have no file writeback contract. Eagerly
      * grant write so native buffer output does not depend on a user fault. */
     unsigned anonymous=m->virtual_reservation && !m->shared && p->physical &&
@@ -478,8 +544,8 @@ uintptr_t KrnMappingReleasePage(struct KrnMappingObject *m, size_t index,
     if (!m || !m->closing || m->in_flight || index >= m->page_count ||
         !ops || !ops->remove)
         return 0;
-    struct KrnMappingPage *p = &m->pages[index];
-    if ((p->state != KMAP_CLEAN && p->state != KMAP_DIRTY) ||
+    struct KrnMappingPage *p = KrnMappingPageAt(m, index);
+    if (!p || (p->state != KMAP_CLEAN && p->state != KMAP_DIRTY) ||
         (m->shared && p->state == KMAP_DIRTY) ||
         !ops->remove(ops->context, m->start + index * m->page_size, p->physical))
         return 0;
@@ -493,7 +559,7 @@ uintptr_t KrnMappingReleasePage(struct KrnMappingObject *m, size_t index,
 int KrnMappingPopulate(struct KrnMappingObject *m,uintptr_t address,size_t length,
     int queue,size_t *resident,size_t *pending,int *page_error)
 {
-    if (!m || !m->page_size || (m->page_size&(m->page_size-1)) ||
+    if (!m || !m->page_size || (m->page_size&(m->page_size-1)) || m->chunks ||
         m->closing || !resident || !pending || !page_error || !length ||
         (address&(m->page_size-1)) || (length&(m->page_size-1)) ||
         address<m->start || address-m->start>=m->length ||

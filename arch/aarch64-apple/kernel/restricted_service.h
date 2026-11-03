@@ -3,6 +3,7 @@
 #ifndef AROS_RESTRICTED_SERVICE_H
 #define AROS_RESTRICTED_SERVICE_H
 #include <aros/apple/restricted.h>
+#include <aros/apple/page_arena.h>
 #include "../../aarch64-all/kernel/mapping.h"
 #include "../../../rom/kernel/mapping/user_service.h"
 struct Task;
@@ -37,6 +38,9 @@ static inline int AROSRestrictedRangeValid(uintptr_t address,size_t length)
     return address>=AROS_RESTRICTED_DYNAMIC_BASE && address<AROS_RESTRICTED_DYNAMIC_END &&
         length<=AROS_RESTRICTED_DYNAMIC_END-address;
 }
+/* Slots of the service's index of private backing pages: backing comes from
+ * the page arena, so twice its page capacity keeps the load at most one half. */
+#define AROS_RESTRICTED_INDEX_SLOTS (2U*(size_t)(AROS_APPLE_PAGE_ARENA_MAX_BYTES/4096U))
 struct AROSRestrictedSpace {
     struct AROSRestrictedSpace *next;
     struct KrnBufferSpace registration;
@@ -57,25 +61,14 @@ struct AROSRestrictedRegion {
     struct AROSRestrictedSpace *space;
     struct AROSRestrictedRegion *next;
     struct KrnMappingObject mapping;
-    uintptr_t *backing;
-    /* Open-addressed set of the private backing pages, for constant-time
-     * alias refusal: index_mask+1 slots, a power of two at least twice the
-     * page capacity. Shared views never enter it. */
-    uintptr_t *index;
-    size_t index_mask;
+    /* Backing ledger in chunks parallel to mapping.chunks: one array of
+     * mapping.chunk_pages physical addresses per attached chunk. */
+    uintptr_t **backing;
     struct AROSRestrictedSharedBacking *shared;
     uint64_t identity;
     unsigned publication_pending;
     size_t publication_page;
 };
-/* Index slots a region of capacity pages needs: the smallest power of two at
- * least twice the capacity, or 0 when that overflows. */
-static inline size_t AROSRestrictedIndexSlots(size_t capacity)
-{
-    size_t slots=2;
-    while (slots<2*capacity) { if (slots>SIZE_MAX/2) return 0;slots*=2; }
-    return capacity<=SIZE_MAX/2 ? slots : 0;
-}
 /* Shared anonymous backing is registered once, independently of any space.
  * Initialize transfers ownership of fresh zeroed pages; close stops admission
  * and returns ownership only after every attached view has detached. A region
@@ -123,10 +116,19 @@ int AROSRestrictedRegionCommitShared(struct AROSRestrictedRegion *,size_t,unsign
  * except the JIT class (KMAP_JIT_CLASS): a private page committed or published
  * writable and executable when the platform's JIT mode allows it, which the
  * caller checks. Shared views never take the JIT class. */
-/* index has AROSRestrictedIndexSlots(capacity) zeroed slots and stays alive
- * with the record arrays; detach leaves it zeroed. */
+/* A region's page records and backing ledger are chunked (KrnMappingReserveVirtualChunked):
+ * chunks and backing each have one zeroed slot per chunk_pages pages of the
+ * capacity, and stay alive with the region. A commit (private or shared) of a
+ * page whose chunk is missing is refused: the caller attaches chunk_pages
+ * zeroed page records and backing entries first (AttachChunk, after
+ * ChunkMissing). Private backing pages enter the service's one alias index,
+ * sized by the page arena; a region carries no index of its own. */
 int AROSRestrictedRegionReserve(struct AROSRestrictedSpace *,struct AROSRestrictedRegion *,
-    uintptr_t,size_t,struct KrnMappingPage *,uintptr_t *,size_t,uintptr_t *index);
+    uintptr_t,size_t,struct KrnMappingPage **chunks,uintptr_t **backing,size_t chunk_pages,
+    size_t capacity);
+int AROSRestrictedRegionChunkMissing(const struct AROSRestrictedRegion *,size_t page);
+int AROSRestrictedRegionAttachChunk(struct AROSRestrictedRegion *,size_t page,
+    struct KrnMappingPage *,uintptr_t *backing);
 int AROSRestrictedRegionCommit(struct AROSRestrictedRegion *,size_t,uintptr_t,unsigned);
 int AROSRestrictedRegionDecommit(struct AROSRestrictedRegion *,size_t,uintptr_t *);
 int AROSRestrictedRegionProtect(struct AROSRestrictedRegion *,size_t,unsigned);

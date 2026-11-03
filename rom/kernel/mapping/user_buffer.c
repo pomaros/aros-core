@@ -54,8 +54,8 @@ static int part_valid(const struct KrnBufferSpace *s, const struct KrnBufferPart
     if (!m || m->owner != s || m->closing || m->shared || b->page >= m->page_count ||
         KrnMappingLookup(s->arena, m->start) != m || !b->length ||
         b->offset >= m->page_size || b->length > m->page_size - b->offset) return 0;
-    struct KrnMappingPage *p = &m->pages[b->page];
-    return p->physical && p->physical == b->physical && p->generation == b->generation &&
+    struct KrnMappingPage *p = KrnMappingPageAt(m, b->page);
+    return p && p->physical && p->physical == b->physical && p->generation == b->generation &&
         (p->protection & access) == access &&
         (p->state == KMAP_DIRTY || (access == KMAP_READ && p->state == KMAP_CLEAN));
 }
@@ -80,7 +80,9 @@ int KrnBufferPin(struct KrnBufferRegistry *r, uint64_t principal, uint64_t handl
         size_t offset = (address - m->start) % m->page_size;
         size_t n = m->page_size - offset;
         if (n > remaining) n = remaining;
-        struct KrnBufferPart b = {m, page, offset, n, m->pages[page].physical, m->pages[page].generation};
+        const struct KrnMappingPage *record = KrnMappingPageAt(m, page);
+        if (!record) return 0;
+        struct KrnBufferPart b = {m, page, offset, n, record->physical, record->generation};
         if (!part_valid(s, &b, access) || !ops->admit(ops->context, s,
             m->start + page * m->page_size, b.physical, m->page_size, access)) return 0;
         size_t refs = 1;

@@ -94,5 +94,35 @@ int main(void)
     CHECK(KrnMappingBeginClose(&file) && KrnMappingReleasePage(&file,0,&maps)==(uintptr_t)b.bytes &&
         KrnMappingRelease(&arena,&file),"file-release");
     CHECK(KrnMappingBeginClose(&m) && KrnMappingRelease(&arena,&m) && !arena.first,"release-reservation");
+    /* Chunked reservation: no page record until its chunk is attached. */
+    struct KrnMappingObject c;struct KrnMappingPage *chunks[2]={0},c0[2],c1[2];
+    CHECK(!KrnMappingReserveVirtualChunked(&arena,&c,BASE,3*PAGE,&b,NULL,2) &&
+        !KrnMappingReserveVirtualChunked(&arena,&c,BASE,3*PAGE,&b,chunks,0),"chunked-invalid");
+    chunks[0]=c0;
+    CHECK(!KrnMappingReserveVirtualChunked(&arena,&c,BASE,3*PAGE,&b,chunks,2) && !arena.first,"chunked-dirty-table");
+    chunks[0]=NULL;
+    CHECK(KrnMappingReserveVirtualChunked(&arena,&c,BASE,3*PAGE,&b,chunks,2) && c.page_count==3 &&
+        c.chunk_pages==2 && !c.pages && c.virtual_reservation,"chunked-reserve");
+    CHECK(KrnMappingChunkMissing(&c,0) && KrnMappingChunkMissing(&c,2) && !KrnMappingChunkMissing(&c,3) &&
+        !KrnMappingPageAt(&c,0) && !KrnMappingPageAt(&c,3),"chunked-missing");
+    CHECK(KrnMappingFault(&c,BASE,KMAP_READ,1,&request,&maps)==KMAP_FAULT_TRAP && !c.in_flight,"chunked-fault-trap");
+    CHECK(!KrnMappingCommitResidentPage(&c,0,(uintptr_t)b.bytes,3,&maps) && !b.mapped && !c.resident,"chunked-commit-needs-chunk");
+    CHECK(!KrnMappingProtectPage(&c,0,3,&maps),"chunked-protect-missing");
+    released=123;
+    CHECK(KrnMappingDecommitPage(&c,0,&maps,&released) && !released,"chunked-decommit-missing");
+    CHECK(!KrnMappingCommitRange(&c,BASE,PAGE,3) &&
+        !KrnMappingPopulate(&c,BASE,PAGE,0,&resident,&pending,&error),"chunked-flat-only");
+    CHECK(!KrnMappingAttachChunk(&c,3,c0) && !KrnMappingAttachChunk(&c,0,NULL) && KrnMappingChunkMissing(&c,0),"chunked-attach-invalid");
+    CHECK(KrnMappingAttachChunk(&c,1,c0) && !KrnMappingAttachChunk(&c,0,c1) && KrnMappingPageAt(&c,1)==&c0[1] &&
+        c0[0].state==KMAP_RESERVED && !c0[0].physical && !KrnMappingChunkMissing(&c,0) && KrnMappingChunkMissing(&c,2),"chunked-attach");
+    CHECK(KrnMappingCommitResidentPage(&c,1,(uintptr_t)b.bytes,3,&maps) && c0[1].state==KMAP_DIRTY &&
+        c.resident==1 && b.mapped==(uintptr_t)b.bytes,"chunked-commit");
+    CHECK(KrnMappingFault(&c,BASE+PAGE,KMAP_WRITE,1,&request,&maps)==KMAP_FAULT_RETRY,"chunked-fault-resident");
+    CHECK(KrnMappingProtectPage(&c,1,1,&maps) && b.protection==1,"chunked-protect");
+    CHECK(KrnMappingAttachChunk(&c,2,c1) && KrnMappingPageAt(&c,2)==&c1[0] && !KrnMappingChunkMissing(&c,2),"chunked-attach-tail");
+    CHECK(KrnMappingBeginClose(&c) && !KrnMappingRelease(&arena,&c) &&
+        KrnMappingCut(&arena,&c,BASE+2*PAGE,PAGE,NULL,NULL,0)==KMAP_CUT_INVALID,"chunked-no-cut");
+    CHECK(!KrnMappingReleasePage(&c,0,&maps) && KrnMappingReleasePage(&c,1,&maps)==(uintptr_t)b.bytes &&
+        KrnMappingRelease(&arena,&c) && !arena.first,"chunked-release");
     puts("PASS virtual reserve commit decommit zero reuse");return 0;
 }

@@ -72,7 +72,7 @@ try:
   ('populate-preflight','if (queue && (p->state==KMAP_ERROR ||','if (0 && queue && (p->state==KMAP_ERROR ||',here/'test.c'),
   ('batch-duplicate','if (i && address<=previous)','if (0 && i && address<=previous)',here/'writeback_batch_test.c'),
   ('batch-not-shared','!p || !r->mapping->shared || !p->physical','!p || !p->physical',here/'writeback_batch_test.c'),
-  ('batch-no-rollback','prior->mapping->pages[prior->page].state=KMAP_DIRTY;','(void)prior;',here/'writeback_batch_test.c'),
+  ('batch-no-rollback','KrnMappingPageAt(prior->mapping,prior->page)->state=KMAP_DIRTY;','(void)prior;',here/'writeback_batch_test.c'),
   ('batch-partial-end','if (!writeback_batch_valid(requests,count,KMAP_WRITEBACK)) return 0;','if (0) return 0;',here/'writeback_batch_test.c'),
  ]:execute(name,test,before,after)
  inputs=[model,header,model.parent/'domain.c',model.parent/'domain.h',here/'domain_test.c',here/'test.c',here/'range_test.c',here/'writeback_batch_test.c',Path(__file__)]

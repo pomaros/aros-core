@@ -50,6 +50,13 @@ struct KrnMappingObject {
     size_t resident, in_flight;
     struct KrnMappingObject *next;
     unsigned virtual_reservation;
+    /* Chunked reservation: the page records live in chunks of chunk_pages
+     * records that the caller attaches on demand (pages is NULL). A page
+     * whose chunk is missing reads as RESERVED with generation
+     * reserved_generation and no backing. */
+    struct KrnMappingPage **chunks;
+    size_t chunk_pages;
+    uint64_t reserved_generation;
 };
 struct KrnMappingArena {
     uintptr_t start;
@@ -114,6 +121,21 @@ int KrnMappingReserveVirtual(struct KrnMappingArena *, struct KrnMappingObject *
     uintptr_t address, size_t length, void *owner, struct KrnMappingPage *, size_t capacity);
 int KrnMappingCommitRange(struct KrnMappingObject *, uintptr_t address,
     size_t length, unsigned protection);
+/* A chunked virtual reservation: chunks has one zeroed slot per chunk_pages
+ * pages (rounded up) and no page record exists until AttachChunk supplies
+ * chunk_pages zeroed records for the chunk holding page. Operations that
+ * write a page record (commit, protect, fault) refuse a missing chunk;
+ * ChunkMissing tells the caller to attach one first. Decommit of a missing
+ * chunk releases nothing. Range commit, cut, populate and writeback are not
+ * available on chunked objects. Chunks stay attached until release; the
+ * caller owns their storage. PageAt returns the record of a page, or NULL
+ * for a missing chunk. */
+int KrnMappingReserveVirtualChunked(struct KrnMappingArena *, struct KrnMappingObject *,
+    uintptr_t address, size_t length, void *owner, struct KrnMappingPage **chunks,
+    size_t chunk_pages);
+int KrnMappingChunkMissing(const struct KrnMappingObject *, size_t page);
+int KrnMappingAttachChunk(struct KrnMappingObject *, size_t page, struct KrnMappingPage *);
+struct KrnMappingPage *KrnMappingPageAt(const struct KrnMappingObject *, size_t page);
 /* Eager anonymous commit of a previously RESERVED page. The caller supplies
  * newly owned, zero-filled backing and retains it on failure. Successful
  * installation transfers backing to the mapping and advances its generation.

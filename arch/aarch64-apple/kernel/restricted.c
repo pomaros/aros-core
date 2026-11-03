@@ -52,13 +52,24 @@ enum RestrictedState { R_FREE, R_ALLOCATING, R_LIVE, R_REAPING };
 /* Address-space allocation lifetime is separate from an execution context.
  * The legacy run wrapper creates one domain; explicit attachment follows here,
  * rather than making a thread's native continuation own shared root storage. */
+/* The page records and backing ledger come in chunks of chunk_pages pages
+ * (R_CHUNK_PAGES at most), attached at the first commit into the chunk: a
+ * reservation costs its chunk tables, never a record per reserved page. Each
+ * attached chunk is one page-rounded allocation of chunk_bytes holding the
+ * records, then the ledger. */
+#define R_CHUNK_PAGES 512U
 struct RestrictedAllocation {
     struct RestrictedAllocation *next;
     struct AROSRestrictedRegion region;
-    size_t count,storage_bytes;
-    struct KrnMappingPage *pages;
-    uintptr_t *backing,*index;
+    size_t count,storage_bytes,chunk_pages,chunk_count,chunk_bytes,chunks_attached;
+    struct KrnMappingPage **pages;
+    uintptr_t **backing;
 };
+static uintptr_t r_backing(const struct RestrictedAllocation *a,size_t page)
+{
+    uintptr_t *chunk=page<a->count ? a->backing[page/a->chunk_pages] : NULL;
+    return chunk ? chunk[page%a->chunk_pages] : 0;
+}
 struct RestrictedTableChunk {
     struct RestrictedTableChunk *next;
     void *pages;
@@ -677,11 +688,13 @@ static const void *r_execution_alias(struct RestrictedDomain *d,uint64_t va,size
     for (struct RestrictedAllocation *a=d->allocations;a;a=a->next) {
         if (va<a->region.mapping.start || va-a->region.mapping.start>=a->region.mapping.length) continue;
         size_t offset=va-a->region.mapping.start,page=offset/R_PAGE,in_page=offset%R_PAGE;
+        uintptr_t backing=r_backing(a,page);
+        const struct KrnMappingPage *p=KrnMappingPageAt(&a->region.mapping,page);
         if (page>=a->count || bytes>R_PAGE-in_page ||
-            !a->backing[page] || a->pages[page].physical!=a->backing[page] ||
+            !backing || !p || p->physical!=backing ||
             (a->region.shared && (page>=a->region.shared->count ||
-             a->region.shared->pages[page]!=a->backing[page]))) return NULL;
-        return (const unsigned char *)a->backing[page]+in_page;
+             a->region.shared->pages[page]!=backing))) return NULL;
+        return (const unsigned char *)backing+in_page;
     }
     return NULL;
 }
@@ -777,6 +790,12 @@ struct RestrictedMemoryOperation {
     uintptr_t address, physical;
     unsigned operation, protection;
     struct RestrictedAllocation *allocation;
+    /* A commit into a chunk without records: the handler asks for chunk_bytes
+     * of zeroed storage (chunk_needed), the caller supplies it in chunk and
+     * retries; the handler takes it (chunk becomes NULL) or leaves it. */
+    void *chunk;
+    size_t chunk_bytes;
+    unsigned chunk_needed;
 };
 /* Set only by the native publication wrapper while PageMapLock and the
  * remote rendezvous are held. Scalar payload SVCs cannot set this identity. */
@@ -790,7 +809,7 @@ static const struct AROSRestrictedPublicationOps publication_ops={NULL,r_publish
 static int r_prepare_low_page(struct RestrictedDomain *d,
     struct RestrictedAllocation *a, size_t page, uintptr_t address)
 {
-    if (address >= AROS_RESTRICTED_LOW_END || a->backing[page]) return 1;
+    if (address >= AROS_RESTRICTED_LOW_END || r_backing(a,page)) return 1;
     if (!AROSAppleKernelTransitionRangeAvailable(address, R_PAGE)) return 0;
     uint64_t physical;
     if (!AArch64MappingPhysical(&d->space.hardware,d->root,d->space.tcr,address,&physical))
@@ -811,7 +830,7 @@ static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned s
             (p->address >= AROS_RESTRICTED_LOW_END ||
             AROSAppleKernelTransitionRangeAvailable(p->address,a->count*R_PAGE)) &&
             AROSRestrictedRegionReserve(&d->space,&a->region,p->address,
-            a->count*R_PAGE,a->pages,a->backing,a->count,a->index)) {
+            a->count*R_PAGE,a->pages,a->backing,a->chunk_pages,a->count)) {
             a->next=d->allocations;d->allocations=a;d->memory_pages+=a->storage_bytes/R_PAGE;
             d->memory_metadata_pages+=a->storage_bytes/R_PAGE;frame->x[0]=1;
         }
@@ -826,6 +845,14 @@ static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned s
     if ((p->operation==1 || p->operation==5) && !r_tables_need(d,3)) {
         frame->x[1]=d->table_shortage;return 1;
     }
+    if ((p->operation==1 || p->operation==5) && AROSRestrictedRegionChunkMissing(&a->region,page)) {
+        if (!p->chunk) { p->chunk_bytes=a->chunk_bytes;p->chunk_needed=1;return 1; }
+        struct KrnMappingPage *records=p->chunk;
+        if (!AROSRestrictedRegionAttachChunk(&a->region,page,records,
+            (uintptr_t *)(records+a->chunk_pages))) return 1;
+        p->chunk=NULL;++a->chunks_attached;
+        d->memory_pages+=a->chunk_bytes/R_PAGE;d->memory_metadata_pages+=a->chunk_bytes/R_PAGE;
+    }
     if ((p->operation==1 || p->operation==5) &&
         !r_prepare_low_page(d,a,page,p->address)) return 1;
     if (p->operation==1) {
@@ -835,8 +862,9 @@ static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned s
         frame->x[0]=AROSRestrictedRegionDecommit(&a->region,page,&p->physical);
         if (frame->x[0] && p->physical) --d->memory_pages;
     } else if (p->operation==3) {
+        const struct KrnMappingPage *record=KrnMappingPageAt(&a->region.mapping,page);
         if ((p->protection&KMAP_EXEC) || a->region.publication_pending ||
-            (a->pages[page].protection&KMAP_EXEC)) {
+            (record && (record->protection&KMAP_EXEC))) {
             if (publication_context && publication_context==context)
                 frame->x[0]=AROSRestrictedRegionPublish(&a->region,page,p->protection,&publication_ops);
         } else frame->x[0]=AROSRestrictedRegionProtect(&a->region,page,p->protection);
@@ -844,8 +872,9 @@ static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned s
         frame->x[0]=AROSRestrictedRegionCommitShared(&a->region,page,p->protection);
     else if (p->operation==4 && p->address==a->region.mapping.start &&
         AROSRestrictedRegionDetach(&a->region)) {
-        for (size_t i=0;i<a->count;++i) d->memory_pages-=a->backing[i]!=0;
-        d->memory_pages-=a->storage_bytes/R_PAGE;d->memory_metadata_pages-=a->storage_bytes/R_PAGE;
+        for (size_t i=0;i<a->count;++i) d->memory_pages-=r_backing(a,i)!=0;
+        size_t metadata=a->storage_bytes/R_PAGE+a->chunks_attached*(a->chunk_bytes/R_PAGE);
+        d->memory_pages-=metadata;d->memory_metadata_pages-=metadata;
         *link=a->next;a->next=NULL;p->allocation=a;frame->x[0]=1;
     }
     return 1;
@@ -1425,7 +1454,10 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
 static void r_free_allocation(struct RestrictedAllocation *a)
 {
     for (size_t i=0;i<a->count;++i)
-        if (a->backing[i] && !AROSApplePageFree((void *)a->backing[i],R_PAGE))
+        if (r_backing(a,i) && !AROSApplePageFree((void *)r_backing(a,i),R_PAGE))
+            for (;;) __asm__ volatile("wfe");
+    for (size_t c=0;c<a->chunk_count;++c)
+        if (a->pages[c] && !AROSApplePageFree(a->pages[c],a->chunk_bytes))
             for (;;) __asm__ volatile("wfe");
     if (!AROSApplePageFree(a,a->storage_bytes)) for (;;) __asm__ volatile("wfe");
 }
@@ -1708,13 +1740,23 @@ static int r_close_domain(uint64_t handle)
 
 static int r_memory_call(struct RestrictedMemoryOperation *p)
 {
+    int ok;
     for (;;) {
         register uintptr_t argument __asm__("x0")=(uintptr_t)p;
         register uintptr_t missing __asm__("x1")=0;
         __asm__ volatile("svc #0xa567":"+r"(argument),"+r"(missing)::"memory","cc");
-        if (argument || !missing) return argument!=0;
-        if (!r_supply_tables(p->handle,NULL,NULL,missing)) return 0;
+        if (!argument && p->chunk_needed) {
+            p->chunk_needed=0;
+            p->chunk=AROSApplePageAllocate(NULL,p->chunk_bytes,MEMF_CLEAR);
+            if (p->chunk) continue;
+            ok=0;break;
+        }
+        if (argument || !missing) { ok=argument!=0;break; }
+        if (!r_supply_tables(p->handle,NULL,NULL,missing)) { ok=0;break; }
     }
+    /* Storage the handler did not take. */
+    if (p->chunk && !AROSApplePageFree(p->chunk,p->chunk_bytes)) for (;;) __asm__ volatile("wfe");
+    p->chunk=NULL;return ok;
 }
 static size_t r_record_size(size_t header,size_t count,size_t element)
 {
@@ -1725,17 +1767,18 @@ static size_t r_record_size(size_t header,size_t count,size_t element)
 static int r_reserve_memory(uint64_t handle,uintptr_t address,size_t length)
 {
     if (!AROSRestrictedRangeValid(address,length)) return 0;
-    size_t count=length/R_PAGE,slots=AROSRestrictedIndexSlots(count);
-    /* Page metadata, backing ledger and the backing index's slots. */
-    if (!slots || slots>(SIZE_MAX-sizeof(struct RestrictedAllocation))/sizeof(uintptr_t)) return 0;
-    size_t storage=r_record_size(sizeof(struct RestrictedAllocation)+slots*sizeof(uintptr_t),count,
+    size_t count=length/R_PAGE;
+    size_t chunk_pages=count<R_CHUNK_PAGES ? count : R_CHUNK_PAGES,chunk_count=(count+chunk_pages-1)/chunk_pages;
+    /* The chunk tables; the chunks come later. */
+    size_t storage=r_record_size(sizeof(struct RestrictedAllocation),chunk_count,2*sizeof(void *));
+    size_t chunk_bytes=r_record_size(sizeof(struct KrnMappingPage),chunk_pages,
         sizeof(struct KrnMappingPage)+sizeof(uintptr_t));
-    if (!storage) return 0;
+    if (!storage || !chunk_bytes) return 0;
     Forbid();
     struct RestrictedAllocation *a=AROSApplePageAllocate(NULL,storage,MEMF_CLEAR);
     if (!a) { Permit();return 0; }
-    a->count=count;a->storage_bytes=storage;a->pages=(void *)(a+1);a->backing=(void *)(a->pages+count);
-    a->index=a->backing+count;
+    a->count=count;a->storage_bytes=storage;a->chunk_pages=chunk_pages;a->chunk_count=chunk_count;
+    a->chunk_bytes=chunk_bytes;a->pages=(void *)(a+1);a->backing=(void *)(a->pages+chunk_count);
     struct RestrictedMemoryOperation op={.handle=handle,.address=address,.allocation=a};
     int ok=r_memory_call(&op);if (!ok && !AROSApplePageFree(a,storage)) for (;;) __asm__ volatile("wfe");
     Permit();return ok;
