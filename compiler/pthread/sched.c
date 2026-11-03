@@ -20,6 +20,7 @@
 */
 
 #include <proto/exec.h>
+#include <proto/kernel.h>
 #include <exec/execbase.h>
 #ifdef __AROS__
 #include <aros/config.h>
@@ -61,6 +62,18 @@ int sched_yield(void)
     Forbid();
     SysBase->SysFlags |= SFF_AttnSwitch;
     Permit();
+#elif defined(__AROSEXEC_SMP__)
+    /* A priority bounce is no yield here: the first SetTaskPri reschedules
+       at once, and a busier task of the old priority keeps the CPU, so the
+       caller stays at -10 on the ready list until that task blocks. The
+       kernel's switch re-enqueues the caller behind its equals and
+       dispatches. */
+    static APTR KernelBase;
+
+    if (KernelBase == NULL)
+        KernelBase = OpenResource((CONST_STRPTR)"kernel.resource");
+    if (KernelBase != NULL)
+        KrnSwitch();
 #else
     BYTE oldpri;
     struct Task *task = FindTask(NULL);
