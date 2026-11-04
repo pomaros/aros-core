@@ -1,13 +1,13 @@
 /*
     Copyright (C) 2026, The AROS Development Team. All rights reserved.
 
-    venus.hidd - Mesa's Venus Vulkan driver behind vulkan.hidd.
+    venus.hidd - Mesa's Venus Vulkan driver behind the Vulkan HIDD interface.
 
-    Venus encodes Vulkan commands for a renderer. Here the renderer runs
-    in this system, in venusrenderer.library, over a native driver: the module
-    opens that driver, starts the renderer on its root entry point and
-    registers Venus as a GPU of its own. Applications then reach the native
-    driver through the same protocol an isolated Windows process uses.
+    Venus encodes Vulkan commands for a renderer. Here the renderer runs in
+    this system, in venusrenderer.library, over a native driver: the module
+    makes that driver's object and starts the renderer on its root entry
+    point. hidd.vulkan.venus then serves applications through the same
+    protocol an isolated Windows process uses.
 */
 
 #include <aros/symbolsets.h>
@@ -15,87 +15,95 @@
 #include <hidd/vulkan_hidd.h>
 #include <proto/exec.h>
 #include <proto/oop.h>
-#include <proto/vulkan.h>
 #include <proto/venusrenderer.h>
 
 #include <venus/avs.h>
 
-#include "mesa_icd.h"
 #include "venus_intern.h"
-
-#include LC_LIBDEFS_FILE
 
 /* The native driver the renderer runs its commands on */
 #define VENUS_NATIVE_DRIVER     "lavapipe.hidd"
-#define VENUS_NATIVE_CLASS      CLID_Hidd_Vulkan_Lavapipe
+#define VENUS_NATIVE_CLASS      "hidd.vulkan.lavapipe"
 
 /* The renderer's functions are C calls through this base */
 struct Library *VenusRendererBase;
 
-static const struct VulkanDriverCallbacks *native;
-static APTR native_data;
+/* The renderer's entry point takes no context: one renderer per system */
+static struct venusstaticdata *venus_sd;
 
 static avs_void_function native_gipa(void *instance, const char *name)
 {
-    return (avs_void_function)native->GetInstanceProcAddr(instance, name, native_data);
+    struct pHidd_Vulkan_GetInstanceProcAddr msg = {
+        .mID      = venus_sd->nativeGipa,
+        .instance = instance,
+        .pName    = name,
+    };
+
+    return (avs_void_function)OOP_DoMethod(venus_sd->native, (OOP_Msg)&msg);
 }
 
-OOP_Object *METHOD(HiddVenus, Root, New)
+static void venus_release(struct venusstaticdata *sd)
 {
-    return (OOP_Object *)OOP_DoSuperMethod(cl, o, (OOP_Msg)msg);
+    if (sd->venuslib)
+        CloseLibrary(sd->venuslib);
+    VenusRendererBase = NULL;
+    if (sd->native)
+        OOP_DisposeObject(sd->native);
+    if (sd->nativehidd)
+        CloseLibrary(sd->nativehidd);
+    if (sd->hiddVulkanAB)
+        OOP_ReleaseAttrBase((STRPTR)IID_Hidd_Vulkan);
+    if (sd->UtilityBase)
+        CloseLibrary(sd->UtilityBase);
+    sd->venuslib = sd->nativehidd = sd->UtilityBase = NULL;
+    sd->native = NULL;
+    sd->hiddVulkanAB = 0;
 }
 
 static int HiddVenus_InitLib(LIBBASETYPEPTR LIBBASE)
 {
-    struct Library *HiddVulkanBase;
+    struct venusstaticdata *sd = &LIBBASE->sd;
+    struct TagItem tags[] = {
+        { 0, VULKAN_INTERFACE_VERSION },
+        { TAG_DONE, 0 }
+    };
 
-    if (!(HiddVulkanBase = OpenLibrary("vulkan.hidd", 0)))
-        return FALSE;
-    LIBBASE->vulkanhidd = HiddVulkanBase;
+    venus_sd = sd;
+    if (!(sd->UtilityBase = OpenLibrary((STRPTR)"utility.library", 0)) ||
+        !(sd->hiddVulkanAB = OOP_ObtainAttrBase((STRPTR)IID_Hidd_Vulkan)))
+        goto fail;
+    sd->nativeGipa = OOP_GetMethodID((STRPTR)IID_Hidd_Vulkan, moHidd_Vulkan_GetInstanceProcAddr);
+    tags[0].ti_Tag = sd->hiddVulkanAB + aoHidd_Vulkan_InterfaceVersion;
 
-    /* The native driver registers itself as it opens */
-    LIBBASE->nativehidd = OpenLibrary(VENUS_NATIVE_DRIVER, 0);
-    native = VulkanHidd_FindDriver(VENUS_NATIVE_CLASS, &native_data);
-    if (!native || !native->GetInstanceProcAddr)
+    if (!(sd->nativehidd = OpenLibrary((STRPTR)VENUS_NATIVE_DRIVER, 0)) ||
+        !(sd->native = OOP_NewObject(NULL, VENUS_NATIVE_CLASS, tags)))
     {
         bug("[venus] no native driver %s\n", VENUS_NATIVE_DRIVER);
         goto fail;
     }
 
-    if (!(VenusRendererBase = OpenLibrary("venusrenderer.library", 0)))
+    if (!(VenusRendererBase = OpenLibrary((STRPTR)"venusrenderer.library", 0)))
         goto fail;
-    LIBBASE->venuslib = VenusRendererBase;
+    sd->venuslib = VenusRendererBase;
     if (!avs_server_init(avs_local_memory(), native_gipa))
     {
         bug("[venus] the renderer did not start\n");
         goto fail;
     }
-
-    /* Preferred over the native driver: lower priority values win */
-    LIBBASE->slot = VulkanHidd_RegisterGPU(CLID_Hidd_Vulkan_Venus, NULL, 0x1af4, 0x1050,
-                                           VULKAN_GPU_VGPU | VULKAN_GPU_COMPUTE,
-                                           0, "Venus", -1,
-                                           &mesa_icd_callbacks, LIBBASE, 0, 0, 0);
-    if (LIBBASE->slot >= 0)
-        return TRUE;
-    bug("[venus] vulkan.hidd refused the registration\n");
+    return TRUE;
 
 fail:
-    if (LIBBASE->venuslib)
-        CloseLibrary(LIBBASE->venuslib);
-    VenusRendererBase = NULL;
-    if (LIBBASE->nativehidd)
-        CloseLibrary(LIBBASE->nativehidd);
-    CloseLibrary(HiddVulkanBase);
-    LIBBASE->venuslib = LIBBASE->nativehidd = LIBBASE->vulkanhidd = NULL;
+    venus_release(sd);
     return FALSE;
 }
 
+/* The renderer's threads run from this module: it stays resident */
 static int HiddVenus_ExpungeLib(LIBBASETYPEPTR LIBBASE)
 {
-    /* The registry keeps our callbacks: stay resident while vulkan.hidd is */
-    return LIBBASE->vulkanhidd == NULL;
+    return LIBBASE->sd.native == NULL;
 }
 
 ADD2INITLIB(HiddVenus_InitLib, 0)
 ADD2EXPUNGELIB(HiddVenus_ExpungeLib, 0)
+
+ADD2LIBS((STRPTR)"vulkan.hidd", 8, static struct Library *, VulkanHiddBase);
