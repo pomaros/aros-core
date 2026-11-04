@@ -594,7 +594,7 @@ BOOL ReadKeyFiles(struct SecurityBase *secBase)
 void LoadConfig(struct SecurityBase *secBase)
 {
     BPTR file, olddir;
-    SIPTR *argarray[19];
+    SIPTR *argarray[24];
 
 #define argLIMITDOSSETPROTECTION    0
 #define argPROFILE                  1
@@ -615,6 +615,11 @@ void LoadConfig(struct SecurityBase *secBase)
 #define argMAXTRIES                 16
 #define argLOCKTIME                 17
 #define argLOGINDELAYMAX            18
+#define argKEYLOGIN                 19
+#define argKEYREQUIRED              20
+#define argKEYTIMEOUT               21
+#define argKEYAPPID                 22
+#define argKEYDEVICE                23
 
     struct RDArgs *rdargs;
     ULONG line;
@@ -623,13 +628,16 @@ void LoadConfig(struct SecurityBase *secBase)
 
     D(bug(DEBUG_NAME_STR " %s()\n", __func__);)
 
-    config.Flags = secCFGF_LimitDOSSetProtection | secCFGF_Profile | secCFGF_LastLoginReq;
+    config.Flags = secCFGF_LimitDOSSetProtection | secCFGF_Profile | secCFGF_LastLoginReq | secCFGF_KeyLogin;
     config.LogFlags = 0;
     config.PasswduidLevel = secNOBODY_UID;
     config.PasswdgidLevel = secNOBODY_UID;
     config.MaxTries = secAUTH_DEFMAXTRIES;
     config.LockTime = secAUTH_DEFLOCKTIME;
     config.LoginDelayMax = secAUTH_DEFDELAYMAX;
+    config.KeyTimeout = secAUTH_DEFKEYTIMEOUT;
+    strcpy(config.KeyAppID, secAUTH_DEFKEYAPPID);
+    strcpy(config.KeyDevice, secAUTH_DEFKEYDEVICE);
 
     if (secBase->_cfgLock && ClearBuffer(secBase) && (rdargs = AllocDosObject(DOS_RDARGS, NULL)))
     {
@@ -655,7 +663,8 @@ void LoadConfig(struct SecurityBase *secBase)
                              "LOGLOGIN/K/N,LOGLOGINFAIL/K/N,LOGPASSWD/K/N,LOGPASSWDFAIL/K/N,"
                              "LOGCHECKPASSWD/K/N,LOGCHECKPASSWDFAIL/K/N,PASSWDUIDLEVEL/K/N,"
                              "PASSWDGIDLEVEL/K/N,FSTAB/K/N,RESOURCETRACKING/K/N,LOADPLUGIN/K,"
-                             "HASHEDLOGIN/K/N,MAXTRIES/K/N,LOCKTIME/K/N,LOGINDELAYMAX/K/N",
+                             "HASHEDLOGIN/K/N,MAXTRIES/K/N,LOCKTIME/K/N,LOGINDELAYMAX/K/N,"
+                             "KEYLOGIN/K/N,KEYREQUIRED/K/N,KEYTIMEOUT/K/N,KEYAPPID/K,KEYDEVICE/K",
                              (SIPTR *)argarray, rdargs))
                 {
 #define BOOLOPT(idx, var, flag) \
@@ -667,6 +676,14 @@ void LoadConfig(struct SecurityBase *secBase)
                     BOOLOPT(argFSTAB, config.Flags, secCFGF_UseFSTab);
                     BOOLOPT(argRESOURCETRACKING, config.Flags, secCFGF_RT);
                     BOOLOPT(argHASHEDLOGIN, config.Flags, secCFGF_HashedLogin);
+                    BOOLOPT(argKEYLOGIN, config.Flags, secCFGF_KeyLogin);
+                    BOOLOPT(argKEYREQUIRED, config.Flags, secCFGF_KeyRequired);
+                    if (argarray[argKEYTIMEOUT])
+                        config.KeyTimeout = (*argarray[argKEYTIMEOUT] < 1 || *argarray[argKEYTIMEOUT] > 600) ? secAUTH_DEFKEYTIMEOUT : *argarray[argKEYTIMEOUT];
+                    if (argarray[argKEYAPPID] && strlen((STRPTR)argarray[argKEYAPPID]) < sizeof(config.KeyAppID))
+                        strcpy(config.KeyAppID, (STRPTR)argarray[argKEYAPPID]);
+                    if (argarray[argKEYDEVICE] && strlen((STRPTR)argarray[argKEYDEVICE]) < sizeof(config.KeyDevice))
+                        strcpy(config.KeyDevice, (STRPTR)argarray[argKEYDEVICE]);
                     BOOLOPT(argLOGSTARTUP, config.LogFlags, secLogF_Startup);
                     BOOLOPT(argLOGLOGIN, config.LogFlags, secLogF_Login);
                     BOOLOPT(argLOGLOGINFAIL, config.LogFlags, secLogF_LoginFail);
@@ -736,10 +753,8 @@ void LoadConfig(struct SecurityBase *secBase)
  * RecoverDbFile(). The old file is never touched if anything goes wrong
  * before that. 'write' returns the number of bytes it wrote, or -1.
  */
-typedef LONG (*DbWriter)(struct SecurityBase *secBase, BPTR file);
-
-static BOOL RewriteDbFile(struct SecurityBase *secBase, BPTR dir, CONST_STRPTR name, CONST_STRPTR newname,
-                          CONST_STRPTR oldname, BOOL readable, DbWriter write)
+BOOL RewriteDbFile(struct SecurityBase *secBase, BPTR dir, CONST_STRPTR name, CONST_STRPTR newname,
+                   CONST_STRPTR oldname, BOOL readable, DbWriter write, APTR ctx)
 {
     BPTR file, olddir;
     BOOL res = FALSE;
@@ -759,7 +774,7 @@ static BOOL RewriteDbFile(struct SecurityBase *secBase, BPTR dir, CONST_STRPTR n
             ProtectRootWritable(secBase, newname);
         else
             ProtectRootOnly(secBase, newname);
-        written = write(secBase, file);
+        written = write(secBase, file, ctx);
         res = Close(file) && (written > 0);
 
         /* the file on disk must hold all of it */
@@ -779,8 +794,16 @@ static BOOL RewriteDbFile(struct SecurityBase *secBase, BPTR dir, CONST_STRPTR n
         }
         if (res)
         {
+            BPTR old;
+
             DeleteFile(oldname);
-            res = Rename(name, oldname) && Rename(newname, name);
+            /* a first file (a user's key file) has no old version to keep */
+            if ((old = Lock(name, SHARED_LOCK)))
+            {
+                UnLock(old);
+                res = Rename(name, oldname);
+            }
+            res = res && Rename(newname, name);
             if (res)
                 DeleteFile(oldname);
             else
@@ -804,7 +827,7 @@ static BOOL RewriteDbFile(struct SecurityBase *secBase, BPTR dir, CONST_STRPTR n
     return res;
 }
 
-static LONG WritePasswd(struct SecurityBase *secBase, BPTR file)
+static LONG WritePasswd(struct SecurityBase *secBase, BPTR file, APTR ctx)
 {
     struct secUserDef *def;
     LONG written = 0, len;
@@ -828,7 +851,7 @@ static LONG WritePasswd(struct SecurityBase *secBase, BPTR file)
 
 /* The group lines, then - after an empty line - the secondary groups of
  * the users ("uid:gid,gid...") */
-static LONG WriteGroup(struct SecurityBase *secBase, BPTR file)
+static LONG WriteGroup(struct SecurityBase *secBase, BPTR file, APTR ctx)
 {
     struct secGroupDef *gdef;
     struct secUserDef *udef;
@@ -882,7 +905,7 @@ static LONG WriteGroup(struct SecurityBase *secBase, BPTR file)
 BOOL UpdateUserDefs(struct SecurityBase *secBase)
 {
     return RewriteDbFile(secBase, secBase->_pwdLock, PasswdFileName, secPasswd_NewName, secPasswd_OldName,
-                         FALSE, WritePasswd);
+                         FALSE, WritePasswd, NULL);
 }
 
 /*
@@ -892,7 +915,7 @@ BOOL UpdateUserDefs(struct SecurityBase *secBase)
 BOOL UpdateGroupDefs(struct SecurityBase *secBase)
 {
     return RewriteDbFile(secBase, secBase->_cfgLock, GroupFileName, secGroup_NewName, secGroup_OldName,
-                         TRUE, WriteGroup);
+                         TRUE, WriteGroup, NULL);
 }
 
 /*

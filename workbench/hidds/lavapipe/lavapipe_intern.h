@@ -1,22 +1,48 @@
-#ifndef LAVAPIPE_INTERN_H
-#define LAVAPIPE_INTERN_H
+#ifndef _LAVAPIPE_INTERN_H
+#define _LAVAPIPE_INTERN_H
 
 /*
-    Copyright (C) 2026, The AROS Development Team. All rights reserved.
+    Copyright 2026, The AROS Development Team. All rights reserved.
 */
 
-#include <exec/libraries.h>
-#include <oop/oop.h>
+#include <stdint.h>
+#include <stdbool.h>
 
-struct IntHiddLavapipeBase
+#include LC_LIBDEFS_FILE
+
+#define CLID_Hidd_Vulkan_Lavapipe  "hidd.vulkan.lavapipe"
+
+struct HiddVulkanLavapipeData
 {
-    struct Library      base;
-    OOP_Class          *lavapipeclass;
-    struct Library     *vulkanhidd;
-    int32_t             slot;
+    OOP_Object *lavapipe_obj;
+};
+
+struct lavapipestaticdata
+{
+    OOP_Class       *vulkanclass;
+    OOP_AttrBase    hiddVulkanAB;
+    struct Library  *UtilityBase;
+};
+
+LIBBASETYPE
+{
+    struct Library              LibNode;
+    struct lavapipestaticdata   sd;
 };
 
 #define METHOD(base, id, name) \
   base ## __ ## id ## __ ## name (OOP_Class *cl, OOP_Object *o, struct p ## id ## _ ## name *msg)
+
+#define BASE(lib) ((LIBBASETYPEPTR)(lib))
+
+#define SD(cl) (&BASE(cl->UserData)->sd)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+void Lavapipe_ForceLLVMPipeRTTI(void);
+#ifdef __cplusplus
+}
+#endif
 
 #endif

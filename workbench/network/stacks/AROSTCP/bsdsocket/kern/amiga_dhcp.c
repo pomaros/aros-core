@@ -8,9 +8,6 @@
 #include <net/if_sana.h>
 #include <net/sana2arp.h>   /* for autoip_start() */
 #include <api/netservice_api.h>
-#include <sys/syslog.h>
-#include <sys/systm.h>
-#include <proto/exec.h>
 
 extern struct ifnet *ifnet;
 
@@ -25,36 +22,24 @@ extern struct ifnet *ifnet;
  * teardown still call run_dhclient()/kill_dhclient() etc. to mark intent, but
  * the actual process management is the daemon's job - the stack only records
  * the per-interface ifi_aros_usedhcp flag (set by addifent), which the daemon
- * reads back through SIOCGIFDHCP.  These remain as no-ops so existing callers
- * are undisturbed; autoip (IPv4LL) stays in the stack.
+ * reads back through SIOCGIFDHCP.  run_dhclient() only tells the daemon to
+ * relaunch its clients, and only for a DHCP interface - a link that came up
+ * (S2EVENT_CONNECT) or an interface added at run time needs a new lease; the
+ * kill calls stay no-ops.  autoip (IPv4LL) stays in the stack.
  */
 
-/*
- * A new association (sana_connect) means a new network and a new lease: the
- * DHCP daemon's client must start over, and only the daemon knows it. Ask it
- * through its reconfigure-end signal, which stops its clients and launches
- * them again for the current interface set. Without this, a link lost and
- * regained (a dropped association, a laptop sleep) left the interface with
- * no address while dhclient went on believing in a lease the stack had
- * deleted. Before the daemon registers (the boot configuration) there is
- * nobody to tell, and the daemon's own first launch covers it.
- */
 void run_dhclient(struct ifnet *ifp)
 {
-    struct NetService *svc;
-
-    (void)ifp;
-    svc = netservice_find((CONST_STRPTR)"dhcp");
-    if(svc != NULL && (svc->ns_Flags & NSF_EXTERNAL) && svc->ns_Task != NULL &&
-            svc->ns_SigEnd != 0) {
-        __log(LOG_NOTICE, "%s%d: new association, DHCP restarted.",
-              ifp->if_name, ifp->if_unit);
-        Signal(svc->ns_Task, svc->ns_SigEnd);
-    }
+    if(ifp->if_data.ifi_aros_usedhcp)
+        netservice_resume("dhcp");
 }
 void kill_dhclient(struct ifnet *ifp)       { (void)ifp; }
 #if INET6 && DHCP6
-void run_dhclient6(struct ifnet *ifp)       { (void)ifp; }
+void run_dhclient6(struct ifnet *ifp)
+{
+    if(ifp->if_data.ifi_aros_usedhcp6)
+        netservice_resume("dhcp");
+}
 void kill_dhclient6(struct ifnet *ifp)      { (void)ifp; }
 #endif
 void dhcp_stop_all(void)                    { }

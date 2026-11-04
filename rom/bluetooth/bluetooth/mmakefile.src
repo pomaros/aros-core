@@ -1,5 +1,4 @@
 include $(SRCDIR)/config/aros.cfg
-#MM- kernel-bluetooth-library : workbench-libs-keyring-includes
 
 FILES :=    \
     bluetooth.library \
@@ -36,8 +35,5 @@ USER_LDFLAGS := -static
 
 INCLUDE_FILES := $(call WILDCARD, include/libraries/*.h)
 %copy_includes path=libraries dir=include/libraries
-
-INCLUDE_FILES := $(call WILDCARD, include/devices/*.h)
-%copy_includes path=devices dir=include/devices
 
 %common

@@ -29,7 +29,6 @@ struct HwPropEntry { struct MinNode node; char name[28]; char val[104]; };
 
 struct BtActionData
 {
-    Object *editor;         /* enclosing shared PrefsEditor, when hosted */
     Object *navlst;         /* left navigation (IconListClass) */
     Object *pagegrp;        /* page group, driven by navlst */
 
@@ -67,7 +66,7 @@ struct BtActionData
     Object *statustxt;
 
     /* pairing request popup */
-    Object *pairwin, *pairtext, *pairyes, *pairno, *pairinput;
+    Object *pairwin, *pairtext, *pairyes, *pairno;
     APTR    pairdev;
     ULONG   pairtype;
 
@@ -86,8 +85,6 @@ struct BtActionData
 
 /* incremental list update shared by the Devices page and the Add Device window (ActionClass.c) */
 void MergeDevList(Object *list, struct MinList *entries, struct MinList *fresh);
-
-#define MUIM_BtA_RefreshConfig (TAG_USER | 0x1a24)
 
 #define TAGBASE_BtA (TAG_USER | 0x1a00)
 

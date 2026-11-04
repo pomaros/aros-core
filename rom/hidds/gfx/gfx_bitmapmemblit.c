@@ -297,33 +297,36 @@ VOID BM__Hidd_BitMap__CopyMemBox8(OOP_Class *cl, OOP_Object *o,
 
 /****************************************************************************************/
 
-VOID BM__Hidd_BitMap__CopyMemBox16(OOP_Class *cl, OOP_Object *o,
-                                   struct pHidd_BitMap_CopyMemBox16 *msg)
+/* Worker for CopyMemBox16, also used by CopyMemBox32: a 32 bit pixel is two
+   16 bit ones, and pairs of those are copied with ULONG moves anyway. Called
+   directly rather than through the CopyMemBox16 method, so a subclass
+   overriding only that is not involved. x and width are LONG, as doubling
+   them for 32 bit may not fit a WORD. */
+GFX_SHARED VOID copymembox16(UBYTE *src, LONG srcX, LONG srcY, ULONG srcMod,
+                             UBYTE *dst, LONG dstX, LONG dstY, ULONG dstMod,
+                             LONG width, LONG height)
 {
     UBYTE *src_start, *dst_start;
-    LONG phase, width, height, w, p;
+    LONG phase, w, p;
     LONG src_start_add, dst_start_add; /* must be signed */
     BOOL descending;
 
-    width  = msg->width;
-    height = msg->height;
+    src_start     = src + srcY * srcMod + srcX * 2;
+    src_start_add = (LONG)srcMod - width * 2;
 
-    src_start     = msg->src + msg->srcY * msg->srcMod + msg->srcX * 2;
-    src_start_add = (LONG)msg->srcMod - width * 2;
-
-    dst_start     = msg->dst + msg->dstY * msg->dstMod + msg->dstX * 2;
-    dst_start_add = (LONG)msg->dstMod - width * 2;
+    dst_start     = dst + dstY * dstMod + dstX * 2;
+    dst_start_add = (LONG)dstMod - width * 2;
 
     IPTR src_begin = (IPTR)src_start;
-    IPTR src_end   = src_begin + (height - 1) * msg->srcMod + width * 2;
+    IPTR src_end   = src_begin + (height - 1) * srcMod + width * 2;
 
     IPTR dst_begin = (IPTR)dst_start;
 
     if (src_begin < dst_begin && src_end > dst_begin) {
         /* Overlap: copy backwards */
         descending = TRUE;
-        src_start += (height - 1) * msg->srcMod + width * 2;
-        dst_start += (height - 1) * msg->dstMod + width * 2;
+        src_start += (height - 1) * srcMod + width * 2;
+        dst_start += (height - 1) * dstMod + width * 2;
 
         phase = ((IPTR)src_start & 1L);
         if (phase > width) phase = width;
@@ -381,6 +384,14 @@ VOID BM__Hidd_BitMap__CopyMemBox16(OOP_Class *cl, OOP_Object *o,
             dst_start -= dst_start_add;
         }
     }
+}
+
+VOID BM__Hidd_BitMap__CopyMemBox16(OOP_Class *cl, OOP_Object *o,
+                                   struct pHidd_BitMap_CopyMemBox16 *msg)
+{
+    copymembox16(msg->src, msg->srcX, msg->srcY, msg->srcMod,
+                 msg->dst, msg->dstX, msg->dstY, msg->dstMod,
+                 msg->width, msg->height);
 }
 
 /****************************************************************************************/
@@ -445,64 +456,10 @@ VOID BM__Hidd_BitMap__CopyMemBox24(OOP_Class *cl, OOP_Object *o,
 
 VOID BM__Hidd_BitMap__CopyMemBox32(OOP_Class *cl, OOP_Object *o, struct pHidd_BitMap_CopyMemBox32 *msg)
 {
-#define COPYPIXEL32SIZE 4
-    UBYTE *src_start, *dst_start;
-    LONG width, height, w;
-    LONG src_start_add, dst_start_add;  /* must be signed! */
-    IPTR src_end;
-    BOOL descending;
-
-    width = msg->width;
-    height = msg->height;
-
-    /* base starts */
-    src_start = (UBYTE *)((IPTR)msg->src + msg->srcY * msg->srcMod + msg->srcX * COPYPIXEL32SIZE);
-    dst_start = (UBYTE *)((IPTR)msg->dst + msg->dstY * msg->dstMod + msg->dstX * COPYPIXEL32SIZE);
-
-    /* signed row adjustment: how many bytes to add to move from end of one row to start of next row */
-    src_start_add = (LONG)msg->srcMod - (LONG)width * COPYPIXEL32SIZE;
-    dst_start_add = (LONG)msg->dstMod - (LONG)width * COPYPIXEL32SIZE;
-
-    /* compute source end (address just past the last pixel in the last row) */
-    src_end = (IPTR)src_start + (IPTR)(height - 1) * (IPTR)msg->srcMod + (IPTR)width * COPYPIXEL32SIZE;
-
-    /* Decide whether we need to copy descending (backwards) to handle overlap correctly.
-       Descend if source region starts before destination but extends past destination start. */
-    if ((IPTR)src_start < (IPTR)dst_start && src_end > (IPTR)dst_start) {
-        /* overlapping and src is before dst -> copy descending (backwards) */
-        /* set pointers to end-of-block (one-past-last-pixel style but we decrement before write) */
-        src_start = (UBYTE *)((IPTR)src_start + (IPTR)(height - 1) * (IPTR)msg->srcMod + (IPTR)width * COPYPIXEL32SIZE);
-        dst_start = (UBYTE *)((IPTR)dst_start + (IPTR)(height - 1) * (IPTR)msg->dstMod + (IPTR)width * COPYPIXEL32SIZE);
-
-        descending = TRUE;
-    } else {
-        descending = FALSE;
-    }
-
-    if (!descending) {
-        while (height--) {
-            w = width;
-            while (w--) {
-                *((ULONG *)dst_start) = *((ULONG *)src_start);
-                src_start = (UBYTE *)((IPTR)src_start + COPYPIXEL32SIZE);
-                dst_start = (UBYTE *)((IPTR)dst_start + COPYPIXEL32SIZE);
-            }
-            src_start = (UBYTE *)((IPTR)src_start + src_start_add);
-            dst_start = (UBYTE *)((IPTR)dst_start + dst_start_add);
-        }
-    } else {
-        while (height--) {
-            w = width;
-            while (w--) {
-                dst_start = &dst_start[-COPYPIXEL32SIZE];
-                src_start = &src_start[-COPYPIXEL32SIZE];
-                *(ULONG *)dst_start = *(ULONG *)src_start;
-            }
-            src_start = (UBYTE *)((IPTR)src_start - src_start_add);
-            dst_start = (UBYTE *)((IPTR)dst_start - dst_start_add);
-        }
-    }
-#undef COPYPIXEL32SIZE
+    /* Same bytes and same overlap decision as twice as many 16 bit pixels */
+    copymembox16(msg->src, msg->srcX * 2L, msg->srcY, msg->srcMod,
+                 msg->dst, msg->dstX * 2L, msg->dstY, msg->dstMod,
+                 msg->width * 2L, msg->height);
 }
 
 /****************************************************************************************/
@@ -816,18 +773,24 @@ VOID BM__Hidd_BitMap__GetMem32Image24(OOP_Class *cl, OOP_Object *o,
 
 /****************************************************************************************/
 
-VOID BM__Hidd_BitMap__PutMemTemplate8(OOP_Class *cl, OOP_Object *o, struct pHidd_BitMap_PutMemTemplate8 *msg)
+/* Common setup for the PutMemTemplate methods. Returns -1 if there is nothing to
+   do, else the drawing type (0 = JAM1, 1 = COMPLEMENT, 2 = JAM2). INVERSVID is
+   folded into the data: *invp is XORed into every template byte, except for
+   JAM2 where fg and bg are swapped instead. The template is read a byte at a
+   time and the row's last byte is never stepped past, so a template allocated
+   to its exact width is not over-read (PomAROS). */
+GFX_SHARED WORD memtemplate_setup(struct pHidd_BitMap_PutMemTemplate8 *msg, ULONG bpp,
+                                  ULONG *fgp, ULONG *bgp, UBYTE *invp,
+                                  UBYTE **bitarrayp, UBYTE **bufp)
 {
-    WORD                     x, y;
-    UBYTE                   *bitarray, *buf;
-    UBYTE                    bitmask;
     OOP_Object              *gc = msg->gc;
     ULONG                    fg = GC_FG(gc);
     ULONG                    bg = GC_BG(gc);
-    WORD                     type = 0;
-    
+    UBYTE                    inv = msg->inverttemplate ? 0xFF : 0;
+    WORD                     type;
+
     if (msg->width <= 0 || msg->height <= 0)
-        return;
+        return -1;
 
     if (GC_COLEXP(gc) == vHidd_GC_ColExp_Transparent)
     {
@@ -835,26 +798,51 @@ VOID BM__Hidd_BitMap__PutMemTemplate8(OOP_Class *cl, OOP_Object *o, struct pHidd
     }
     else if (GC_DRMD(gc) == vHidd_GC_DrawMode_Invert)
     {
-        type = 2;
+        type = 1;
     }
     else
     {
-        type = 4;
+        type = 2;
+        if (inv)
+        {
+            ULONG t = fg;
+
+            fg = bg;
+            bg = t;
+            inv = 0;
+        }
     }
-    
-    if (msg->inverttemplate) type++;
-    
-    bitarray = msg->masktemplate + (msg->srcx / 8);
+
+    *fgp  = fg;
+    *bgp  = bg;
+    *invp = inv;
+    *bitarrayp = msg->masktemplate + (msg->srcx / 8);
+    *bufp = (UBYTE *)msg->dst + msg->y * msg->dstMod + msg->x * bpp;
+
+    return type;
+}
+
+/****************************************************************************************/
+
+VOID BM__Hidd_BitMap__PutMemTemplate8(OOP_Class *cl, OOP_Object *o, struct pHidd_BitMap_PutMemTemplate8 *msg)
+{
+    WORD                     x, y, type;
+    UBYTE                   *bitarray, *buf;
+    UBYTE                    bitmask, inv;
+    ULONG                    fg, bg;
+
+    type = memtemplate_setup((struct pHidd_BitMap_PutMemTemplate8 *)msg, 1, &fg, &bg, &inv, &bitarray, &buf);
+    if (type < 0)
+        return;
+
     bitmask = 0x80 >> (msg->srcx & 7);
-    
-    buf = msg->dst + msg->y * msg->dstMod + msg->x;
-    
+
     for(y = 0; y < msg->height; y++)
     {
         ULONG  mask = bitmask;
         UBYTE *array = bitarray;
-        UBYTE  bitword = *array;
-        UBYTE *xbuf = buf;
+        UBYTE  bitword = *array ^ inv;
+        UBYTE *xbuf = (UBYTE *)buf;
 
         switch(type)
         {
@@ -868,29 +856,13 @@ VOID BM__Hidd_BitMap__PutMemTemplate8(OOP_Class *cl, OOP_Object *o, struct pHidd
                     {
                         mask = 0x80;
                         array++;
-                        bitword = *array;
+                        bitword = *array ^ inv;
                     }
 
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
 
-            case 1:     /* JAM1 | INVERSVID */
-                for(x = 0; x < msg->width; x++, xbuf++)
-                {
-                    if (!(bitword & mask)) *xbuf = fg;
-
-                    mask >>= 1;
-                    if (!mask && x + 1 < msg->width)
-                    {
-                        mask = 0x80;
-                        array++;
-                        bitword = *array;
-                    }
-
-                } /* for(x = 0; x < msg->width; x++) */
-                break;
-
-            case 2: /* COMPLEMENT */
+            case 1:     /* COMPLEMENT */
                 for(x = 0; x < msg->width; x++, xbuf++)
                 {
                     if (bitword & mask) *xbuf = ~(*xbuf);
@@ -900,54 +872,25 @@ VOID BM__Hidd_BitMap__PutMemTemplate8(OOP_Class *cl, OOP_Object *o, struct pHidd
                     {
                         mask = 0x80;
                         array++;
-                        bitword = *array;
+                        bitword = *array ^ inv;
                     }
+
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
 
-            case 3: /* COMPLEMENT | INVERSVID*/
+            case 2:     /* JAM2 */
                 for(x = 0; x < msg->width; x++, xbuf++)
                 {
-                    if (!(bitword & mask)) *xbuf = ~(*xbuf);
+                    *xbuf = (bitword & mask) ? fg : bg;
 
                     mask >>= 1;
                     if (!mask && x + 1 < msg->width)
                     {
                         mask = 0x80;
                         array++;
-                        bitword = *array;
-                    }
-                 } /* for(x = 0; x < msg->width; x++) */
-                break;
-
-            case 4:     /* JAM2 */
-                for(x = 0; x < msg->width; x++)
-                {
-                    *xbuf++ = (bitword & mask) ? fg : bg;
-
-                    mask >>= 1;
-                    if (!mask && x + 1 < msg->width)
-                    {
-                        mask = 0x80;
-                        array++;
-                        bitword = *array;
+                        bitword = *array ^ inv;
                     }
 
-                } /* for(x = 0; x < msg->width; x++) */
-                break;
-
-            case 5:     /* JAM2 | INVERSVID */
-                for(x = 0; x < msg->width; x++)
-                {
-                    *xbuf++ = (bitword & mask) ? bg : fg;
-
-                    mask >>= 1;
-                    if (!mask && x + 1 < msg->width)
-                    {
-                        mask = 0x80;
-                        array++;
-                        bitword = *array;
-                    }
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
 
@@ -963,42 +906,22 @@ VOID BM__Hidd_BitMap__PutMemTemplate8(OOP_Class *cl, OOP_Object *o, struct pHidd
 
 VOID BM__Hidd_BitMap__PutMemTemplate16(OOP_Class *cl, OOP_Object *o, struct pHidd_BitMap_PutMemTemplate16 *msg)
 {
-    WORD                     x, y;
+    WORD                     x, y, type;
     UBYTE                   *bitarray, *buf;
-    UBYTE                    bitmask;
-    OOP_Object              *gc = msg->gc;
-    ULONG                    fg = GC_FG(gc);
-    ULONG                    bg = GC_BG(gc);
-    WORD                     type = 0;
-    
-    if (msg->width <= 0 || msg->height <= 0)
+    UBYTE                    bitmask, inv;
+    ULONG                    fg, bg;
+
+    type = memtemplate_setup((struct pHidd_BitMap_PutMemTemplate8 *)msg, 2, &fg, &bg, &inv, &bitarray, &buf);
+    if (type < 0)
         return;
 
-    if (GC_COLEXP(gc) == vHidd_GC_ColExp_Transparent)
-    {
-        type = 0;
-    }
-    else if (GC_DRMD(gc) == vHidd_GC_DrawMode_Invert)
-    {
-        type = 2;
-    }
-    else
-    {
-        type = 4;
-    }
-    
-    if (msg->inverttemplate) type++;
-    
-    bitarray = msg->masktemplate + (msg->srcx / 8);
     bitmask = 0x80 >> (msg->srcx & 7);
-    
-    buf = msg->dst + msg->y * msg->dstMod + msg->x * 2;
 
     for(y = 0; y < msg->height; y++)
     {
         ULONG  mask = bitmask;
         UBYTE *array = bitarray;
-        UBYTE  bitword = *array;
+        UBYTE  bitword = *array ^ inv;
         UWORD *xbuf = (UWORD *)buf;
 
         switch(type)
@@ -1013,29 +936,13 @@ VOID BM__Hidd_BitMap__PutMemTemplate16(OOP_Class *cl, OOP_Object *o, struct pHid
                     {
                         mask = 0x80;
                         array++;
-                        bitword = *array;
+                        bitword = *array ^ inv;
                     }
 
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
 
-            case 1:     /* JAM1 | INVERSVID */
-                for(x = 0; x < msg->width; x++, xbuf++)
-                {
-                    if (!(bitword & mask)) *xbuf = fg;
-
-                    mask >>= 1;
-                    if (!mask && x + 1 < msg->width)
-                    {
-                        mask = 0x80;
-                        array++;
-                        bitword = *array;
-                    }
-
-                } /* for(x = 0; x < msg->width; x++) */
-                break;
-
-            case 2: /* COMPLEMENT */
+            case 1:     /* COMPLEMENT */
                 for(x = 0; x < msg->width; x++, xbuf++)
                 {
                     if (bitword & mask) *xbuf = ~(*xbuf);
@@ -1045,54 +952,25 @@ VOID BM__Hidd_BitMap__PutMemTemplate16(OOP_Class *cl, OOP_Object *o, struct pHid
                     {
                         mask = 0x80;
                         array++;
-                        bitword = *array;
+                        bitword = *array ^ inv;
                     }
+
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
 
-            case 3: /* COMPLEMENT | INVERSVID*/
+            case 2:     /* JAM2 */
                 for(x = 0; x < msg->width; x++, xbuf++)
                 {
-                    if (!(bitword & mask)) *xbuf = ~(*xbuf);
+                    *xbuf = (bitword & mask) ? fg : bg;
 
                     mask >>= 1;
                     if (!mask && x + 1 < msg->width)
                     {
                         mask = 0x80;
                         array++;
-                        bitword = *array;
-                    }
-                 } /* for(x = 0; x < msg->width; x++) */
-                break;
-
-            case 4:     /* JAM2 */
-                for(x = 0; x < msg->width; x++)
-                {
-                    *xbuf++ = (bitword & mask) ? fg : bg;
-
-                    mask >>= 1;
-                    if (!mask && x + 1 < msg->width)
-                    {
-                        mask = 0x80;
-                        array++;
-                        bitword = *array;
+                        bitword = *array ^ inv;
                     }
 
-                } /* for(x = 0; x < msg->width; x++) */
-                break;
-
-            case 5:     /* JAM2 | INVERSVID */
-                for(x = 0; x < msg->width; x++)
-                {
-                    *xbuf++ = (bitword & mask) ? bg : fg;
-
-                    mask >>= 1;
-                    if (!mask && x + 1 < msg->width)
-                    {
-                        mask = 0x80;
-                        array++;
-                        bitword = *array;
-                    }
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
 
@@ -1102,24 +980,21 @@ VOID BM__Hidd_BitMap__PutMemTemplate16(OOP_Class *cl, OOP_Object *o, struct pHid
         bitarray += msg->modulo;
 
     } /* for(y = 0; y < msg->height; y++) */
-    
 }
 
 /****************************************************************************************/
 
 VOID BM__Hidd_BitMap__PutMemTemplate24(OOP_Class *cl, OOP_Object *o, struct pHidd_BitMap_PutMemTemplate24 *msg)
 {
-    WORD                     x, y;
+    WORD                     x, y, type;
     UBYTE                   *bitarray, *buf;
-    UBYTE                    bitmask;
-    OOP_Object              *gc = msg->gc;
-    ULONG                    fg = GC_FG(gc);
+    UBYTE                    bitmask, inv;
+    ULONG                    fg, bg;
     UBYTE                    fg1, fg2, fg3;
-    ULONG                    bg = GC_BG(gc);
     UBYTE                    bg1, bg2, bg3;
-    WORD                     type = 0;
-    
-    if (msg->width <= 0 || msg->height <= 0)
+
+    type = memtemplate_setup((struct pHidd_BitMap_PutMemTemplate8 *)msg, 3, &fg, &bg, &inv, &bitarray, &buf);
+    if (type < 0)
         return;
 
 #if AROS_BIG_ENDIAN
@@ -1140,32 +1015,14 @@ VOID BM__Hidd_BitMap__PutMemTemplate24(OOP_Class *cl, OOP_Object *o, struct pHid
     bg3 = (bg >> 16) & 0xFF;
 #endif
 
-    if (GC_COLEXP(gc) == vHidd_GC_ColExp_Transparent)
-    {
-        type = 0;
-    }
-    else if (GC_DRMD(gc) == vHidd_GC_DrawMode_Invert)
-    {
-        type = 2;
-    }
-    else
-    {
-        type = 4;
-    }
-    
-    if (msg->inverttemplate) type++;
-    
-    bitarray = msg->masktemplate + (msg->srcx / 8);
     bitmask = 0x80 >> (msg->srcx & 7);
-    
-    buf = msg->dst + msg->y * msg->dstMod + msg->x * 3;
-    
+
     for(y = 0; y < msg->height; y++)
     {
         ULONG  mask = bitmask;
         UBYTE *array = bitarray;
-        UBYTE  bitword = *array;
-        UBYTE *xbuf = buf;
+        UBYTE  bitword = *array ^ inv;
+        UBYTE *xbuf = (UBYTE *)buf;
 
         switch(type)
         {
@@ -1184,87 +1041,47 @@ VOID BM__Hidd_BitMap__PutMemTemplate24(OOP_Class *cl, OOP_Object *o, struct pHid
                     {
                         mask = 0x80;
                         array++;
-                        bitword = *array;
+                        bitword = *array ^ inv;
                     }
 
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
 
-            case 1:     /* JAM1 | INVERSVID */
+            case 1:     /* COMPLEMENT */
                 for(x = 0; x < msg->width; x++, xbuf += 3)
                 {
-                    if (!(bitword & mask))
+                    if (bitword & mask)
+                    {
+                        xbuf[0] = ~xbuf[0];
+                        xbuf[1] = ~xbuf[1];
+                        xbuf[2] = ~xbuf[2];
+                    }
+
+                    mask >>= 1;
+                    if (!mask && x + 1 < msg->width)
+                    {
+                        mask = 0x80;
+                        array++;
+                        bitword = *array ^ inv;
+                    }
+
+                } /* for(x = 0; x < msg->width; x++) */
+                break;
+
+            case 2:     /* JAM2 */
+                for(x = 0; x < msg->width; x++, xbuf += 3)
+                {
+                    if (bitword & mask)
                     {
                         xbuf[0] = fg1;
                         xbuf[1] = fg2;
                         xbuf[2] = fg3;
                     }
-
-                    mask >>= 1;
-                    if (!mask && x + 1 < msg->width)
-                    {
-                        mask = 0x80;
-                        array++;
-                        bitword = *array;
-                    }
-
-                } /* for(x = 0; x < msg->width; x++) */
-                break;
-
-            case 2: /* COMPLEMENT */
-                for(x = 0; x < msg->width; x++, xbuf += 3)
-                {
-                    if (bitword & mask)
-                    {
-                        xbuf[0] = ~xbuf[0];
-                        xbuf[1] = ~xbuf[1];
-                        xbuf[2] = ~xbuf[2];
-                    }
-
-                    mask >>= 1;
-                    if (!mask && x + 1 < msg->width)
-                    {
-                        mask = 0x80;
-                        array++;
-                        bitword = *array;
-                    }
-                } /* for(x = 0; x < msg->width; x++) */
-                break;
-
-            case 3: /* COMPLEMENT | INVERSVID*/
-                for(x = 0; x < msg->width; x++, xbuf += 3)
-                {
-                    if (!(bitword & mask))
-                    {
-                        xbuf[0] = ~xbuf[0];
-                        xbuf[1] = ~xbuf[1];
-                        xbuf[2] = ~xbuf[2];
-                    }
-
-                    mask >>= 1;
-                    if (!mask && x + 1 < msg->width)
-                    {
-                        mask = 0x80;
-                        array++;
-                        bitword = *array;
-                    }
-                 } /* for(x = 0; x < msg->width; x++) */
-                break;
-
-            case 4:     /* JAM2 */
-                for(x = 0; x < msg->width; x++)
-                {
-                    if (bitword & mask)
-                    {
-                        *xbuf++ = fg1;
-                        *xbuf++ = fg2;
-                        *xbuf++ = fg3;
-                    }
                     else
                     {
-                        *xbuf++ = bg1;
-                        *xbuf++ = bg2;
-                        *xbuf++ = bg3;
+                        xbuf[0] = bg1;
+                        xbuf[1] = bg2;
+                        xbuf[2] = bg3;
                     }
 
                     mask >>= 1;
@@ -1272,35 +1089,9 @@ VOID BM__Hidd_BitMap__PutMemTemplate24(OOP_Class *cl, OOP_Object *o, struct pHid
                     {
                         mask = 0x80;
                         array++;
-                        bitword = *array;
+                        bitword = *array ^ inv;
                     }
 
-                } /* for(x = 0; x < msg->width; x++) */
-                break;
-
-            case 5:     /* JAM2 | INVERSVID */
-                for(x = 0; x < msg->width; x++)
-                {
-                    if (bitword & mask)
-                    {
-                        *xbuf++ = bg1;
-                        *xbuf++ = bg2;
-                        *xbuf++ = bg3;
-                    }
-                    else
-                    {
-                        *xbuf++ = fg1;
-                        *xbuf++ = fg2;
-                        *xbuf++ = fg3;
-                    }
-
-                    mask >>= 1;
-                    if (!mask && x + 1 < msg->width)
-                    {
-                        mask = 0x80;
-                        array++;
-                        bitword = *array;
-                    }
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
 
@@ -1310,49 +1101,28 @@ VOID BM__Hidd_BitMap__PutMemTemplate24(OOP_Class *cl, OOP_Object *o, struct pHid
         bitarray += msg->modulo;
 
     } /* for(y = 0; y < msg->height; y++) */
-    
 }
 
 /****************************************************************************************/
 
 VOID BM__Hidd_BitMap__PutMemTemplate32(OOP_Class *cl, OOP_Object *o, struct pHidd_BitMap_PutMemTemplate32 *msg)
 {
-    WORD                     x, y;
+    WORD                     x, y, type;
     UBYTE                   *bitarray, *buf;
-    UBYTE                    bitmask;
-    OOP_Object              *gc = msg->gc;
-    ULONG                    fg = GC_FG(gc);
-    ULONG                    bg = GC_BG(gc);
-    WORD                     type = 0;
-    
-    if (msg->width <= 0 || msg->height <= 0)
+    UBYTE                    bitmask, inv;
+    ULONG                    fg, bg;
+
+    type = memtemplate_setup((struct pHidd_BitMap_PutMemTemplate8 *)msg, 4, &fg, &bg, &inv, &bitarray, &buf);
+    if (type < 0)
         return;
 
-    if (GC_COLEXP(gc) == vHidd_GC_ColExp_Transparent)
-    {
-        type = 0;
-    }
-    else if (GC_DRMD(gc) == vHidd_GC_DrawMode_Invert)
-    {
-        type = 2;
-    }
-    else
-    {
-        type = 4;
-    }
-    
-    if (msg->inverttemplate) type++;
-    
-    bitarray = msg->masktemplate + (msg->srcx / 8);
     bitmask = 0x80 >> (msg->srcx & 7);
-    
-    buf = msg->dst + msg->y * msg->dstMod + msg->x * 4;
-    
+
     for(y = 0; y < msg->height; y++)
     {
         ULONG  mask = bitmask;
         UBYTE *array = bitarray;
-        UBYTE  bitword = *array;
+        UBYTE  bitword = *array ^ inv;
         ULONG *xbuf = (ULONG *)buf;
 
         switch(type)
@@ -1367,29 +1137,13 @@ VOID BM__Hidd_BitMap__PutMemTemplate32(OOP_Class *cl, OOP_Object *o, struct pHid
                     {
                         mask = 0x80;
                         array++;
-                        bitword = *array;
+                        bitword = *array ^ inv;
                     }
 
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
 
-            case 1:     /* JAM1 | INVERSVID */
-                for(x = 0; x < msg->width; x++, xbuf++)
-                {
-                    if (!(bitword & mask)) *xbuf = fg;
-
-                    mask >>= 1;
-                    if (!mask && x + 1 < msg->width)
-                    {
-                        mask = 0x80;
-                        array++;
-                        bitword = *array;
-                    }
-
-                } /* for(x = 0; x < msg->width; x++) */
-                break;
-
-            case 2: /* COMPLEMENT */
+            case 1:     /* COMPLEMENT */
                 for(x = 0; x < msg->width; x++, xbuf++)
                 {
                     if (bitword & mask) *xbuf = ~(*xbuf);
@@ -1399,54 +1153,25 @@ VOID BM__Hidd_BitMap__PutMemTemplate32(OOP_Class *cl, OOP_Object *o, struct pHid
                     {
                         mask = 0x80;
                         array++;
-                        bitword = *array;
+                        bitword = *array ^ inv;
                     }
+
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
 
-            case 3: /* COMPLEMENT | INVERSVID*/
+            case 2:     /* JAM2 */
                 for(x = 0; x < msg->width; x++, xbuf++)
                 {
-                    if (!(bitword & mask)) *xbuf = ~(*xbuf);
+                    *xbuf = (bitword & mask) ? fg : bg;
 
                     mask >>= 1;
                     if (!mask && x + 1 < msg->width)
                     {
                         mask = 0x80;
                         array++;
-                        bitword = *array;
-                    }
-                 } /* for(x = 0; x < msg->width; x++) */
-                break;
-
-            case 4:     /* JAM2 */
-                for(x = 0; x < msg->width; x++)
-                {
-                    *xbuf++ = (bitword & mask) ? fg : bg;
-
-                    mask >>= 1;
-                    if (!mask && x + 1 < msg->width)
-                    {
-                        mask = 0x80;
-                        array++;
-                        bitword = *array;
+                        bitword = *array ^ inv;
                     }
 
-                } /* for(x = 0; x < msg->width; x++) */
-                break;
-
-            case 5:     /* JAM2 | INVERSVID */
-                for(x = 0; x < msg->width; x++)
-                {
-                    *xbuf++ = (bitword & mask) ? bg : fg;
-
-                    mask >>= 1;
-                    if (!mask && x + 1 < msg->width)
-                    {
-                        mask = 0x80;
-                        array++;
-                        bitword = *array;
-                    }
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
 
@@ -1456,63 +1181,96 @@ VOID BM__Hidd_BitMap__PutMemTemplate32(OOP_Class *cl, OOP_Object *o, struct pHid
         bitarray += msg->modulo;
 
     } /* for(y = 0; y < msg->height; y++) */
-    
 }
 
 /****************************************************************************************/
 
-VOID BM__Hidd_BitMap__PutMemPattern8(OOP_Class *cl, OOP_Object *o, struct pHidd_BitMap_PutMemPattern8 *msg)
+/* Common setup for the PutMemPattern methods. Returns -1 if there is nothing to
+   do, else the drawing type (0 = JAM1, 1 = COMPLEMENT, 2 = JAM2, 3 = multi color
+   pattern). INVERSVID is folded in as for memtemplate_setup(); it does not
+   apply to multi color patterns. */
+GFX_SHARED WORD mempattern_setup(struct pHidd_BitMap_PutMemPattern8 *msg, ULONG bpp,
+                                 ULONG *fgp, ULONG *bgp, UBYTE *invp, UWORD *maskmaskp,
+                                 UBYTE **maskarrayp, UBYTE **bufp)
 {
-    WORD                     x, y;
-    UBYTE                   *patarray, *buf, *maskarray = 0;
-    UWORD                    patmask, maskmask = 0;
     OOP_Object              *gc = msg->gc;
     ULONG                    fg = GC_FG(gc);
     ULONG                    bg = GC_BG(gc);
-    WORD                     type = 0;
-    
+    UWORD                    inv = 0, maskmask = 0;
+    UBYTE                   *maskarray;
+    WORD                     type;
+
     if (msg->width <= 0 || msg->height <= 0)
-        return;
+        return -1;
 
     if (msg->patterndepth > 1)
     {
-        type = 6;
+        type = 3;
     }
     else
     {
+        if (msg->invertpattern) inv = 0xFFFF;
+
         if (GC_COLEXP(gc) == vHidd_GC_ColExp_Transparent)
         {
             type = 0;
         }
         else if (GC_DRMD(gc) == vHidd_GC_DrawMode_Invert)
         {
-            type = 2;
+            type = 1;
         }
         else
         {
-            type = 4;
+            type = 2;
+            if (inv)
+            {
+                ULONG t = fg;
+
+                fg = bg;
+                bg = t;
+                inv = 0;
+            }
         }
-
-        if (msg->invertpattern) type++;
     }
-
-    patarray = msg->pattern;
-    patmask = 0x8000 >> (msg->patternsrcx & 0xF);
 
     if ((maskarray = msg->mask))
     {
         maskarray += (msg->masksrcx / 16) * 2;
         maskmask = 0x8000 >> (msg->masksrcx & 0xF);
     }
-        
-    buf = msg->dst + msg->y * msg->dstMod + msg->x;
-    
+
+    *fgp  = fg;
+    *bgp  = bg;
+    *invp = inv;
+    *maskmaskp  = maskmask;
+    *maskarrayp = maskarray;
+    *bufp = (UBYTE *)msg->dst + msg->y * msg->dstMod + msg->x * bpp;
+
+    return type;
+}
+
+/****************************************************************************************/
+
+VOID BM__Hidd_BitMap__PutMemPattern8(OOP_Class *cl, OOP_Object *o, struct pHidd_BitMap_PutMemPattern8 *msg)
+{
+    WORD                     x, y, type;
+    UBYTE                   *patarray, *buf, *maskarray;
+    UWORD                    patmask, maskmask, inv;
+    ULONG                    fg, bg;
+
+    type = mempattern_setup((struct pHidd_BitMap_PutMemPattern8 *)msg, 1, &fg, &bg, &inv, &maskmask, &maskarray, &buf);
+    if (type < 0)
+        return;
+
+    patarray = msg->pattern;
+    patmask = 0x8000 >> (msg->patternsrcx & 0xF);
+
     for(y = 0; y < msg->height; y++)
     {
         UWORD  pmask = patmask;
         UWORD  mmask = maskmask;
         UWORD *parray = ((UWORD *)patarray) + ((y + msg->patternsrcy) % msg->patternheight);
-        UWORD  patword = AROS_BE2WORD(*parray);
+        UWORD  patword = AROS_BE2WORD(*parray) ^ inv;
         UWORD *marray = NULL;
         UWORD  maskword = 0;
         UBYTE *xbuf = (UBYTE *)buf;
@@ -1546,35 +1304,11 @@ VOID BM__Hidd_BitMap__PutMemPattern8(OOP_Class *cl, OOP_Object *o, struct pHidd_
 
                     pmask >>= 1;
                     if (!pmask) pmask = 0x8000;
- 
+
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
 
-            case 1:     /* JAM1 | INVERSVID */
-                for(x = 0; x < msg->width; x++, xbuf++)
-                {
-                    if (!maskarray || (maskword & mmask))
-                    {
-                        if (!(patword & pmask)) *xbuf = fg;
-                    }
-
-                    if (maskarray)
-                    {
-                        mmask >>= 1;
-                        if (!mmask)
-                        {
-                            mmask = 0x8000;
-                            marray++;
-                            maskword = AROS_BE2WORD(*marray);
-                        }
-                    }
-
-                    pmask >>= 1;
-                    if (!pmask) pmask = 0x8000;
-                } /* for(x = 0; x < msg->width; x++) */
-                break;
-
-            case 2: /* COMPLEMENT */
+            case 1:     /* COMPLEMENT */
                 for(x = 0; x < msg->width; x++, xbuf++)
                 {
                     if (!maskarray || (maskword & mmask))
@@ -1595,41 +1329,16 @@ VOID BM__Hidd_BitMap__PutMemPattern8(OOP_Class *cl, OOP_Object *o, struct pHidd_
 
                     pmask >>= 1;
                     if (!pmask) pmask = 0x8000;
-                        
+
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
 
-            case 3: /* COMPLEMENT | INVERSVID*/
+            case 2:     /* JAM2 */
                 for(x = 0; x < msg->width; x++, xbuf++)
                 {
                     if (!maskarray || (maskword & mmask))
                     {
-                        if (!(patword & pmask)) *xbuf = ~(*xbuf);
-                    }
-
-                    if (maskarray)
-                    {
-                        mmask >>= 1;
-                        if (!mmask)
-                        {
-                            mmask = 0x8000;
-                            marray++;
-                            maskword = AROS_BE2WORD(*marray);
-                        }
-                    }
-
-                    pmask >>= 1;
-                    if (!pmask) pmask = 0x8000;
-                        
-                } /* for(x = 0; x < msg->width; x++) */
-                break;
-
-            case 4:     /* JAM2 */
-                for(x = 0; x < msg->width; x++)
-                {
-                    if (!maskarray || (maskword & mmask))
-                    {
-                        xbuf[x] = (patword & pmask) ? fg : bg;
+                        *xbuf = (patword & pmask) ? fg : bg;
                     }
 
                     if (maskarray)
@@ -1649,33 +1358,8 @@ VOID BM__Hidd_BitMap__PutMemPattern8(OOP_Class *cl, OOP_Object *o, struct pHidd_
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
 
-            case 5:     /* JAM2 | INVERSVID */
-                for(x = 0; x < msg->width; x++)
-                {
-                    if (!maskarray || (maskword & mmask))
-                    {
-                        xbuf[x] = (patword & pmask) ? bg : fg;
-                    }
-
-                    if (maskarray)
-                    {
-                        mmask >>= 1;
-                        if (!mmask)
-                        {
-                            mmask = 0x8000;
-                            marray++;
-                            maskword = AROS_BE2WORD(*marray);
-                        }
-                    }
-
-                    pmask >>= 1;
-                    if (!pmask) pmask = 0x8000;
-
-                } /* for(x = 0; x < msg->width; x++) */
-                break;
-
-            case 6: /* multi color pattern */
-                for(x = 0; x < msg->width; x++)
+            case 3:     /* multi color pattern */
+                for(x = 0; x < msg->width; x++, xbuf++)
                 {
                     if (!maskarray || (maskword & mmask))
                     {
@@ -1692,7 +1376,7 @@ VOID BM__Hidd_BitMap__PutMemPattern8(OOP_Class *cl, OOP_Object *o, struct pHidd_
 
                         if (msg->patternlut) pixel = msg->patternlut->pixels[pixel];
 
-                        xbuf[x] = pixel;
+                        *xbuf = pixel;
                     }
 
                     if (maskarray)
@@ -1718,63 +1402,30 @@ VOID BM__Hidd_BitMap__PutMemPattern8(OOP_Class *cl, OOP_Object *o, struct pHidd_
         if (maskarray) maskarray += msg->maskmodulo;
 
     } /* for(y = 0; y < msg->height; y++) */
-    
 }
 
 /****************************************************************************************/
 
 VOID BM__Hidd_BitMap__PutMemPattern16(OOP_Class *cl, OOP_Object *o, struct pHidd_BitMap_PutMemPattern16 *msg)
 {
-    WORD                     x, y;
-    UBYTE                   *patarray, *buf, *maskarray = 0;
-    UWORD                    patmask, maskmask = 0;
-    OOP_Object              *gc = msg->gc;
-    ULONG                    fg = GC_FG(gc);
-    ULONG                    bg = GC_BG(gc);
-    WORD                     type = 0;
-    
-    if (msg->width <= 0 || msg->height <= 0)
+    WORD                     x, y, type;
+    UBYTE                   *patarray, *buf, *maskarray;
+    UWORD                    patmask, maskmask, inv;
+    ULONG                    fg, bg;
+
+    type = mempattern_setup((struct pHidd_BitMap_PutMemPattern8 *)msg, 2, &fg, &bg, &inv, &maskmask, &maskarray, &buf);
+    if (type < 0)
         return;
-
-    if (msg->patterndepth > 1)
-    {
-        type = 6;
-    }
-    else
-    {
-        if (GC_COLEXP(gc) == vHidd_GC_ColExp_Transparent)
-        {
-            type = 0;
-        }
-        else if (GC_DRMD(gc) == vHidd_GC_DrawMode_Invert)
-        {
-            type = 2;
-        }
-        else
-        {
-            type = 4;
-        }
-
-        if (msg->invertpattern) type++;
-    }
 
     patarray = msg->pattern;
     patmask = 0x8000 >> (msg->patternsrcx & 0xF);
 
-    if ((maskarray = msg->mask))
-    {
-        maskarray += (msg->masksrcx / 16) * 2;
-        maskmask = 0x8000 >> (msg->masksrcx & 0xF);
-    }
-        
-    buf = msg->dst + msg->y * msg->dstMod + msg->x * 2;
-    
     for(y = 0; y < msg->height; y++)
     {
         UWORD  pmask = patmask;
         UWORD  mmask = maskmask;
         UWORD *parray = ((UWORD *)patarray) + ((y + msg->patternsrcy) % msg->patternheight);
-        UWORD  patword = AROS_BE2WORD(*parray);
+        UWORD  patword = AROS_BE2WORD(*parray) ^ inv;
         UWORD *marray = NULL;
         UWORD  maskword = 0;
         UWORD *xbuf = (UWORD *)buf;
@@ -1808,35 +1459,11 @@ VOID BM__Hidd_BitMap__PutMemPattern16(OOP_Class *cl, OOP_Object *o, struct pHidd
 
                     pmask >>= 1;
                     if (!pmask) pmask = 0x8000;
- 
+
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
 
-            case 1:     /* JAM1 | INVERSVID */
-                for(x = 0; x < msg->width; x++, xbuf++)
-                {
-                    if (!maskarray || (maskword & mmask))
-                    {
-                        if (!(patword & pmask)) *xbuf = fg;
-                    }
-
-                    if (maskarray)
-                    {
-                        mmask >>= 1;
-                        if (!mmask)
-                        {
-                            mmask = 0x8000;
-                            marray++;
-                            maskword = AROS_BE2WORD(*marray);
-                        }
-                    }
-
-                    pmask >>= 1;
-                    if (!pmask) pmask = 0x8000;
-                } /* for(x = 0; x < msg->width; x++) */
-                break;
-
-            case 2: /* COMPLEMENT */
+            case 1:     /* COMPLEMENT */
                 for(x = 0; x < msg->width; x++, xbuf++)
                 {
                     if (!maskarray || (maskword & mmask))
@@ -1857,41 +1484,16 @@ VOID BM__Hidd_BitMap__PutMemPattern16(OOP_Class *cl, OOP_Object *o, struct pHidd
 
                     pmask >>= 1;
                     if (!pmask) pmask = 0x8000;
-                        
+
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
 
-            case 3: /* COMPLEMENT | INVERSVID*/
+            case 2:     /* JAM2 */
                 for(x = 0; x < msg->width; x++, xbuf++)
                 {
                     if (!maskarray || (maskword & mmask))
                     {
-                        if (!(patword & pmask)) *xbuf = ~(*xbuf);
-                    }
-
-                    if (maskarray)
-                    {
-                        mmask >>= 1;
-                        if (!mmask)
-                        {
-                            mmask = 0x8000;
-                            marray++;
-                            maskword = AROS_BE2WORD(*marray);
-                        }
-                    }
-
-                    pmask >>= 1;
-                    if (!pmask) pmask = 0x8000;
-                        
-                } /* for(x = 0; x < msg->width; x++) */
-                break;
-
-            case 4:     /* JAM2 */
-                for(x = 0; x < msg->width; x++)
-                {
-                    if (!maskarray || (maskword & mmask))
-                    {
-                        xbuf[x] = (patword & pmask) ? fg : bg;
+                        *xbuf = (patword & pmask) ? fg : bg;
                     }
 
                     if (maskarray)
@@ -1911,33 +1513,8 @@ VOID BM__Hidd_BitMap__PutMemPattern16(OOP_Class *cl, OOP_Object *o, struct pHidd
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
 
-            case 5:     /* JAM2 | INVERSVID */
-                for(x = 0; x < msg->width; x++)
-                {
-                    if (!maskarray || (maskword & mmask))
-                    {
-                        xbuf[x] = (patword & pmask) ? bg : fg;
-                    }
-
-                    if (maskarray)
-                    {
-                        mmask >>= 1;
-                        if (!mmask)
-                        {
-                            mmask = 0x8000;
-                            marray++;
-                            maskword = AROS_BE2WORD(*marray);
-                        }
-                    }
-
-                    pmask >>= 1;
-                    if (!pmask) pmask = 0x8000;
-
-                } /* for(x = 0; x < msg->width; x++) */
-                break;
-
-            case 6: /* multi color pattern */
-                for(x = 0; x < msg->width; x++)
+            case 3:     /* multi color pattern */
+                for(x = 0; x < msg->width; x++, xbuf++)
                 {
                     if (!maskarray || (maskword & mmask))
                     {
@@ -1954,7 +1531,7 @@ VOID BM__Hidd_BitMap__PutMemPattern16(OOP_Class *cl, OOP_Object *o, struct pHidd
 
                         if (msg->patternlut) pixel = msg->patternlut->pixels[pixel];
 
-                        xbuf[x] = pixel;
+                        *xbuf = pixel;
                     }
 
                     if (maskarray)
@@ -1980,23 +1557,21 @@ VOID BM__Hidd_BitMap__PutMemPattern16(OOP_Class *cl, OOP_Object *o, struct pHidd
         if (maskarray) maskarray += msg->maskmodulo;
 
     } /* for(y = 0; y < msg->height; y++) */
-    
 }
+
 /****************************************************************************************/
 
 VOID BM__Hidd_BitMap__PutMemPattern24(OOP_Class *cl, OOP_Object *o, struct pHidd_BitMap_PutMemPattern24 *msg)
 {
-    WORD                     x, y;
-    UBYTE                   *patarray, *buf, *maskarray = 0;
-    UWORD                    patmask, maskmask = 0;
-    OOP_Object              *gc = msg->gc;
-    ULONG                    fg = GC_FG(gc);
+    WORD                     x, y, type;
+    UBYTE                   *patarray, *buf, *maskarray;
+    UWORD                    patmask, maskmask, inv;
+    ULONG                    fg, bg;
     UBYTE                    fg1, fg2, fg3;
-    ULONG                    bg = GC_BG(gc);
     UBYTE                    bg1, bg2, bg3;
-    WORD                     type = 0;
-    
-    if (msg->width <= 0 || msg->height <= 0)
+
+    type = mempattern_setup((struct pHidd_BitMap_PutMemPattern8 *)msg, 3, &fg, &bg, &inv, &maskmask, &maskarray, &buf);
+    if (type < 0)
         return;
 
 #if AROS_BIG_ENDIAN
@@ -2017,45 +1592,15 @@ VOID BM__Hidd_BitMap__PutMemPattern24(OOP_Class *cl, OOP_Object *o, struct pHidd
     bg3 = (bg >> 16) & 0xFF;
 #endif
 
-    if (msg->patterndepth > 1)
-    {
-        type = 6;
-    }
-    else
-    {
-        if (GC_COLEXP(gc) == vHidd_GC_ColExp_Transparent)
-        {
-            type = 0;
-        }
-        else if (GC_DRMD(gc) == vHidd_GC_DrawMode_Invert)
-        {
-            type = 2;
-        }
-        else
-        {
-            type = 4;
-        }
-
-        if (msg->invertpattern) type++;
-    }
-
     patarray = msg->pattern;
     patmask = 0x8000 >> (msg->patternsrcx & 0xF);
 
-    if ((maskarray = msg->mask))
-    {
-        maskarray += (msg->masksrcx / 16) * 2;
-        maskmask = 0x8000 >> (msg->masksrcx & 0xF);
-    }
-        
-    buf = msg->dst + msg->y * msg->dstMod + msg->x * 3;
-    
     for(y = 0; y < msg->height; y++)
     {
         UWORD  pmask = patmask;
         UWORD  mmask = maskmask;
         UWORD *parray = ((UWORD *)patarray) + ((y + msg->patternsrcy) % msg->patternheight);
-        UWORD  patword = AROS_BE2WORD(*parray);
+        UWORD  patword = AROS_BE2WORD(*parray) ^ inv;
         UWORD *marray = NULL;
         UWORD  maskword = 0;
         UBYTE *xbuf = (UBYTE *)buf;
@@ -2094,41 +1639,11 @@ VOID BM__Hidd_BitMap__PutMemPattern24(OOP_Class *cl, OOP_Object *o, struct pHidd
 
                     pmask >>= 1;
                     if (!pmask) pmask = 0x8000;
- 
+
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
 
-            case 1:     /* JAM1 | INVERSVID */
-                for(x = 0; x < msg->width; x++, xbuf += 3)
-                {
-                    if (!maskarray || (maskword & mmask))
-                    {
-                        if (!(patword & pmask))
-                        {
-                            xbuf[0] = fg1;
-                            xbuf[1] = fg2;
-                            xbuf[2] = fg3;
-                        }
-
-                    }
-
-                    if (maskarray)
-                    {
-                        mmask >>= 1;
-                        if (!mmask)
-                        {
-                            mmask = 0x8000;
-                            marray++;
-                            maskword = AROS_BE2WORD(*marray);
-                        }
-                    }
-
-                    pmask >>= 1;
-                    if (!pmask) pmask = 0x8000;
-                } /* for(x = 0; x < msg->width; x++) */
-                break;
-
-            case 2: /* COMPLEMENT */
+            case 1:     /* COMPLEMENT */
                 for(x = 0; x < msg->width; x++, xbuf += 3)
                 {
                     if (!maskarray || (maskword & mmask))
@@ -2154,41 +1669,11 @@ VOID BM__Hidd_BitMap__PutMemPattern24(OOP_Class *cl, OOP_Object *o, struct pHidd
 
                     pmask >>= 1;
                     if (!pmask) pmask = 0x8000;
-                        
+
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
 
-            case 3: /* COMPLEMENT | INVERSVID*/
-                for(x = 0; x < msg->width; x++, xbuf += 3)
-                {
-                    if (!maskarray || (maskword & mmask))
-                    {
-                        if (!(patword & pmask))
-                        {
-                            xbuf[0] = ~xbuf[0];
-                            xbuf[1] = ~xbuf[1];
-                            xbuf[2] = ~xbuf[2];
-                        }
-                    }
-
-                    if (maskarray)
-                    {
-                        mmask >>= 1;
-                        if (!mmask)
-                        {
-                            mmask = 0x8000;
-                            marray++;
-                            maskword = AROS_BE2WORD(*marray);
-                        }
-                    }
-
-                    pmask >>= 1;
-                    if (!pmask) pmask = 0x8000;
-                        
-                } /* for(x = 0; x < msg->width; x++) */
-                break;
-
-            case 4:     /* JAM2 */
+            case 2:     /* JAM2 */
                 for(x = 0; x < msg->width; x++, xbuf += 3)
                 {
                     if (!maskarray || (maskword & mmask))
@@ -2205,7 +1690,6 @@ VOID BM__Hidd_BitMap__PutMemPattern24(OOP_Class *cl, OOP_Object *o, struct pHidd
                             xbuf[1] = bg2;
                             xbuf[2] = bg3;
                         }
-                        
                     }
 
                     if (maskarray)
@@ -2225,44 +1709,7 @@ VOID BM__Hidd_BitMap__PutMemPattern24(OOP_Class *cl, OOP_Object *o, struct pHidd
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
 
-            case 5:     /* JAM2 | INVERSVID */
-                for(x = 0; x < msg->width; x++, xbuf += 3)
-                {
-                    if (!maskarray || (maskword & mmask))
-                    {
-                        if (patword & pmask)
-                        {
-                            xbuf[0] = bg1;
-                            xbuf[1] = bg2;
-                            xbuf[2] = bg3;
-                        }
-                        else
-                        {
-                            xbuf[0] = fg1;
-                            xbuf[1] = fg2;
-                            xbuf[2] = fg3;
-                        }
-                        
-                    }
-
-                    if (maskarray)
-                    {
-                        mmask >>= 1;
-                        if (!mmask)
-                        {
-                            mmask = 0x8000;
-                            marray++;
-                            maskword = AROS_BE2WORD(*marray);
-                        }
-                    }
-
-                    pmask >>= 1;
-                    if (!pmask) pmask = 0x8000;
-
-                } /* for(x = 0; x < msg->width; x++) */
-                break;
-
-            case 6: /* multi color pattern */
+            case 3:     /* multi color pattern */
                 for(x = 0; x < msg->width; x++, xbuf += 3)
                 {
                     if (!maskarray || (maskword & mmask))
@@ -2280,15 +1727,15 @@ VOID BM__Hidd_BitMap__PutMemPattern24(OOP_Class *cl, OOP_Object *o, struct pHidd
 
                         if (msg->patternlut) pixel = msg->patternlut->pixels[pixel];
 
-                    #if AROS_BIG_ENDIAN
+#if AROS_BIG_ENDIAN
                         xbuf[0] = (pixel >> 16) & 0xFF;
                         xbuf[1] = (pixel >> 8) & 0xFF;
                         xbuf[2] = (pixel) & 0xFF;
-                    #else
+#else
                         xbuf[0] = (pixel) & 0xFF;
                         xbuf[1] = (pixel >> 8) & 0xFF;
                         xbuf[2] = (pixel >> 16) & 0xFF;
-                    #endif
+#endif
                     }
 
                     if (maskarray)
@@ -2314,63 +1761,30 @@ VOID BM__Hidd_BitMap__PutMemPattern24(OOP_Class *cl, OOP_Object *o, struct pHidd
         if (maskarray) maskarray += msg->maskmodulo;
 
     } /* for(y = 0; y < msg->height; y++) */
-    
 }
 
 /****************************************************************************************/
 
 VOID BM__Hidd_BitMap__PutMemPattern32(OOP_Class *cl, OOP_Object *o, struct pHidd_BitMap_PutMemPattern32 *msg)
 {
-    WORD                     x, y;
-    UBYTE                   *patarray, *buf, *maskarray = 0;
-    UWORD                    patmask, maskmask = 0;
-    OOP_Object              *gc = msg->gc;
-    ULONG                    fg = GC_FG(gc);
-    ULONG                    bg = GC_BG(gc);
-    WORD                     type = 0;
-    
-    if (msg->width <= 0 || msg->height <= 0)
+    WORD                     x, y, type;
+    UBYTE                   *patarray, *buf, *maskarray;
+    UWORD                    patmask, maskmask, inv;
+    ULONG                    fg, bg;
+
+    type = mempattern_setup((struct pHidd_BitMap_PutMemPattern8 *)msg, 4, &fg, &bg, &inv, &maskmask, &maskarray, &buf);
+    if (type < 0)
         return;
-
-    if (msg->patterndepth > 1)
-    {
-        type = 6;
-    }
-    else
-    {
-        if (GC_COLEXP(gc) == vHidd_GC_ColExp_Transparent)
-        {
-            type = 0;
-        }
-        else if (GC_DRMD(gc) == vHidd_GC_DrawMode_Invert)
-        {
-            type = 2;
-        }
-        else
-        {
-            type = 4;
-        }
-
-        if (msg->invertpattern) type++;
-    }
 
     patarray = msg->pattern;
     patmask = 0x8000 >> (msg->patternsrcx & 0xF);
 
-    if ((maskarray = msg->mask))
-    {
-        maskarray += (msg->masksrcx / 16) * 2;
-        maskmask = 0x8000 >> (msg->masksrcx & 0xF);
-    }
-        
-    buf = msg->dst + msg->y * msg->dstMod + msg->x * 4;
-    
     for(y = 0; y < msg->height; y++)
     {
         UWORD  pmask = patmask;
         UWORD  mmask = maskmask;
         UWORD *parray = ((UWORD *)patarray) + ((y + msg->patternsrcy) % msg->patternheight);
-        UWORD  patword = AROS_BE2WORD(*parray);
+        UWORD  patword = AROS_BE2WORD(*parray) ^ inv;
         UWORD *marray = NULL;
         UWORD  maskword = 0;
         ULONG *xbuf = (ULONG *)buf;
@@ -2404,35 +1818,11 @@ VOID BM__Hidd_BitMap__PutMemPattern32(OOP_Class *cl, OOP_Object *o, struct pHidd
 
                     pmask >>= 1;
                     if (!pmask) pmask = 0x8000;
- 
+
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
 
-            case 1:     /* JAM1 | INVERSVID */
-                for(x = 0; x < msg->width; x++, xbuf++)
-                {
-                    if (!maskarray || (maskword & mmask))
-                    {
-                        if (!(patword & pmask)) *xbuf = fg;
-                    }
-
-                    if (maskarray)
-                    {
-                        mmask >>= 1;
-                        if (!mmask)
-                        {
-                            mmask = 0x8000;
-                            marray++;
-                            maskword = AROS_BE2WORD(*marray);
-                        }
-                    }
-
-                    pmask >>= 1;
-                    if (!pmask) pmask = 0x8000;
-                } /* for(x = 0; x < msg->width; x++) */
-                break;
-
-            case 2: /* COMPLEMENT */
+            case 1:     /* COMPLEMENT */
                 for(x = 0; x < msg->width; x++, xbuf++)
                 {
                     if (!maskarray || (maskword & mmask))
@@ -2453,41 +1843,16 @@ VOID BM__Hidd_BitMap__PutMemPattern32(OOP_Class *cl, OOP_Object *o, struct pHidd
 
                     pmask >>= 1;
                     if (!pmask) pmask = 0x8000;
-                        
+
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
 
-            case 3: /* COMPLEMENT | INVERSVID*/
+            case 2:     /* JAM2 */
                 for(x = 0; x < msg->width; x++, xbuf++)
                 {
                     if (!maskarray || (maskword & mmask))
                     {
-                        if (!(patword & pmask)) *xbuf = ~(*xbuf);
-                    }
-
-                    if (maskarray)
-                    {
-                        mmask >>= 1;
-                        if (!mmask)
-                        {
-                            mmask = 0x8000;
-                            marray++;
-                            maskword = AROS_BE2WORD(*marray);
-                        }
-                    }
-
-                    pmask >>= 1;
-                    if (!pmask) pmask = 0x8000;
-                        
-                } /* for(x = 0; x < msg->width; x++) */
-                break;
-
-            case 4:     /* JAM2 */
-                for(x = 0; x < msg->width; x++)
-                {
-                    if (!maskarray || (maskword & mmask))
-                    {
-                        xbuf[x] = (patword & pmask) ? fg : bg;
+                        *xbuf = (patword & pmask) ? fg : bg;
                     }
 
                     if (maskarray)
@@ -2507,33 +1872,8 @@ VOID BM__Hidd_BitMap__PutMemPattern32(OOP_Class *cl, OOP_Object *o, struct pHidd
                 } /* for(x = 0; x < msg->width; x++) */
                 break;
 
-            case 5:     /* JAM2 | INVERSVID */
-                for(x = 0; x < msg->width; x++)
-                {
-                    if (!maskarray || (maskword & mmask))
-                    {
-                        xbuf[x] = (patword & pmask) ? bg : fg;
-                    }
-
-                    if (maskarray)
-                    {
-                        mmask >>= 1;
-                        if (!mmask)
-                        {
-                            mmask = 0x8000;
-                            marray++;
-                            maskword = AROS_BE2WORD(*marray);
-                        }
-                    }
-
-                    pmask >>= 1;
-                    if (!pmask) pmask = 0x8000;
-
-                } /* for(x = 0; x < msg->width; x++) */
-                break;
-
-            case 6: /* multi color pattern */
-                for(x = 0; x < msg->width; x++)
+            case 3:     /* multi color pattern */
+                for(x = 0; x < msg->width; x++, xbuf++)
                 {
                     if (!maskarray || (maskword & mmask))
                     {
@@ -2550,7 +1890,7 @@ VOID BM__Hidd_BitMap__PutMemPattern32(OOP_Class *cl, OOP_Object *o, struct pHidd
 
                         if (msg->patternlut) pixel = msg->patternlut->pixels[pixel];
 
-                        xbuf[x] = pixel;
+                        *xbuf = pixel;
                     }
 
                     if (maskarray)
@@ -2576,7 +1916,6 @@ VOID BM__Hidd_BitMap__PutMemPattern32(OOP_Class *cl, OOP_Object *o, struct pHidd
         if (maskarray) maskarray += msg->maskmodulo;
 
     } /* for(y = 0; y < msg->height; y++) */
-    
 }
 
 /****************************************************************************************/

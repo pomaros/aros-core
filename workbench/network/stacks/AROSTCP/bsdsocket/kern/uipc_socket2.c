@@ -98,6 +98,8 @@
 
 #include <kern/uipc_socket2_protos.h>
 #include <kern/amiga_select_protos.h>
+#include <proto/timer.h>
+#include <time.h>               /* timespec_get() */
 
 /*
  * Primitive routines for operating on sockets and socket buffers
@@ -802,6 +804,70 @@ struct mbuf *control, *m0;
     } else
         sb->sb_mb = control;
     return (1);
+}
+
+/*
+ * Create a control mbuf holding one control message - a cmsghdr of the given
+ * level and type followed by size bytes from p - for a protocol to hand to
+ * sbappendaddr() with a datagram. The data starts at CMSG_DATA(), which on
+ * an LP64 target lies past padding after the header, so cmsg_len is
+ * CMSG_LEN(size), and the mbuf holds CMSG_SPACE(size) so the next message in
+ * a chain starts aligned, as 4.4BSD-Lite's sbcreatecontrol(). Returns NULL
+ * when no mbuf is free or the message does not fit in one.
+ */
+struct mbuf *
+sbcreatecontrol(caddr_t p, int size, int type, int level)
+{
+    struct cmsghdr *cp;
+    struct mbuf *m;
+
+    if(CMSG_SPACE((u_int)size) > MLEN)
+        return ((struct mbuf *)NULL);
+    if((m = m_get(M_DONTWAIT, MT_CONTROL)) == NULL)
+        return ((struct mbuf *)NULL);
+    cp = mtod(m, struct cmsghdr *);
+    bzero(cp, CMSG_SPACE((u_int)size));
+    if(size)
+        bcopy(p, CMSG_DATA(cp), size);
+    m->m_len = CMSG_SPACE((u_int)size);
+    cp->cmsg_len = CMSG_LEN((u_int)size);
+    cp->cmsg_level = level;
+    cp->cmsg_type = type;
+    return (m);
+}
+
+/*
+ * The receive time of a datagram for a socket that asked with SO_TIMESTAMP,
+ * as a control mbuf, or NULL (FreeBSD's SO_TIMESTAMP and SO_TS_CLOCK).
+ * Called as the datagram is handed to the socket, before it waits in the
+ * buffer; the clock is read once, of the kind so_ts_clock names:
+ * - SO_TS_REALTIME_MICRO: SCM_TIMESTAMP, a struct timeval - the C
+ *   runtime's timespec_get(TIME_UTC), which is the time posixc's
+ *   gettimeofday() gives (the system time from 1970, in UTC by the
+ *   locale's offset at that moment), so the stack keeps no conversion of
+ *   its own;
+ * - SO_TS_MONOTONIC: SCM_MONOTONIC, a struct timespec - timer.device's
+ *   GetUpTime(), which is posixc's CLOCK_MONOTONIC.
+ */
+struct mbuf *
+sbcreatetimestamp(struct socket *so)
+{
+    struct timespec ts;
+    struct timeval tv;
+
+    if(!(so->so_options & SO_TIMESTAMP))
+        return NULL;
+    if(so->so_ts_clock == SO_TS_MONOTONIC) {
+        GetUpTime(&tv);
+        ts.tv_sec = tv.tv_sec;
+        ts.tv_nsec = (long)tv.tv_usec * 1000;
+        return sbcreatecontrol((caddr_t)&ts, sizeof(ts), SCM_MONOTONIC, SOL_SOCKET);
+    }
+    if(timespec_get(&ts, TIME_UTC) != TIME_UTC)
+        return NULL;
+    tv.tv_sec = ts.tv_sec;
+    tv.tv_usec = ts.tv_nsec / 1000;
+    return sbcreatecontrol((caddr_t)&tv, sizeof(tv), SCM_TIMESTAMP, SOL_SOCKET);
 }
 
 /*

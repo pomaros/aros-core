@@ -29,6 +29,9 @@
 #include <proto/exec.h>
 #include <proto/dos.h>
 #include <proto/timer.h>
+#ifdef __AROS__
+#include <libraries/stdc.h>
+#endif
 
 #include <string.h>
 #include <stdio.h>
@@ -76,6 +79,9 @@ TWIN_FIELD(struct SignalSemaphore, ss_WaitQueue, struct __pthread_twin_signalsem
 TWIN_FIELD(struct SignalSemaphore, ss_MultipleLink, struct __pthread_twin_signalsemaphore, __multiplelink);
 TWIN_FIELD(struct SignalSemaphore, ss_Owner, struct __pthread_twin_signalsemaphore, __owner);
 TWIN_FIELD(struct SignalSemaphore, ss_QueueCount, struct __pthread_twin_signalsemaphore, __queuecount);
+#if defined(__AROS__)
+#include <proto/task.h>
+#endif
 
 
 //#define USE_ASYNC_CANCEL
@@ -90,6 +96,16 @@ TLSKey tlskeys[PTHREAD_KEYS_MAX];
 struct SignalSemaphore tls_sem;
 // set once the program exits: remaining threads end without TLS destructors
 volatile BOOL __pthread_exiting;
+
+#if defined(__AROS__)
+// Tasks that are not pthreads keep their thread-specific values in a task
+// storage slot: other programs calling into a shared library that links
+// this, or a program's raw subtasks. The slot dies with the task, so a new
+// task at the same address starts empty. Taken on first use only, so a
+// program whose threads all come from pthread_create() never needs one.
+static struct Library *tlstaskres;
+static LONG tlsslot;
+#endif
 
 //
 // Helper functions
@@ -122,6 +138,51 @@ ThreadInfo *GetThreadInfo(pthread_t thread)
         return threads[thread];
 
     return 0;
+}
+
+// The calling task's thread-specific values; NULL if it has none yet and
+// create is FALSE, or if they cannot be allocated.
+void **GetTLSValues(BOOL create)
+{
+    struct Task *task = GET_THIS_TASK;
+    pthread_t thread = GetThreadId(task);
+
+    if (thread != PTHREAD_THREADS_MAX)
+        return GetThreadInfo(thread)->tlsvalues;
+
+#if defined(__AROS__)
+    {
+        struct Library *TaskResBase;
+        void **values = NULL;
+
+        if (!tlsslot)
+        {
+            if (!create)
+                return NULL;
+            ObtainSemaphore(&tls_sem);
+            if (!tlsslot && (TaskResBase = tlstaskres = OpenResource("task.resource")))
+                tlsslot = AllocTaskStorageSlot();
+            ReleaseSemaphore(&tls_sem);
+            if (!tlsslot)
+                return NULL;
+        }
+
+        TaskResBase = tlstaskres;
+        values = (void **)GetTaskStorageSlot(tlsslot);
+        if (!values && create)
+        {
+            values = AllocVec(PTHREAD_KEYS_MAX * sizeof(void *), MEMF_ANY | MEMF_CLEAR);
+            if (values && !SetTaskStorageSlot(tlsslot, (IPTR)values))
+            {
+                FreeVec(values);
+                values = NULL;
+            }
+        }
+        return values;
+    }
+#else
+    return GetThreadInfo(0)->tlsvalues;
+#endif
 }
 
 pthread_t GetThreadId(struct Task *task)
@@ -163,11 +224,14 @@ static int __m68k_sync_val_compare_and_swap(int *v, int o, int n)
 
 static int __m68k_sync_lock_test_and_set(int *v, int n)
 {
+    int old;
+
     Disable();
+    old = *v;
     (*v) = (n);
     Enable();
 
-    return n;
+    return old;
 }
 #undef __sync_lock_test_and_set
 #define __sync_lock_test_and_set(v, n) __m68k_sync_lock_test_and_set(v, n)
@@ -1549,9 +1613,7 @@ static int _obtain_sema_timed(struct SignalSemaphore *sema, const struct timespe
     BUGS
         Non-recursive ownership is not tracked. Acquiring a lock already held
         by the same task can deadlock. The source contains an explicit TODO
-        concerning yield frequency. The __mc68000__ replacement for
-        test-and-set returns the newly written value, so this loop cannot
-        observe an unlocked value through that replacement.
+        concerning yield frequency.
 
     SEE ALSO
         pthread_spin_trylock()
@@ -1603,11 +1665,6 @@ static int _obtain_sema_timed(struct SignalSemaphore *sema, const struct timespe
     NOTES
         Does not yield, sleep, or queue a waiter. Each successful acquisition
         requires a matching unlock.
-
-    BUGS
-        The __mc68000__ replacement for test-and-set returns the written value
-        instead of the old value; with a nonzero lock request this path
-        reports EBUSY even on an initially clear lock.
 
     SEE ALSO
         pthread_spin_lock()
@@ -2150,8 +2207,7 @@ static void OnceCleanup(void *arg)
         PTHREAD_ONCE_INIT: the initial compare-and-swap path can skip
         initialization. Cancellation during the callback also has nontrivial
         state and cleanup implications; do not assume a POSIX retry guarantee
-        without testing. On __mc68000__, its spin-lock helper also uses the
-        problematic test-and-set replacement.
+        without testing.
 
     SEE ALSO
         pthread_spin_lock()
@@ -2681,6 +2737,20 @@ static void OnceCleanup(void *arg)
 // Constructors, destructors
 //
 
+#ifdef __AROS__
+// exit(), abort() or an unhandled signal in a thread: the program's exit code
+// has to run in the program's task (stdc.library asks it to break), so only
+// this thread ends
+static void __pthread_TaskExit(int returncode)
+{
+    pthread_t thread = GetThreadId(GET_THIS_TASK);
+
+    (void)returncode;
+    if (thread != 0 && thread < PTHREAD_THREADS_MAX)
+        pthread_exit(PTHREAD_CANCELED);
+}
+#endif
+
 int __pthread_Init_Func(void)
 {
     DB2(bug("%s()\n", __FUNCTION__));
@@ -2710,6 +2780,9 @@ int __pthread_Init_Func(void)
     inf->task = GET_THIS_TASK;
 
     NEWLIST((struct List *)&inf->cleanup);
+#ifdef __AROS__
+    __stdc_set_taskexit(__pthread_TaskExit);
+#endif
     return TRUE;
 }
 
@@ -2753,6 +2826,9 @@ void __pthread_Exit_Func(void)
         return;
 
     __pthread_exiting = TRUE;
+#ifdef __AROS__
+    __stdc_set_taskexit(NULL);
+#endif
 
     // if we don't do this we can easily end up with unloaded code being executed
     for (i = 1; i < threads_used; i++)
@@ -2826,6 +2902,24 @@ void __pthread_Exit_Func(void)
     {
         CloseDevice((struct IORequest *)&timer_shared_io);
         timer_shared_ok = FALSE;
+    }
+#endif
+
+#if defined(__AROS__)
+    // Freed slots are not cleared in the tasks that used them, so give
+    // back what this task holds before the slot can be handed out again.
+    if (tlsslot)
+    {
+        struct Library *TaskResBase = tlstaskres;
+        void **values = (void **)GetTaskStorageSlot(tlsslot);
+
+        if (values)
+        {
+            SetTaskStorageSlot(tlsslot, 0);
+            FreeVec(values);
+        }
+        FreeTaskStorageSlot(tlsslot);
+        tlsslot = 0;
     }
 #endif
 }

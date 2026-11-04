@@ -105,12 +105,34 @@ void ActivateMonitor(Object *newmonitor, WORD x, WORD y, struct IntuitionBase *I
         /* A crude copy from inputhandler.c. We should really handle this in monitorclass */
         if (scr)
         {
-            DWidth = (scr->ViewPort.ColorMap->cm_vpe->DisplayClip.MaxX -
-                      scr->ViewPort.ColorMap->cm_vpe->DisplayClip.MinX + 1) *
-                     int_MouseScaleX(scr) - 1;
-            DHeight = (scr->ViewPort.ColorMap->cm_vpe->DisplayClip.MaxY -
-                       scr->ViewPort.ColorMap->cm_vpe->DisplayClip.MinY + 1) *
-                      int_MouseScaleY(scr) - 1;
+            UWORD cw = scr->ViewPort.ColorMap->cm_vpe->DisplayClip.MaxX -
+                       scr->ViewPort.ColorMap->cm_vpe->DisplayClip.MinX + 1;
+            UWORD ch = scr->ViewPort.ColorMap->cm_vpe->DisplayClip.MaxY -
+                       scr->ViewPort.ColorMap->cm_vpe->DisplayClip.MinY + 1;
+
+            /* The clip is in the screen's pixels, the pointer in the
+             * display's, which a scaled screen does not share. */
+            if (GetPrivScreen(scr)->SpecialFlags & SF_ScaledCoords)
+            {
+                struct msScreenToDisplayCoords coordmsg =
+                {
+                    .MethodID   = MM_ScreenToDisplayCoords,
+                    .Screen     = scr,
+                    .ScrX       = cw,
+                    .ScrY       = ch,
+                    .DispX      = &DWidth,
+                    .DispY      = &DHeight
+                };
+
+                DoMethodA(newmonitor, (Msg)&coordmsg);
+                DWidth--;
+                DHeight--;
+            }
+            else
+            {
+                DWidth = cw * int_MouseScaleX(scr) - 1;
+                DHeight = ch * int_MouseScaleY(scr) - 1;
+            }
         }
         else
         {
@@ -169,6 +191,8 @@ struct RastPort *MyCloneRastPort(struct IntuitionBase *IntuitionBase, struct Ras
         if (newrp)
         {
             CopyMem(rp, newrp, sizeof(struct RastPort));
+            /* graphics' private data stays with the original */
+            newrp->RP_Extra = NULL;
         }
     }
 
@@ -177,11 +201,12 @@ struct RastPort *MyCloneRastPort(struct IntuitionBase *IntuitionBase, struct Ras
 
 void MyFreeRastPort(struct IntuitionBase *IntuitionBase, struct RastPort *rp)
 {
-    if (rp->RP_Extra)
-    {
-        /* Just in case... What if someone plays with ClipRects? */
+    /*
+     * graphics' private data, when it belongs to this RastPort (its first
+     * field is the RastPort): a copy of another RastPort shares the pointer.
+     */
+    if (rp->RP_Extra && (*(struct RastPort **)rp->RP_Extra == rp))
         FreeVec(rp->RP_Extra);
-    }
 
     FreeMem(rp, sizeof(*rp));
 }
@@ -411,10 +436,25 @@ struct TextFont *SafeReopenFont(struct IntuitionBase *IntuitionBase,
     struct IntIntuitionBase *_intuitionBase = GetPrivIBase(IntuitionBase);
     struct GfxBase *GfxBase = _intuitionBase->GfxBase;
     struct TextFont *ret = NULL, *font;
+    struct SignalSemaphore *fontsem;
 
-    /* Atomically lock the font before, so it can't go away
+    /*
+     * Pin the font under the semaphore graphics.library itself uses for
+     * the font list and tf_Accessors (OpenFont/CloseFont/RemFont), so it
+     * cannot go away under us. Forbid() alone only stops this CPU.
      */
-    Forbid();
+    if (!_intuitionBase->GfxFontSem)
+    {
+        Forbid();
+        _intuitionBase->GfxFontSem = FindSemaphore("graphics.library/TextFonts");
+        Permit();
+    }
+    fontsem = _intuitionBase->GfxFontSem;
+
+    if (fontsem)
+        ObtainSemaphore(fontsem);
+    else
+        Forbid();
 
     font = *fontptr;
     if (font)
@@ -422,7 +462,10 @@ struct TextFont *SafeReopenFont(struct IntuitionBase *IntuitionBase,
         struct TTextAttr ta;
 
         font->tf_Accessors++;
-        Permit();
+        if (fontsem)
+            ReleaseSemaphore(fontsem);
+        else
+            Permit();
 
         /* Now really open it
          */
@@ -432,11 +475,17 @@ struct TextFont *SafeReopenFont(struct IntuitionBase *IntuitionBase,
 
         /* Unlock it
          */
-        Forbid();
+        if (fontsem)
+            ObtainSemaphore(fontsem);
+        else
+            Forbid();
         font->tf_Accessors--;
     }
 
-    Permit();
+    if (fontsem)
+        ReleaseSemaphore(fontsem);
+    else
+        Permit();
 
     return ret;
 }

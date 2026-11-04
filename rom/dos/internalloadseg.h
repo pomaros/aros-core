@@ -1,21 +1,46 @@
 #ifndef INTERNALLOADSEG_H
 #define INTERNALLOADSEG_H
 
+#include <exec/nodes.h>
+#include <dos/doshunks.h>
+
 #define SEGTYPE_HUNK            1
 #define SEGTYPE_HUNK_OVERLAY    2
 #define SEGTYPE_ELF             10
 
-/* The seg-registry node for SEGTYPE_HUNK on non-68k 64-bit targets: carries the
- * raw source-file bytes alongside the seglist, because the seglist's own payload
- * (loaded above 4GB, truncated relocations) is not interpretable there - the 68k
- * execution router re-loads from these bytes. Owned by the registry: freed with
- * the node when the seglist is unloaded. Other node types stay a plain Node. */
-struct hunk_segnode
+struct HunkRelocList;
+
+#ifndef __mc68000
+/* what the hunk loader collects for register_hunk() */
+struct HunkRelocList
 {
-    struct Node shn_Node;
-    APTR        shn_Image;      /* AllocVec'd copy of the hunk file (or NULL) */
-    ULONG       shn_ImageSize;
+    struct HunkRelocGroup *groups;
+    ULONG                  ngroups, gcap;
+    ULONG                 *offsets;
+    ULONG                  noffsets, ocap;
+    BOOL                   lost;
 };
+#endif
+
+/* segdata node of a SEGTYPE_HUNK seglist.
+   hsn_Relocs (non-68k): the groups and offsets follow the node in the same
+   allocation, so UnLoadSeg() frees them with the node (GSLI_68KRELOCS).
+   hsn_Image: on 64-bit hosts an AllocVec'd copy of the hunk file, because
+   the seglist's own payload (loaded above 4GB, truncated relocations) is not
+   interpretable there - the 68k execution router re-loads from these bytes.
+   Owned by the registry: freed with the node. NULL otherwise. */
+struct HunkSegNode
+{
+    struct Node             hsn_Node;
+#ifndef __mc68000
+    struct HunkRelocTable   hsn_Relocs;
+#endif
+    APTR                    hsn_Image;
+    ULONG                   hsn_ImageSize;
+};
+
+/* Transitional spellings of the same node, still used by rom/dos/unloadseg.c
+   and rom/dos/emu68k_route.c; drop once those use struct HunkSegNode. */
 
 BPTR InternalLoadSeg_AOS(BPTR file,
                          BPTR table,

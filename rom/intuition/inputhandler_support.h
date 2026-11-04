@@ -112,6 +112,7 @@ void DrawWindowRefresh(struct Window *, struct IntuitionBase *);
 void WindowNeedsRefresh(struct Window * w, struct IntuitionBase * IntuitionBase );
 
 struct Screen *FindHighestScreen(struct IntuitionBase *IntuitionBase);
+WORD ScreenTopInDisplay(struct Screen *scr, struct IntuitionBase *IntuitionBase);
 
 struct Screen *FindActiveScreen(struct IntuitionBase *IntuitionBase);
 

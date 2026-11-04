@@ -33,7 +33,7 @@
 #define FULL_SPECIFIERS
 #endif
 
-const unsigned char *const __stdc_char_decimalpoint = ".";
+extern const unsigned char *const __stdc_char_decimalpoint;
 
 /* support macros for FMTPRINTF */
 #define FMTPRINTF_TYPE          char

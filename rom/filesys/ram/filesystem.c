@@ -171,8 +171,8 @@ struct Object *CreateObject(struct Handler *handler, const TEXT *name,
 
    if(error == 0)
    {
-      object->block_count = MEMBLOCKS(sizeof(struct Object));
-      handler->block_count += MEMBLOCKS(sizeof(struct Object));
+      object->block_count = MemBlocks(sizeof(struct Object));
+      handler->block_count += MemBlocks(sizeof(struct Object));
 
       NewList((struct List *)&object->elements);
       ((struct Node *)object)->ln_Pri = type;
@@ -337,7 +337,8 @@ VOID DeleteObject(struct Handler *handler, struct Object *object)
 
       /* Delete a hard link */
 
-      if(object_type == ST_LINKFILE || object_type == ST_LINKDIR)
+      if((object_type == ST_LINKFILE || object_type == ST_LINKDIR)
+         && object->hard_link.mln_Pred != NULL)
       {
          node = real_object->hard_link.mln_Succ;
          master_link = HARDLINK(node);
@@ -388,7 +389,13 @@ VOID DeleteObject(struct Handler *handler, struct Object *object)
 
          /* Prepare to destroy "heir" link */
 
+         AdjustExaminations(handler, heir);
+         UnmatchNotifyRequests(handler, heir);
          Remove((APTR)heir);
+         if(object_type == ST_USERDIR)
+            RematchNotifyRequests(handler);
+         else
+            MatchNotifyRequests(handler);
          object = heir;
       }
 
@@ -411,8 +418,11 @@ VOID DeleteObject(struct Handler *handler, struct Object *object)
 
       SetString(handler, (TEXT **)&((struct Node *)object)->ln_Name, NULL);
       SetString(handler, &object->comment, NULL);
+      SetString(handler, &object->soft_link_target, NULL);
       handler->block_count -= object->block_count;
       FreePooled(handler->clear_pool, object, sizeof(struct Object));
+      if(object_type == ST_LINKDIR)
+         RematchNotifyRequests(handler);
    }
 
    return;
@@ -466,6 +476,72 @@ struct Object *GetHardObject(struct Handler *handler, struct Lock *lock,
    object = GetObject(handler, lock, name, parent, NULL);
    if(IoErr() == ERROR_IS_SOFT_LINK)
       object = NULL;
+
+   return object;
+}
+
+
+/****i* ram.handler/GetObjectNoFollow **************************************
+*
+*   NAME
+*	GetObjectNoFollow -- Find an object given a lock and path, taking a
+*	    soft link as the last part as the object itself.
+*
+*   SYNOPSIS
+*	object = GetObjectNoFollow(handler, lock, name,
+*	    parent)
+*
+*	struct Object *GetObjectNoFollow(struct Handler *, struct Lock *,
+*	    TEXT *, struct Object **);
+*
+*   FUNCTION
+*	Looks for the object corresponding to the specified lock and path
+*	combination. A soft link as the last part of the path is returned
+*	like any other object, so that calls acting on a name (rename, or a
+*	check for an existing name) can see it. If an earlier part of the
+*	path is a soft link, NULL is returned and ERROR_IS_SOFT_LINK is set,
+*	as for GetHardObject().
+*
+*   INPUTS
+*	lock - .
+*	name - .
+*	parent - parent directory will be returned here (will be NULL if
+*	    path is invalid or contains a soft link before its last part).
+*
+*   RESULT
+*	object - The located object, or NULL if not found.
+*
+*   EXAMPLE
+*
+*   NOTES
+*
+*   BUGS
+*
+*   SEE ALSO
+*	GetHardObject()
+*
+****************************************************************************
+*
+*/
+
+struct Object *GetObjectNoFollow(struct Handler *handler, struct Lock *lock,
+   const TEXT *name, struct Object **parent)
+{
+   struct Object *object;
+   LONG pos = -1;
+
+   object = GetObject(handler, lock, name, parent, &pos);
+   if(IoErr() == ERROR_IS_SOFT_LINK)
+   {
+      if(pos == -1)
+      {
+         if(parent != NULL)
+            *parent = object->parent;
+         SetIoErr(0);
+      }
+      else
+         object = NULL;
+   }
 
    return object;
 }
@@ -976,7 +1052,7 @@ struct Lock *LockObject(struct Handler *handler, struct Object *object,
          NewList((struct List *)&lock->openings);
       }
       else
-         error = IoErr();
+         error = ERROR_NO_FREE_STORE;
    }
    else
    {
@@ -1060,7 +1136,7 @@ BOOL ExamineObject(struct Handler *handler, struct Object *object,
       info->fib_FileName[0] = StrSize(s) - 1;
       CopyMem(s, &info->fib_FileName[1], info->fib_FileName[0]);
       s = object->comment;
-      if(s != NULL && ((struct Node *)object)->ln_Pri != ST_SOFTLINK) {
+      if(s != NULL) {
          info->fib_Comment[0] = StrSize(s) - 1;
          CopyMem(s, &info->fib_Comment[1], info->fib_Comment[0]);
       } else
@@ -1268,7 +1344,7 @@ static struct Block *AddDataBlock(struct Handler *handler,
    block = NULL;
    while(block == NULL && alloc_size >= limit)
    {
-      alloc_size = ((alloc_size - 1) & (~MEM_BLOCKMASK)) + MEM_BLOCKSIZE;
+      alloc_size = ((alloc_size - 1) & (~RAM_BLOCKMASK)) + RAM_BLOCKSIZE;
       block = AllocPooled(handler->muddy_pool, alloc_size);
       if(block == NULL)
          alloc_size >>= 1;
@@ -1280,7 +1356,7 @@ static struct Block *AddDataBlock(struct Handler *handler,
    {
       AddTail((struct List *)&file->elements, (struct Node *)block);
       block->length = alloc_size - sizeof(struct Block);
-      file->block_count += alloc_size >> MEM_BLOCKSHIFT;
+      file->block_count += alloc_size / RAM_BLOCKSIZE;
    }
    else
       SetIoErr(ERROR_DISK_FULL);
@@ -1328,7 +1404,7 @@ static VOID FreeDataBlock(struct Handler *handler, struct Object *file,
    if(block != NULL)
    {
       alloc_size = sizeof(struct Block) + block->length;
-      file->block_count -= alloc_size >> MEM_BLOCKSHIFT;
+      file->block_count -= alloc_size / RAM_BLOCKSIZE;
       FreePooled(handler->muddy_pool, block, alloc_size);
    }
 

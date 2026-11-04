@@ -335,7 +335,8 @@ BOOL fdhooks_setup(void)
     if (FDBase == NULL)
         return FALSE;
 
-    if (FD_SetOwnerHooks(FD_OWNER_BSDSOCKET, &bsdsocket_fd_hooks) != 0) {
+    if (FD_SetOwnerHooks(FD_OWNER_BSDSOCKET, &bsdsocket_fd_hooks) != 0)
+    {
         CloseLibrary(FDBase);
         FDBase = NULL;
         return FALSE;

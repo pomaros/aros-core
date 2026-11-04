@@ -12,6 +12,9 @@
 
 #include <dos/dos.h>
 #include <exec/semaphores.h>
+#include <exec/lists.h>
+
+struct __flock_file;
 
 /* file control block - one per file handle */
 struct reclock_file;
@@ -34,6 +37,20 @@ typedef struct _fcb
     /* The file record locks know this handle by (see __reclock.c), once
        a lock operation has named it. */
     struct reclock_file *reclock;
+    /* flock(): an advisory lock belongs to the open file description, so it
+       is kept here and released when the last descriptor is closed. Guarded
+       by the flock registry lock (flock.c), not by io_lock. */
+    struct MinNode flock_node;          /* in the file's list of holders */
+    struct __flock_file *flock_file;    /* NULL when no lock is held */
+    struct Task *flock_task;            /* Task that obtained the lock */
+    int flock_mode;                     /* LOCK_SH or LOCK_EX */
+    /* Position set by lseek() beyond the end of the file, 0 when none (a
+       position past EOF is never 0). POSIX lseek() does not change the
+       file, so the DOS handle stays where it was and the gap is only
+       zero-filled when data is written there; reads at the position see
+       EOF. Maintained by the __dos64 helpers under io_lock. */
+    QUAD seekpastend;
+
 } fcb;
 
 #include <proto/exec.h>
@@ -112,6 +129,9 @@ LONG __oflags2amode(int flags);
 fdesc *__alloc_fdesc(void);
 void __free_fdesc(fdesc *fdesc);
 void __close_on_exec_fdescs(void);
+/* Release the flock() lock of a description whose last descriptor is
+   being closed (flock.c). */
+void __flock_release(fcb *f);
 
 /* Resolve the operation hooks for a descriptor owned by another subsystem
    (e.g. a bsdsocket.library socket) through fd.library.  Returns the hooks

@@ -2431,11 +2431,7 @@ void bHandleChannel(LIBBASETYPEPTR BluetoothBase, struct BtHardware *bth, struct
                 bd->bd_AutoHold = FALSE;
                 btUnlockDevice(bd);
                 bth->bth_LEListsDirty = TRUE;
-                if(!bStoreDevConfig(BluetoothBase, bd, TRUE)) {
-                    bd->bd_Flags &= ~BDFF_REGISTERED;
-                    bReplyChannel(BluetoothBase, bch, BTIOERR_NOTREADY, 0);
-                    return;
-                }
+                bStoreDevConfig(BluetoothBase, bd, TRUE);
                 btAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname),
                                "Device %s registered.", bd->bd_Name);
                 btSendEvent(BEHMB_DEVICEREGISTERED, bd, NULL);
@@ -2452,18 +2448,12 @@ void bHandleChannel(LIBBASETYPEPTR BluetoothBase, struct BtHardware *bth, struct
             }
             btLockWriteDevice(bd);
             if(bd->bd_Flags & BDFF_REGISTERED) {
-                ULONG previous_flags=bd->bd_Flags;
                 bd->bd_Flags &= ~(BDFF_REGISTERED|BDFF_BONDED);
                 memset(&bd->bd_Keys, 0, sizeof(bd->bd_Keys));
                 bd->bd_CurAddrValid = FALSE;
                 btUnlockDevice(bd);
                 bth->bth_LEListsDirty = TRUE;
-                if(!bStoreDevConfig(BluetoothBase, bd, TRUE)) {
-                    bd->bd_Flags=previous_flags;
-                    bLoadKeyringBond(BluetoothBase,bd);
-                    bReplyChannel(BluetoothBase, bch, BTIOERR_NOTREADY, 0);
-                    return;
-                }
+                bStoreDevConfig(BluetoothBase, bd, TRUE);
                 btAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname),
                                "Device %s unregistered.", bd->bd_Name);
                 /* bindings are released by the event handler task */
@@ -3161,13 +3151,11 @@ AROS_UFH0(void, bHWTask)
                                        bth->bth_MsgCount);
                     }
                     if(cnt == 300) {
-                        /* The driver still owns these requests: closing the
-                           device or freeing them now would let it write into
-                           freed memory. Keep waiting; a stuck driver keeps
-                           the stack loaded instead of corrupting it. */
-                        btAddErrorMsg(RETURN_FAIL, (STRPTR) GM_UNIQUENAME(libname),
-                                       "%ld IORequests still owned by %s/%ld after 30 s; waiting for the driver.",
-                                       bth->bth_MsgCount, bth->bth_DevName, bth->bth_Unit);
+                        btAddErrorMsg(RETURN_WARN, (STRPTR) GM_UNIQUENAME(libname),
+                                       "Okay, I've waited long enough, sod these %ld IORequests.",
+                                       bth->bth_MsgCount);
+                        bth->bth_MsgCount = 0;
+                        break;
                     }
                     while((req = (struct IOBTHCIReq *) GetMsg(&bth->bth_DevMsgPort))) {
                         bHandleDevReply(hc, req);
@@ -3194,15 +3182,9 @@ AROS_UFH0(void, bHWTask)
 
     CloseLibrary((struct Library *) BluetoothBase);
     Forbid();
-    {
-        /* btRemHardware() frees bth once it sees no task: read everything
-           first and touch nothing of bth after publishing. */
-        struct Task *ready = bth->bth_ReadySigTask;
-        ULONG mask = 1UL << bth->bth_ReadySignal;
-        bth->bth_Task = NULL;
-        if(ready) {
-            Signal(ready, mask);
-        }
+    bth->bth_Task = NULL;
+    if(bth->bth_ReadySigTask) {
+        Signal(bth->bth_ReadySigTask, 1L<<bth->bth_ReadySignal);
     }
     AROS_USERFUNC_EXIT
 }

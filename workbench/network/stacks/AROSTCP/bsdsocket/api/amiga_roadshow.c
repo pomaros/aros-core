@@ -23,7 +23,7 @@
 #include <net/route.h>
 #include <net/if.h>
 #include <net/radix.h>
-#include <net/bpf.h>
+#include "../net/bpf.h"
 #include <net/if_sana.h>
 #if INET6
 #include <netinet6/nd6.h>	/* struct llinfo_nd6 (ND6 neighbour expiry) */
@@ -304,29 +304,66 @@ AROS_LH3(long, bpf_write,
 
     ifp = d->bd_ifp;
 
-    if(len > (long)ifp->if_mtu) {
+    /*
+     * The buffer is a whole frame, link header included, sent as it is
+     * (SANA2IOF_RAW): what an Ethernet descriptor captures (DLT_EN10MB).
+     * A DLT_RAW capture has no link header to write one with.
+     */
+    if(d->bd_dlt != DLT_EN10MB) {
+        writeErrnoValue(libPtr, EAFNOSUPPORT);
+        return -1;
+    }
+    if(len < SANA_ETHER_HDRLEN) {
+        writeErrnoValue(libPtr, EINVAL);
+        return -1;
+    }
+    if(len > (long)ifp->if_mtu + SANA_ETHER_HDRLEN) {
         writeErrnoValue(libPtr, EMSGSIZE);
         return -1;
     }
 
-    /* Allocate mbuf with header and copy user data */
+    /* Copy the frame into an mbuf chain: a large MTU takes several clusters */
     m = m_gethdr(M_DONTWAIT, MT_DATA);
     if(m == NULL) {
         writeErrnoValue(libPtr, ENOBUFS);
         return -1;
     }
-    if(len > (int)MHLEN) {
-        MCLGET(m, M_DONTWAIT);
-        if((m->m_flags & M_EXT) == 0) {
-            m_freem(m);
-            writeErrnoValue(libPtr, ENOBUFS);
-            return -1;
-        }
-    }
-    memcpy(mtod(m, char *), buffer, len);
-    m->m_len = len;
+    m->m_len = 0;
     m->m_pkthdr.len = len;
     m->m_pkthdr.rcvif = NULL;
+    {
+        struct mbuf *n = m;
+        long done = 0;
+
+        for(;;) {
+            long room, chunk;
+
+            if(len - done > (long)(n == m ? MHLEN : MLEN)) {
+                MCLGET(n, M_DONTWAIT);
+                if((n->m_flags & M_EXT) == 0) {
+                    m_freem(m);
+                    writeErrnoValue(libPtr, ENOBUFS);
+                    return -1;
+                }
+                room = MCLBYTES;
+            } else {
+                room = (n == m) ? MHLEN : MLEN;
+            }
+            chunk = (len - done < room) ? len - done : room;
+            memcpy(mtod(n, char *), (char *)buffer + done, chunk);
+            n->m_len = chunk;
+            done += chunk;
+            if(done == len)
+                break;
+            MGET(n->m_next, M_DONTWAIT, MT_DATA);
+            if(n->m_next == NULL) {
+                m_freem(m);
+                writeErrnoValue(libPtr, ENOBUFS);
+                return -1;
+            }
+            n = n->m_next;
+        }
+    }
 
     /* Send as raw packet via AF_UNSPEC */
     memset(&dst, 0, sizeof(dst));
@@ -936,16 +973,56 @@ AROS_LH1(void, ReleaseInterfaceList,
          struct SocketBase *, libPtr, 76, UL)
 {
     AROS_LIBFUNC_INIT
-    __log(LOG_CRIT, "ReleaseInterfaceList() is not implemented");
+    struct Node *n;
+
+    if(list == NULL)
+        return;
+    while((n = RemHead(list)) != NULL)
+        FreeVec(n);
+    FreeVec(list);
     AROS_LIBFUNC_EXIT
 }
 
+/*
+ * ObtainInterfaceList - Roadshow's list of the interfaces: one struct Node
+ * per interface, its name ("eth0", "lo0": what QueryInterfaceTagList() and
+ * the ioctls take) in ln_Name, the name stored with the node. Free it with
+ * ReleaseInterfaceList(). NULL with ENOMEM when memory runs out.
+ */
 AROS_LH0(struct List *, ObtainInterfaceList,
          struct SocketBase *, libPtr, 77, UL)
 {
     AROS_LIBFUNC_INIT
-    __log(LOG_CRIT, "ObtainInterfaceList() is not implemented");
-    return NULL;
+    extern struct ifnet *ifnet;
+    struct ifnet *ifp;
+    struct List *list;
+    spl_t s;
+
+    if((list = AllocVec(sizeof(*list), MEMF_PUBLIC | MEMF_CLEAR)) == NULL) {
+        writeErrnoValue(libPtr, ENOMEM);
+        return NULL;
+    }
+    NewList(list);
+    s = splnet();
+    for(ifp = ifnet; ifp; ifp = ifp->if_next) {
+        struct Node *n = AllocVec(sizeof(*n) + IFNAMSIZ + 4, MEMF_PUBLIC | MEMF_CLEAR);
+
+        if(n == NULL) {
+            struct Node *f;
+
+            splx(s);
+            while((f = RemHead(list)) != NULL)
+                FreeVec(f);
+            FreeVec(list);
+            writeErrnoValue(libPtr, ENOMEM);
+            return NULL;
+        }
+        n->ln_Name = (char *)(n + 1);
+        snprintf(n->ln_Name, IFNAMSIZ + 4, "%s%d", ifp->if_name, ifp->if_unit);
+        AddTail(list, n);
+    }
+    splx(s);
+    return list;
     AROS_LIBFUNC_EXIT
 }
 
@@ -1056,8 +1133,11 @@ AROS_LH1(LONG, AddDomainNameServer,
     nsn->nsn_EntSize = sizeof(nsn->nsn_Ent);
     nsn->nsn_Family = AF_INET;
     nsn->nsn_Ent.ns_addr.s_addr = sa.sin_addr.s_addr;
+    nsn->nsn_OwnerIndex = 0;
+    nsn->nsn_Expire = 0;
 
     ObtainSemaphore(&DynDB.dyn_Lock);
+    ndb_ops_locked();
     AddTail((struct List *)&DynDB.dyn_NameServers, (struct Node *)nsn);
     ndb_Serial++;
     ReleaseSemaphore(&DynDB.dyn_Lock);
@@ -1088,6 +1168,7 @@ AROS_LH1(LONG, RemoveDomainNameServer,
     }
 
     ObtainSemaphore(&DynDB.dyn_Lock);
+    ndb_ops_locked();
     for(node = DynDB.dyn_NameServers.mlh_Head; node->mln_Succ;) {
         struct NameserventNode *nsn = (struct NameserventNode *)node;
         nnode = node->mln_Succ;

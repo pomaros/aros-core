@@ -54,6 +54,8 @@ struct AppearanceEditor_DATA
     Object *ae_CompLeft;
     Object *ae_CompRight;
     Object *ae_CompAlpha;
+    Object *ae_CompScale;
+    Object *ae_CompNative;
 
     IPTR   *ae_ThemeArray;
     struct Hook ae_PreviewHook;

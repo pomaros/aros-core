@@ -11,11 +11,70 @@
 
 /* The completion cookie is CPU-only metadata, never an address given to xHC. */
 struct XHCIPayload {
+    struct XHCIPayload *next;   /* deferred-free list, see xhciFreeDeferredBounces */
     APTR cpu;
     APTR target;
     ULONG bytes;
     UWORD direction;
 };
+
+static void freePayload(struct PCIController *hc, struct XHCIPayload *payload)
+{
+    if(payload->cpu)
+        FREEPCIMEM(hc, hc->hc_PCIDriverObject, payload->cpu);
+    FreeMem(payload, sizeof(*payload));
+}
+
+/*
+ * A transfer's payload is released where the transfer completes, in the
+ * controller's interrupt, but the PCI allocator and exec's allocator may not
+ * be entered from an interrupt: on SMP the task it interrupted can hold the
+ * memory header's spinlock, and the CPU then spins on it for good. The
+ * payload goes on a list instead and the event ring task frees it when the
+ * completion wakes it (upstream's deferred bounce free, on the fork's
+ * PCI-payload cookies).
+ */
+static void deferPayloadFree(struct PCIController *hc, struct XHCIPayload *payload)
+{
+    struct XhciHCPrivate *xhcic = xhciGetHCPrivate(hc);
+#if defined(__AROSEXEC_SMP__)
+    struct XHCIPayload *head = __atomic_load_n((struct XHCIPayload **)&xhcic->xhc_FreeBounce, __ATOMIC_RELAXED);
+
+    do
+        payload->next = head;
+    while(!__atomic_compare_exchange_n((struct XHCIPayload **)&xhcic->xhc_FreeBounce, &head, payload, TRUE,
+                                       __ATOMIC_RELEASE, __ATOMIC_RELAXED));
+#else
+    Disable();
+    payload->next = xhcic->xhc_FreeBounce;
+    xhcic->xhc_FreeBounce = payload;
+    Enable();
+#endif
+}
+
+/* Free the deferred payloads - task context only */
+void xhciFreeDeferredBounces(struct PCIController *hc)
+{
+    struct XhciHCPrivate *xhcic = xhciGetHCPrivate(hc);
+    struct XHCIPayload *payload;
+
+    if(!xhcic)
+        return;
+#if defined(__AROSEXEC_SMP__)
+    payload = __atomic_exchange_n((struct XHCIPayload **)&xhcic->xhc_FreeBounce, NULL, __ATOMIC_ACQUIRE);
+#else
+    Disable();
+    payload = xhcic->xhc_FreeBounce;
+    xhcic->xhc_FreeBounce = NULL;
+    Enable();
+#endif
+    while(payload) {
+        struct XHCIPayload *next = payload->next;
+
+        freePayload(hc, payload);
+        payload = next;
+    }
+}
 
 static APTR payloadAddress(struct PCIController *hc, APTR cpu, ULONG bytes)
 {
@@ -72,9 +131,7 @@ APTR xhciPreparePCIPayload(struct PCIController *hc, struct IOUsbHWReq *ioreq,
     *cookieOut = payload;
     return dma;
 fail:
-    if(payload->cpu)
-        FREEPCIMEM(hc, hc->hc_PCIDriverObject, payload->cpu);
-    FreeMem(payload, sizeof(*payload));
+    freePayload(hc, payload);
     return NULL;
 }
 
@@ -91,8 +148,8 @@ void xhciReleasePCIPayload(struct PCIController *hc, struct IOUsbHWReq *ioreq,
         ioreq->iouh_Req.io_Error = UHIOERR_HOSTERROR;
     else if(payload->direction == UHDIR_IN && actual)
         CopyMem(payload->cpu, payload->target, actual);
-    FREEPCIMEM(hc, hc->hc_PCIDriverObject, payload->cpu);
-    FreeMem(payload, sizeof(*payload));
+    /* Completion context: never free here (see deferPayloadFree) */
+    deferPayloadFree(hc, payload);
 }
 
 APTR xhciPrepareDMABuffer(struct PCIController *hc, struct IOUsbHWReq *ioreq,
@@ -122,5 +179,10 @@ void xhciDiscardPreparedDMABuffer(struct PCIController *hc, struct IOUsbHWReq *i
 {
     (void)cpu;
     (void)bytes;
-    xhciReleasePCIPayload(hc, ioreq, 0, direction, bounce);
+    (void)ioreq;
+    (void)direction;
+    if(!bounce)
+        return;
+    /* Submission path, task context: the payload can be freed directly. */
+    freePayload(hc, bounce);
 }

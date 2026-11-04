@@ -36,6 +36,7 @@
 #include "ia_stage_intern.h"
 #include "ia_option.h"
 #include "ia_diskio.h"
+#include "ia_log.h"
 #include "ia_packages.h"
 #include "ia_bootloader.h"
 
@@ -65,6 +66,13 @@ extern Object *optObjDestDevice;
 extern Object *optObjDestUnit;
 
 extern Object *optObjCheckEFI;
+#if defined(INSTALL_BL_EFI)
+extern Object *optObjCheckFormatESP;
+extern Object *optObjCheckCopyESP;
+extern Object *bootopt_esp;
+extern Object *bootopt_grubgroup;
+extern Object *bootopt_efigroup;
+#endif
 
 extern Object *optObjCyclePartScheme;
 extern Object *optObjCheckSysSize;
@@ -583,7 +591,46 @@ IPTR InstallStage__MUIM_IC_NextStep(Class * CLASS, Object * self, Msg message)
             if (!data->instc_options_main->bootloaded)
             {
                 data->instc_options_main->bootloaded = TRUE;
+#ifdef INSTALL_BL_PC_EFI
+                extern Object *optObjCycleBootMode;
+                BootLoaderType = XOPTOGET(optObjCycleBootMode, MUIA_Cycle_Active) ?
+                    BOOTLOADER_EFI : BIOSBootLoaderType;
+                Object *bootOptions = (Object *)XGET(bootopt_grubgroup, MUIA_Parent);
+                DoMethod(bootOptions, MUIM_Group_InitChange);
+                SET(bootopt_grubgroup, MUIA_ShowMe, BootLoaderType != BOOTLOADER_EFI);
+                SET(bootopt_efigroup, MUIA_ShowMe, BootLoaderType == BOOTLOADER_EFI);
+                DoMethod(bootOptions, MUIM_Group_ExitChange);
+#endif
 
+
+#if defined(INSTALL_BL_EFI)
+                if (BootLoaderType == BOOTLOADER_EFI)
+                {
+                    TEXT espName[64], espText[96];
+                    BOOL formatted = FALSE;
+
+                    data->instc_options_grub->bootinfo = TRUE;
+                    if (BOOTLOADER_ESPInfo(espName, sizeof(espName),
+                            &formatted))
+                    {
+                        sprintf(espText, "%s:%s", espName,
+                            formatted ? "" : "  (unformatted)");
+                        SET(bootopt_esp, MUIA_Text_Contents, (IPTR)espText);
+
+                        /* A failed mount may be damaged or temporarily
+                         * unreadable, not blank. Formatting is always opt-in. */
+                        OPTOSET(optObjCheckFormatESP, MUIA_Selected, FALSE);
+                    }
+                    else
+                    {
+                        SET(bootopt_esp, MUIA_Text_Contents,
+                            __(MSG_EFINOESP));
+                        OPTOSET(optObjCheckFormatESP, MUIA_Selected, FALSE);
+                        OPTOSET(optObjCheckCopyESP, MUIA_Selected, FALSE);
+                    }
+                }
+                else
+#endif
                 if (!data->instc_options_grub->bootinfo)
                 {
                     char *tmp_blpath = NULL;
@@ -624,7 +671,31 @@ IPTR InstallStage__MUIM_IC_NextStep(Class * CLASS, Object * self, Msg message)
                 data->instc_stage_prev = EInstallOptionsStage;
                 break;
             }
-            else if (strlen((STRPTR) XGET(grub_device,
+#if defined(INSTALL_BL_EFI)
+            else if (BootLoaderType == BOOTLOADER_EFI)
+            {
+                TEXT espName[64];
+                BOOL formatted = FALSE;
+                if (!BOOTLOADER_ESPInfo(espName, sizeof(espName), &formatted))
+                {
+                    MUI_RequestA(data->installer, data->window, 0, _(MSG_ERROR),
+                        _(MSG_OK), _(MSG_EFINOESP), NULL);
+                    return 0;
+                }
+                if (!formatted && XOPTOGET(optObjCheckCopyESP, MUIA_Selected) &&
+                    !XOPTOGET(optObjCheckFormatESP, MUIA_Selected))
+                {
+                    MUI_RequestA(data->installer, data->window, 0, _(MSG_EFIESPIS),
+                        _(MSG_OK), _(MSG_FORMATPART), NULL);
+                    return 0;
+                }
+            }
+#endif
+            else if (
+#if defined(INSTALL_BL_EFI)
+                (BootLoaderType != BOOTLOADER_EFI) &&
+#endif
+                strlen((STRPTR) XGET(grub_device,
                         MUIA_String_Contents)) == 0)
             {
                 /* Go back if user hasn't entered a device name for GRUB */
@@ -772,6 +843,11 @@ IPTR InstallStage__MUIM_IC_NextStep(Class * CLASS, Object * self, Msg message)
         data->bl_TargetUnit = XGET(grub_unit, MUIA_String_Integer);
 
         DoMethod(self, MUIM_IC_Install);
+
+        /* The done page congratulated the user whatever had happened */
+        SET(data->doneMsg, MUIA_Text_Contents,
+            (data->inst_success == MUIV_Inst_InProgress)
+            ? __(MSG_DONE) : __(MSG_DONEFAILED));
 
         next_stage = EDoneStage;
         SET(data->back, MUIA_Disabled, TRUE);
@@ -1089,8 +1165,22 @@ IPTR InstallStage__MUIM_Partition(Class * CLASS, Object * self, Msg message)
         SET(data->back, MUIA_Disabled, TRUE);
         SET(data->proceed, MUIA_Disabled, TRUE);
 
-        char tmpcmd[150], tmparg[100];
+        char *tmpcmd, tmparg[100];
+        IPTR sysname, workname;
+
         GET(optObjDestDevice, MUIA_InstallOption_Value, &tmp);
+        OPTOGET(optObjDestVolumeName, MUIA_String_Contents, &sysname);
+        GET(work_devname, MUIA_String_Contents, &workname);
+        /* All variable strings plus room for option names and four signed
+         * numeric arguments (including 64-bit IPTR values). */
+        tmpcmd = malloc(strlen((char *)tmp) + strlen((char *)sysname)
+            + strlen((char *)workname) + 384);
+        if (tmpcmd == NULL)
+        {
+            SET(data->proceed, MUIA_Disabled, FALSE);
+            SetIoErr(ERROR_NO_FREE_STORE);
+            return RETURN_FAIL;
+        }
         GET(optObjDestUnit, MUIA_InstallOption_Value, &option);
         sprintf(tmpcmd, "C:Partition DEVICE=%s UNIT=%ld FORCE QUIET",
             (char *)tmp, option);
@@ -1099,7 +1189,24 @@ IPTR InstallStage__MUIM_Partition(Class * CLASS, Object * self, Msg message)
         OPTOGET(optObjCheckEFI, MUIA_Selected, &option);
         if (option)
         {
-            strcat(tmpcmd, " BOOTSIZE=100 BOOTTYPE=fat32");
+            IPTR deviceName, unit;
+            ULONG bootMB = 100;
+            struct PartitionHandle *root;
+            GET(optObjDestDevice, MUIA_InstallOption_Value, &deviceName);
+            GET(optObjDestUnit, MUIA_InstallOption_Value, &unit);
+            root = OpenRootPartition((CONST_STRPTR)deviceName, unit);
+            if (root)
+            {
+                /* FAT32 needs at least 65525 data clusters, including on
+                 * disks whose logical sectors are larger than 512 bytes. */
+                ULONG minimum = ((UQUAD)root->dg.dg_SectorSize * 66560 +
+                    1024 * 1024 - 1) / (1024 * 1024);
+                if (minimum > bootMB)
+                    bootMB = minimum;
+                CloseRootPartition(root);
+            }
+            sprintf(tmparg, " BOOTSIZE=%lu BOOTTYPE=fat32", bootMB);
+            strcat(tmpcmd, tmparg);
         }
         /* Partition scheme to use? */
         OPTOGET(optObjCyclePartScheme, MUIA_Cycle_Active, &option);
@@ -1118,9 +1225,7 @@ IPTR InstallStage__MUIM_Partition(Class * CLASS, Object * self, Msg message)
         }
 
         /* Specify SYS name */
-        OPTOGET(optObjDestVolumeName, MUIA_String_Contents, &tmp);
-        sprintf(tmparg, " SYSNAME=\"%s\"", (char *)tmp);
-        strcat(tmpcmd, tmparg);
+        sprintf(tmpcmd + strlen(tmpcmd), " SYSNAME=\"%s\"", (char *)sysname);
 
         /* Specify SYS filesystem (defaults to FFSIntl) */
         get(optObjCycleFSTypeSys, MUIA_Cycle_Active, &tmp);
@@ -1153,9 +1258,7 @@ IPTR InstallStage__MUIM_Partition(Class * CLASS, Object * self, Msg message)
                 strcat(tmpcmd, " WORKTYPE=SFS");
 
             /* Specify WORK name */
-            GET(work_devname, MUIA_String_Contents, &tmp);
-            sprintf(tmparg, " WORKNAME=\"%s\"", (char *)tmp);
-            strcat(tmpcmd, tmparg);
+            sprintf(tmpcmd + strlen(tmpcmd), " WORKNAME=\"%s\"", (char *)workname);
         }
 
         /* Specify whether to wipe disk or not */
@@ -1170,8 +1273,11 @@ IPTR InstallStage__MUIM_Partition(Class * CLASS, Object * self, Msg message)
                 bug("[InstallAROS:Stage] %s: Partitioning Free Space...\n", __func__);
         )
 
-        D(bug("[InstallAROS:Stage] %s: ### Executing '%s'\n", __func__, &tmpcmd));
+        D(bug("[InstallAROS:Stage] %s: ### Executing '%s'\n", __func__, tmpcmd));
+        LOG_Printf("partitioning: %s", tmpcmd);
         tmp = SystemTagList(tmpcmd, NULL);
+        free(tmpcmd);
+        LOG_Printf("partitioning returned %ld", (LONG)tmp);
 
         SET(data->proceed, MUIA_Disabled, FALSE);
     }
@@ -1383,6 +1489,9 @@ IPTR InstallStage__MUIM_IC_Install(Class * CLASS, Object * self, Msg message)
     SET(data->back, MUIA_Disabled, TRUE);
     SET(data->proceed, MUIA_Disabled, TRUE);
 
+    LOG_Printf("install starting: source '%s', SYS '%s:', Work '%s:'",
+        source_Path, data->install_SysTarget, data->install_WorkTarget);
+
     SET(data->pagetitle, MUIA_Text_Contents, __(MSG_INSTALLING));
 
     /* set up destination Work name to use */
@@ -1477,6 +1586,7 @@ IPTR InstallStage__MUIM_IC_Install(Class * CLASS, Object * self, Msg message)
 
         /* Copying Core system Files */
         D(bug("[InstallAROS:Stage] %s: Copying Core files...\n", __func__));
+        LOG_Printf("copying the core system");
         SET(data->label, MUIA_Text_Contents, __(MSG_COPYCORE));
         sprintf(destinationPath, "%s:", data->install_SysTarget);
 
@@ -1539,6 +1649,7 @@ IPTR InstallStage__MUIM_IC_Install(Class * CLASS, Object * self, Msg message)
 
         /* Copying Extras */
         D(bug("[InstallAROS:Stage] %s: Copying Extras to '%s'...\n", __func__, extras_path));
+        LOG_Printf("copying the extras");
         SET(data->label, MUIA_Text_Contents, __(MSG_COPYEXTRA));
         sprintf(extraspath, "%s:", extras_path);
         CopyDirArray(CLASS, self, extras_source, extraspath, extras_dirs, &SKIPLIST);
@@ -1573,6 +1684,7 @@ IPTR InstallStage__MUIM_IC_Install(Class * CLASS, Object * self, Msg message)
                 NULL
             };
             TEXT developerpath[100];
+            TEXT developerpkg[100 + 32];
             BOOL undoenabled = data->instc_copt_undoenabled;
 
             /* Explicitly disable undo. Some users might not have RAM for backup */
@@ -1582,6 +1694,7 @@ IPTR InstallStage__MUIM_IC_Install(Class * CLASS, Object * self, Msg message)
 
             /* Copying Developer stuff */
             D(bug("[InstallAROS:Stage] %s: Copying Developer Files...\n", __func__));
+            LOG_Printf("copying the developer files");
             SET(data->label, MUIA_Text_Contents, __(MSG_COPYDEVEL));
             sprintf(developerpath, "%s:", extras_path);
             CopyDirArray(CLASS, self, source_Path, developerpath,
@@ -1592,9 +1705,11 @@ IPTR InstallStage__MUIM_IC_Install(Class * CLASS, Object * self, Msg message)
             create_environment_variable(data->install_SysTarget, "DEVELPATH",
                 developerpath);
 
-            /* Set Developer package var */
+            /* Set Developer package var: the package directory, then its
+               start priority and group (see C:SystemPackage) */
+            sprintf(developerpkg, "%s\nPRI=20\nGROUP=Developer\n", developerpath);
             create_environment_variable(data->install_SysTarget, "SYS/Packages/Developer",
-                developerpath);
+                developerpkg);
 
             /* Restore undo state */
             data->instc_copt_undoenabled = undoenabled;
@@ -1619,6 +1734,7 @@ IPTR InstallStage__MUIM_IC_Install(Class * CLASS, Object * self, Msg message)
     SET(data->proceed, MUIA_Disabled, FALSE);
 
     /* STEP : CREATE ENVIRONMENT VARIABLES THAT POINT TO INSTALLATION LOCATIONS */
+    if (data->inst_success == MUIV_Inst_InProgress)
     {
         TEXT varval[255];
         IPTR optcheck = 0;
@@ -1645,7 +1761,8 @@ IPTR InstallStage__MUIM_IC_Install(Class * CLASS, Object * self, Msg message)
     }
 
     /* STEP : EXECUTE EXTERNAL POST-INSTALL SCRIPT */
-    if ((BOOL) XGET(data->instc_options_main->opt_copycore, MUIA_Selected))
+    if (data->inst_success == MUIV_Inst_InProgress &&
+        (BOOL) XGET(data->instc_options_main->opt_copycore, MUIA_Selected))
     {
         BPTR scriptfile = Open(POST_INSTALL_SCRIPT, MODE_OLDFILE);
         if (scriptfile)
@@ -1684,6 +1801,11 @@ IPTR InstallStage__MUIM_IC_Install(Class * CLASS, Object * self, Msg message)
     }
 
     /* STEP : UNDORECORD CLEANUP */
+
+    LOG_Printf("install finished: %s",
+        (data->inst_success == MUIV_Inst_InProgress) ? "ok" :
+        (data->inst_success == MUIV_Inst_Cancelled) ? "CANCELLED" : "FAILED");
+    LOG_Close();
 
     D(bug
         ("[InstallAROS:Stage] Reached end of Install Function - cleaning up undo logs @ %p...\n",
@@ -1743,7 +1865,7 @@ IPTR InstallStage__MUIM_Format(Class * CLASS, Object * self, Msg message)
     char vol_nametmp[100];
     char fmt_nametmp[100];
     char *name_tmp = NULL;
-    BOOL success = FALSE;
+    BOOL success;
     IPTR option = FALSE;
     BPTR lock = BNULL;
     char tmp[100];
@@ -1771,9 +1893,15 @@ IPTR InstallStage__MUIM_Format(Class * CLASS, Object * self, Msg message)
         D(bug("[InstallAROS:Stage] (info) Using FormatPartition\n");)
         success =
             FormatPartition(dev_nametmp, vol_nametmp, ID_INTER_FFS_DISK);
+        LOG_Printf("format %s as '%s': %s", dev_nametmp, vol_nametmp,
+            success ? "ok" : "FAILED");
+        if (!success)
+        {
+            data->inst_success = MUIV_Inst_Failed;
+            return FALSE;
+        }
 
-        if (success)
-            set(data->gauge2, MUIA_Gauge_Current, 100);
+        set(data->gauge2, MUIA_Gauge_Current, 100);
     }
 
     OPTOGET(optObjCheckWork, MUIA_Selected, &option);
@@ -1800,27 +1928,30 @@ IPTR InstallStage__MUIM_Format(Class * CLASS, Object * self, Msg message)
         D(bug("[InstallAROS:Stage] (info) Using FormatPartition\n");)
         success =
             FormatPartition(dev_nametmp, vol_nametmp, ID_INTER_FFS_DISK);
-
-        if (success)
+        LOG_Printf("format %s as '%s': %s", dev_nametmp, vol_nametmp,
+            success ? "ok" : "FAILED");
+        if (!success)
         {
-            SET(data->gauge2, MUIA_Gauge_Current, 100);
-            lock = Lock((CONST_STRPTR)dev_nametmp, SHARED_LOCK);      /* check the dest dir exists */
-            if (lock == BNULL)
-            {
-                bug("[InstallAROS:Stage] (Warning) FORMAT: Failed for chosen work partition '%s' : defaulting to sys only\n", dev_nametmp);
-                extras_path = dest_Path;
-            }
-            else
-            {
-                UnLock(lock);
-                lock = BNULL;
-            }
+            data->inst_success = MUIV_Inst_Failed;
+            return FALSE;
+        }
+
+        SET(data->gauge2, MUIA_Gauge_Current, 100);
+        lock = Lock((CONST_STRPTR)dev_nametmp, SHARED_LOCK);      /* check the dest dir exists */
+        if (lock == BNULL)
+        {
+            bug("[InstallAROS:Stage] (Warning) FORMAT: Failed for chosen work partition '%s' : defaulting to sys only\n", dev_nametmp);
+            extras_path = dest_Path;
+        }
+        else
+        {
+            UnLock(lock);
+            lock = BNULL;
         }
     }
-    if (success)
-        SET(data->gauge2, MUIA_Gauge_Current, 100);
+    SET(data->gauge2, MUIA_Gauge_Current, 100);
 
-    return success;
+    return TRUE;
 }
 
 IPTR InstallStage__MUIM_IC_CopyFile
@@ -1988,7 +2119,24 @@ IPTR InstallStage__MUIM_IC_CopyFile
             D(bug
                 ("[InstallAROS:Stage:CopyF] Failed to open '%s' for writing [ioerr=%d]\n",
                     message->dstFile, IoErr()));
-            data->inst_success = MUIV_Inst_Failed;
+            LOG_Printf("ERROR: cannot open '%s' for writing [ioerr=%ld]",
+                message->dstFile, (LONG)IoErr());
+
+            Close(from);
+
+            retry =
+                AskRetry(CLASS, self, _(MSG_COULDNTOPEN),
+                message->dstFile, _(MSG_RETRY), _(MSG_SKIP), _(MSG_CANCEL));
+            switch (retry)
+            {
+            case 0:            /* Retry */
+                goto copy_retry;
+            case 1:            /*Skip */
+                goto copy_skip;
+            default:
+                DoMethod(self, MUIM_IC_QuitInstall);
+                goto copy_skip;
+            }
         }
         Close(from);
 
@@ -2021,7 +2169,14 @@ IPTR InstallStage__MUIM_IC_CopyFile
     {
         D(bug("[InstallAROS:Stage:CopyF] Failed to open: %s [ioerr=%d]\n",
                 message->srcFile, IoErr()));
-        data->inst_success = MUIV_Inst_Failed;
+        LOG_Printf("ERROR: cannot open '%s' for reading [ioerr=%ld]",
+            message->srcFile, (LONG)IoErr());
+
+        retry =
+            AskRetry(CLASS, self, _(MSG_COULDNTOPEN), message->srcFile,
+            _(MSG_RETRY), _(MSG_SKIP), _(MSG_CANCEL));
+        if (retry == 2)
+            DoMethod(self, MUIM_IC_QuitInstall);
     }
 
     return filescopied;

@@ -4,7 +4,7 @@
 /*
     Copyright (C) 2026, John KNIPPER <code@jkn.me>.
     Licensed under the AROS Public License, version 1.1.
-    Copyright © 1995-2025, The AROS Development Team. All rights reserved.
+    Copyright © 1995-2026, The AROS Development Team. All rights reserved.
     $Id$
 
     Desc: Important defines and structures for intuition.library
@@ -695,16 +695,30 @@ struct ExtNewWindow
 #define WA_Priority 	     (WA_Dummy + 100)
 #define WA_Parent   	     (WA_Dummy + 101)
 #define WA_Behind   	     (WA_Dummy + 103)
+/* Composited windows (AROS): the window's layer renders into a surface of
+   its own that the display composes onto the screen. Only honoured when the
+   screen's display can compose; otherwise an ordinary smart refresh window.
+   WA_Opaqueness is the AmigaOS 4 name; the value is AROS specific. */
+#define WA_Opaqueness	     (WA_Dummy + 104)	/* 0..255, 255 = opaque */
+#define WA_AlphaSurface      (WA_Dummy + 105)	/* BOOL: surface with per pixel alpha; starts transparent,
+                                                   pens and alpha-less blits render opaque, see LA_AlphaSurface */
+/* AROS: where the window takes input, apart from where it is seen (struct
+   Region *, window relative; copied). See LA_InputShape. Change it later with
+   layers.library's ChangeLayerInputShape(window->WLayer, region). Not for
+   GZZ windows (ignored there). */
+#define WA_InputRegion       (WA_Dummy + 106)
+
+/* PomAROS extensions (display scaling); placed after the AROS tags above. */
 /* BOOL: protected top layer, only borderless nonactivating top-level ToolBox. */
-#define WA_TileOverlay       (WA_Dummy + 104)
-#define WA_ScaleAware        (WA_Dummy + 105) /* BOOL: uses screen scale and CHANGESCALE */
+#define WA_TileOverlay       (WA_Dummy + 107)
+#define WA_ScaleAware        (WA_Dummy + 108) /* BOOL: uses screen scale and CHANGESCALE */
 /* Copied during OpenWindow. Requires WA_ScaleAware. These outer-window
  * rectangle/limit values override the constructor geometry and use 100%
  * units; Width/Height -1 fill the viewport, MaxWidth/MaxHeight -1 are unbounded.
  * Zero limits use the accepted initial extent at its opening scale.
  * WA_AutoAdjust FALSE rejects a rectangle which requires fitting.
  * Subsequent Move/Size/WindowLimits APIs retain physical-pixel units. */
-#define WA_ScaleGeometry     (WA_Dummy + 106)
+#define WA_ScaleGeometry     (WA_Dummy + 109)
 struct ScaleWindowGeometry
 {
     LONG Left, Top, Width, Height;
@@ -715,14 +729,14 @@ struct ScaleWindowGeometry
  * member. No gadgets/IDCMP, parent, custom shape, activation or TileOverlay.
  * Input-transparent protected layer; ShowWindow/MoveWindow/CloseWindow retain
  * ordinary scene ownership and exposure. Does not provide through-scene alpha. */
-#define WA_VisualOverlay     (WA_Dummy + 107)
+#define WA_VisualOverlay     (WA_Dummy + 110)
 /* const ScreenRenderContext*: expected immutable CLIENT layout generation.
  * Requires WA_Hidden TRUE and no activation at Open. Construction/publication
  * refuse stale/wrong-screen contexts. ShowWindow(window,NULL) for a bound
  * window is synchronous, preserves z-order and returns FALSE if stale/closed;
  * caller MUST hold no client Layer/LayerInfo lock. Other values are refused.
  * Ordinary unbound ShowWindow retains its existing asynchronous contract. */
-#define WA_RenderContext     (WA_Dummy + 108)
+#define WA_RenderContext     (WA_Dummy + 111)
 
 /* Flags */
 #define WFLG_SIZEGADGET     (1L<<0)

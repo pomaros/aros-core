@@ -42,9 +42,7 @@ int main(int argc, char *argv[])
     struct Library *BluetoothBase;
     struct List *errmsgs;
     struct Node *pem;
-    /* btGetAttrs uses UnpackStructureTags: scalar outputs occupy an IPTR,
-       even when the stored attribute is a UWORD. */
-    IPTR level;
+    ULONG level;
     IPTR origin;
     IPTR errstr;
     STRPTR errmsg = NULL;
@@ -106,14 +104,12 @@ int main(int argc, char *argv[])
         }
         if(!ArgsArray[ARGS_NOFLUSH])
         {
-            /* No Forbid(): removal takes the library's semaphores and frees
-               pool memory, which may block. The write lock already keeps
-               other readers out; on SMP, blocking while Forbid()den froze
-               the boot CPU and with it the whole desktop. */
+            Forbid();
             while(errmsgs->lh_Head->ln_Succ)
             {
                 btRemErrorMsg(errmsgs->lh_Head);
             }
+            Permit();
         }
         if(!ArgsArray[ARGS_DEBUG])
         {
@@ -126,3 +122,4 @@ int main(int argc, char *argv[])
     fail(errmsg);
     return(0); // never gets here, just to shut the compiler up
 }
+

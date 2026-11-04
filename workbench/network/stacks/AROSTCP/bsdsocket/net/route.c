@@ -632,17 +632,19 @@ int cmd, flags;
 /*
  * rt_find_ifroute - return the first route in this radix tree (descending
  * through its subtrees and each leaf's duplicate-key chain) that resolves
- * through ifp.  Pure lookup: it never mutates the tree, so rt_purgeif() can
- * find a route, delete it, then rescan from the top.
+ * through ifp, or, with ifp NULL, that uses the address ifa.  Pure lookup: it
+ * never mutates the tree, so rt_purgeif() can find a route, delete it, then
+ * rescan from the top.
  *
  * Every non-ROOT leaf's radix node is rtentry.rt_nodes[0] (rn_addroute() is
  * handed rt->rt_nodes and rn_match() results are cast straight to rtentry *
  * elsewhere in this file), so the cast below is the same idiom.
  */
 static struct rtentry *
-rt_find_ifroute(rn, ifp)
+rt_find_ifroute(rn, ifp, ifa)
 register struct radix_node *rn;
 struct ifnet *ifp;
+struct ifaddr *ifa;
 {
     struct rtentry *rt;
 
@@ -650,38 +652,40 @@ struct ifnet *ifp;
         return (0);
     if(rn->rn_b >= 0) {
         /* interior node: descend both progeny */
-        if((rt = rt_find_ifroute(rn->rn_l, ifp)))
+        if((rt = rt_find_ifroute(rn->rn_l, ifp, ifa)))
             return (rt);
-        return (rt_find_ifroute(rn->rn_r, ifp));
+        return (rt_find_ifroute(rn->rn_r, ifp, ifa));
     }
     /* leaf: scan this key's duplicate chain */
     for(; rn; rn = rn->rn_dupedkey) {
         if(rn->rn_flags & RNF_ROOT)
             continue;
         rt = (struct rtentry *)rn;
-        if(rt->rt_ifp == ifp)
+        if(ifp ? rt->rt_ifp == ifp : rt->rt_ifa == ifa)
             return (rt);
     }
     return (0);
 }
 
 /*
- * rt_purgeif - delete every route that resolves through ifp, across all
- * address families.  Because it matches on rt_ifp it catches cloning prefix
- * routes, their cloned host children and ARP/NDP llinfo entries alike - each
- * carries rt_ifp == ifp - so no stale route is left pointing at an interface
- * whose addresses are about to be removed (such a dangling route otherwise
- * makes re-adding the prefix fail EEXIST, or leaves rt_ifa pointing at freed
- * ifaddr storage).
+ * rt_purgeif - delete every route that resolves through ifp, in family af
+ * (AF_UNSPEC: all families).  Because it matches on rt_ifp it catches cloning
+ * prefix routes, their cloned host children and ARP/NDP llinfo entries alike -
+ * each carries rt_ifp == ifp - so no stale route is left pointing at an
+ * interface whose addresses are about to be removed (such a dangling route
+ * otherwise makes re-adding the prefix fail EEXIST, or leaves rt_ifa pointing
+ * at freed ifaddr storage).
  *
  * One route is removed per radix-tree scan and the tree is then rescanned, so
  * it is never walked while rtrequest()/rn_delete() is mutating it.  The work
  * is bounded by the number of routes on the interface; the last-pointer guard
  * stops the loop if a route cannot be removed rather than spinning on it.
  */
-void
-rt_purgeif(ifp)
+static void
+rt_purge(ifp, ifa, af)
 struct ifnet *ifp;
+struct ifaddr *ifa;
+int af;
 {
     register struct radix_node_head *rnh;
     spl_t s = splnet();
@@ -691,7 +695,9 @@ struct ifnet *ifp;
     for(rnh = radix_node_head; rnh; rnh = rnh->rnh_next) {
         struct rtentry *rt, *last = 0;
 
-        while((rt = rt_find_ifroute(rnh->rnh_treetop, ifp)) != 0
+        if(af != AF_UNSPEC && rnh->rnh_af != af)
+            continue;
+        while((rt = rt_find_ifroute(rnh->rnh_treetop, ifp, ifa)) != 0
                 && rt != last) {
             last = rt;
             /*
@@ -706,4 +712,165 @@ struct ifnet *ifp;
         }
     }
     splx(s);
+}
+
+void
+rt_purgeif(ifp, af)
+struct ifnet *ifp;
+int af;
+{
+    rt_purge(ifp, (struct ifaddr *)0, af);
+}
+
+/*
+ * rt_purgeifa - delete every route that uses ifa, which is about to be freed.
+ * Routes hold no reference on their rt_ifa: a gateway route or ARP entry left
+ * behind would call ifa_rtrequest on freed memory when it is deleted.
+ */
+void
+rt_purgeifa(ifa)
+struct ifaddr *ifa;
+{
+    rt_purge((struct ifnet *)0, ifa, AF_UNSPEC);
+}
+
+/* ------------------------------------------------------------------
+ * Path MTU (RFC 1191 for IPv4, RFC 8201 for IPv6).
+ *
+ * An ICMP "fragmentation needed" or ICMPv6 Packet Too Big lowers the MTU
+ * of the route to the destination of the packet it quotes, and ip_output()
+ * / ip6_output() then size what they send there to fit.
+ * That route must be the destination's own: on the link it is the
+ * neighbour's host route, which neighbour discovery clones; through a
+ * router the table only has the router's route (a prefix, or the default
+ * one), so - as in KAME (icmp6_mtudisc_clone()) - a host route through the
+ * same router is added for the destination, and the MTU put on it, so it
+ * does not apply to every other destination behind that router.
+ *
+ * A lowered MTU is kept PMTU_EXPIRE seconds, then the larger one is tried
+ * again (RFC 8201 section 4: no sooner than 5 minutes, 10 recommended): a
+ * host route added for it is deleted, another one gets its MTU back. The
+ * routes are kept, with a reference, in pmtu_routes[]; with the table full,
+ * the entry closest to expiring gives way.
+ * ------------------------------------------------------------------ */
+#define PMTU_EXPIRE     600     /* seconds */
+#define PMTU_ROUTES     32
+
+static struct {
+    struct rtentry *rt;         /* NULL: free */
+    u_long expire;              /* seconds (GetSysTime()) */
+    u_long old_mtu;             /* the route's MTU before */
+    int added;                  /* the host route was added for the MTU */
+} pmtu_routes[PMTU_ROUTES];
+
+static u_long
+pmtu_now(void)
+{
+    struct timeval tv;
+
+    GetSysTime(&tv);
+    return tv.tv_sec;
+}
+
+/* Give the route back its MTU, or delete it if it was added for it. */
+static void
+pmtu_restore(int i)
+{
+    struct rtentry *rt = pmtu_routes[i].rt;
+
+    if(rt->rt_flags & RTF_UP) {
+        if(pmtu_routes[i].added)
+            rtrequest(RTM_DELETE, rt_key(rt), rt->rt_gateway, rt_mask(rt),
+                      rt->rt_flags, NULL);
+        else {
+            rt->rt_rmx.rmx_mtu = pmtu_routes[i].old_mtu;
+            rt->rt_rmx.rmx_expire = 0;
+        }
+    }
+    rtfree(rt);
+    pmtu_routes[i].rt = NULL;
+}
+
+/* Keep rt (whose reference this takes) for PMTU_EXPIRE seconds. */
+static void
+pmtu_keep(struct rtentry *rt, u_long old_mtu, int added)
+{
+    int i, slot = -1;
+
+    for(i = 0; i < PMTU_ROUTES; i++) {
+        if(pmtu_routes[i].rt == rt) {
+            rtfree(rt);                 /* kept already: the new reference goes */
+            slot = i;
+            break;
+        }
+        if(pmtu_routes[i].rt == NULL && slot < 0)
+            slot = i;
+    }
+    if(slot < 0) {
+        slot = 0;
+        for(i = 1; i < PMTU_ROUTES; i++)
+            if(pmtu_routes[i].expire < pmtu_routes[slot].expire)
+                slot = i;
+        pmtu_restore(slot);
+    }
+    if(pmtu_routes[slot].rt == NULL) {
+        pmtu_routes[slot].rt = rt;
+        pmtu_routes[slot].old_mtu = old_mtu;
+        pmtu_routes[slot].added = added;
+    }
+    pmtu_routes[slot].expire = pmtu_now() + PMTU_EXPIRE;
+    rt->rt_rmx.rmx_expire = pmtu_routes[slot].expire;
+}
+
+/* From ip_slowtimo(): give back the path MTUs whose time is up. */
+void
+rt_pmtu_timer(void)
+{
+    u_long now = pmtu_now();
+    int i;
+
+    for(i = 0; i < PMTU_ROUTES; i++)
+        if(pmtu_routes[i].rt != NULL &&
+                (pmtu_routes[i].expire <= now || !(pmtu_routes[i].rt->rt_flags & RTF_UP)))
+            pmtu_restore(i);
+}
+
+/*
+ * rt_pmtu_update - the path to dst takes packets of at most mtu bytes (the
+ * caller has clamped it): put that on dst's own route, only ever lowered.
+ */
+void
+rt_pmtu_update(struct sockaddr *dst, u_long mtu)
+{
+    struct rtentry *rt;
+    u_long old_mtu;
+    int added = 0;
+
+    rt = rtalloc1(dst, 0);
+    if(rt == NULL)
+        return;
+    if(rt->rt_rmx.rmx_mtu != 0 && mtu >= rt->rt_rmx.rmx_mtu) {
+        rtfree(rt);                     /* not lower: nothing to do */
+        return;
+    }
+    if(!(rt->rt_flags & RTF_HOST)) {
+        struct rtentry *nrt = NULL;
+
+        /* an on-link destination with no host route of its own: leave the
+         * prefix, which the whole link shares, alone */
+        if(!(rt->rt_flags & RTF_GATEWAY) ||
+                rtrequest(RTM_ADD, dst, rt->rt_gateway, NULL,
+                          RTF_HOST | RTF_GATEWAY | RTF_DYNAMIC, &nrt) != 0 ||
+                nrt == NULL) {
+            rtfree(rt);
+            return;
+        }
+        nrt->rt_rmx = rt->rt_rmx;       /* the router's route's metrics */
+        rtfree(rt);
+        rt = nrt;
+        added = 1;
+    }
+    old_mtu = rt->rt_rmx.rmx_mtu;
+    rt->rt_rmx.rmx_mtu = mtu;
+    pmtu_keep(rt, old_mtu, added);
 }

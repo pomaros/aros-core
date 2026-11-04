@@ -28,7 +28,12 @@ VENUS_HIDD_FILES := \
             venus_init \
             $(SRCDIR)/workbench/hidds/vulkan/mesa_icd
 
-#MM- workbench-hidds : hidd-venus
+# Not built: venus_init.c was written against the callback-table vulkan.hidd
+# (struct VulkanDriverCallbacks, VulkanHidd_FindDriver, VulkanHidd_RegisterGPU)
+# which the subclass-model vulkan.hidd (VULKAN_INTERFACE_VERSION 3) no longer
+# offers. Until venus.hidd is ported to the subclass model the target is not
+# aggregated into workbench-hidds; "make hidd-venus" still names it.
+#MM- workbench-hidds-venus-disabled : hidd-venus
 #MM hidd-venus : includes hidd-vulkan workbench-libs-z-linklib linklibs-libatomic mesa3d-linklib-venus mesa3d-linklib-compiler linklibs-galliumauxiliary workbench-libs-venus
 
 USER_INCLUDES += \

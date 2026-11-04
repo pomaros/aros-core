@@ -131,18 +131,19 @@ typedef void (*irqhandler_t)(void *data, void *data2);
 #define KATTR_FrameBufferDepth  (KATTR_CPULoad_END + 6) /* [.G] (IPTR)    - Framebuffer bits per pixel                                  */
 #define KATTR_FrameBufferPitch  (KATTR_CPULoad_END + 7) /* [.G] (IPTR)    - Framebuffer bytes per line                                  */
 #define KATTR_PlatformTimer     (KATTR_CPULoad_END + 8) /* [.G] (APTR)    - Kernel tick timer shared with timer.device (platform specific) */
-#define KATTR_FrameBufferFormat (KATTR_CPULoad_END + 9) /* [.G] (IPTR)    - KRN_FB_FORMAT_* pixel byte order                           */
-#define KATTR_FrameBufferSize   (KATTR_CPULoad_END + 10) /* [.G] (IPTR)   - Framebuffer aperture size in bytes                         */
+#define KATTR_CPUHardwareID     (KATTR_CPULoad_END + 9) /* [.G] (IPTR)    - Hardware id of a CPU (e.g. RISC-V hart id), per CPU via KrnGetCPUAttr() */
+#define KATTR_FrameBufferFormat (KATTR_CPULoad_END + 10) /* [.G] (IPTR)   - KRN_FB_FORMAT_* pixel byte order                           */
+#define KATTR_FrameBufferSize   (KATTR_CPULoad_END + 11) /* [.G] (IPTR)   - Framebuffer aperture size in bytes                         */
 /* Standalone W^X loaders require this checked, ordinary C-callable operation.
  * Return 1 only after the complete range and remote synchronization succeed;
  * return 0 on failure (a converted prefix is possible). Ownership stays with
  * the caller. Unsupported KrnGetSystemAttr queries return -1. */
 typedef int (*KRN_PageProtect)(void *address, uint32_t length, uint32_t flags);
-#define KATTR_PageProtect (KATTR_CPULoad_END + 11) /* [.G] KRN_PageProtect */
+#define KATTR_PageProtect (KATTR_CPULoad_END + 12) /* [.G] KRN_PageProtect */
 /* CPU features common to every CPU, as the architecture's feature words
  * (AArch64: <aros/aarch64/hwcap.h>, the Linux AT_HWCAP layout). */
-#define KATTR_HWCap       (KATTR_CPULoad_END + 12) /* [.G] (IPTR) */
-#define KATTR_HWCap2      (KATTR_CPULoad_END + 13) /* [.G] (IPTR) */
+#define KATTR_HWCap       (KATTR_CPULoad_END + 13) /* [.G] (IPTR) */
+#define KATTR_HWCap2      (KATTR_CPULoad_END + 14) /* [.G] (IPTR) */
 
 
 /* Tag IDs for KrnStatMemory() */

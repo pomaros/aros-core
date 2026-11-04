@@ -18,15 +18,12 @@
 
 #define ARGS_QUIET      0
 #define ARGS_REMOVE     1
-#define ARGS_FROM       2
-#define ARGS_SIZEOF     3
+#define ARGS_SIZEOF     2
 
 #define CLASSPATH       "SYS:Classes/Bluetooth"
 #define CLASSNAMEMAX    128
 
-/* FROM: a class file, or a directory holding only classes, instead of
-   SYS:Classes/Bluetooth - a development build is added from its depot. */
-static const char *template = "QUIET/S,REMOVE/S,FROM/K";
+static const char *template = "QUIET/S,REMOVE/S";
 const char *version = "$VER: AddBTClasses 1.0 (18.08.2026) " ISOASCII_COPYRIGHT " The AROS Development Team";
 static IPTR ArgsArray[ARGS_SIZEOF];
 static struct RDArgs *ArgsHook = NULL;
@@ -60,9 +57,6 @@ int main(int argc, char *argv[])
     ULONG               ents;
     ULONG               namelen;
     BOOL                exready, isvalid;
-    STRPTR              path = CLASSPATH;
-    struct FileInfoBlock *fib;
-    LONG                dir = 1;
 
     if(!(ArgsHook = ReadArgs(template, ArgsArray, NULL)))
     {
@@ -87,46 +81,9 @@ int main(int argc, char *argv[])
             }
             btUnlockBase();
         } else {
-            if(ArgsArray[ARGS_FROM])
+            if((exall = AllocDosObject(DOS_EXALLCONTROL, NULL)))
             {
-                path = (STRPTR) ArgsArray[ARGS_FROM];
-                if((lock = Lock(path, ACCESS_READ)))
-                {
-                    if((fib = AllocDosObject(DOS_FIB, NULL)))
-                    {
-                        if(Examine(lock, fib))
-                        {
-                            dir = fib->fib_DirEntryType;
-                        }
-                        FreeDosObject(DOS_FIB, fib);
-                    }
-                    UnLock(lock);
-                }
-            }
-            if(dir < 0)
-            {
-                if(!ArgsArray[ARGS_QUIET])
-                {
-                    Printf("Adding class %s...", path);
-                }
-                if(btAddClass(path, 0))
-                {
-                    if(!ArgsArray[ARGS_QUIET])
-                    {
-                        PutStr("okay!\n");
-                    }
-                    btClassScan();
-                } else {
-                    if(!ArgsArray[ARGS_QUIET])
-                    {
-                        PutStr("failed!\n");
-                    }
-                    errmsg = "Class not added.\n";
-                }
-            }
-            else if((exall = AllocDosObject(DOS_EXALLCONTROL, NULL)))
-            {
-                lock = Lock(path, ACCESS_READ);
+                lock = Lock(CLASSPATH, ACCESS_READ);
                 if(lock)
                 {
                     exall->eac_LastKey = 0;
@@ -140,10 +97,7 @@ int main(int argc, char *argv[])
                         while(ents--)
                         {
                             isvalid = TRUE;
-                            namelen = strlen(path);
-                            btSafeRawDoFmt(sbuf, CLASSNAMEMAX,
-                                           (namelen && (path[namelen-1] == ':' || path[namelen-1] == '/')) ? "%s%s" : "%s/%s",
-                                           path, exdata->ed_Name);
+                            btSafeRawDoFmt(sbuf, CLASSNAMEMAX, CLASSPATH "/%s", exdata->ed_Name);
                             namelen = strlen(sbuf);
                             if (((namelen > 4) && (!strcmp(&sbuf[namelen-4], ".dbg"))) || ((namelen > 5) && (!strcmp(&sbuf[namelen-5], ".info"))))
                                 isvalid = FALSE;
@@ -157,7 +111,7 @@ int main(int argc, char *argv[])
                                     }
                                 }
                                 btGetAttrs(BGA_STACK, NULL, BSA_ClassList, &bclist, TAG_END);
-                                btLockReadBase();
+                                Forbid();
                                 bc = bclist->lh_Head;
                                 while(bc->ln_Succ)
                                 {
@@ -169,7 +123,7 @@ int main(int argc, char *argv[])
                                 }
                                 if(bc->ln_Succ)
                                 {
-                                    btUnlockBase();
+                                    Permit();
                                     if(!ArgsArray[ARGS_QUIET])
                                     {
                                         Printf("Skipping class %s...\n", exdata->ed_Name);
@@ -177,7 +131,7 @@ int main(int argc, char *argv[])
                                     exdata = exdata->ed_Next;
                                     continue;
                                 }
-                                btUnlockBase();
+                                Permit();
 
                                 if(!ArgsArray[ARGS_QUIET])
                                 {
@@ -202,7 +156,7 @@ int main(int argc, char *argv[])
                     UnLock(lock);
                     btClassScan();
                 } else {
-                    errmsg = "Failed to lock the class directory.\n";
+                    errmsg = "Failed to lock " CLASSPATH ".\n";
                 }
                 FreeDosObject(DOS_EXALLCONTROL, exall);
             }

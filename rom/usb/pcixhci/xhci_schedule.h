@@ -9,6 +9,7 @@ UBYTE xhciEndpointIDFromIndex(UWORD wIndex);
 /* Returns a CPU address; bounceOut is an opaque PCI cookie or platform bounce. */
 APTR xhciPrepareDMABuffer(struct PCIController *hc, struct IOUsbHWReq *ioreq,
                           ULONG *dmalen, UWORD effdir, APTR *bounceOut);
+void xhciFreeDeferredBounces(struct PCIController *hc);
 void xhciReleaseDMABuffer(struct PCIController *hc, struct IOUsbHWReq *ioreq,
                           ULONG actual, UWORD effdir, APTR bounceBuf);
 

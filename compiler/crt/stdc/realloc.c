@@ -4,8 +4,10 @@
     C99 function realloc().
 */
 
-#include "__malloc.h"
+#include <aros/cpu.h>
 #include <proto/exec.h>
+
+#include "__memalign.h"
 
 /*****************************************************************************
 
@@ -48,33 +50,59 @@
 
 ******************************************************************************/
 {
-    struct __stdc_malloc_header *header;
-    void *newmem;
+    UBYTE * mem, * newmem;
     size_t oldsize;
 
-    if (oldmem == NULL)
-        return malloc(size);
+    if (!oldmem)
+        return malloc (size);
+
+    /* C allows realloc(ptr, 0) to free ptr; do so and return NULL, which is
+       the behaviour most callers expect (and matches the historical idiom). */
     if (size == 0)
     {
-        free(oldmem);
+        free (oldmem);
         return NULL;
     }
 
-    header = __stdc_allocation_header(oldmem);
-    oldsize = header->requested_size;
-    if (size == oldsize || (size < oldsize && oldsize - size < 4096))
+    mem = (UBYTE *)oldmem - MALLOC_HDRSIZE;
+    oldsize = *((size_t *)mem);
+
+    /* A block from aligned_alloc()/posix_memalign() has the magic number in
+       place of its size; what is usable is the rest of the malloc() block it
+       lies in. Always move it, as the result need not keep its alignment. */
+    if (oldsize == MEMALIGN_MAGIC)
     {
-        header->requested_size = size;
-        return oldmem;
+        UBYTE *orig = ((UBYTE **)(mem - AROS_ALIGN(sizeof(void *))))[0];
+
+        oldsize = *((size_t *)(orig - MALLOC_HDRSIZE)) - ((UBYTE *)oldmem - orig);
+        goto copy;
     }
 
-    /* Resizing retains the original allocation domain, even when a different
-       stdc opener calls realloc(). On failure the old block is untouched. */
-    newmem = __stdc_alloc_from_pool(header->pool, size, __alignof__(max_align_t));
-    if (newmem != NULL)
+    /* Reduce or enlarge the memory ? */
+    if (size < oldsize)
     {
-        CopyMem(oldmem, newmem, size < oldsize ? size : oldsize);
-        free(oldmem);
+        /* Don't change anything for small changes */
+        if ((oldsize - size) < 4096)
+            newmem = oldmem;
+        else
+            goto copy;
     }
+    else if (size == oldsize) /* Keep the size ? */
+        newmem = oldmem;
+    else
+    {
+copy:
+        newmem = malloc (size);
+
+        if (newmem)
+        {
+            if (size > oldsize)
+                size = oldsize;
+            CopyMem (oldmem, newmem, size);
+            free (oldmem);
+        }
+    }
+
     return newmem;
 } /* realloc */
+

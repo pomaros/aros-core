@@ -1405,21 +1405,20 @@ struct Resident *FindLibResident(BPTR   Segment)
     while (Segment)
     {
         UBYTE       *MySegment;
-        UWORD       *MyBuffer;
-        UWORD       *EndBuffer;
-        ULONG       BufferLen;
+        UBYTE       *MyBuffer;
+        UBYTE       *EndBuffer;
+        ULONG        BufferLen;
 
-        /* A hunk is ULONG size, BPTR next, data: the BPTR points at next and
-           the size counts the whole hunk, as in FindSegmentVER() below. */
-        MySegment   = (UBYTE *) BADDR(Segment);
+        /* ULONG length (counted from itself), BPTR next, data; 0 = unknown */
+        MySegment   = BADDR(Segment);
         BufferLen   = *(ULONG *)(MySegment - sizeof(ULONG));
         if (BufferLen < sizeof(ULONG) + sizeof(BPTR) + sizeof(struct Resident))
         {
             Segment = *(BPTR *)MySegment;
             continue;
         }
-        MyBuffer    = (UWORD *) (MySegment + sizeof(BPTR));
-        EndBuffer   = (UWORD *) (MySegment + BufferLen - sizeof(ULONG) - sizeof(struct Resident));
+        MyBuffer    = MySegment + sizeof(BPTR);
+        EndBuffer   = MySegment - sizeof(ULONG) + BufferLen - sizeof(struct Resident);
 
         while (MyBuffer <= EndBuffer)
         {
@@ -1432,7 +1431,7 @@ struct Resident *FindLibResident(BPTR   Segment)
                 return MyResident;
             }
 
-            MyBuffer++;
+            MyBuffer += sizeof(UWORD);
         }
 
         Segment = *(BPTR *)MySegment;

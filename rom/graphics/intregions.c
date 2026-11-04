@@ -57,8 +57,18 @@ static inline struct RegionRectangleExtChunk *__NewRegionRectangleExtChunk
 
     if(!Pool || !Pool->NumChunkFree) {
         int i;
+        ULONG numchunks = SIZECHUNKBUF;
 
-        Pool = AllocMem(sizeof(struct ChunkPool), MEMF_ANY);
+        /* Reserving a whole pool is optional. Do not expunge unrelated
+         * caches merely because that large block does not fit fragmented
+         * free memory. Only the minimum, one-chunk allocation may reclaim. */
+        do {
+            Pool = AllocMem(sizeof(*Pool) + numchunks * sizeof(struct ChunkExt),
+                MEMF_ANY | (numchunks > 1 ? MEMF_NO_EXPUNGE : 0));
+            if (Pool)
+                break;
+            numchunks /= 2;
+        } while (numchunks);
 
         if(!Pool) {
             ReleaseSemaphore(&PrivGBase(GfxBase)->regionsem);
@@ -68,9 +78,10 @@ static inline struct RegionRectangleExtChunk *__NewRegionRectangleExtChunk
 
         NEWLIST(&Pool->ChunkList);
 
-        Pool->NumChunkFree = SIZECHUNKBUF;
+        Pool->NumChunks = numchunks;
+        Pool->NumChunkFree = numchunks;
 
-        for(i = 0; i < SIZECHUNKBUF; i++) {
+        for(i = 0; i < numchunks; i++) {
             ADDTAIL(&Pool->ChunkList, &Pool->Chunks[i]);
         }
 
@@ -106,8 +117,8 @@ void __DisposeRegionRectangleExtChunk
 
     REMOVE(Pool);
 
-    if(++Pool->NumChunkFree == SIZECHUNKBUF) {
-        FreeMem(Pool, sizeof(struct ChunkPool));
+    if(++Pool->NumChunkFree == Pool->NumChunks) {
+        FreeMem(Pool, sizeof(*Pool) + Pool->NumChunks * sizeof(struct ChunkExt));
     } else {
         ADDHEAD(&PrivGBase(GfxBase)->ChunkPoolList, Pool);
         ADDTAIL(&Pool->ChunkList, Chunk);
@@ -193,9 +204,18 @@ void _DisposeRegionRectangleList
         RR->Prev->Next = NULL;
     }
 
-    /* Is this the first rectangle in the chunk? */
-    if(!Counter(RR)) {
-        /* If so then this chunk has to be deleted too */
+    /*
+     * First slot of its chunk, or head of the whole list (AndRectRegion may
+     * have unlinked the slots before it): the chunk goes too. The chunk
+     * chain runs through Rects[SIZERECTBUF-1].RR.Next, which is not
+     * RR->Prev when AndRectRegion unlinked the previous chunk's last
+     * slot(s): cut it there as well, or it keeps naming freed chunks and
+     * the next ClearRegion frees them again, disposing chunks whose pool
+     * is long gone.
+     */
+    if(!Counter(RR) || !RR->Prev) {
+        if(RR->Prev)
+            Chunk(RR->Prev)->Rects[SIZERECTBUF - 1].RR.Next = NULL;
         NextChunk = Chunk(RR);
     } else {
         /* otherwise dispose all the chunks starting from the one after this one */

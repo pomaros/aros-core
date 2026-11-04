@@ -19,9 +19,6 @@
 #include <proto/utility.h>
 #include <proto/btclass.h>
 #include <proto/timer.h>
-#include <libraries/keyring.h>
-#define __KEYRING_NOLIBBASE__
-#include <proto/keyring.h>
 
 #include <string.h>
 #include <btcore/buffer.h>
@@ -34,56 +31,18 @@
 #define DOSBase BluetoothBase->bt_DosBase
 #define TimerBase BluetoothBase->bt_TimerIOReq.tr_node.io_Device
 
-/* Bond bytes are private to the Bluetooth service, outside the IFF prefs. */
-static LONG bKeyringBond(LIBBASETYPEPTR BluetoothBase, struct BtDevice *bd,
-                        unsigned operation)
-{
-    struct Library *KeyringBase = OpenLibrary(KEYRINGNAME, 1);
-    APTR context;
-    LONG result = KR_ERR_CONTEXT;
-    ULONG size = sizeof(bd->bd_Keys);
-    if (!KeyringBase) return result;
-    context = KR_ServiceOpen(BluetoothBase, KR_SERVICE_BLUETOOTH);
-    if (context) {
-        if (operation == 0) {
-            result = KR_ServiceFetch(context, bd->bd_IDString, &bd->bd_Keys, &size);
-            if (result == KR_SUCCESS && (size != sizeof(bd->bd_Keys) || bd->bd_Keys.bkc_Version != 1)) result = KR_ERR_FORMAT;
-        } else if (operation == 1) {
-            bd->bd_Keys.bkc_Version=1;
-            result = KR_ServiceStore(context, bd->bd_IDString, &bd->bd_Keys, size);
-        }
-        else
-            result = KR_ServiceDelete(context, bd->bd_IDString);
-        KR_ServiceClose(context);
-    }
-    CloseLibrary(KeyringBase);
-    return result;
-}
-
-BOOL bLoadKeyringBond(LIBBASETYPEPTR BluetoothBase, struct BtDevice *bd)
-{
-    if(bKeyringBond(BluetoothBase, bd, 0) == KR_SUCCESS && bd->bd_Keys.bkc_Flags)
-        return TRUE;
-    {
-        volatile UBYTE *p = (volatile UBYTE *)&bd->bd_Keys;
-        ULONG size = sizeof(bd->bd_Keys);
-        while(size--) *p++ = 0;
-    }
-    return FALSE;
-}
-
 /* *** Hardware *** */
 
 /* /// "bFindHardware()" */
 struct BtHardware * bFindHardware(LIBBASETYPEPTR BluetoothBase, STRPTR name, ULONG unit)
 {
     struct BtHardware *bth;
-    bGuard(BluetoothBase);
+    Forbid();
     while(*name) {
         bth = (struct BtHardware *) BluetoothBase->bt_Hardware.lh_Head;
         while(bth->bth_Node.ln_Succ) {
             if((bth->bth_Unit == unit) && (!strcmp(bth->bth_DevName, name))) {
-                bUnguard(BluetoothBase);
+                Permit();
                 return(bth);
             }
             bth = (struct BtHardware *) bth->bth_Node.ln_Succ;
@@ -95,12 +54,54 @@ struct BtHardware * bFindHardware(LIBBASETYPEPTR BluetoothBase, STRPTR name, ULO
             }
         } while(*(++name));
     }
-    bUnguard(BluetoothBase);
+    Permit();
     return(NULL);
 }
 /* \\\ */
 
 /* /// "btAddHardware()" */
+/*****************************************************************************
+    NAME
+        APTR btAddHardware(
+
+    SYNOPSIS
+        STRPTR name, ULONG unit)
+
+    FUNCTION
+        Open and initialize a Bluetooth HCI adapter, or return an existing adapter.
+
+    INPUTS
+        name - Non-NULL, NUL-terminated HCI device name or path.
+        unit - Device unit passed to OpenDevice().
+
+    RESULT
+        Hardware handle after successful initial startup, an existing
+        matching handle, or NULL if allocation, task creation, device opening
+        or controller initialization fails. No new ownership reference is
+        acquired when an existing handle is returned.
+
+    NOTES
+        Lookup tries the supplied name, then suffixes following slash or
+        colon separators. Device opening uses the same fallback order.
+        A newly started hardware task completes controller bring-up before
+        the call returns; this can include an installed firmware loader.
+        An existing handle is returned without rechecking its ready state.
+
+        Call from task context with bluetooth.library open. Startup clears
+        SIGF_SINGLE and waits for the worker using btBorrowLocksWait(); no
+        caller timeout is provided. The name is copied for a new adapter.
+        Serialize adapter addition and removal: duplicate lookup and insertion
+        are not one atomic operation, and returned handles are shared.
+
+        A new adapter sends BEHMB_ADDHARDWARE. Event allocation can fail
+        independently. Use btEnumerateHardware() to restore configured devices
+        and apply scan settings, and btStartDiscoveryA() for radio discovery.
+        Remove the shared adapter only after coordinating its users.
+
+    SEE ALSO
+        btRemHardware(), btEnumerateHardware(), btStartDiscoveryA()
+
+*****************************************************************************/
 AROS_LH2(struct BtHardware *, btAddHardware,
          AROS_LHA(STRPTR, name, A0),
          AROS_LHA(ULONG, unit, D0),
@@ -128,13 +129,13 @@ AROS_LH2(struct BtHardware *, btAddHardware,
         bth->bth_State = BHS_OFFLINE;
         if((bth->bth_Node.ln_Name = bth->bth_DevName = btCopyStr(name))) {
             btSafeRawDoFmt(buf, 64, "bthw<%s/%ld>", name, unit);
-            bth->bth_ReadySignal = bAllocReadySignal();
+            bth->bth_ReadySignal = SIGB_SINGLE;
             bth->bth_ReadySigTask = FindTask(NULL);
+            SetSignal(0, SIGF_SINGLE); // clear single bit
             if((tmptask = btSpawnSubTask(buf, bHWTask, bth))) {
                 btBorrowLocksWait(tmptask, 1UL<<bth->bth_ReadySignal);
                 if(bth->bth_Task) {
                     bth->bth_ReadySigTask = NULL;
-                    bFreeReadySignal(bth->bth_ReadySignal);
                     btAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname),
                                    "New hardware %s/%ld added (%s, %s).",
                                    bth->bth_DevName,
@@ -146,7 +147,6 @@ AROS_LH2(struct BtHardware *, btAddHardware,
                 }
             }
             bth->bth_ReadySigTask = NULL;
-            bFreeReadySignal(bth->bth_ReadySignal);
             btFreeVec(bth->bth_DevName);
         }
         btFreeVec(bth);
@@ -157,6 +157,51 @@ AROS_LH2(struct BtHardware *, btAddHardware,
 /* \\\ */
 
 /* /// "btRemHardware()" */
+/*****************************************************************************
+    NAME
+        VOID btRemHardware(
+
+    SYNOPSIS
+        APTR bth)
+
+    FUNCTION
+        Release an adapter's devices, stop its hardware task and remove the adapter.
+
+    INPUTS
+        bth - Live hardware handle. NULL is invalid.
+
+    RESULT
+        None. Shutdown or binding-release failures are not returned.
+
+    NOTES
+        Stop discovery, connections and new I/O, complete outstanding requests
+        and release channels before removal. Quiesce all users of the adapter
+        and its devices. This call releases class and application bindings;
+        their callbacks run synchronously and may wait for workers.
+
+        Call from task context outside the hardware task and any worker that
+        a release callback must stop. Keep bluetooth.library open until return.
+        The call waits on SIGF_SINGLE for hardware-task termination and has
+        no bounded completion guarantee. Do not hold locks needed by workers
+        or release callbacks.
+
+        The adapter handle and all device, service and endpoint handles owned
+        by it become invalid. Removal events carry old pointers as identifiers;
+        they do not retain objects and must not be dereferenced. Saved adapter
+        and device configuration is not removed by this call.
+
+    BUGS
+        Binding release starts while the hardware task may still run. The
+        task is then stopped before dead-device cleanup, but outstanding
+        connection use is not protected by the shutdown sequence.
+        After repeated waits for device use counts, removal forcibly clears
+        a remaining count and continues. It does not safely refuse removal
+        while channels are in use; callers must establish quiescence first.
+
+    SEE ALSO
+        btAddHardware(), btDisconnectDevice(), btFreeChannel(), btFreeDevice()
+
+*****************************************************************************/
 AROS_LH1(void, btRemHardware,
          AROS_LHA(struct BtHardware *, bth, A0),
          LIBBASETYPEPTR, BluetoothBase, 13, bt)
@@ -170,9 +215,22 @@ AROS_LH1(void, btRemHardware,
     bd = (struct BtDevice *) bth->bth_Devices.lh_Head;
     while(bd->bd_Node.ln_Succ) {
         bFreeBindings(BluetoothBase, bd);
-        bFreeDevice(BluetoothBase, bd);
         btSendEvent(BEHMB_REMDEVICE, bd, NULL);
         bd = (struct BtDevice *) bth->bth_Devices.lh_Head;
+    }
+    /* Connections still refer to device services and endpoints. Stop the
+       hardware task before freeing those records; bindings have already
+       drained their channels while the task could still service them. */
+    Forbid();
+    /* Note that the subtask unlinks the hardware! */
+    bth->bth_ReadySignal = SIGB_SINGLE;
+    bth->bth_ReadySigTask = FindTask(NULL);
+    if(bth->bth_Task) {
+        Signal(bth->bth_Task, SIGBREAKF_CTRL_C);
+    }
+    Permit();
+    while(bth->bth_Task) {
+        Wait(1L<<bth->bth_ReadySignal);
     }
     cnt = 0;
     bd = (struct BtDevice *) bth->bth_DeadDevices.lh_Head;
@@ -199,18 +257,6 @@ AROS_LH1(void, btRemHardware,
         bd = (struct BtDevice *) bth->bth_DeadDevices.lh_Head;
     }
 
-    Forbid();
-    /* Note that the subtask unlinks the hardware! */
-    bth->bth_ReadySignal = bAllocReadySignal();
-    bth->bth_ReadySigTask = FindTask(NULL);
-    if(bth->bth_Task) {
-        Signal(bth->bth_Task, SIGBREAKF_CTRL_C);
-    }
-    Permit();
-    while(bth->bth_Task) {
-        Wait(1L<<bth->bth_ReadySignal);
-    }
-    bFreeReadySignal(bth->bth_ReadySignal);
     KPRINTF(1, ("FreeHardware(%p) freevec name\n", bth));
     btAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname),
                    "Removed hardware %s/%ld. Bye bye!",
@@ -292,6 +338,38 @@ AROS_LH1(APTR, btEnumerateHardware,
 /* *** Devices *** */
 
 /* /// "btAllocDevice()" */
+/*****************************************************************************
+    NAME
+        APTR btAllocDevice(
+
+    SYNOPSIS
+        APTR bth)
+
+    FUNCTION
+        Allocate a remote-device object and append it to an adapter's device list.
+
+    INPUTS
+        bth - Live hardware handle. NULL is invalid.
+
+    RESULT
+        Device handle, or NULL if the device allocation fails.
+
+    NOTES
+        The object starts without an address, name, services, registration
+        or connection. RSSI is initialized to 127; automatic connection uses
+        the current global default. The adapter device count is incremented.
+        No radio operation, duplicate-address check or add-device event occurs.
+
+        This is an object-construction operation, not device discovery.
+        Coordinate initialization with list readers: the object is already
+        visible when returned. Keep the adapter and bluetooth.library valid,
+        call from task context and serialize with adapter removal. Release
+        with btFreeDevice(), not btFreeVec().
+
+    SEE ALSO
+        btFreeDevice(), btSetAttrsA(), btStartDiscoveryA()
+
+*****************************************************************************/
 AROS_LH1(struct BtDevice *, btAllocDevice,
          AROS_LHA(struct BtHardware *, bth, A0),
          LIBBASETYPEPTR, BluetoothBase, 15, bt)
@@ -450,6 +528,50 @@ void bFreeDevice(LIBBASETYPEPTR BluetoothBase, struct BtDevice *bd)
 /* \\\ */
 
 /* /// "btFreeDevice()" */
+/*****************************************************************************
+    NAME
+        VOID btFreeDevice(
+
+    SYNOPSIS
+        APTR bd)
+
+    FUNCTION
+        Remove a device from active enumeration and release its bindings and resources.
+
+    INPUTS
+        bd - Live device on its adapter's active list. NULL is invalid.
+
+    RESULT
+        None. Outstanding channel use can defer resource cleanup.
+
+    NOTES
+        Complete connection shutdown and outstanding I/O, release channels
+        and quiesce all device users before calling. The function moves the
+        device to the adapter's dead-device list and decrements the active
+        count. Class and application release callbacks run synchronously
+        under the device write lock. Do not call from a worker they must stop
+        or wait for another task that needs that lock.
+
+        A nonzero device use count defers final cleanup until the last channel
+        is released. Otherwise services, endpoints and selected device metadata
+        are released and the device is unlinked. Treat the handle and all
+        child handles as invalid after this call; do not call it twice or
+        free the returned storage yourself.
+
+        Call from task context with the adapter and bluetooth.library valid.
+        The call does not request a controller disconnect, delete persistent
+        registration or emit BEHMB_REMDEVICE. It has no callback timeout.
+
+    BUGS
+        Final cleanup deliberately leaves the device allocation resident.
+        That allocation is not a usable retained handle: its semaphore and
+        child resources have been dismantled. Retention does not make calls
+        through stale device pointers safe.
+
+    SEE ALSO
+        btAllocDevice(), btDisconnectDevice(), btFreeChannel(), btUnregisterDevice()
+
+*****************************************************************************/
 AROS_LH1(void, btFreeDevice,
          AROS_LHA(struct BtDevice *, bd, A0),
          LIBBASETYPEPTR, BluetoothBase, 16, bt)
@@ -487,6 +609,39 @@ AROS_LH1(void, btFreeDevice,
 /* \\\ */
 
 /* /// "btLockReadDevice()" */
+/*****************************************************************************
+    NAME
+        VOID btLockReadDevice(
+
+    SYNOPSIS
+        APTR bd)
+
+    FUNCTION
+        Acquire shared access to a Bluetooth device. The calling task
+        may nest acquisitions.
+
+    INPUTS
+        bd - Live device object. NULL is invalid.
+
+    RESULT
+        None. Return indicates that access has been acquired.
+
+    NOTES
+        Call from task context. The call may wait indefinitely and uses
+        SIGB_SINGLE while waiting. Balance every acquisition with one
+        btUnlockDevice() in the same task. A read acquisition made by the
+        exclusive owner increases its exclusive nesting count.
+
+        If a reader record cannot be allocated, the call acquires exclusive
+        access instead. Do not depend on another reader entering while this
+        lock is held. No reader/writer fairness guarantee is provided.
+        Keep the device alive until the matching unlock; acquiring a lock
+        does not validate an expired device pointer.
+
+    SEE ALSO
+        btLockWriteDevice(), btUnlockDevice(), btBorrowLocksWait()
+
+*****************************************************************************/
 AROS_LH1(void, btLockReadDevice,
          AROS_LHA(struct BtDevice *, bd, A0),
          LIBBASETYPEPTR, BluetoothBase, 17, bt)
@@ -499,6 +654,40 @@ AROS_LH1(void, btLockReadDevice,
 /* \\\ */
 
 /* /// "btLockWriteDevice()" */
+/*****************************************************************************
+    NAME
+        VOID btLockWriteDevice(
+
+    SYNOPSIS
+        APTR bd)
+
+    FUNCTION
+        Acquire exclusive access to a Bluetooth device. Repeated
+        acquisitions by the owner increase the nesting count.
+
+    INPUTS
+        bd - Live device object. NULL is invalid.
+
+    RESULT
+        None. Return indicates that exclusive access has been acquired.
+
+    NOTES
+        Call from task context. The call may wait indefinitely and uses
+        SIGB_SINGLE while waiting. Balance every acquisition with one
+        btUnlockDevice() in the same task.
+
+        An existing read lock can be promoted when this task is the only
+        reader. The read acquisition remains and needs its own unlock after
+        the exclusive acquisition is released. Do not attempt concurrent
+        read-to-write upgrades: waiting while retaining shared access can
+        deadlock with another upgrading reader.
+        Keep the device alive until the matching unlock; acquiring a lock
+        does not validate an expired device pointer.
+
+    SEE ALSO
+        btLockReadDevice(), btUnlockDevice(), btBorrowLocksWait()
+
+*****************************************************************************/
 AROS_LH1(void, btLockWriteDevice,
          AROS_LHA(struct BtDevice *, bd, A0),
          LIBBASETYPEPTR, BluetoothBase, 18, bt)
@@ -511,6 +700,34 @@ AROS_LH1(void, btLockWriteDevice,
 /* \\\ */
 
 /* /// "btUnlockDevice()" */
+/*****************************************************************************
+    NAME
+        VOID btUnlockDevice(
+
+    SYNOPSIS
+        APTR bd)
+
+    FUNCTION
+        Release one lock acquisition held by the calling task on a Bluetooth device.
+
+    INPUTS
+        bd - Live device object. NULL is invalid.
+
+    RESULT
+        None. Ownership errors are logged, not returned.
+
+    NOTES
+        Release exclusive acquisitions before any underlying shared
+        acquisitions. The last acquisition of a mode releases that mode and
+        wakes waiting tasks; it does not guarantee which waiter proceeds.
+        An unlock by a non-owner or without an acquisition leaves the lock
+        unchanged and can add diagnostic messages. Do not use this call
+        as an ownership test. Call from task context.
+
+    SEE ALSO
+        btLockReadDevice(), btLockWriteDevice()
+
+*****************************************************************************/
 AROS_LH1(void, btUnlockDevice,
          AROS_LHA(struct BtDevice *, bd, A0),
          LIBBASETYPEPTR, BluetoothBase, 19, bt)
@@ -523,6 +740,33 @@ AROS_LH1(void, btUnlockDevice,
 /* \\\ */
 
 /* /// "btGetNextDevice()" */
+/*****************************************************************************
+    NAME
+        APTR btGetNextDevice(
+
+    SYNOPSIS
+        APTR bd)
+
+    FUNCTION
+        Return the next device in hardware-list order, skipping empty radios.
+
+    INPUTS
+        bd - Previous device in the active device list, or NULL to start.
+
+    RESULT
+        Borrowed device handle, or NULL at the end of the list.
+
+    NOTES
+        This enumerates known devices, including disconnected devices; it
+        does not perform discovery. No lock is acquired and no reference is
+        retained. Exclude list changes throughout traversal and keep each
+        handle valid while using it. Do not pass a removed device as the
+        cursor or free a returned handle merely to end iteration.
+
+    SEE ALSO
+        btFindDeviceA(), btLockReadBase(), btUnlockBase()
+
+*****************************************************************************/
 AROS_LH1(struct BtDevice *, btGetNextDevice,
          AROS_LHA(struct BtDevice *, bd, A0),
          LIBBASETYPEPTR, BluetoothBase, 20, bt)
@@ -552,6 +796,53 @@ AROS_LH1(struct BtDevice *, btGetNextDevice,
 /* \\\ */
 
 /* /// "btFindDeviceA()" */
+/*****************************************************************************
+    NAME
+        APTR btFindDeviceA(
+
+    SYNOPSIS
+        APTR bd, struct TagItem *taglist)
+
+    FUNCTION
+        Find the next known device that satisfies all supplied supported filters.
+
+    INPUTS
+        bd - Previous active device, excluded from the search; NULL starts
+            at the first device across all radios.
+        taglist - Filter tags, or NULL for no filtering.
+
+    TAGS
+        BDA_Address - Pointer to six address bytes in BD_ADDR order.
+        BDA_AddressString - Address text in XX:XX:XX:XX:XX:XX form;
+            comparison ignores case.
+        BDA_AddressType, BDA_ClassOfDevice, BDA_VendorID, BDA_ProductID -
+            Exact numeric values.
+        BDA_Hardware, BDA_Binding - Exact handle values; NULL can match
+            an absent binding.
+        BDA_Name, BDA_IDString - NUL-terminated, case-sensitive strings.
+            A missing device string does not match.
+        BDA_IsRegistered, BDA_IsConnected - Boolean tests; nonzero means TRUE.
+        BDA_ConnHandle - Exact handle; the device must also be connected.
+
+    RESULT
+        Borrowed device handle, or NULL if no later device matches.
+
+    NOTES
+        This searches existing objects, not the air. Unknown filter tags
+        are ignored, including device attribute tags not listed above.
+        Only the first occurrence of each filter is used; standard TagItem
+        control tags are honored. Pointer-valued filter data must remain
+        valid throughout the call and is not retained.
+
+        No lock is acquired or lifetime extended. Exclude list and attribute
+        changes during the search and preserve the returned object's
+        lifetime while using it. Continue with the returned handle to find
+        later matches.
+
+    SEE ALSO
+        btGetNextDevice(), btFindServiceA(), btGetAttrsA()
+
+*****************************************************************************/
 AROS_LH2(struct BtDevice *, btFindDeviceA,
          AROS_LHA(struct BtDevice *, bd, A0),
          AROS_LHA(struct TagItem *, tags, A1),
@@ -638,6 +929,51 @@ AROS_LH2(struct BtDevice *, btFindDeviceA,
 /* \\\ */
 
 /* /// "btFindServiceA()" */
+/*****************************************************************************
+    NAME
+        APTR btFindServiceA(
+
+    SYNOPSIS
+        APTR bd, APTR bsv, struct TagItem *taglist)
+
+    FUNCTION
+        Find the next matching service already known for a device.
+
+    INPUTS
+        bd - Device whose service list is searched; NULL returns NULL.
+        bsv - Previous service in that device's list, excluded from the
+            search; NULL starts at the first service.
+        taglist - Filter tags, or NULL for no filtering.
+
+    TAGS
+        BSVA_UUID16 - Exact primary 16-bit UUID or an entry in the service's
+            zero-terminated service-class ID list.
+        BSVA_UUID - Pointer to 16 UUID bytes in big-endian order; exact match
+            against the primary UUID, without service-class ID expansion.
+        BSVA_Protocol, BSVA_PSM, BSVA_RFCOMMChannel, BSVA_RecordHandle -
+            Exact numeric values.
+        BSVA_Name, BSVA_IDString - NUL-terminated, case-sensitive strings;
+            a missing service string does not match.
+        BSVA_Binding - Exact binding handle; NULL matches no binding.
+
+    RESULT
+        Borrowed service handle, or NULL if no later service matches.
+
+    NOTES
+        All supplied supported filters must match. Unknown tags are ignored;
+        only the first occurrence of each filter is used. Standard TagItem
+        control tags are honored. Filter data is not retained.
+
+        This does not enumerate remote services or acquire a lock. Keep the
+        device and cursor valid and exclude service-list changes during
+        traversal. A device read lock protects traversal against service
+        replacement; it does not retain a service after unlocking. Service
+        refresh or device removal can invalidate returned handles.
+
+    SEE ALSO
+        btFindEndpointA(), btEnumerateServices(), btLockReadDevice()
+
+*****************************************************************************/
 AROS_LH3(struct BtService *, btFindServiceA,
          AROS_LHA(struct BtDevice *, bd, A0),
          AROS_LHA(struct BtService *, bsv, A2),
@@ -725,6 +1061,48 @@ AROS_LH3(struct BtService *, btFindServiceA,
 /* \\\ */
 
 /* /// "btFindEndpointA()" */
+/*****************************************************************************
+    NAME
+        APTR btFindEndpointA(
+
+    SYNOPSIS
+        APTR bsv, APTR bep, struct TagItem *taglist)
+
+    FUNCTION
+        Find the next matching endpoint in a known service.
+
+    INPUTS
+        bsv - Service whose endpoints are searched; NULL returns NULL.
+        bep - Previous endpoint in that service, excluded from the search;
+            NULL starts at the first endpoint.
+        taglist - Filter tags, or NULL for no filtering.
+
+    TAGS
+        BEA_CanRead, BEA_CanWrite - Boolean tests; nonzero means TRUE.
+        BEA_Type, BEA_PSM, BEA_CID, BEA_RFCOMMChannel, BEA_Handle,
+        BEA_UUID16, BEA_ReportType, BEA_ReportID - Exact numeric values.
+        BEA_UUID - Pointer to 16 UUID bytes in big-endian order; exact match.
+        BEA_Properties - Required property bits. All supplied bits must be
+            present; extra endpoint bits are allowed. Zero matches any value.
+
+    RESULT
+        Borrowed endpoint handle, or NULL if no later endpoint matches.
+
+    NOTES
+        All supplied supported filters must match. Unknown tags are ignored;
+        only the first occurrence of each filter is used. Standard TagItem
+        control tags are honored. Filter data is not retained.
+
+        No channel is opened and no lock is acquired. Keep the service and
+        cursor valid and exclude endpoint changes during traversal, using
+        the owning device's read lock where required. The result is not a
+        retained reference: service refresh can free unbound endpoints.
+        A capability match does not establish a connection or guarantee I/O.
+
+    SEE ALSO
+        btFindServiceA(), btAllocChannel(), btLockReadDevice()
+
+*****************************************************************************/
 AROS_LH3(struct BtEndpoint *, btFindEndpointA,
          AROS_LHA(struct BtService *, bsv, A0),
          AROS_LHA(struct BtEndpoint *, bep, A2),
@@ -852,14 +1230,21 @@ void bApplyDevConfig(LIBBASETYPEPTR BluetoothBase, struct BtDevice *bd)
                 CopyMem(((UBYTE *) bpc) + 8, ((UBYTE *) &bd->bd_PoPoCfg) + 8,
                         min(AROS_LONG2BE(bpc->bpc_Length), AROS_LONG2BE(bd->bd_PoPoCfg.bpc_Length)));
             }
-
+            if((chnk = bFindCfgChunk(BluetoothBase, pic, IFFCHNK_KEYS))) {
+                struct BtKeyCfg *bkc = (struct BtKeyCfg *) chnk;
+                bd->bd_Keys.bkc_ChunkID = AROS_LONG2BE(IFFCHNK_KEYS);
+                bd->bd_Keys.bkc_Length = AROS_LONG2BE(sizeof(struct BtKeyCfg) - 8);
+                CopyMem(((UBYTE *) bkc) + 8, ((UBYTE *) &bd->bd_Keys) + 8,
+                        min(AROS_LONG2BE(bkc->bkc_Length), sizeof(struct BtKeyCfg) - 8));
+                if(bd->bd_Keys.bkc_Flags) {
+                    bd->bd_Flags |= BDFF_BONDED;
+                }
+            }
             break;
         }
         pic = btNextCfgForm(pic);
     }
     bUnlockSem(BluetoothBase, &BluetoothBase->bt_ConfigLock);
-    if(bLoadKeyringBond(BluetoothBase, bd)) bd->bd_Flags |= BDFF_BONDED;
-
 }
 /* \\\ */
 
@@ -908,7 +1293,9 @@ ULONG bRestoreDevices(LIBBASETYPEPTR BluetoothBase, struct BtHardware *bth)
                     if(brd->brd_Flags & BRDF_LE) {
                         bd->bd_Flags |= BDFF_LE;
                     }
-                    if(brd->brd_Flags & BRDF_BONDED) bd->bd_Flags |= BDFF_BONDED;
+                    if(brd->brd_Flags & BRDF_BONDED) {
+                        bd->bd_Flags |= BDFF_BONDED;
+                    }
                     bApplyDevConfig(BluetoothBase, bd);
                     if(!bd->bd_Name) {
                         bd->bd_Name = btCopyStr(bd->bd_AddrString);
@@ -949,66 +1336,49 @@ ULONG bRestoreDevices(LIBBASETYPEPTR BluetoothBase, struct BtHardware *bth)
    from a resolvable private address): from now on the device is identified
    and stored under the identity, while the link that is up keeps using the
    private address (bd_CurAddr). Called with the device write locked. */
-BOOL bRekeyDevice(LIBBASETYPEPTR BluetoothBase, struct BtDevice *bd, const UBYTE *addr, UBYTE addrtype)
+void bRekeyDevice(LIBBASETYPEPTR BluetoothBase, struct BtDevice *bd, const UBYTE *addr, UBYTE addrtype)
 {
-    struct BtIFFContext *pic=NULL;
-    struct Library *KeyringBase;
-    APTR context;
-    STRPTR oldid=bd->bd_IDString,newid,newname=NULL;
-    UBYTE address[BT_ADDRSTR_LEN];
-    ULONG restore[(8+BT_ADDRSTR_LEN+3+3)/4];
-    LONG result=KR_ERR_CONTEXT;
-    struct BtKeyCfg replacement=bd->bd_Keys;
+    struct BtIFFContext *pic;
+    STRPTR oldid = bd->bd_IDString;
+    STRPTR newid;
     BOOL addrname;
-    if(!memcmp(bd->bd_Address.bd_Addr,addr,6)) {
-        volatile UBYTE *p=(volatile UBYTE *)&replacement; ULONG n=sizeof(replacement); while(n--) *p++=0; return TRUE;
+
+    if(!memcmp(bd->bd_Address.bd_Addr, addr, 6)) {
+        return;
     }
-    bAddrToStr((UBYTE *)addr,(STRPTR)address);
-    newid=btCopyStrFmt("BT:%s",address);
-    if(!newid) goto fail;
-    addrname=bd->bd_Name && !strcmp(bd->bd_Name,(char *)bd->bd_AddrString);
-    if(addrname && !(newname=btCopyStr((STRPTR)address))) goto fail;
-    if(oldid && strlen(oldid)!=strlen(newid)) goto fail;
-    KeyringBase=OpenLibrary(KEYRINGNAME,1);
-    if(!KeyringBase) goto fail;
-    context=KR_ServiceOpen(BluetoothBase,KR_SERVICE_BLUETOOTH);
-    if(!context) { CloseLibrary(KeyringBase);goto fail; }
-    bLockSemExcl(BluetoothBase,&BluetoothBase->bt_ConfigLock);
+    CopyMem(bd->bd_Address.bd_Addr, bd->bd_CurAddr, 6);
+    bd->bd_CurAddrType = bd->bd_AddrType;
+    bd->bd_CurAddrValid = TRUE;
+    addrname = bd->bd_Name && !strcmp(bd->bd_Name, (char *) bd->bd_AddrString);
+    CopyMem((APTR) addr, bd->bd_Address.bd_Addr, 6);
+    bd->bd_AddrType = addrtype;
+    bAddrToStr(bd->bd_Address.bd_Addr, (STRPTR) bd->bd_AddrString);
+    newid = btCopyStrFmt("BT:%s", bd->bd_AddrString);
+    if(!newid) {
+        return;
+    }
+    bd->bd_IDString = newid;
+    if(addrname) {
+        btFreeVec(bd->bd_Name);
+        bd->bd_Name = btCopyStr(bd->bd_AddrString);
+        bd->bd_Node.ln_Name = bd->bd_Name;
+    }
+    /* move the config form (custom name, popup settings) to the new id */
     if(oldid) {
-        pic=btFindCfgForm(NULL,IFFFORM_BTDEVICECFG);
-        while(pic && !bMatchStringChunk(BluetoothBase,pic,IFFCHNK_DEVID,oldid)) pic=btNextCfgForm(pic);
-        if(pic) {
-            memset(restore,0,sizeof(restore));
-            restore[0]=AROS_LONG2BE(IFFCHNK_DEVID);
-            restore[1]=AROS_LONG2BE(strlen(oldid)+1);
-            CopyMem(oldid,(UBYTE *)restore+8,strlen(oldid)+1);
-            /* Reserve the replacement chunk before committing the vault.
-             * Both IDs have equal encoded lengths; rollback reuses capacity. */
-            if(!bAddStringChunk(BluetoothBase,pic,IFFCHNK_DEVID,newid)) goto unlock;
+        bLockSemExcl(BluetoothBase, &BluetoothBase->bt_ConfigLock);
+        pic = btFindCfgForm(NULL, IFFFORM_BTDEVICECFG);
+        while(pic) {
+            if(bMatchStringChunk(BluetoothBase, pic, IFFCHNK_DEVID, oldid)) {
+                bAddStringChunk(BluetoothBase, pic, IFFCHNK_DEVID, newid);
+                break;
+            }
+            pic = btNextCfgForm(pic);
         }
+        bUnlockSem(BluetoothBase, &BluetoothBase->bt_ConfigLock);
+        btFreeVec(oldid);
     }
-    replacement.bkc_Version=1;
-    result=KR_ServiceRekey(context,oldid?oldid:newid,newid,&replacement,sizeof(replacement));
-    if(result!=KR_SUCCESS && pic) bAddCfgChunk(BluetoothBase,pic,restore);
-unlock:
-    bUnlockSem(BluetoothBase,&BluetoothBase->bt_ConfigLock);
-    KR_ServiceClose(context);CloseLibrary(KeyringBase);
-    if(result!=KR_SUCCESS) goto fail;
-    bd->bd_Keys.bkc_Version=1;
-    { volatile UBYTE *p=(volatile UBYTE *)&replacement; ULONG n=sizeof(replacement); while(n--) *p++=0; }
-    CopyMem(bd->bd_Address.bd_Addr,bd->bd_CurAddr,6);
-    bd->bd_CurAddrType=bd->bd_AddrType;bd->bd_CurAddrValid=TRUE;
-    CopyMem((APTR)addr,bd->bd_Address.bd_Addr,6);bd->bd_AddrType=addrtype;
-    CopyMem(address,bd->bd_AddrString,sizeof(address));bd->bd_IDString=newid;
-    if(addrname) { btFreeVec(bd->bd_Name);bd->bd_Name=newname;bd->bd_Node.ln_Name=newname; }
-    btFreeVec(oldid);return TRUE;
-fail:
-    { volatile UBYTE *p=(volatile UBYTE *)&replacement; ULONG n=sizeof(replacement); while(n--) *p++=0; }
-    btFreeVec(newid);btFreeVec(newname);
-    btAddErrorMsg0(RETURN_ERROR,(STRPTR)GM_UNIQUENAME(libname),
-                  "Keyring rekey failed: device identity and bond were preserved.");
-    return FALSE;
 }
+/* \\\ */
 
 /* /// "bStoreDevConfig()" */
 /* Writes custom name, popup config and (if registered) the registration
@@ -1016,26 +1386,13 @@ fail:
    written to disk (ENVARC:/ENV:Sys/bluetooth.prefs) by the event handler
    process - that is how registrations and bond keys survive a reboot without
    the user having to press Save in the prefs. */
-BOOL bStoreDevConfig(LIBBASETYPEPTR BluetoothBase, struct BtDevice *bd, BOOL persist)
+void bStoreDevConfig(LIBBASETYPEPTR BluetoothBase, struct BtDevice *bd, BOOL persist)
 {
     struct BtIFFContext *pic;
     struct BtIFFContext *root;
 
     if(!bd->bd_IDString) {
-        return FALSE;
-    }
-    /* A failed keyring commit must never publish saved/bonded metadata. */
-    {
-        LONG result;
-        if((bd->bd_Flags & (BDFF_REGISTERED|BDFF_BONDED)) ==
-               (BDFF_REGISTERED|BDFF_BONDED) && bd->bd_Keys.bkc_Flags)
-            result = bKeyringBond(BluetoothBase, bd, 1);
-        else result = bKeyringBond(BluetoothBase, bd, 2);
-        if(result != KR_SUCCESS && result != KR_ERR_NOTFOUND) {
-            btAddErrorMsg0(RETURN_ERROR, (STRPTR) GM_UNIQUENAME(libname),
-                "Keyring locked or unavailable: open Settings > System > Keyring. Configuration was not saved.");
-            return FALSE;
-        }
+        return;
     }
     bLockSemExcl(BluetoothBase, &BluetoothBase->bt_ConfigLock);
     pic = btFindCfgForm(NULL, IFFFORM_BTDEVICECFG);
@@ -1084,9 +1441,16 @@ BOOL bStoreDevConfig(LIBBASETYPEPTR BluetoothBase, struct BtDevice *bd, BOOL per
             brd.brd_ProductID = bd->bd_ProductID;
             brd.brd_ProductVersion = bd->bd_ProductVersion;
             bAddCfgChunk(BluetoothBase, pic, &brd);
-
+            if((bd->bd_Flags & BDFF_BONDED) && bd->bd_Keys.bkc_Flags) {
+                bd->bd_Keys.bkc_ChunkID = AROS_LONG2BE(IFFCHNK_KEYS);
+                bd->bd_Keys.bkc_Length = AROS_LONG2BE(sizeof(struct BtKeyCfg) - 8);
+                bAddCfgChunk(BluetoothBase, pic, &bd->bd_Keys);
+            } else {
+                bRemCfgChunk(BluetoothBase, pic, IFFCHNK_KEYS);
+            }
         } else {
             bRemCfgChunk(BluetoothBase, pic, IFFCHNK_REGDEVICE);
+            bRemCfgChunk(BluetoothBase, pic, IFFCHNK_KEYS);
         }
     }
     bUnlockSem(BluetoothBase, &BluetoothBase->bt_ConfigLock);
@@ -1100,13 +1464,49 @@ BOOL bStoreDevConfig(LIBBASETYPEPTR BluetoothBase, struct BtDevice *bd, BOOL per
         }
         Permit();
     }
-    return pic != NULL;
 }
 /* \\\ */
 
 /* *** Channels *** */
 
 /* /// "btAllocChannel()" */
+/*****************************************************************************
+    NAME
+        APTR btAllocChannel(
+
+    SYNOPSIS
+        APTR bd, struct MsgPort *mp, APTR bep)
+
+    FUNCTION
+        Allocate a reusable request channel for a device or one of its endpoints.
+
+    INPUTS
+        bd - Live device handle; NULL returns NULL.
+        mp - Initialized reply port; NULL returns NULL. Use a signal port
+            owned by the task that will call the channel wait functions.
+        bep - Endpoint belonging to bd, or NULL for device control requests.
+
+    RESULT
+        Channel handle, or NULL for invalid arguments or allocation failure.
+
+    NOTES
+        Call from task context. Keep the library, reply port, hardware and
+        endpoint valid until btFreeChannel(). The channel holds a device
+        usage count, but does not independently retain its endpoint across
+        service refresh. Coordinate refresh and removal with the channel
+        owner. Do not free the channel with btFreeVec().
+
+        An endpoint channel starts with BTPR_READ. Configure a control
+        channel with btChannelSetup() before submission. Auto-connect is
+        copied from the device policy; it is not a live link to that policy.
+        Allocation may wait for the hardware task using SIGB_SINGLE. A
+        returned handle does not establish that a remote channel is open;
+        the internal open request's error is not returned.
+
+    SEE ALSO
+        btChannelSetup(), btSendChannel(), btFreeChannel()
+
+*****************************************************************************/
 AROS_LH3(struct BtChannel *, btAllocChannel,
          AROS_LHA(struct BtDevice *, bd, A0),
          AROS_LHA(struct MsgPort *, mp, A1),
@@ -1136,9 +1536,9 @@ AROS_LH3(struct BtChannel *, btAllocChannel,
         if(bd->bd_PoPoCfg.bpc_AutoConnect) {
             bch->bch_Flags |= BCHF_AUTOCONNECT;
         }
-        bGuard(BluetoothBase);
+        Forbid();
         bd->bd_UseCnt++;
-        bUnguard(BluetoothBase);
+        Permit();
         if(bep) {
             LONG err;
             bSubmitCtrl(BluetoothBase, bd->bd_Hardware, bd, BTPRI_OPENCHANNEL, 0, 0, bep, 0, &err);
@@ -1151,6 +1551,43 @@ AROS_LH3(struct BtChannel *, btAllocChannel,
 /* \\\ */
 
 /* /// "btFreeChannel()" */
+/*****************************************************************************
+    NAME
+        APTR btFreeChannel(
+
+    SYNOPSIS
+        APTR pp)
+
+    FUNCTION
+        Release a channel and its device usage count.
+
+    INPUTS
+        pp - Channel handle, or NULL for no operation.
+
+    RESULT
+        No defined return value. Ignore the public APTR result.
+
+    NOTES
+        Call from the reply-port owner task. Complete and consume the last
+        reply before freeing the channel. Keep the library, port and hardware
+        valid through the call. No other task may use the channel afterward.
+        The reply port and caller's data buffer are not freed.
+
+        A pending request triggers an abort followed by a wait. Closing an
+        endpoint channel can also wait for the hardware task. There is no
+        bounded completion guarantee. Releasing the last device usage count
+        can finish deferred device cleanup.
+
+    BUGS
+        The public declaration returns APTR, but the implementation returns
+        void. It does not produce a valid pointer result. A reply already
+        queued on the port is not removed when freeing a completed channel;
+        consume it first to avoid leaving a freed message in the queue.
+
+    SEE ALSO
+        btAllocChannel(), btAbortChannel(), btWaitChannel()
+
+*****************************************************************************/
 AROS_LH1(void, btFreeChannel,
          AROS_LHA(struct BtChannel *, bch, A1),
          LIBBASETYPEPTR, BluetoothBase, 24, bt)
@@ -1176,13 +1613,13 @@ AROS_LH1(void, btFreeChannel,
         bSubmitCtrl(BluetoothBase, bd->bd_Hardware, bd, BTPRI_CLOSECHANNEL, 0, 0, bch->bch_Endpoint, 0, &err);
     }
 
-    bGuard(BluetoothBase);
+    Forbid();
     if(!(--bd->bd_UseCnt) && (bd->bd_Flags & BDFF_DELEXPUNGE)) {
-        bUnguard(BluetoothBase);
+        Permit();
         KPRINTF(20, ("Finally getting rid of device %s\n", bd->bd_Name));
         bFreeDevice(BluetoothBase, bd);
     } else {
-        bUnguard(BluetoothBase);
+        Permit();
     }
 
     btFreeVec(bch);
@@ -1191,6 +1628,53 @@ AROS_LH1(void, btFreeChannel,
 /* \\\ */
 
 /* /// "btChannelSetup()" */
+/*****************************************************************************
+    NAME
+        VOID btChannelSetup(
+
+    SYNOPSIS
+        APTR pp, UWORD rq, UWORD val, UWORD idx)
+
+    FUNCTION
+        Set the request and its two 16-bit parameters for the next submission.
+
+    INPUTS
+        pp - Idle channel whose preceding reply has been consumed.
+        rq - BTPR_* request from libraries/bluetooth.h.
+        val, idx - Request parameters described below; use zero when unused.
+
+    NOTES
+        Endpoint channels use BTPR_READ to receive one SDU or notification,
+        or BTPR_WRITE to send data. val and idx are unused. A GATT endpoint
+        read waits for a notification or indication; it is not an ATT read.
+
+        Control channels have no endpoint and support these requests:
+        BTPR_REMOTENAME - Receive a NUL-terminated remote name; buffer
+            capacity includes the terminator. Actual excludes that terminator.
+        BTPR_SDPSEARCH - val is the 16-bit service UUID. Receive consecutive
+            four-byte, big-endian record handles; Actual is a byte count.
+        BTPR_SDPATTRIBUTES - val is the low half and idx the high half of
+            a record handle. Receive the attribute sequence's nested bytes.
+        BTPR_GATTREAD - val is the remote attribute handle; receive its value.
+        BTPR_GATTWRITE - val is the handle; send a value with a response.
+        BTPR_GATTWRITENORSP - val is the handle; send without a response.
+        BTPR_READRSSI - Receive one signed BYTE from the cached inquiry or
+            advertising result; 127 means unknown.
+
+        Setup performs no I/O or validation. The settings remain until
+        changed. Keep the channel idle while changing them. Payload buffers
+        are supplied to btSendChannel() or btDoChannel().
+
+    RESULT
+        None.
+
+    BUGS
+        BTPR_L2CAPECHO is declared but is not handled; it returns BTIOERR_NOTSUPPORTED.
+
+    SEE ALSO
+        btDoChannel(), btSendChannel(), btGetChannelActual()
+
+*****************************************************************************/
 AROS_LH4(void, btChannelSetup,
          AROS_LHA(struct BtChannel *, bch, A1),
          AROS_LHA(UWORD, rq, D0),
@@ -1208,6 +1692,52 @@ AROS_LH4(void, btChannelSetup,
 /* \\\ */
 
 /* /// "btSendChannel()" */
+/*****************************************************************************
+    NAME
+        VOID btSendChannel(
+
+    SYNOPSIS
+        APTR pp, APTR data, ULONG len)
+
+    FUNCTION
+        Submit a channel request and return without waiting for its reply.
+
+    INPUTS
+        pp - Idle channel with no unconsumed previous reply.
+        data - Request buffer: writable for reads, readable for writes.
+            Supply storage for len bytes when the request transfers data.
+        len - Read capacity or write length in bytes.
+
+    RESULT
+        None. Obtain completion status with btWaitChannel() or after receiving the reply.
+
+    NOTES
+        Call from task context. The buffer is borrowed until completion;
+        do not modify a write buffer or inspect a read buffer while pending.
+        Keep the channel, endpoint, hardware, port and library valid. Submit
+        only one request at a time per channel. Submission clears Actual
+        and Error; neither zero value proves completion.
+
+        Completion replies the channel message to its allocation port, even
+        when submission immediately detects unavailable hardware. Consume
+        each reply once: use btWaitChannel(), or receive it with GetMsg()
+        and query the result. Do not call btWaitChannel() after GetMsg() has
+        removed that reply. Do not ReplyMsg() the returned channel message.
+
+        Endpoint reads consume one queued SDU or notification. An undersized
+        buffer receives a prefix with BTIOERR_OVERFLOW; the remainder is
+        discarded. Successful writes need not imply remote application
+        receipt. BCHA_NoWait does not bypass connection setup and is not
+        implemented for GATT notification reads.
+
+    BUGS
+        BCHA_Timeout is stored but not enforced by channel dispatch. Do not
+        rely on it to bound a pending request.
+
+    SEE ALSO
+        btChannelSetup(), btWaitChannel(), btCheckChannel(), btAbortChannel()
+
+*****************************************************************************/
 AROS_LH3(void, btSendChannel,
          AROS_LHA(struct BtChannel *, bch, A1),
          AROS_LHA(APTR, data, A0),
@@ -1239,6 +1769,39 @@ AROS_LH3(void, btSendChannel,
 /* \\\ */
 
 /* /// "btDoChannel()" */
+/*****************************************************************************
+    NAME
+        LONG btDoChannel(
+
+    SYNOPSIS
+        APTR pp, APTR data, ULONG len)
+
+    FUNCTION
+        Submit a channel request and wait for its reply.
+
+    INPUTS
+        pp - Idle channel with no unconsumed previous reply.
+        data - Request buffer, with the direction and lifetime required by
+            btSendChannel().
+        len - Read capacity or write length in bytes.
+
+    RESULT
+        Zero on success, or an IOERR_* or BTIOERR_* completion code.
+
+    NOTES
+        This combines btSendChannel() and btWaitChannel(). Call from the
+        reply-port owner task, never the hardware task servicing the channel.
+        The reply is consumed before return; do not wait for it again.
+        Use btGetChannelActual() for the byte count or request-specific
+        error detail. Keep all request storage valid until return.
+
+        No overall timeout is enforced. The call can wait indefinitely;
+        holding a lock needed by the hardware task can deadlock it.
+
+    SEE ALSO
+        btSendChannel(), btWaitChannel(), btGetChannelActual()
+
+*****************************************************************************/
 AROS_LH3(LONG, btDoChannel,
          AROS_LHA(struct BtChannel *, bch, A1),
          AROS_LHA(APTR, data, A0),
@@ -1254,6 +1817,42 @@ AROS_LH3(LONG, btDoChannel,
 /* \\\ */
 
 /* /// "btAbortChannel()" */
+/*****************************************************************************
+    NAME
+        VOID btAbortChannel(
+
+    SYNOPSIS
+        APTR pp)
+
+    FUNCTION
+        Ask the hardware task to cancel a pending channel request.
+
+    INPUTS
+        pp - Live channel. A channel that is not pending needs no action.
+
+    RESULT
+        None. The call does not report whether cancellation was requested or succeeded.
+
+    NOTES
+        Call from the reply-port owner task, never the hardware task.
+        The call waits for a separate cancellation reply, using the same
+        port, but does not consume the original request's reply. Finish
+        with btWaitChannel(pp), or receive that original reply through the
+        existing message loop, before reusing its buffer or channel.
+
+        Completion can win the race with cancellation; do not require
+        IOERR_ABORTED as the result. Cancellation does not undo remote
+        effects already performed. Keep the hardware task and port alive
+        through this operation; there is no timeout.
+
+    BUGS
+        If allocation of the cancellation message fails, the call returns
+        without requesting cancellation and without reporting failure.
+
+    SEE ALSO
+        btWaitChannel(), btCheckChannel(), btGetChannelError()
+
+*****************************************************************************/
 AROS_LH1(void, btAbortChannel,
          AROS_LHA(struct BtChannel *, bch, A1),
          LIBBASETYPEPTR, BluetoothBase, 28, bt)
@@ -1281,6 +1880,44 @@ AROS_LH1(void, btAbortChannel,
 /* \\\ */
 
 /* /// "btWaitChannel()" */
+/*****************************************************************************
+    NAME
+        LONG btWaitChannel(
+
+    SYNOPSIS
+        APTR pp)
+
+    FUNCTION
+        Wait until a channel is no longer pending and remove its queued reply.
+
+    INPUTS
+        pp - Live channel whose reply has not been removed by GetMsg()
+            or another waiter.
+
+    RESULT
+        Zero on success, or the stored IOERR_* or BTIOERR_* completion code.
+
+    NOTES
+        Call from the task signaled by the reply port. The call waits on
+        that port's signal and leaves other queued messages in place.
+        Signals observed while waiting are restored for other port users.
+        It neither frees the channel nor releases the caller's buffer.
+
+        No overall timeout or break-signal cancellation is provided. Do not
+        call from the hardware task or while holding a lock it needs.
+        For a newly allocated channel this returns its initial zero status
+        without submitting anything. A nonpending channel returns its
+        stored status; that is not evidence of a new operation.
+
+    BUGS
+        Every call updates the device's reachability history from the stored
+        error, including repeated calls after completion. Wait once per
+        submitted request; use btGetChannelError() for later inspection.
+
+    SEE ALSO
+        btSendChannel(), btAbortChannel(), btGetChannelActual(), btGetChannelError()
+
+*****************************************************************************/
 AROS_LH1(LONG, btWaitChannel,
          AROS_LHA(struct BtChannel *, bch, A1),
          LIBBASETYPEPTR, BluetoothBase, 29, bt)
@@ -1290,25 +1927,17 @@ AROS_LH1(LONG, btWaitChannel,
     struct BtDevice *bd = bch->bch_Device;
     LONG ioerr;
     KPRINTF(5, ("btWaitChannel(%p)\n", bch));
-    {
-        /* A replied message may still be on its way onto the port from
-           another CPU, and the caller may already have taken it with
-           GetMsg(): remove it only when it is really linked, and give up
-           after a bounded number of looks once it is marked replied. */
-        ULONG looks = 0;
-        for(;;) {
-            while(bch->bch_Msg.mn_Node.ln_Type == NT_MESSAGE) {
-                sigs |= Wait(1L<<bch->bch_MsgPort->mp_SigBit);
-            }
-            if(bch->bch_Msg.mn_Node.ln_Type != NT_REPLYMSG ||
-               bTakeReply(BluetoothBase, bch->bch_MsgPort, &bch->bch_Msg) || ++looks > 1000) {
-                break;
-            }
-        }
+    while(bch->bch_Msg.mn_Node.ln_Type == NT_MESSAGE) {
+        sigs |= Wait(1L<<bch->bch_MsgPort->mp_SigBit);
+    }
+    Forbid();
+    if(bch->bch_Msg.mn_Node.ln_Type == NT_REPLYMSG) {
         bch->bch_Msg.mn_Node.ln_Type = NT_FREEMSG;
+        Remove(&bch->bch_Msg.mn_Node);
     }
     // avoid signals getting lost for other messages arriving.
     SetSignal(sigs, sigs);
+    Permit();
     ioerr = bch->bch_Error;
     if(bd) {
         switch(ioerr) {
@@ -1346,6 +1975,33 @@ AROS_LH1(LONG, btWaitChannel,
 /* \\\ */
 
 /* /// "btCheckChannel()" */
+/*****************************************************************************
+    NAME
+        APTR btCheckChannel(
+
+    SYNOPSIS
+        APTR pp)
+
+    FUNCTION
+        Check whether a channel is still pending without waiting.
+
+    INPUTS
+        pp - Live channel handle; NULL is invalid.
+
+    RESULT
+        NULL while pending; otherwise pp, including for a newly allocated channel.
+
+    NOTES
+        A non-NULL result is neither a success status nor proof that a
+        request was submitted. It does not remove a reply from the port.
+        Consume the reply before resubmitting or freeing the channel, then
+        inspect Error and Actual. Serialize access with submitters and
+        consumers; this call does not lock the channel.
+
+    SEE ALSO
+        btWaitChannel(), btGetChannelError(), btGetChannelActual()
+
+*****************************************************************************/
 AROS_LH1(struct BtChannel *, btCheckChannel,
          AROS_LHA(struct BtChannel *, bch, A1),
          LIBBASETYPEPTR, BluetoothBase, 32, bt)
@@ -1361,6 +2017,36 @@ AROS_LH1(struct BtChannel *, btCheckChannel,
 /* \\\ */
 
 /* /// "btGetChannelActual()" */
+/*****************************************************************************
+    NAME
+        ULONG btGetChannelActual(
+
+    SYNOPSIS
+        APTR pp)
+
+    FUNCTION
+        Read the channel's stored transfer count or request-specific error detail.
+
+    INPUTS
+        pp - Live channel handle; NULL is invalid.
+
+    RESULT
+        On successful data transfer, the number of bytes transferred.
+        For BTIOERR_OVERFLOW, the number of bytes copied, not the full
+        required capacity. For BTIOERR_REMOTEERROR, this may instead be
+        an HCI status, ATT error code or SDP client result.
+
+    NOTES
+        Check completion and Error before interpreting this value. A new
+        channel and each submission start with zero. This call neither
+        waits nor consumes a reply; a value read while pending is not a
+        completion indication. Remote-name counts exclude the terminating
+        NUL; SDP search counts are bytes, not record counts.
+
+    SEE ALSO
+        btGetChannelError(), btCheckChannel(), btChannelSetup()
+
+*****************************************************************************/
 AROS_LH1(ULONG, btGetChannelActual,
          AROS_LHA(struct BtChannel *, bch, A1),
          LIBBASETYPEPTR, BluetoothBase, 30, bt)
@@ -1372,6 +2058,34 @@ AROS_LH1(ULONG, btGetChannelActual,
 /* \\\ */
 
 /* /// "btGetChannelError()" */
+/*****************************************************************************
+    NAME
+        LONG btGetChannelError(
+
+    SYNOPSIS
+        APTR pp)
+
+    FUNCTION
+        Read the channel's stored error code without waiting or consuming a reply.
+
+    INPUTS
+        pp - Live channel handle; NULL is invalid.
+
+    RESULT
+        Zero for a successful completed request; otherwise an IOERR_* or
+        BTIOERR_* code from exec/errors.h, devices/bluetoothhci.h or
+        libraries/bluetooth.h.
+
+    NOTES
+        A new channel and each submission start with zero. Establish
+        completion before treating zero as success. btGetChannelActual()
+        can contain a partial byte count or remote error detail. Reading
+        the status does not update device reachability history.
+
+    SEE ALSO
+        btGetChannelActual(), btCheckChannel(), btWaitChannel()
+
+*****************************************************************************/
 AROS_LH1(LONG, btGetChannelError,
          AROS_LHA(struct BtChannel *, bch, A1),
          LIBBASETYPEPTR, BluetoothBase, 31, bt)
@@ -1395,6 +2109,7 @@ BOOL bSubmitCtrl(LIBBASETYPEPTR BluetoothBase, struct BtHardware *bth, struct Bt
                  UWORD request, UWORD val, UWORD idx, APTR data, ULONG len, LONG *error)
 {
     struct BtChannel bch;
+    struct MsgPort mp;
 
     if(!bth || !bth->bth_Task) {
         if(error) {
@@ -1403,6 +2118,7 @@ BOOL bSubmitCtrl(LIBBASETYPEPTR BluetoothBase, struct BtHardware *bth, struct Bt
         return(FALSE);
     }
     memset(&bch, 0, sizeof(bch));
+    memset(&mp, 0, sizeof(mp));
     bch.bch_Device = bd;
     bch.bch_Hardware = bth;
     bch.bch_Request = request;
@@ -1415,24 +2131,23 @@ BOOL bSubmitCtrl(LIBBASETYPEPTR BluetoothBase, struct BtHardware *bth, struct Bt
     if(FindTask(NULL) == bth->bth_Task) {
         bHandleChannel(BluetoothBase, bth, &bch, TRUE);
     } else {
-        /* A port of our own with a private signal, emptied through
-           GetMsg(): a stack port with SIGF_SINGLE let a late reply on
-           another CPU signal an Exec semaphore wait or a reused stack. */
-        struct MsgPort *port = CreateMsgPort();
-        if(!port) {
-            if(error) {
-                *error = BTIOERR_OUTOFMEMORY;
-            }
-            return(FALSE);
-        }
-        bch.bch_MsgPort = port;
-        bch.bch_Msg.mn_ReplyPort = port;
+        mp.mp_Flags = PA_SIGNAL;
+        mp.mp_SigBit = SIGB_SINGLE;
+        mp.mp_SigTask = FindTask(NULL);
+        NewList(&mp.mp_MsgList);
+        bch.bch_MsgPort = &mp;
+        bch.bch_Msg.mn_ReplyPort = &mp;
         bch.bch_Msg.mn_Node.ln_Type = NT_MESSAGE;
+        SetSignal(0, SIGF_SINGLE);
         PutMsg(&bth->bth_TaskMsgPort, &bch.bch_Msg);
-        while(GetMsg(port) != &bch.bch_Msg) {
-            WaitPort(port);
+        while(bch.bch_Msg.mn_Node.ln_Type == NT_MESSAGE) {
+            Wait(SIGF_SINGLE);
         }
-        DeleteMsgPort(port);
+        Forbid();
+        if(bch.bch_Msg.mn_Node.ln_Type == NT_REPLYMSG) {
+            Remove(&bch.bch_Msg.mn_Node);
+        }
+        Permit();
     }
     if(error) {
         *error = bch.bch_Error;
@@ -1442,6 +2157,59 @@ BOOL bSubmitCtrl(LIBBASETYPEPTR BluetoothBase, struct BtHardware *bth, struct Bt
 /* \\\ */
 
 /* /// "btStartDiscoveryA()" */
+/*****************************************************************************
+    NAME
+        BOOL btStartDiscoveryA(
+
+    SYNOPSIS
+        APTR bth, struct TagItem *taglist)
+
+    FUNCTION
+        Start device discovery on a Bluetooth adapter.
+
+    INPUTS
+        bth - Live hardware handle.
+        taglist - Discovery options, or NULL for defaults.
+
+    TAGS
+        BDSA_Duration - ULONG duration in seconds. Defaults to
+            BGCA_DiscoveryTime; zero selects 10 seconds. Values above 60
+            are limited to 60. Name resolution can extend the operation.
+        BDSA_Classic - Enable classic inquiry; TRUE by default.
+        BDSA_LE - Enable LE active scanning; TRUE by default.
+        BDSA_ResolveNames - Resolve missing names of discovered classic
+            devices after inquiry; TRUE by default.
+        BDSA_ClearOld - FALSE by default. TRUE removes unregistered devices
+            that are neither connected nor connecting, have no device or
+            service binding, and have no outstanding device use count.
+
+    RESULT
+        TRUE if discovery was accepted. FALSE for NULL hardware, a missing
+        hardware task, an adapter that is not ready, discovery already in
+        progress, or no requested discovery mode supported by the adapter.
+        Detailed errors are not returned through IoErr().
+        Hardware shutdown also returns FALSE.
+
+    NOTES
+        Unsupported modes are ignored when another requested mode is
+        available. Discovery clears the discovered flag on retained devices.
+        ClearOld invalidates handles to removed devices and their services
+        and endpoints; a raw pointer alone does not prevent removal.
+
+        Return does not wait for radio discovery or name resolution.
+        BEHMB_DISCOVERYSTART and BEHMB_DISCOVERYSTOP identify the adapter.
+        Controller command failures are not reflected in the return value;
+        TRUE does not guarantee that the radio started or found a device.
+
+        Call from a task other than the adapter's hardware task. Keep the
+        adapter and bluetooth.library valid during the call. The call uses
+        SIGF_SINGLE and waits for the hardware task without a caller timeout;
+        do not hold locks that task needs. The tag list is not retained.
+
+    SEE ALSO
+        btStopDiscovery(), btFindDeviceA(), btAddEventHandler()
+
+*****************************************************************************/
 AROS_LH2(BOOL, btStartDiscoveryA,
          AROS_LHA(struct BtHardware *, bth, A0),
          AROS_LHA(struct TagItem *, tags, A1),
@@ -1468,6 +2236,41 @@ AROS_LH2(BOOL, btStartDiscoveryA,
 /* \\\ */
 
 /* /// "btStopDiscovery()" */
+/*****************************************************************************
+    NAME
+        BOOL btStopDiscovery(
+
+    SYNOPSIS
+        APTR bth)
+
+    FUNCTION
+        Request termination of device discovery on an adapter.
+
+    INPUTS
+        bth - Live hardware handle.
+
+    RESULT
+        TRUE if the stop request was processed, including when discovery
+        was already inactive. FALSE for NULL hardware or a missing hardware
+        task. Detailed errors are not returned through IoErr().
+        Hardware shutdown also returns FALSE.
+
+    NOTES
+        Cancels pending discovery and queued name lookups. An outstanding
+        name lookup may delay BEHMB_DISCOVERYSTOP. The call does not wait
+        for controller cancellation commands to complete, and their failure
+        is not returned. Existing discovery results remain available.
+        Background scanning may resume; this call does not disable the radio.
+
+        Call from a task other than the adapter's hardware task. Keep the
+        adapter and bluetooth.library valid during the call. It uses
+        SIGF_SINGLE and waits for the hardware task without a caller timeout.
+        Do not hold locks that task needs.
+
+    SEE ALSO
+        btStartDiscoveryA(), btAddEventHandler()
+
+*****************************************************************************/
 AROS_LH1(BOOL, btStopDiscovery,
          AROS_LHA(struct BtHardware *, bth, A0),
          LIBBASETYPEPTR, BluetoothBase, 76, bt)
@@ -1483,6 +2286,45 @@ AROS_LH1(BOOL, btStopDiscovery,
 /* \\\ */
 
 /* /// "btConnectDevice()" */
+/*****************************************************************************
+    NAME
+        BOOL btConnectDevice(
+
+    SYNOPSIS
+        APTR bd)
+
+    FUNCTION
+        Establish a connection to a known Bluetooth device.
+
+    INPUTS
+        bd - Live device handle.
+
+    RESULT
+        TRUE when the selected transport is connected, including an already
+        connected transport. FALSE for NULL, unavailable hardware, an
+        unsupported transport, resource failure or connection failure.
+        Detailed errors are not returned through IoErr().
+        Hardware shutdown also returns FALSE.
+
+    NOTES
+        Selects classic Bluetooth when supported by both device and adapter;
+        otherwise selects LE. For a dual-mode device, an additional connection
+        is attempted on the other transport without waiting for its result.
+        TRUE does not establish that both transports, pairing, service
+        enumeration or class binding have completed.
+
+        Explicit connection clears the device's temporary reconnect hold.
+        The configured automatic-connection policy is not changed.
+
+        Call from a task other than the adapter's hardware task. Keep the
+        device, adapter and bluetooth.library valid until return. The call
+        uses SIGF_SINGLE and waits without a caller timeout or cancellation
+        parameter. Do not hold locks needed by the hardware task.
+
+    SEE ALSO
+        btDisconnectDevice(), btPairDeviceA(), btEnumerateServices()
+
+*****************************************************************************/
 AROS_LH1(BOOL, btConnectDevice,
          AROS_LHA(struct BtDevice *, bd, A0),
          LIBBASETYPEPTR, BluetoothBase, 77, bt)
@@ -1498,6 +2340,43 @@ AROS_LH1(BOOL, btConnectDevice,
 /* \\\ */
 
 /* /// "btDisconnectDevice()" */
+/*****************************************************************************
+    NAME
+        BOOL btDisconnectDevice(
+
+    SYNOPSIS
+        APTR bd)
+
+    FUNCTION
+        Request disconnection of both transports of a Bluetooth device.
+
+    INPUTS
+        bd - Live device handle.
+
+    RESULT
+        TRUE if the request was processed, including when no connection
+        exists. FALSE for NULL or a missing hardware task. Detailed errors
+        are not returned through IoErr().
+        Hardware shutdown also returns FALSE.
+
+    NOTES
+        Requests disconnection of established links and cancellation of
+        connection attempts. Return does not wait for controller completion;
+        command-submission and controller failures are not returned. Monitor
+        BEHMB_DEVICEDISCONNECTED and current device state for completion.
+        Registration, stored keys and the configured automatic-connection
+        policy remain unchanged. A locally terminated link can enter a
+        temporary reconnect hold, cleared by an explicit connection request.
+
+        Call from a task other than the adapter's hardware task. Keep the
+        device, adapter and bluetooth.library valid during the call. It uses
+        SIGF_SINGLE and waits for the hardware task without a caller timeout.
+        Do not hold locks that task needs.
+
+    SEE ALSO
+        btConnectDevice(), btUnpairDevice(), btUnregisterDevice()
+
+*****************************************************************************/
 AROS_LH1(BOOL, btDisconnectDevice,
          AROS_LHA(struct BtDevice *, bd, A0),
          LIBBASETYPEPTR, BluetoothBase, 78, bt)
@@ -1533,6 +2412,59 @@ static void bFillPairParams(LIBBASETYPEPTR BluetoothBase, struct BtPairParams *b
 /* \\\ */
 
 /* /// "btPairDeviceA()" */
+/*****************************************************************************
+    NAME
+        BOOL btPairDeviceA(
+
+    SYNOPSIS
+        APTR bd, struct TagItem *taglist)
+
+    FUNCTION
+        Connect to a device if necessary and wait for pairing to finish.
+
+    INPUTS
+        bd - Live device handle.
+        taglist - Pairing tag list, or NULL. See BUGS.
+
+    RESULT
+        TRUE when pairing reports success. FALSE for NULL, unavailable
+        hardware, an unsupported transport or role, pairing already in
+        progress, or connection or pairing failure. Detailed errors are not
+        returned through IoErr().
+        Hardware shutdown also returns FALSE.
+
+    NOTES
+        Prefers classic Bluetooth when both device and adapter support it;
+        otherwise uses LE. Initiated LE pairing requires the central role
+        and waits for any active service enumeration on that connection.
+
+        User interaction is reported through BEHMB_PAIRINGREQUEST and the
+        BDA_PairingRequest and BDA_PairingPasskey attributes. Arrange for
+        another task or the library's enabled pairing popup to answer with
+        btPairingReplyA(); the calling task remains blocked. Completion
+        updates BDA_PairingState and sends BEHMB_PAIRINGDONE.
+
+        Success marks the device bonded and registered and requests a
+        configuration save. It does not confirm that preferences reached
+        disk or that class binding completed. Failure does not roll back
+        connection establishment or all intermediate state.
+
+        Call from a task other than the adapter's hardware task. Keep the
+        device, adapter, library and tag list valid until return. The call
+        uses SIGF_SINGLE and has no caller timeout or cancellation parameter.
+        Do not hold locks needed by the hardware task.
+
+    BUGS
+        BPRA_Bond, BPRA_MITM, BPRA_IOCapability, BPRA_PINCode, BPRA_Passkey
+        and BPRA_Confirm are read but not used to configure this operation.
+        They cannot disable bonding, enforce MITM protection, select an I/O
+        capability or pre-answer a prompt. Supply responses separately with
+        btPairingReplyA(). Do not infer authentication strength from TRUE.
+
+    SEE ALSO
+        btPairingReplyA(), btUnpairDevice(), btGetAttrsA()
+
+*****************************************************************************/
 AROS_LH2(BOOL, btPairDeviceA,
          AROS_LHA(struct BtDevice *, bd, A0),
          AROS_LHA(struct TagItem *, tags, A1),
@@ -1551,6 +2483,61 @@ AROS_LH2(BOOL, btPairDeviceA,
 /* \\\ */
 
 /* /// "btPairingReplyA()" */
+/*****************************************************************************
+    NAME
+        BOOL btPairingReplyA(
+
+    SYNOPSIS
+        APTR bd, struct TagItem *taglist)
+
+    FUNCTION
+        Answer a pending pairing prompt for a Bluetooth device.
+
+    INPUTS
+        bd - Live device handle with a pending pairing prompt.
+        taglist - Response tags, or NULL. Supply the response explicitly;
+            omission can accept some prompts and reject others.
+
+    TAGS
+        BPRA_Confirm - BOOL response to consent or numeric comparison.
+            A held incoming LE pairing request requires explicit TRUE.
+            Other supported confirmation prompts default to acceptance
+            when this tag is absent.
+        BPRA_Passkey - ULONG from 0 through 999999 for passkey entry.
+            Zero is a valid passkey. Omitting the tag rejects the request.
+        BPRA_PINCode - NUL-terminated string for classic legacy PIN entry.
+            NULL or an empty string rejects it; at most 16 bytes are used.
+        BPRA_Bond, BPRA_MITM, BPRA_IOCapability - Ignored by this operation.
+
+    RESULT
+        TRUE if a supported response was processed, including rejection or
+        an immediate pairing failure. FALSE for NULL, a missing hardware
+        task, no waiting pairing operation, or an unsupported prompt.
+        Detailed errors are not returned through IoErr().
+        Hardware shutdown also returns FALSE.
+
+    NOTES
+        Read BDA_PairingRequest before choosing response tags. For numeric
+        comparison, display BDA_PairingPasskey and obtain the user's decision.
+        A passkey-display prompt requires display on this host and entry on
+        the peer, not a passkey response. If both transports await input,
+        the classic connection is selected first.
+
+        Return does not wait for pairing completion. Observe
+        BEHMB_PAIRINGDONE or BDA_PairingState for the outcome. Controller
+        reply-submission failures and invalid passkey rejection are not
+        reliably reflected in the BOOL result.
+
+        Call from a task other than the adapter's hardware task and serialize
+        responders for the device. Keep the device, adapter, library, tag list
+        and PIN string valid until return; the input storage is not retained.
+        The call uses SIGF_SINGLE and waits for the hardware task without a
+        caller timeout. Do not hold locks that task needs.
+
+    SEE ALSO
+        btPairDeviceA(), btGetAttrsA(), btAddEventHandler()
+
+*****************************************************************************/
 AROS_LH2(BOOL, btPairingReplyA,
          AROS_LHA(struct BtDevice *, bd, A0),
          AROS_LHA(struct TagItem *, tags, A1),
@@ -1569,6 +2556,43 @@ AROS_LH2(BOOL, btPairingReplyA,
 /* \\\ */
 
 /* /// "btUnpairDevice()" */
+/*****************************************************************************
+    NAME
+        BOOL btUnpairDevice(
+
+    SYNOPSIS
+        APTR bd)
+
+    FUNCTION
+        Remove locally stored pairing keys and request device disconnection.
+
+    INPUTS
+        bd - Live device handle.
+
+    RESULT
+        TRUE after the local key state is cleared and disconnection is
+        requested. FALSE for NULL or a missing hardware task. Detailed
+        errors are not returned through IoErr().
+        Hardware shutdown also returns FALSE.
+
+    NOTES
+        Clears the bonded flag and cached current address and requests a
+        configuration save. Registration is retained. Both transports are
+        disconnected or their connection attempts cancelled without waiting
+        for controller completion. TRUE confirms neither disk persistence
+        nor removal of keys stored by the remote device.
+
+        Serialize with pairing and other registration or key changes; this
+        call does not make those operations an atomic transaction. Call from
+        a task other than the adapter's hardware task. Keep the device,
+        adapter and bluetooth.library valid until return. The call uses
+        SIGF_SINGLE and waits without a caller timeout. Do not hold locks
+        needed by the hardware task, including configuration locks.
+
+    SEE ALSO
+        btPairDeviceA(), btUnregisterDevice(), btDisconnectDevice()
+
+*****************************************************************************/
 AROS_LH1(BOOL, btUnpairDevice,
          AROS_LHA(struct BtDevice *, bd, A0),
          LIBBASETYPEPTR, BluetoothBase, 81, bt)
@@ -1584,6 +2608,47 @@ AROS_LH1(BOOL, btUnpairDevice,
 /* \\\ */
 
 /* /// "btRegisterDevice()" */
+/*****************************************************************************
+    NAME
+        BOOL btRegisterDevice(
+
+    SYNOPSIS
+        APTR bd)
+
+    FUNCTION
+        Register a known Bluetooth device for persistent use and class binding.
+
+    INPUTS
+        bd - Live device handle.
+
+    RESULT
+        TRUE after registration, including when already registered. FALSE
+        for NULL or a missing hardware task. Detailed errors are not
+        returned through IoErr().
+        Hardware shutdown also returns FALSE.
+
+    NOTES
+        A new registration clears the temporary reconnect hold, requests a
+        configuration save and sends BEHMB_DEVICEREGISTERED. An already
+        registered device is left unchanged. Pairing and connection are not
+        required and are not performed by this call.
+
+        Class scanning follows asynchronously when services are known.
+        Return confirms neither binding completion nor disk persistence;
+        configuration-allocation and save failures are not returned. Automatic
+        saving requires an initialized disk configuration and DOS support.
+        The device remains library-owned.
+
+        Call from a task other than the adapter's hardware task. Keep the
+        device, adapter and bluetooth.library valid until return and serialize
+        registration changes. The call uses SIGF_SINGLE and waits without a
+        caller timeout. Do not hold locks needed by the hardware task,
+        including configuration locks.
+
+    SEE ALSO
+        btUnregisterDevice(), btPairDeviceA(), btClassScan()
+
+*****************************************************************************/
 AROS_LH1(BOOL, btRegisterDevice,
          AROS_LHA(struct BtDevice *, bd, A0),
          LIBBASETYPEPTR, BluetoothBase, 82, bt)
@@ -1599,6 +2664,48 @@ AROS_LH1(BOOL, btRegisterDevice,
 /* \\\ */
 
 /* /// "btUnregisterDevice()" */
+/*****************************************************************************
+    NAME
+        BOOL btUnregisterDevice(
+
+    SYNOPSIS
+        APTR bd)
+
+    FUNCTION
+        Remove a device registration and its locally stored pairing keys.
+
+    INPUTS
+        bd - Live device handle.
+
+    RESULT
+        TRUE after processing, including when already unregistered. FALSE
+        for NULL or a missing hardware task. Detailed errors are not
+        returned through IoErr().
+        Hardware shutdown also returns FALSE.
+
+    NOTES
+        For a registered device, clears registration, bonding, keys and the
+        cached current address, requests a configuration save and sends
+        BEHMB_DEVICEUNREGISTERED. An already unregistered device is left
+        unchanged, including any key state it still has.
+
+        Binding release is delegated to the event handler and may occur after
+        return. Event allocation can fail independently. The call does not
+        itself disconnect or free the device. Return does not confirm binding
+        release, disk persistence or deletion of keys on the remote device.
+        Quiesce users of bindings before unregistering; their handles become
+        invalid when release callbacks run.
+
+        Call from a task other than the adapter's hardware task. Keep the
+        device, adapter and bluetooth.library valid and serialize registration
+        and pairing changes. The call uses SIGF_SINGLE and waits without a
+        caller timeout. Do not hold locks needed by the hardware task,
+        including configuration locks.
+
+    SEE ALSO
+        btRegisterDevice(), btUnpairDevice(), btDisconnectDevice()
+
+*****************************************************************************/
 AROS_LH1(BOOL, btUnregisterDevice,
          AROS_LHA(struct BtDevice *, bd, A0),
          LIBBASETYPEPTR, BluetoothBase, 83, bt)
@@ -1614,6 +2721,55 @@ AROS_LH1(BOOL, btUnregisterDevice,
 /* \\\ */
 
 /* /// "btEnumerateServices()" */
+/*****************************************************************************
+    NAME
+        BOOL btEnumerateServices(
+
+    SYNOPSIS
+        APTR bd)
+
+    FUNCTION
+        Refresh remote services on the selected transport of a Bluetooth device.
+
+    INPUTS
+        bd - Live device handle.
+
+    RESULT
+        TRUE when enumeration completes successfully, including an empty
+        result. FALSE for NULL, unavailable hardware, unsupported transport,
+        connection or enumeration failure, or another explicit enumeration
+        request already waiting. Detailed errors are not returned through
+        IoErr().
+        Hardware shutdown also returns FALSE.
+
+    NOTES
+        Connects if necessary, preferring classic Bluetooth when supported
+        by both device and adapter; otherwise uses LE. Enumerates SDP on
+        classic Bluetooth or GATT on LE. It does not explicitly refresh both
+        transports. An active enumeration without an explicit waiter is
+        joined; otherwise a new refresh is started.
+
+        Refresh closes endpoint state and can free unbound service and
+        endpoint objects on that transport. Bound services and services being
+        bound are retained for refresh in place. Quiesce endpoint users and
+        release channels referring to unbound endpoints before calling;
+        reacquire service and endpoint handles afterward. Keeping a device
+        handle or an allocated channel does not pin those endpoint objects.
+        Failure can leave partially refreshed results; the old list is not
+        restored.
+
+        Success marks services known and sends BEHMB_SERVICESCHG. The return
+        value is not a service count and does not wait for class binding.
+
+        Call from a task other than the adapter's hardware task. Keep the
+        device, adapter and bluetooth.library valid until return. The call
+        uses SIGF_SINGLE and waits without a caller timeout or cancellation
+        parameter. Do not hold locks needed by the hardware task.
+
+    SEE ALSO
+        btFindServiceA(), btFindEndpointA(), btConnectDevice()
+
+*****************************************************************************/
 AROS_LH1(BOOL, btEnumerateServices,
          AROS_LHA(struct BtDevice *, bd, A0),
          LIBBASETYPEPTR, BluetoothBase, 84, bt)
@@ -1803,12 +2959,85 @@ void bUpdateLEConnInterval(LIBBASETYPEPTR BluetoothBase)
 /* /// "btAddServiceRecordA()" */
 /*
  * A record the SDP server advertises: ServiceRecordHandle, ServiceClassIDList,
- * ProtocolDescriptorList (L2CAP [+PSM] [, RFCOMM channel | upper protocol
- * + version]), BrowseGroupList
+ * ProtocolDescriptorList (L2CAP [+PSM] [, RFCOMM channel]), BrowseGroupList
  * (public browse root), BluetoothProfileDescriptorList and ServiceName. The
  * attribute list content is encoded once; the record handle is unique per
  * stack lifetime.
  */
+/*****************************************************************************
+    NAME
+        APTR btAddServiceRecordA(
+
+    SYNOPSIS
+        struct TagItem *taglist)
+
+    FUNCTION
+        Register a local SDP or GATT service record.
+
+    INPUTS
+        taglist - Service definition. NULL lacks the required service UUID.
+
+    TAGS
+        BSRA_Protocol - BSVP_RFCOMM (default), BSVP_L2CAP or BSVP_ATT.
+        BSRA_UUID16 - Nonzero 16-bit service UUID for SDP. For GATT, use
+            this or BSRA_UUID128; a supplied UUID128 takes precedence.
+        BSRA_UUID128 - GATT service UUID: 16 bytes, most significant first.
+        BSRA_RFCOMMChannel - Required RFCOMM server channel, from 1 to 30.
+        BSRA_PSM - Required nonzero 16-bit PSM for BSVP_L2CAP. The value
+            is encoded without further protocol-validity checks.
+        BSRA_Name - Optional NUL-terminated service name. SDP publishes at
+            most its first 64 bytes; the stored name is copied in full.
+        BSRA_ProfileUUID16 - SDP profile UUID; defaults to BSRA_UUID16.
+        BSRA_ProfileVersion - SDP profile version; defaults to 0x0102.
+        BSRA_Owner - Optional NUL-terminated owner name. Defaults to the
+            calling task's name; the string is copied.
+        BSRA_Characteristics - Array of BtGattCharDef for GATT. Required
+            when BSRA_NumCharacteristics is nonzero.
+        BSRA_NumCharacteristics - GATT array length, from 0 to 64; default 0.
+        BSRA_LEConnInterval - GATT preferred connection interval in 1.25 ms
+            units. Default 0 adds no preference; values above 1199 are
+            limited to 1199. This is not a negotiated-interval guarantee.
+
+    RESULT
+        Service-record handle, or NULL for an invalid required definition,
+        allocation failure or exhausted GATT attribute-handle space.
+        A successful result does not guarantee remote availability.
+
+    NOTES
+        Each GATT characteristic needs a nonzero bgd_UUID16 or a 16-byte
+        bgd_UUID128; the 16-bit form takes precedence for characteristics.
+        Both bgd_Len and bgd_MaxLen must be at most BGATT_MAXVALUE (512).
+        A nonzero initial length requires bgd_Value. Capacity is the larger
+        of those lengths. UUIDs, definitions and value bytes are copied.
+
+        bgd_Properties uses BGDP_READ, BGDP_WRITENR, BGDP_WRITE, BGDP_NOTIFY
+        and BGDP_INDICATE. BGDP_STREAM marks an event stream whose remote
+        reads are empty; writes and notifications remain available. Properties
+        are not comprehensively validated and do not establish a security
+        policy. Supply only properties supported by the service.
+
+        SDP records start enabled; GATT records start disabled. Registered
+        server classes receive BCM_ServiceRecordEvent synchronously and may
+        apply their policy before return. BSRA_Enabled is not a creation tag;
+        use btSetAttrsA(BGA_SERVICERECORD, ...) to change it. Creating a record
+        does not create a listening application or prove that a class can
+        serve the advertised protocol.
+
+        Call from task context, keep bluetooth.library open and serialize
+        record removal with all users. Class callbacks run with the base read
+        lock held; avoid incompatible locks or reentrant record removal.
+        Input storage is not retained. Release with btRemServiceRecord().
+
+    BUGS
+        Failure to copy the name or owner is not checked, so a non-NULL
+        record may have missing metadata. Duplicate service UUIDs and transport
+        endpoints are not rejected. SDP UUIDs, PSM and profile fields are
+        encoded as 16-bit values; out-of-range ULONG values are not rejected.
+
+    SEE ALSO
+        btRemServiceRecord(), btSetServiceValue(), btGetServiceValue(), btSetAttrsA()
+
+*****************************************************************************/
 AROS_LH1(APTR, btAddServiceRecordA,
          AROS_LHA(struct TagItem *, tags, A0),
          LIBBASETYPEPTR, BluetoothBase, 88, bt)
@@ -1821,9 +3050,6 @@ AROS_LH1(APTR, btAddServiceRecordA,
     ULONG psm = GetTagData(BSRA_PSM, 0, tags);
     ULONG profile = GetTagData(BSRA_ProfileUUID16, uuid16, tags);
     ULONG version = GetTagData(BSRA_ProfileVersion, 0x0102, tags);
-    ULONG upper = GetTagData(BSRA_ProtocolUUID16, 0, tags);
-    ULONG upperversion = GetTagData(BSRA_ProtocolVersion, 0x0100, tags);
-    struct TagItem *features = FindTagItem(BSRA_SupportedFeatures, tags);
     STRPTR name = (STRPTR) GetTagData(BSRA_Name, 0, tags);
     STRPTR owner = (STRPTR) GetTagData(BSRA_Owner, 0, tags);
     UBYTE buf[256];
@@ -1868,20 +3094,13 @@ AROS_LH1(APTR, btAddServiceRecordA,
     bt_sdp_encode_sequence_header(&w, 3);
     bt_sdp_encode_uuid16(&w, uuid16);
     bt_sdp_encode_uint(&w, 0x0004, 2);
-    /* Each descriptor is a sequence (2-byte header): L2CAP with its PSM holds
-       a UUID16 (3) and a uint16 (3), 8 in all; L2CAP alone 5; RFCOMM with
-       its channel 7; an upper protocol (AVDTP) with its version 8. */
-    protolen = (proto == BSVP_L2CAP) ? 8 + (upper ? 8 : 0) : 5 + 7;
+    /* L2CAP descriptor: 5 bytes with a PSM, 3 without; RFCOMM descriptor: 5 */
+    protolen = ((proto == BSVP_L2CAP) ? 7 : 5) + ((proto == BSVP_RFCOMM) ? 7 : 0);
     bt_sdp_encode_sequence_header(&w, protolen);
     if(proto == BSVP_L2CAP) {
-        bt_sdp_encode_sequence_header(&w, 6);
+        bt_sdp_encode_sequence_header(&w, 5);
         bt_sdp_encode_uuid16(&w, 0x0100);
         bt_sdp_encode_uint(&w, psm, 2);
-        if(upper) {
-            bt_sdp_encode_sequence_header(&w, 6);
-            bt_sdp_encode_uuid16(&w, upper);
-            bt_sdp_encode_uint(&w, upperversion, 2);
-        }
     } else {
         bt_sdp_encode_sequence_header(&w, 3);
         bt_sdp_encode_uuid16(&w, 0x0100);
@@ -1903,11 +3122,6 @@ AROS_LH1(APTR, btAddServiceRecordA,
         bt_buf_writer_write_u8(&w, nlen);
         bt_buf_writer_write_bytes(&w, (const uint8_t *) name, nlen);
     }
-    if(features) {
-        /* attribute IDs ascend: SupportedFeatures follows ServiceName */
-        bt_sdp_encode_uint(&w, 0x0311, 2);
-        bt_sdp_encode_uint(&w, features->ti_Data, 2);
-    }
     bsr->bsr_AttrsLen = bt_buf_writer_len(&w);
     if(!(bsr->bsr_Attrs = btAllocVec(bsr->bsr_AttrsLen))) {
         bFreeServiceRecord(BluetoothBase, bsr);
@@ -1928,6 +3142,45 @@ AROS_LH1(APTR, btAddServiceRecordA,
 /* \\\ */
 
 /* /// "btRemServiceRecord()" */
+/*****************************************************************************
+    NAME
+        VOID btRemServiceRecord(
+
+    SYNOPSIS
+        APTR record)
+
+    FUNCTION
+        Remove a local service record and discard its queued GATT value updates.
+
+    INPUTS
+        record - Live service-record handle, or NULL for no operation.
+
+    RESULT
+        None. Class callback results are ignored.
+
+    NOTES
+        Unlinks the record, removes its pending notification snapshots and
+        requests advertising and preferred-interval updates. Every registered
+        class receives BCM_ServiceRecordEvent synchronously before the record
+        and its copied metadata, characteristics and values are freed.
+        The callback runs under the base read lock and must not retain the
+        record or recursively remove it.
+
+        BEHMB_REMSERVICEREC carries the old handle without retaining the
+        record. An asynchronous recipient must treat it as an identifier,
+        not dereference it. Remote caches are not invalidated synchronously,
+        and previously transmitted updates are not recalled. GATT attribute
+        handles are not recycled during the library instance's lifetime.
+
+        Call from task context with bluetooth.library open. Quiesce all record
+        users, including value access and class operations, before removal.
+        Do not call twice. The base and GATT locks protect internal list work;
+        they do not validate a stale caller handle.
+
+    SEE ALSO
+        btAddServiceRecordA(), btSetServiceValue(), btGetServiceValue()
+
+*****************************************************************************/
 AROS_LH1(void, btRemServiceRecord,
          AROS_LHA(APTR, record, A0),
          LIBBASETYPEPTR, BluetoothBase, 89, bt)
@@ -1969,6 +3222,57 @@ AROS_LH1(void, btRemServiceRecord,
  * that subscribed to it are notified by the radio tasks shortly after.
  * Returns the length stored or -1.
  */
+/*****************************************************************************
+    NAME
+        LONG btSetServiceValue(
+
+    SYNOPSIS
+        APTR record, ULONG index, APTR data, ULONG len)
+
+    FUNCTION
+        Replace a local GATT characteristic value and queue updates for subscribers.
+
+    INPUTS
+        record - Live GATT service-record handle.
+        index - Zero-based index in the record's characteristic array.
+        data - Buffer containing len bytes; may be NULL when len is zero.
+        len - New byte length, no greater than the characteristic's capacity.
+
+    RESULT
+        Number of bytes stored, including zero. Returns -1 for NULL or a
+        non-GATT record, an invalid index, missing nonempty data, excessive
+        length, notification allocation failure or a full notification queue.
+        On these failures the current value remains unchanged.
+
+    NOTES
+        The value is copied and its length replaced; unused capacity is not
+        part of the value. The call may update a disabled record and does not
+        require BGDP_WRITE, which controls access from remote devices.
+
+        For BGDP_NOTIFY or BGDP_INDICATE, an update snapshot is allocated
+        before checking subscribers. With subscribers, it is appended to the
+        shared queue, limited to 256 outstanding snapshots across all records.
+        Without subscribers, the snapshot is discarded. Even without subscribers,
+        its initial allocation can fail. Successful updates wake radio tasks.
+
+        Return confirms the local update, not transmission or acknowledgement.
+        Each notification or indication carries at most the negotiated ATT
+        MTU minus three bytes, also bounded by the sender's packet buffer;
+        longer values are truncated for that update, not split into messages.
+        Updates may be skipped when the record is disabled, a subscription
+        ends, a link fails, or indication handling stops. Remote reads of a
+        BGDP_STREAM value remain empty; btGetServiceValue() returns its stored
+        local bytes.
+
+        Call from task context. Keep the record and bluetooth.library valid,
+        serialize with record removal, and keep data unchanged until return.
+        The GATT lock serializes value access; it does not retain the record.
+        No ownership of the input buffer is transferred.
+
+    SEE ALSO
+        btGetServiceValue(), btAddServiceRecordA(), btRemServiceRecord()
+
+*****************************************************************************/
 AROS_LH4(LONG, btSetServiceValue,
          AROS_LHA(APTR, record, A0),
          AROS_LHA(ULONG, index, D0),
@@ -2043,6 +3347,42 @@ AROS_LH4(LONG, btSetServiceValue,
 /* /// "btGetServiceValue()" */
 /* The current value (a device may have written it: BEHMB_SERVICEWRITE).
    Returns its length, of which at most len bytes were copied, or -1. */
+/*****************************************************************************
+    NAME
+        LONG btGetServiceValue(
+
+    SYNOPSIS
+        APTR record, ULONG index, APTR buf, ULONG len)
+
+    FUNCTION
+        Read the current local value of a GATT characteristic.
+
+    INPUTS
+        record - Live GATT service-record handle.
+        index - Zero-based index in the record's characteristic array.
+        buf - Destination buffer, or NULL to query the current length.
+        len - Available bytes in buf; zero performs no copy.
+
+    RESULT
+        Full current value length, which may exceed len. Returns -1 for a
+        NULL or non-GATT record or an invalid index. Copies at most len bytes
+        when buf is non-NULL; no terminator is appended.
+
+    NOTES
+        Length and copied bytes are read under the GATT lock as one snapshot.
+        A separate length query and read can observe different values; size
+        the buffer or handle truncation accordingly. Values can change through
+        btSetServiceValue() or permitted remote writes. A disabled record and
+        a BGDP_STREAM characteristic can still be read locally.
+
+        Call from task context. Keep the record and bluetooth.library valid
+        and serialize with removal. The lock protects value access, not record
+        lifetime. The destination is caller-owned and is not retained.
+
+    SEE ALSO
+        btSetServiceValue(), btAddServiceRecordA(), btRemServiceRecord()
+
+*****************************************************************************/
 AROS_LH4(LONG, btGetServiceValue,
          AROS_LHA(APTR, record, A0),
          AROS_LHA(ULONG, index, D0),
@@ -2066,45 +3406,6 @@ AROS_LH4(LONG, btGetServiceValue,
     }
     ReleaseSemaphore(&BluetoothBase->bt_GattLock);
     return(actual);
-    AROS_LIBFUNC_EXIT
-}
-/* \\\ */
-
-/* /// "btCloneEndpoint()" */
-/*
- * A second endpoint for an L2CAP endpoint's PSM. Its channels open their own
- * L2CAP channel instead of sharing the original's: AVDTP carries signalling
- * and media on two channels to PSM 25. The clone belongs to the same
- * service and is freed with it; it is never a listener.
- */
-AROS_LH1(APTR, btCloneEndpoint,
-         AROS_LHA(APTR, original, A0),
-         LIBBASETYPEPTR, BluetoothBase, 92, bt)
-{
-    AROS_LIBFUNC_INIT
-    struct BtEndpoint *bep = original;
-    struct BtEndpoint *clone;
-    struct BtDevice *bd;
-    UBYTE name[40];
-
-    if(!bep || (bep->bep_Type != BEPT_L2CAP) || !bep->bep_Service) {
-        return(NULL);
-    }
-    bd = bep->bep_Service->bsv_Device;
-    btSafeRawDoFmt(name, sizeof(name), "L2CAP PSM 0x%04lx (clone)", (ULONG) bep->bep_PSM);
-    btLockWriteDevice(bd);
-    if((clone = bAllocEndpoint(BluetoothBase, bep->bep_Service))) {
-        clone->bep_Type = bep->bep_Type;
-        clone->bep_CanRead = bep->bep_CanRead;
-        clone->bep_CanWrite = bep->bep_CanWrite;
-        clone->bep_PSM = bep->bep_PSM;
-        clone->bep_MaxPktSize = bep->bep_MaxPktSize;
-        clone->bep_Clone = TRUE;
-        clone->bep_Name = btCopyStr(name);
-        clone->bep_Node.ln_Name = clone->bep_Name;
-    }
-    btUnlockDevice(bd);
-    return(clone);
     AROS_LIBFUNC_EXIT
 }
 /* \\\ */
