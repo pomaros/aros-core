@@ -48,31 +48,28 @@ typedef int BOOL;
 struct stat { FIELDS; };
 struct stat64 { FIELDS; };
 struct DateStamp { int32_t ds_Days,ds_Minute,ds_Tick; };
-struct FileInfoBlock64 { uint64_t fib_Size,fib_NumBlocks; struct DateStamp fib_Date; UWORD fib_OwnerUID,fib_OwnerGID; ULONG fib_Protection; int fib_DirEntryType; char fib_FileName[64]; };
+struct FileInfoBlock { int32_t fib_Size,fib_NumBlocks; uint64_t fib_Size64,fib_NumBlocks64; struct DateStamp fib_Date; UWORD fib_OwnerUID,fib_OwnerGID; ULONG fib_Protection; int fib_DirEntryType; char fib_FileName[64]; };
 struct FileLock { uint64_t fl_Volume; };
 struct InfoData { int id_BytesPerBlock; };
 static struct FileLock model_lock={77};
 static unsigned allocations,owned,fail_allocation,locks,nexts;
-static int dos_error,unsupported,examine_error,add_error;
+static int dos_error,unsupported,examine_error;
 static BPTR current_dir=500;
 static uint64_t provider_size=123;
 static void *AllocVec(size_t size,unsigned flags) {(void)flags;if(++allocations==fail_allocation)return NULL;void*p=calloc(1,size);assert(p);++owned;return p;}
 static void FreeVec(void *p) {if(!p)return;assert(owned);--owned;free(p);}
 static int IoErr(void) {return dos_error;}
 static int __stdc_ioerr2errno(int error) {return error==101?EACCES:EIO;}
-static BPTR CurrentDir(BPTR value) {BPTR old=current_dir;current_dir=value;return old;}
-static int NameFromLock(BPTR lock,char *out,int size) {assert(lock==500);const char *s="VOL:cwd";if(size<=(int)strlen(s)){dos_error=ERROR_LINE_TOO_LONG;return 0;}strcpy(out,s);return 1;}
-static int AddPart(char *out,const char *name,int size) {if(add_error){dos_error=101;return 0;}assert(strlen(out)+strlen(name)+2<=(size_t)size);strcat(out,"/");strcat(out,name);return 1;}
 static char *FilePart(char *s) {char*a=strrchr(s,'/'),*b=strrchr(s,':');if(!a || (b&&b>a))a=b;return a?a+1:s;}
 static BPTR Lock(const char *s,int mode) {assert(s&&mode==SHARED_LOCK&&!locks);++locks;return (BPTR)(uintptr_t)&model_lock;}
 static void UnLock(BPTR lock) {assert(lock==(BPTR)(uintptr_t)&model_lock&&locks==1);--locks;}
-static int __dos64_examine(BPTR lock,struct FileInfoBlock64 *fib,int operation) {
+static int __dos64_examine(BPTR lock,struct FileInfoBlock *fib,int operation) {
  assert(lock==(BPTR)(uintptr_t)&model_lock);
  if(operation==__DOS64_EXAMINE)nexts=0;
  else if(nexts++){dos_error=ERROR_NO_MORE_ENTRIES;return 0;}
  if(examine_error){dos_error=101;return 0;}
  if(unsupported){dos_error=ERROR_NOT_IMPLEMENTED;return 0;}
- memset(fib,0,sizeof *fib);fib->fib_Size=provider_size;fib->fib_Date.ds_Tick=73;
+ memset(fib,0,sizeof *fib);fib->fib_Size64=provider_size;fib->fib_Size=provider_size>INT32_MAX?0:(int32_t)provider_size;fib->fib_Date.ds_Tick=73;
  fib->fib_DirEntryType=operation==__DOS64_EXAMINE?ST_ROOT:ST_FILE;strcpy(fib->fib_FileName,"file");return 1;
 }
 static int stricmp(const char*a,const char*b) {return strcasecmp(a,b);}
@@ -80,13 +77,13 @@ static int __stdc_gmtoffset(void) {return 0;}
 static unsigned __id_a2u(UWORD id) {return id;}
 static unsigned __prot_a2u(ULONG protection) {return protection;}
 static int Info(BPTR lock,struct InfoData *info) {assert(lock==(BPTR)(uintptr_t)&model_lock);info->id_BytesPerBlock=4096;return 1;}
-static void hashlittle2(const void *data,size_t size,uint32_t *a,uint32_t *b) {assert(data&&size);*a=1;*b=2;}
+static void hashlittle2(const void *data,size_t size,uint32_t *a,uint32_t *b) {assert(data);(void)size;*a=1;*b=2;}
 /* PRODUCTION */
-static void reset(void) {assert(!owned&&!locks&&current_dir==500);allocations=fail_allocation=nexts=0;provider_size=123;dos_error=unsupported=examine_error=add_error=0;errno=0;}
+static void reset(void) {assert(!owned&&!locks&&current_dir==500);allocations=fail_allocation=nexts=0;provider_size=123;dos_error=unsupported=examine_error=0;errno=0;}
 int main(int argc,char **argv) {
  assert(argc==2);
  if(!strcmp(argv[1],"size")) {
-  struct stat64 s={0};struct FileInfoBlock64 fib={0};fib.fib_Size=UINT64_C(0x10000007b);fib.fib_DirEntryType=ST_FILE;
+  struct stat64 s={0};struct FileInfoBlock fib={0};fib.fib_Size64=UINT64_C(0x10000007b);fib.fib_DirEntryType=ST_FILE;
   __fill_stat64buffer(&s,"VOL:file",&fib,0,0);assert(s.st_size==INT64_C(0x10000007b));
  } else if(!strcmp(argv[1],"path-size")) {
   struct stat64 b={0};reset();provider_size=UINT64_C(0x10000007b);
@@ -113,9 +110,10 @@ int main(int argc,char **argv) {
   } else if(!strcmp(argv[1],"provider")) {
    examine_error=1;assert((wide?__stat64_from_path("VOL:file",&b):__stat_from_path("VOL:file",&a))==-1);
    assert(errno==EACCES&&!owned&&!locks);
-  } else if(!strcmp(argv[1],"join")) {
-   add_error=1;assert((wide?__stat64_from_path("file",&b):__stat_from_path("file",&a))==-1);
-   assert(errno==EACCES&&!owned&&!locks);
+  } else if(!strcmp(argv[1],"borrowed")) {
+   locks=1;
+   assert(__stat_from_path_common("VOL:file",wide?(void*)&b:(void*)&a,wide,(BPTR)(uintptr_t)&model_lock)==0);
+   assert(!owned&&locks==1);locks=0;
   } else assert(!"unknown scenario");
   assert(!owned&&!locks&&current_dir==500);
  }

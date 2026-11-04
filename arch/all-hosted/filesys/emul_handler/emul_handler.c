@@ -367,7 +367,7 @@ const ULONG sizes[] = {
     offsetof(struct ExAllData,ed_Days),
     offsetof(struct ExAllData,ed_Comment),
     offsetof(struct ExAllData,ed_OwnerUID),
-    sizeof(struct ExAllData)
+    offsetof(struct ExAllData,ed_Size64)    /* ED_OWNER: up to ed_OwnerGID */
 };
 
 static SIPTR examine(struct emulbase *emulbase, struct filehandle *fh,
@@ -1055,10 +1055,25 @@ static void handlePacket(struct emulbase *emulbase, struct filehandle *fhv, stru
             dp->dp_Type == ACTION_SEEK ? "" : "64", fh, dp->dp_Arg3,
             dp->dp_Arg2));
 
-        if (fh->type == FHD_FILE)
-            Res1 = DoSeek(emulbase, fh, dp->dp_Arg2, dp->dp_Arg3, &Res2);
+        if (dp->dp_Type == ACTION_SEEK64 && (!dp->dp_Arg2 || !dp->dp_Arg4))
+        {
+            Res1 = DOSFALSE;
+            Res2 = ERROR_BAD_NUMBER;
+        }
+        else if (fh->type == FHD_FILE)
+        {
+            QUAD offset = dp->dp_Arg2;
+            if (dp->dp_Type == ACTION_SEEK64)
+                CopyMem((APTR)dp->dp_Arg2, &offset, sizeof(offset));
+            Res1 = DoSeek(emulbase, fh, offset, dp->dp_Arg3, &Res2);
+            if (dp->dp_Type == ACTION_SEEK64)
+            {
+                if (!Res2) { QUAD result = Res1; CopyMem(&result, (APTR)dp->dp_Arg4, sizeof(result)); }
+                Res1 = Res2 ? DOSFALSE : DOSTRUE;
+            }
+        }
         else {
-            Res1 = -1;
+            Res1 = dp->dp_Type == ACTION_SEEK64 ? DOSFALSE : -1;
             Res2 = ERROR_OBJECT_WRONG_TYPE;
         }
 
@@ -1107,8 +1122,24 @@ static void handlePacket(struct emulbase *emulbase, struct filehandle *fhv, stru
             fhv, dp->dp_Type == ACTION_SET_FILE_SIZE ? "" : "64", fh,
             dp->dp_Arg3, dp->dp_Arg2));
 
-        Res1 = DoSetSize(emulbase, fh, dp->dp_Arg2, dp->dp_Arg3, &Res2);
-        if (Res2 != 0) {
+        if (dp->dp_Type == ACTION_SET_FILE_SIZE64 && (!dp->dp_Arg2 || !dp->dp_Arg4))
+        {
+            Res1 = DOSFALSE;
+            Res2 = ERROR_BAD_NUMBER;
+            break;
+        }
+        {
+            QUAD offset = dp->dp_Arg2;
+            if (dp->dp_Type == ACTION_SET_FILE_SIZE64)
+                CopyMem((APTR)dp->dp_Arg2, &offset, sizeof(offset));
+            Res1 = DoSetSize(emulbase, fh, offset, dp->dp_Arg3, &Res2);
+        }
+        if (dp->dp_Type == ACTION_SET_FILE_SIZE64)
+        {
+            if (!Res2) { QUAD result = Res1; CopyMem(&result, (APTR)dp->dp_Arg4, sizeof(result)); }
+            Res1 = Res2 ? DOSFALSE : DOSTRUE;
+        }
+        else if (Res2 != 0) {
            Res1 = -1;
         }
         else if (dp->dp_Type == ACTION_CHANGE_FILE_SIZE64)

@@ -27,12 +27,12 @@ def unit(text):
  names+=['__stat_from_path','__stat64_from_path']
  body='\n\n'.join(function(text,n) for n in names)
  return (here/'test.c').read_text().replace('/* PRODUCTION */',body)
-variants={'current':(text,('size','path-size','root','fallback','allocation','provider','join','missing'))}
+variants={'current':(text,('size','path-size','root','fallback','allocation','provider','borrowed','missing'))}
 if a.mutations:
  edits={
-  'narrow-size':('sb->st_size    = (__off64_t)fib->fib_Size;', 'sb->st_size    = (off_t)fib->fib_Size;', 'size'),
-  'missing-success':('__fill_stat_pathbuffer(sb, abspath, fib, fallback_to_defaults, lock, wide);\n        res = 0;', '__fill_stat_pathbuffer(sb, abspath, fib, fallback_to_defaults, lock, wide);', 'root'),
-  'wrong-wide-fill':('return __stat_from_path_common(path, sb, TRUE);', 'return __stat_from_path_common(path, sb, FALSE);', 'path-size'),
+  'narrow-size':('sb->st_size    = (__off64_t)fib->fib_Size64;', 'sb->st_size    = (off_t)fib->fib_Size64;', 'size'),
+  'missing-success':('__fill_stat_pathbuffer(sb, mypath, fib, fallback_to_defaults, lock, wide);\n        res = 0;', '__fill_stat_pathbuffer(sb, mypath, fib, fallback_to_defaults, lock, wide);', 'root'),
+  'wrong-wide-fill':('return __stat_from_path_common(path, sb, TRUE, BNULL);', 'return __stat_from_path_common(path, sb, FALSE, BNULL);', 'path-size'),
   'leaked-input':('out:\n    FreeVec(mypath);', 'out:', 'allocation'),
  }
  for name,(before,after,scenario) in edits.items():

@@ -1220,12 +1220,6 @@ void ExfatProcessPackets(struct Globals *glob)
             BOOL mutation_attempted = FALSE;
 
 #if (__WORDSIZE != 64)
-            if (dp->dp_Type == ACTION_SET_FILE_SIZE64)
-            {
-                err = ERROR_ACTION_NOT_KNOWN;
-                res = -1;
-                break;
-            }
             if (dp->dp_Type == ACTION_CHANGE_FILE_SIZE64 && !packet64)
             {
                 err = ERROR_BAD_NUMBER;
@@ -1238,6 +1232,16 @@ void ExfatProcessPackets(struct Globals *glob)
             offset = (QUAD)dp->dp_Arg2;
             mode = (LONG)dp->dp_Arg3;
 #endif
+            if (dp->dp_Type == ACTION_SET_FILE_SIZE64)
+            {
+                if (!dp->dp_Arg2 || !dp->dp_Arg4)
+                {
+                    err = ERROR_BAD_NUMBER;
+                    res = DOSFALSE;
+                    break;
+                }
+                memcpy(&offset, (APTR)dp->dp_Arg2, sizeof(offset));
+            }
             err = TestLock(lock, glob);
             if (err == 0 && (lock == NULL || !lock->writable
                     || lock->fl_Access != EXCLUSIVE_LOCK))
@@ -1266,7 +1270,12 @@ void ExfatProcessPackets(struct Globals *glob)
                     lock->contents_modified = TRUE;
                 if (lock->position > new_size)
                     lock->position = new_size;
-                if (dp->dp_Type == ACTION_CHANGE_FILE_SIZE64)
+                if (dp->dp_Type == ACTION_SET_FILE_SIZE64)
+                {
+                    memcpy((APTR)dp->dp_Arg4, &new_size, sizeof(new_size));
+                    res64 = res = DOSTRUE;
+                }
+                else if (dp->dp_Type == ACTION_CHANGE_FILE_SIZE64)
                 {
                     res64 = DOSTRUE;
                     res = DOSTRUE;
@@ -1287,7 +1296,7 @@ void ExfatProcessPackets(struct Globals *glob)
                     lock->write_transaction = FALSE;
                 }
                 res64 = -1;
-                res = -1;
+                res = dp->dp_Type == ACTION_SET_FILE_SIZE64 ? DOSFALSE : -1;
             }
             break;
         }
@@ -1301,18 +1310,22 @@ void ExfatProcessPackets(struct Globals *glob)
             LONG mode;
 
 #if (__WORDSIZE != 64)
-            if (dp->dp_Type == ACTION_SEEK64)
-            {
-                err = ERROR_ACTION_NOT_KNOWN;
-                res = -1;
-                break;
-            }
             offset = packet64 ? dp64->dp_Arg2 : (QUAD)dp->dp_Arg2;
             mode = packet64 ? (LONG)dp64->dp_Arg3 : (LONG)dp->dp_Arg3;
 #else
             offset = (QUAD)dp->dp_Arg2;
             mode = (LONG)dp->dp_Arg3;
 #endif
+            if (dp->dp_Type == ACTION_SEEK64)
+            {
+                if (!dp->dp_Arg2 || !dp->dp_Arg4)
+                {
+                    err = ERROR_BAD_NUMBER;
+                    res = DOSFALSE;
+                    break;
+                }
+                memcpy(&offset, (APTR)dp->dp_Arg2, sizeof(offset));
+            }
             err = TestLock(lock, glob);
             if (err == 0 && lock == NULL) err = ERROR_INVALID_LOCK;
             if (err == 0)
@@ -1322,11 +1335,16 @@ void ExfatProcessPackets(struct Globals *glob)
                 res64 = dp->dp_Type == ACTION_CHANGE_FILE_POSITION64
                     ? (QUAD)DOSTRUE : (QUAD)old;
                 res = (IPTR)res64;
+                if (dp->dp_Type == ACTION_SEEK64)
+                {
+                    memcpy((APTR)dp->dp_Arg4, &old, sizeof(old));
+                    res64 = res = DOSTRUE;
+                }
             }
             else
             {
                 res64 = -1;
-                res = -1;
+                res = dp->dp_Type == ACTION_SEEK64 ? DOSFALSE : -1;
             }
             break;
         }

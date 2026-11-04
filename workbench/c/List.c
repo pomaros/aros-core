@@ -673,7 +673,7 @@ int printFileData(struct AnchorPath *ap,
                 if (fib64 != NULL)
                 {
                     if (Examine64(flock, fib64, NULL))
-                        size = fib64->fib_Size;
+                        size = fib64->fib_Size64;
 
                     FreeDosObject64(DOS64_FIB, fib64);
                 }

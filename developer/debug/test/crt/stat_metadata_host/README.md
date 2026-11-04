@@ -10,9 +10,9 @@ and protection/identity conversion are modeled. Ordinary off_t is deliberately
 32 bits in this fixture; the wide metadata result must preserve values above
 4 GiB. This model checks the conversion and does not qualify a 32-bit target ABI.
 
-Cases cover wide filling directly and through path lookup, root and default
+Cases cover MorphOS fib_Size64 filling directly and through path lookup, root and default
 metadata success, every allocation failure in a relative lookup, provider
-failure, path-join failure and exhausted enumeration. Each case checks resources
+failure, borrowed-parent retention and exhausted enumeration. Each case checks resources
 and current-directory restoration. Four exact mutations must fail at runtime:
 narrowing the wide size, losing the root success result, choosing the narrow
 filler for a wide path and leaking the input-path allocation.
