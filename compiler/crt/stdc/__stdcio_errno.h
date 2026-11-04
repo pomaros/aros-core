@@ -19,10 +19,10 @@
 
 static inline int *__stdcio_errnoptr(void)
 {
-    struct StdCIOBase *StdCIOBase = __aros_getbase_StdCIOBase();
-
-    if (StdCIOBase != NULL && StdCIOBase->StdCBase != NULL)
-        return &StdCIOBase->StdCBase->_errno;
+    /* The shared core keeps errno in a task-local slot owned by
+       task.resource, shared by every stdc opener of the same task, so the
+       program's errno is reached through any base, including stdcio's
+       private rellib base. No per-base errno field exists. */
     return __stdc_geterrnoptr();
 }
 
