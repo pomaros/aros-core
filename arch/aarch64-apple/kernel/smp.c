@@ -31,7 +31,7 @@ static int api_self_exit_queue(void *task, void *base, AppleExitPublish publish)
  unsigned cpu=AROSCPUCurrentIndex();
  if(cpu>=AROS_APPLE_SMP_MAX_CPUS || !task ||
     task!=(void *)TLS_GET(ThisTask) || TLS_GET(IDNestCnt)<0 ||
-    ((struct Task *)task)->tc_State!=TS_INVALID) return 0;
+    ((struct Task *)task)->tc_State!=TS_TOMBSTONED) return 0;
  return AppleSelfExitQueue(&self_exit[cpu],cpu,task,base,publish);
 }
 int AROSAppleSelfExitDetached(void *departing)
