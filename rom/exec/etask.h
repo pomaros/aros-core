@@ -2,7 +2,7 @@
 #define _ETASK_H
 
 /*
-    Copyright © 1995-2017, The AROS Development Team. All rights reserved.
+    Copyright (C) 1995-2017, The AROS Development Team. All rights reserved.
     Copyright (C) 2026 John KNIPPER <code@jkn.me>.
     $Id$
 
