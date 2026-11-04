@@ -85,10 +85,9 @@ aros_sync_read(struct vn_renderer *renderer, struct vn_renderer_sync *sync,
 }
 
 static VkResult
-aros_sync_reset(struct vn_renderer *renderer, struct vn_renderer_sync *sync,
-                uint64_t initial_val)
+aros_sync_reset(struct vn_renderer *renderer, struct vn_renderer_sync *sync)
 {
-   return aros_sync_write(renderer, sync, initial_val);
+   return aros_sync_write(renderer, sync, 0);
 }
 
 static void
@@ -103,7 +102,7 @@ aros_sync_destroy(struct vn_renderer *renderer, struct vn_renderer_sync *_sync)
 
 static VkResult
 aros_sync_create(struct vn_renderer *renderer, uint64_t initial_val,
-                 uint32_t flags, struct vn_renderer_sync **out_sync)
+                 struct vn_renderer_sync **out_sync)
 {
    struct aros_venus *av = (struct aros_venus *)renderer;
    struct aros_sync *sync = calloc(1, sizeof(*sync));
@@ -174,7 +173,39 @@ aros_bo_blob_flags(VkMemoryPropertyFlags flags,
 }
 
 static VkResult
+aros_submit(struct vn_renderer *renderer, const struct vn_renderer_submit_batch *b)
+{
+   struct aros_venus *av = (struct aros_venus *)renderer;
+   uint32_t ids_buffer[16], *ids = ids_buffer;
+   uint32_t i;
+   bool ok;
+
+   if (b->sync_count > ARRAY_SIZE(ids_buffer) &&
+       !(ids = malloc(b->sync_count * sizeof(*ids))))
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+   for (i = 0; i < b->sync_count; i++)
+      ids[i] = b->syncs[i]->sync_id;
+
+   const struct avs_batch batch = {
+      .cs = b->cs_data,
+      .cs_size = b->cs_size,
+      .ring_idx = b->ring_idx,
+      /* ring 0 is the CPU timeline: signalled once processed */
+      .timeline = b->ring_idx != 0,
+      .sync_count = b->sync_count,
+      .sync_ids = ids,
+      .sync_values = b->sync_values,
+   };
+
+   ok = avs_submit(av->client, &batch, 1);
+   if (ids != ids_buffer)
+      free(ids);
+   return ok ? VK_SUCCESS : VK_ERROR_DEVICE_LOST;
+}
+
+static VkResult
 aros_bo_create_from_device_memory(struct vn_renderer *renderer,
+                                  struct vn_renderer_submit_batch *batch,
                                   VkDeviceSize size, vn_object_id mem_id,
                                   VkMemoryPropertyFlags flags,
                                   VkExternalMemoryHandleTypeFlags external_handles,
@@ -182,10 +213,19 @@ aros_bo_create_from_device_memory(struct vn_renderer *renderer,
 {
    struct aros_venus *av = (struct aros_venus *)renderer;
    void *addr = NULL;
-   uint32_t res_id = avs_blob_create(av->client, size, mem_id,
-                                     aros_bo_blob_flags(flags, external_handles),
-                                     &addr);
+   uint32_t res_id;
 
+   /* The batch creates the device memory this blob exports */
+   if (batch) {
+      VkResult result = aros_submit(renderer, batch);
+
+      if (result != VK_SUCCESS)
+         return result;
+   }
+
+   res_id = avs_blob_create(av->client, size, mem_id,
+                            aros_bo_blob_flags(flags, external_handles),
+                            &addr);
    if (!res_id)
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
@@ -271,43 +311,6 @@ aros_wait(struct vn_renderer *renderer, const struct vn_renderer_wait *wait)
    return ret == 0 ? VK_SUCCESS : ret > 0 ? VK_TIMEOUT : VK_ERROR_DEVICE_LOST;
 }
 
-static VkResult
-aros_submit(struct vn_renderer *renderer, const struct vn_renderer_submit *submit)
-{
-   struct aros_venus *av = (struct aros_venus *)renderer;
-   struct avs_batch *batches;
-   uint32_t total = 0, i, j, k = 0;
-   uint32_t *ids;
-   bool ok;
-
-   for (i = 0; i < submit->batch_count; i++)
-      total += submit->batches[i].sync_count;
-   batches = malloc(submit->batch_count * sizeof(*batches) + total * sizeof(*ids) + 1);
-   if (!batches)
-      return VK_ERROR_OUT_OF_HOST_MEMORY;
-   ids = (uint32_t *)&batches[submit->batch_count];
-
-   for (i = 0; i < submit->batch_count; i++) {
-      const struct vn_renderer_submit_batch *b = &submit->batches[i];
-
-      batches[i] = (struct avs_batch){
-         .cs = b->cs_data,
-         .cs_size = b->cs_size,
-         .ring_idx = b->ring_idx,
-         /* ring 0 is the CPU timeline: signalled once processed */
-         .timeline = b->ring_idx != 0,
-         .sync_count = b->sync_count,
-         .sync_ids = &ids[k],
-         .sync_values = b->sync_values,
-      };
-      for (j = 0; j < b->sync_count; j++)
-         ids[k++] = b->syncs[j]->sync_id;
-   }
-   ok = avs_submit(av->client, batches, submit->batch_count);
-   free(batches);
-   return ok ? VK_SUCCESS : VK_ERROR_DEVICE_LOST;
-}
-
 static void
 aros_destroy(struct vn_renderer *renderer, const VkAllocationCallbacks *alloc)
 {
@@ -333,6 +336,8 @@ aros_init_renderer_info(struct aros_venus *av)
 
    info->has_dma_buf_import = false;
    info->has_external_sync = false;
+   /* the renderer's syncs are 64-bit counters */
+   info->has_timeline_sync = true;
    info->has_implicit_fencing = false;
 
    info->wire_format_version = capset->wire_format_version;
