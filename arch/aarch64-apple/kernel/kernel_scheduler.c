@@ -7,8 +7,14 @@
 static int restricted_park(struct Task *);
 #define CORE_SCHEDULER_PARK(task) restricted_park(task)
 #define CORE_SCHEDULER_BUG(...) _bug(NULL, __VA_ARGS__)
+#if defined(__AROSEXEC_SMP__)
 #define CORE_SCHEDULER_TIME_US() AROSAppleSMPTimeUS()
 #define CORE_SCHEDULER_TIME_AVAILABLE() 1
+#else
+/* Per-task CPU accounting needs the SMP timer. */
+#define CORE_SCHEDULER_TIME_US() 0
+#define CORE_SCHEDULER_TIME_AVAILABLE() 0
+#endif
 #include "../../aarch64-native/kernel/kernel_scheduler.c"
 
 static struct ExceptionContext *restricted_context(struct Task *task)
