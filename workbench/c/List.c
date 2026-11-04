@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
 
     List the contents of a directory.
 */

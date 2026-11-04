@@ -2,6 +2,7 @@
  * exfat-handler - AmigaDOS packet surface
  *
  * Copyright (C) 2026 The AROS Development Team
+    Copyright (C) 2026 John KNIPPER <code@jkn.me>.
  */
 
 #include <exec/types.h>
