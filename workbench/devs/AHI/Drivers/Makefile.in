@@ -42,10 +42,7 @@ HAVE_COREAUDIO  = @HAVE_COREAUDIO@
 
 SUBDIRS		= Device Filesave Void
 
-# Bluetooth headsets through bta2dp.device, on every AROS target
-ifeq (@host_os@,aros)
-SUBDIRS		+= BTA2DP
-endif
+# Bluetooth headsets: btaudio.class publishes its own AHI mode per sink.
 
 #
 # Add supported native drivers
