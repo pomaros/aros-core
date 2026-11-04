@@ -20,7 +20,7 @@
       AROS_LHA(struct RastPort *, destRP, A1),
 
 /*  LOCATION */
-      struct Library *, GalliumBase, 10, Gallium)
+      struct Library *, GalliumBase, 17, Gallium)
 
 /*  FUNCTION
         Tells the driver that DESTRP, a rastport BltPipeResourceRastPort

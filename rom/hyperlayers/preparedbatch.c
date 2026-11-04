@@ -565,7 +565,7 @@ AROS_LH4(struct LayerGeometryBatch *, PrepareLayerGeometryBatch,
     AROS_LHA(const struct LayerGeometryRequest *, requests, A1),
     AROS_LHA(ULONG, count, D0),
     AROS_LHA(struct LayerGeometryRefusal *, refusal, A2),
-    struct LayersBase *, LayersBase, 48, Layers)
+    struct LayersBase *, LayersBase, 56, Layers)
 {
     AROS_LIBFUNC_INIT
     return prepare_batch(root, requests, count, refusal, LayersBase);
@@ -578,7 +578,7 @@ AROS_LH8(BOOL, ReadLayerGeometryPixels,
     AROS_LHA(ULONG, x, D0), AROS_LHA(ULONG, y, D1),
     AROS_LHA(ULONG, width, D2), AROS_LHA(ULONG, height, D3),
     AROS_LHA(struct PreparedPixel *, pixels, A2), AROS_LHA(ULONG, stride, D4),
-    struct LayersBase *, LayersBase, 49, Layers)
+    struct LayersBase *, LayersBase, 57, Layers)
 {
     AROS_LIBFUNC_INIT
     struct PreparedStack *stack = batch ? find_stack(batch, info) : NULL;
@@ -622,7 +622,7 @@ AROS_LH5(BOOL, WriteLayerGeometryPixels,
     AROS_LHA(struct Layer *, layer, A1),
     AROS_LHA(const struct PreparedPixel *, pixels, A2), AROS_LHA(ULONG, stride, D0),
     AROS_LHA(ULONG, height, D1),
-    struct LayersBase *, LayersBase, 50, Layers)
+    struct LayersBase *, LayersBase, 58, Layers)
 {
     AROS_LIBFUNC_INIT
     ULONG i, y;
@@ -677,7 +677,7 @@ AROS_LH4(BOOL, WriteLayerGeometryBitmap,
     AROS_LHA(struct Layer *, layer, A1),
     AROS_LHA(struct BitMap *, bitmap, A2),
     AROS_LHA(const struct Rectangle *, bounds, A3),
-    struct LayersBase *, LayersBase, 58, Layers)
+    struct LayersBase *, LayersBase, 66, Layers)
 {
     AROS_LIBFUNC_INIT
     ULONG i;
@@ -727,7 +727,7 @@ AROS_LH3(struct HIDD_PixelMap *, PrepareLayerGeometryCursor,
     AROS_LHA(struct LayerGeometryBatch *, batch, A0),
     AROS_LHA(struct BitMap *, bitmap, A1),
     AROS_LHA(struct HIDD_CursorState *, proposed, A2),
-    struct LayersBase *, LayersBase, 57, Layers)
+    struct LayersBase *, LayersBase, 65, Layers)
 {
     AROS_LIBFUNC_INIT
     struct PreparedPixels *owner = NULL;
@@ -757,7 +757,7 @@ AROS_LH3(struct HIDD_PixelMap *, PrepareLayerGeometryCursor,
 
 AROS_LH1(BOOL, SealLayerGeometryBatch,
     AROS_LHA(struct LayerGeometryBatch *, batch, A0),
-    struct LayersBase *, LayersBase, 51, Layers)
+    struct LayersBase *, LayersBase, 59, Layers)
 {
     AROS_LIBFUNC_INIT
     ULONG i;
@@ -778,7 +778,7 @@ AROS_LH1(BOOL, SealLayerGeometryBatch,
 
 AROS_LH1(void, CommitLayerGeometryBatch,
     AROS_LHA(struct LayerGeometryBatch *, batch, A0),
-    struct LayersBase *, LayersBase, 52, Layers)
+    struct LayersBase *, LayersBase, 60, Layers)
 {
     AROS_LIBFUNC_INIT
     ULONG i;
@@ -796,7 +796,7 @@ AROS_LH1(void, CommitLayerGeometryBatch,
 
 AROS_LH1(void, RollbackLayerGeometryBatch,
     AROS_LHA(struct LayerGeometryBatch *, batch, A0),
-    struct LayersBase *, LayersBase, 53, Layers)
+    struct LayersBase *, LayersBase, 61, Layers)
 {
     AROS_LIBFUNC_INIT
     ULONG i;
@@ -818,7 +818,7 @@ AROS_LH1(void, RollbackLayerGeometryBatch,
  * the installed clip/backing generations until batch release. */
 AROS_LH1(void, FinishLayerGeometryBatch,
     AROS_LHA(struct LayerGeometryBatch *, batch, A0),
-    struct LayersBase *, LayersBase, 56, Layers)
+    struct LayersBase *, LayersBase, 64, Layers)
 {
     AROS_LIBFUNC_INIT
     ULONG i;
@@ -887,7 +887,7 @@ AROS_LH1(void, FinishLayerGeometryBatch,
 
 AROS_LH1(void, ReleaseLayerGeometryBatch,
     AROS_LHA(struct LayerGeometryBatch *, batch, A0),
-    struct LayersBase *, LayersBase, 54, Layers)
+    struct LayersBase *, LayersBase, 62, Layers)
 {
     AROS_LIBFUNC_INIT
     release_batch(batch, LayersBase);
@@ -897,7 +897,7 @@ AROS_LH1(void, ReleaseLayerGeometryBatch,
 AROS_LH2(BOOL, LayerGeometryNeedsRefresh,
     AROS_LHA(struct LayerGeometryBatch *, batch, A0),
     AROS_LHA(struct Layer *, layer, A1),
-    struct LayersBase *, LayersBase, 55, Layers)
+    struct LayersBase *, LayersBase, 63, Layers)
 {
     AROS_LIBFUNC_INIT
     ULONG i;
