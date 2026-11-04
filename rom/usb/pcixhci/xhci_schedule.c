@@ -5,6 +5,7 @@
 */
 
 
+#include <aros/config.h>
 #include <proto/exec.h>
 #include <proto/poseidon.h>
 
@@ -44,6 +45,8 @@ UBYTE xhciEndpointIDFromIndex(UWORD wIndex)
     return epid;
 }
 
+
+/* The data in a bounce allocation starts at its first aligned address */
 static BOOL xhciObtainHWEndpoint(struct PCIController *hc, struct IOUsbHWReq *ioreq,
                                  struct List *ownerList, ULONG txtype, BOOL allowEp0AutoCreate,
                                  struct timerequest *timerreq,

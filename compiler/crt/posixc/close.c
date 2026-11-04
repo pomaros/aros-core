@@ -76,6 +76,12 @@
     __posixc_reclock_close(fdesc);
     __fcb_unlock(cblock);
     __free_fdesc(fdesc);
+    /* flock(): the lock belongs to the open file description and goes with
+       its last descriptor. Retained operations hold references too; a block
+       whose last reference is dropped by one of them is released by the
+       final disposal in __releasefcb(). */
+    if (__atomic_load_n(&cblock->opencount, __ATOMIC_ACQUIRE) == 1)
+        __flock_release(cblock);
     __releasefcb(cblock);
 
     return 0;

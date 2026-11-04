@@ -105,6 +105,12 @@ int aifconf(int cmd, caddr_t data);
 #ifdef ENABLE_MULTICAST
 void in_ifdetach(struct ifnet *ifp);    /* netinet/in.c */
 #endif
+#if INET6
+void in6_ifdetach(struct ifnet *ifp);   /* netinet6/in6.c */
+void rip6_ifgone(struct ifnet *ifp);    /* netinet6/raw_ip6.c */
+#endif
+void tcp_ifgone(struct ifnet *ifp);     /* netinet/tcp_subr.c */
+extern struct inpcbhead udb;            /* netinet/udp_usrreq.c */
 #include <net/rtsock_protos.h>
 
 static char *sprint_d(u_int n, char *buf, int buflen);
@@ -269,6 +275,15 @@ struct ifnet *ifp;
 #ifdef ENABLE_MULTICAST
     /* no group membership may go on naming this interface */
     in_ifdetach(ifp);
+#endif
+#if INET6
+    in6_ifdetach(ifp);
+#endif
+    /* and no socket may go on naming it */
+    in_pcbifgone(&udb, ifp);
+    tcp_ifgone(ifp);
+#if INET6
+    rip6_ifgone(ifp);
 #endif
 
     splx(s);

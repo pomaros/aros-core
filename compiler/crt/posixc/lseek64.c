@@ -10,7 +10,6 @@
 #include <proto/dos.h>
 #include <exec/exec.h>
 #include <proto/exec.h>
-#include <clib/macros.h>
 #include "__fdesc.h"
 #include "__dos64.h"
 
@@ -89,7 +88,10 @@
     }
 
     /* Hold one file across seek and position query, including dup'd handles.
-       Flush pending DOS buffers without consuming the retry flag on failure. */
+       Flush pending DOS buffers without consuming the retry flag on failure.
+       POSIX: a position beyond EOF is accepted and does not change the file;
+       __dos64_lseek() remembers it and the gap is only filled when something
+       is written there (fcb.seekpastend). */
     if (file->privflags & _FCB_FLUSHONREAD)
     {
         SetIoErr(0);
@@ -97,7 +99,7 @@
             goto error;
         file->privflags &= ~_FCB_FLUSHONREAD;
     }
-    if (__dos64_seek(file, offset, whence) == -1)
+    if (__dos64_lseek(file, offset, whence) == -1)
         goto error;
     count = __dos64_getpos(file);
     if (count == -1)

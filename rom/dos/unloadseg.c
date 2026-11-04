@@ -104,7 +104,7 @@ static AROS_UFH3(void, FreeFunc,
                     if (segnode->ln_Type == SEGTYPE_HUNK)
                     {
                         /* hunk nodes carry the stashed source image */
-                        FreeVec(((struct hunk_segnode *)segnode)->shn_Image);
+                        FreeVec(((struct HunkSegNode *)segnode)->hsn_Image);
                     }
                     FreeVec(segnode);
                     break;

@@ -70,7 +70,7 @@ BOOL sana_poll(void);
  * include prototypes for initialization functions
  */
 #include <kern/uipc_domain_protos.h>    /* domaininit() */
-#include <net/bpf.h>                    /* bpf_init() */
+#include "../net/bpf.h"                    /* bpf_init() */
 
 /*
  * The main module of the AMITCP/IP.
@@ -505,10 +505,10 @@ init_all(void)
     D(Printf("init_netdb() complete\n");)
 
     /*
-     * Make API visible
+     * Make API visible. Nothing may fail after this point: the error path
+     * would tear the stack down under clients that have already opened it,
+     * so the NETTRACE check comes first.
      */
-    /* No fallible initialization after public admission opens: an error
-       cleanup must not tear resources down under newly admitted clients. */
     if(!Nettrace_Task || api_show() == FALSE)
         return FALSE;
     D(Printf("api_show() complete\n");)
@@ -525,10 +525,8 @@ init_all(void)
         D(Printf("control port '%s' up\n", AROSTCP_CTRLPORT_NAME);)
     }
 
-    if(Nettrace_Task) {
-        D(Printf("Initialization complete, signalling NETTRACE\n");)
-        Signal(Nettrace_Task, SIGBREAKF_CTRL_F);
-    }
+    D(Printf("Initialization complete, signalling NETTRACE\n");)
+    Signal(Nettrace_Task, SIGBREAKF_CTRL_F);
 
     rc_start();
     D(Printf("rc_start() complete, initialization finished\n");)

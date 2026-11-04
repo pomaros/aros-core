@@ -111,19 +111,30 @@ typedef APTR GLADrawable;
  *                   the new context shares; it then uses that context's pipe
  *                   screen.
  */
-#define GLA_ShareContext        (GLA_Dummy + 0x0043)
+#define GLA_ShareContext        (GLA_Dummy + 0x0044)
 
 /*
  * GLA_ShareScreen:  a context whose pipe screen the new context uses without
  *                   sharing its objects, so that drawables made for one
  *                   (glACreateDrawable) can be bound to the other.
  */
-#define GLA_ShareScreen         (GLA_Dummy + 0x0044)
+#define GLA_ShareScreen         (GLA_Dummy + 0x0045)
 
 #define GLA_PROFILE_COMPAT      0
 #define GLA_PROFILE_CORE        1
 #define GLA_PROFILE_ES1         2
 #define GLA_PROFILE_ES2         3
+
+/*
+ * GLA_SwapInterval:        vertical blanks glASwapBuffers() waits for before
+ *                          its frame is shown. 0 (the default): swaps return
+ *                          at once and rendering is not tied to the display's
+ *                          refresh; a frame finished before the display took
+ *                          the previous one is not shown. 1: every swap waits
+ *                          for its frame to be on screen. Changed later with
+ *                          glASwapInterval().
+ */
+#define GLA_SwapInterval        (GLA_Dummy + 0x0043)
 
 /*
  * GLA API calls

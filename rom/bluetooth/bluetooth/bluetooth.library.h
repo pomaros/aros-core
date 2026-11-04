@@ -56,13 +56,6 @@ extern const char GM_UNIQUENAME(libname)[];
 
 /* Protos (bluetooth.library.c) */
 
-void bGuard(struct BtBase *BluetoothBase);
-void bUnguard(struct BtBase *BluetoothBase);
-ULONG bGuardWait(struct BtBase *BluetoothBase, ULONG signals);
-void bGuardPoll(struct BtBase *BluetoothBase);
-BOOL bTakeReply(struct BtBase *BluetoothBase, struct MsgPort *port, struct Message *msg);
-BYTE bAllocReadySignal(void);
-void bFreeReadySignal(BYTE bit);
 void bInitSem(struct BtBase *BluetoothBase, struct BtLockSem *bls, STRPTR name);
 void bDeleteSem(struct BtBase *BluetoothBase, struct BtLockSem *bls);
 void bLockSemExcl(struct BtBase *BluetoothBase, struct BtLockSem *bls);
@@ -96,10 +89,9 @@ void bDeviceClassScan(struct BtBase *BluetoothBase, struct BtDevice *bd);
 void bApplyDevConfig(struct BtBase *BluetoothBase, struct BtDevice *bd);
 /* persist: registration/bond state changed - also write the config to disk
    (done by the event handler process, which has DOS) */
-BOOL bLoadKeyringBond(struct BtBase *BluetoothBase, struct BtDevice *bd);
-BOOL bStoreDevConfig(struct BtBase *BluetoothBase, struct BtDevice *bd, BOOL persist);
+void bStoreDevConfig(struct BtBase *BluetoothBase, struct BtDevice *bd, BOOL persist);
 ULONG bRestoreDevices(struct BtBase *BluetoothBase, struct BtHardware *bth);
-BOOL bRekeyDevice(struct BtBase *BluetoothBase, struct BtDevice *bd, const UBYTE *addr, UBYTE addrtype);
+void bRekeyDevice(struct BtBase *BluetoothBase, struct BtDevice *bd, const UBYTE *addr, UBYTE addrtype);
 void bReplyChannel(struct BtBase *BluetoothBase, struct BtChannel *bch, LONG error, ULONG actual);
 BOOL bSubmitCtrl(struct BtBase *BluetoothBase, struct BtHardware *bth, struct BtDevice *bd,
                  UWORD request, UWORD val, UWORD idx, APTR data, ULONG len, LONG *error);

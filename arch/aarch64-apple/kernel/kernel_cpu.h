@@ -13,12 +13,15 @@
 #include <exec/interrupts.h>
 #include <aros/apple/runtime.h>
 
+#define TASKUSAGE_WINDOW 1000000
+
 #if defined(__AROSEXEC_SMP__)
 #include "../exec/tls.h"
 static inline int GetCPUNumber(void) { return (int)TLS_GET(CPUNumber); }
-#define TASKUSAGE_WINDOW 1000000
 int cpu_SoftIntAllowed(void);
 #define CPU_SOFTINT_ALLOWED() cpu_SoftIntAllowed()
+#else
+static inline int GetCPUNumber(void) { return 0; }
 #endif
 
 #define EXCEPTIONS_COUNT AROS_APPLE_RUNTIME_VECTOR_COUNT

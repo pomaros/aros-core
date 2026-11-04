@@ -1,0 +1,26 @@
+diff -ruN mesa-26.2.5/src/virtio/vulkan/vn_renderer.h mesa-26.2.5.aros/src/virtio/vulkan/vn_renderer.h
+--- mesa-26.2.5/src/virtio/vulkan/vn_renderer.h	2026-10-14 17:12:24.000000000 +0100
++++ mesa-26.2.5.aros/src/virtio/vulkan/vn_renderer.h	2026-11-04 12:00:00.000000000 +0000
+@@ -225,12 +225,21 @@
+                          const VkAllocationCallbacks *alloc,
+                          struct vn_renderer **renderer);
+ 
++#ifdef __AROS__
++VkResult
++vn_renderer_create_aros(struct vn_instance *instance,
++                        const VkAllocationCallbacks *alloc,
++                        struct vn_renderer **renderer);
++#endif
++
+ static inline VkResult
+ vn_renderer_create(struct vn_instance *instance,
+                    const VkAllocationCallbacks *alloc,
+                    struct vn_renderer **renderer)
+ {
+-#ifdef HAVE_LIBDRM
++#if defined(__AROS__)
++   return vn_renderer_create_aros(instance, alloc, renderer);
++#elif defined(HAVE_LIBDRM)
+    VkResult result;
+    if (VN_DEBUG(VTEST)) {
+       result = vn_renderer_create_vtest(instance, alloc, renderer);

@@ -28,7 +28,7 @@ struct fd_retention
 AROS_LH2(LONG, FD_Acquire,
     AROS_LHA(LONG, fd, D0),
     AROS_LHA(struct fd_lease *, lease, A0),
-    struct fd_base *, FDBase, 14, FD)
+    struct fd_base *, FDBase, 15, FD)
 {
     AROS_LIBFUNC_INIT
     LONG error = 0;
@@ -87,7 +87,7 @@ done:
 
 AROS_LH1(LONG, FD_Release,
     AROS_LHA(struct fd_lease *, lease, A0),
-    struct fd_base *, FDBase, 15, FD)
+    struct fd_base *, FDBase, 16, FD)
 {
     AROS_LIBFUNC_INIT
     struct fd_retention *record;
@@ -125,7 +125,7 @@ AROS_LH3(LONG, FD_Retire,
     AROS_LHA(struct fd_lease *, lease, A0),
     AROS_LHA(fd_retire_fn, retire, A1),
     AROS_LHA(APTR, cookie, A2),
-    struct fd_base *, FDBase, 16, FD)
+    struct fd_base *, FDBase, 17, FD)
 {
     AROS_LIBFUNC_INIT
     LONG error = 0;
@@ -160,7 +160,7 @@ AROS_LH6(LONG, FD_RetireOwner,
     AROS_LHA(fd_retire_fn, retire, A1),
     AROS_LHA(APTR, cookie, A2),
     AROS_LHA(LONG *, close_error, A3),
-    struct fd_base *, FDBase, 17, FD)
+    struct fd_base *, FDBase, 18, FD)
 {
     AROS_LIBFUNC_INIT
     LONG error = 0;

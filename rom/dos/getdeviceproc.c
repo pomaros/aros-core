@@ -18,6 +18,11 @@
 /* room for a per-user assign's target once its tokens are expanded */
 #define USERPATH_MAX    512
 
+#include <string.h>
+
+/* room for a per-user assign's target once its tokens are expanded */
+#define USERPATH_MAX    512
+
 extern struct Process *r(struct DeviceNode *dn, struct DosLibrary *DOSBase);
 static struct DevProc *deviceproc_internal(struct DosLibrary *DOSBase, CONST_STRPTR name, struct DevProc *dp);
 static struct MsgPort *start_handler(struct DeviceNode *device, CONST_STRPTR path, struct DosLibrary *DOSBase);

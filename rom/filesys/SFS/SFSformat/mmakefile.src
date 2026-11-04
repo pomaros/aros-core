@@ -2,7 +2,7 @@
 
 include $(SRCDIR)/config/aros.cfg
     
-USER_CFLAGS     := -DADATE="\"$(AROS_BUILD_DATE)\""
+USER_CFLAGS     := -DADATE="\"$(shell date '+%d.%m.%Y')\""
 
 %build_prog mmake=workbench-devs-sfs-c-sfsformat \
     files=SFSformat progname=SFSformat targetdir=$(AROS_C)

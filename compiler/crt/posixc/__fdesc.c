@@ -170,6 +170,7 @@ void __releasefcb(fcb *file)
     /* No descriptor or retained operation can use this block now. Record-lock
        metadata and the native handle each have one final disposal point. */
     __posixc_reclock_release_file(file);
+    __flock_release(file);
     if (file->handle && !(file->privflags & _FCB_DONTCLOSE_FH))
     {
         if (file->privflags & _FCB_ISDIR)
@@ -214,6 +215,9 @@ void __setfdesc(register int fd, fdesc *desc)
         __cwd_runtime_base();
 
     /* FIXME: Check if fd is in valid range... */
+    if (fd < 0)
+        return;
+
     /* Publish the slot pointer under the table guard so a concurrent grow
        (which reallocates the array) cannot write into a stale array. */
     FD_LOCK(PosixCBase);
@@ -284,7 +288,11 @@ static int __reservefdslot(int wanted_fd, int minimum)
            reach this before a C runtime exists, so use Exec's zeroed heap. */
         tmp = AllocVec((wanted_fd+1)*sizeof(fdesc *), MEMF_PUBLIC | MEMF_CLEAR);
 
-        if (!tmp) { FD_UNLOCK(PosixCBase); return -1; }
+        if (!tmp) {
+            FD_UNLOCK(PosixCBase);
+            __set_errno(PosixCBase, ENOMEM);
+            return -1;
+        }
 
         if (FD_ARRAY(PosixCBase))
         {

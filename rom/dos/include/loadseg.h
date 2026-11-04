@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011, The AROS Development Team.  All rights reserved.
+ * Copyright (C) 2011-2026, The AROS Development Team.  All rights reserved.
  * Author: Jason S. McMullan <jason.mcmullan@gmail.com>
  *
  * Licensed under the AROS PUBLIC LICENSE (APL) Version 1.1
@@ -13,10 +13,13 @@
 
 /* This is called after ELF file is loaded. You may grab the debug info from it. */
 void register_elf(BPTR file, BPTR hunks, struct elfheader *eh, struct sheader *sh, struct DosLibrary *DOSBase);
-/* image/imagesize: an AllocVec'd copy of the source file the registry takes
- * ownership of (freed at unload), or NULL - see struct hunk_segnode. */
-void register_hunk(BPTR file, BPTR hunks, APTR header, struct DosLibrary *DOSBase,
-                   APTR image, ULONG imagesize);
+/* relocs: the relocations the loader applied, kept with the seglist for
+   GetSegListInfo(GSLI_68KRELOCS); NULL on 68k.
+   image/imagesize: an AllocVec'd copy of the source file the registry takes
+   ownership of (freed at unload), or NULL - see struct HunkSegNode. */
+struct HunkRelocList;
+void register_hunk(BPTR file, BPTR hunks, APTR header, const struct HunkRelocList *relocs,
+                   struct DosLibrary *DOSBase, APTR image, ULONG imagesize);
 
 AROS_LD4(BPTR, InternalLoadSeg,
          AROS_LDA(BPTR       , fh           , D0),

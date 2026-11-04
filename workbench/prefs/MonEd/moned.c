@@ -504,7 +504,7 @@ void UpDateDisplay( void ){
  *						Draw3DOutBox
  *	Description : just like normal bevelbox except inside color is selectable
  *				  plus it looks MONUMENTAL!
- *								ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+ *								¯¯¯¯¯¯¯¯¯¯¯
  *  Returns		: NULL
  *	Globals		: usual
  *
@@ -574,7 +574,7 @@ void Draw3DBox(
  *						Draw3DLine
  *	Description : just like normal line except its 3D (sorta!) (horizontal)
  *				  plus it looks MONUMENTAL!
- *								ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+ *								¯¯¯¯¯¯¯¯¯¯¯
  *  Returns		: NULL
  *	Globals		: usual
  *
@@ -833,7 +833,7 @@ int main( int argc,char *argv[] )
 		SaveMonitor();
 
 		if( *argv[1] == '?' ){
-			puts( "Moned3a, ï¿½ 1994 Raul Sobon / PRoJeCT-23");
+			puts( "Moned3a, © 1994 Raul Sobon / PRoJeCT-23");
 			puts( " moned HBSTRT=0xnnn HBSTOP=0xnnn HBSTOP=0xnnn");
 			puts( "       HSSTRT=0xnnn HSSTOP=0xnnn VBSTRT=0xnnn");
 			puts( "       VBSTOP=0xnnn VSSTRT=0xnnn VSSTOP=0xnnn");

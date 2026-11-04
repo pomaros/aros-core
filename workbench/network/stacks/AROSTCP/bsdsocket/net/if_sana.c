@@ -69,7 +69,7 @@
 #include <net/if_sana.h>
 #include <net/if_types.h>
 #include <net/sana2arp.h>
-#include <net/bpf.h>
+#include "bpf.h"
 
 #include <net/sana2config.h>
 #include <net/sana2request.h>
@@ -215,9 +215,17 @@ sana_if_deconfigure(struct ifnet *ifp)
     if(ssc->ss_autoip.state != AUTOIP_DISABLED)
         autoip_stop(ifp);
 
+#if INET6
+    /* Forget the routers heard on it and the routes they gave, and the
+     * prefixes: the routes and addresses go below anyway, and an entry left
+     * marked installed (or its address made) would never be put back when
+     * the router advertises again after a reload. */
+    nd6_purge_routers(ifp);
+    nd6_purge_prefixes(ifp);
+#endif
     /* Flush all routes on the interface before dropping its addresses, so no
      * live route is left referencing an ifaddr we are about to free. */
-    rt_purgeif(ifp);
+    rt_purgeif(ifp, AF_UNSPEC);
 
 #if INET6
     {
@@ -1185,6 +1193,49 @@ sana_read(struct sana_softc *ssc, struct IOIPReq *req,
 }
 
 /*
+ * BPF sees what is on the wire. The SANA-II driver adds and strips the link
+ * header itself, so the stack never holds it: on Ethernet it is rebuilt
+ * here from the destination and source addresses and the packet type, and
+ * the capture is DLT_EN10MB. No other wire type has a header the stack can
+ * rebuild in general; there the capture is DLT_RAW, which holds IPv4 and
+ * IPv6 alone, so another packet (ARP) is not shown. bpf_dlt_for_ifp() in
+ * bpf.c reports the same choice.
+ */
+static void
+sana_bpf_tap(struct sana_softc *ssc, struct mbuf *m, int direction,
+             const UBYTE *dsthw, const UBYTE *srchw, ULONG type, int ip)
+{
+    if(ssc->ss_hwtype == S2WireType_Ethernet) {
+        UBYTE eh[SANA_ETHER_HDRLEN];
+
+        bcopy(dsthw, eh, SANA_ETHER_ADDRLEN);
+        bcopy(srchw, eh + SANA_ETHER_ADDRLEN, SANA_ETHER_ADDRLEN);
+        eh[12] = (UBYTE)(type >> 8);
+        eh[13] = (UBYTE)type;
+        bpf_mtap2(&ssc->ss_if, eh, sizeof(eh), m, direction);
+    } else if(ip) {
+        bpf_mtap(&ssc->ss_if, m, direction);
+    }
+}
+
+/*
+ * The link addresses of a received frame, for sana_bpf_tap(). They are
+ * taken before sana_read(), which hands the request back to the driver.
+ */
+struct sana_rxaddr {
+    UBYTE ra_dst[MAXADDRSANA];
+    UBYTE ra_src[MAXADDRSANA];
+};
+
+static inline void
+sana_rxaddr_save(struct sana_softc *ssc, struct IOIPReq *req,
+                 struct sana_rxaddr *ra)
+{
+    bcopy(req->ioip_s2.ios2_DstAddr, ra->ra_dst, ssc->ss_if.if_addrlen);
+    bcopy(req->ioip_s2.ios2_SrcAddr, ra->ra_src, ssc->ss_if.if_addrlen);
+}
+
+/*
  * sana_ip_read(): feed a packet to the IP queue
  * (This routine is called from sana_poll)
  */
@@ -1192,6 +1243,8 @@ static void
 sana_ip_read(struct sana_softc *ssc, struct IOIPReq *req)
 {
     struct mbuf *m;
+    struct sana_rxaddr ra;
+    int tap = ssc->ss_if.if_bpf != NULL;
     spl_t s;
 
     D(bug("[AROSTCP:SANA] %s: %s%d ioError=%d wireError=%ld len=%ld\n",
@@ -1200,6 +1253,8 @@ sana_ip_read(struct sana_softc *ssc, struct IOIPReq *req)
           (long)req->ioip_s2.ios2_WireError,
           (long)req->ioip_s2.ios2_DataLength));
 
+    if(tap)
+        sana_rxaddr_save(ssc, req, &ra);
     m = sana_read(ssc, req, 0, &ssc->ss_ip.sent, "sana_ip_read",
                   ssc->ss_if.if_mtu);
 
@@ -1208,8 +1263,9 @@ sana_ip_read(struct sana_softc *ssc, struct IOIPReq *req)
               __func__, ssc->ss_if.if_name, ssc->ss_if.if_unit,
               m->m_pkthdr.len, m->m_flags, m));
         /* BPF tap: let packet filters see incoming IPv4 packets */
-        if(ssc->ss_if.if_bpf)
-            bpf_mtap(&ssc->ss_if, m, BPF_D_IN);
+        if(tap)
+            sana_bpf_tap(ssc, m, BPF_D_IN, ra.ra_dst, ra.ra_src,
+                         ssc->ss_ip.type, TRUE);
         s = splimp();
         if(IF_QFULL(&ipintrq)) {
             IF_DROP(&ipintrq);
@@ -1237,15 +1293,20 @@ sana_arp_read(struct sana_softc *ssc, struct IOIPReq *req)
 {
     struct mbuf *m;
     UBYTE hwaddr[MAXADDRSANA];
+    struct sana_rxaddr ra;
+    int tap = ssc->ss_if.if_bpf != NULL;
 
     bcopy(req->ioip_s2.ios2_SrcAddr, hwaddr, ssc->ss_if.if_addrlen);
+    if(tap)
+        sana_rxaddr_save(ssc, req, &ra);
 
     m = sana_read(ssc, req, 0, &ssc->ss_arp.sent, "sana_arp_read", ARP_MTU);
 
     if(m) {
         /* BPF tap: let packet filters see incoming ARP packets */
-        if(ssc->ss_if.if_bpf)
-            bpf_mtap(&ssc->ss_if, m, BPF_D_IN);
+        if(tap)
+            sana_bpf_tap(ssc, m, BPF_D_IN, ra.ra_dst, ra.ra_src,
+                         ssc->ss_arp.type, FALSE);
         arpinput(ssc, m, hwaddr);
     }
 }
@@ -1259,6 +1320,8 @@ static void
 sana_ip6_read(struct sana_softc *ssc, struct IOIPReq *req)
 {
     struct mbuf *m;
+    struct sana_rxaddr ra;
+    int tap = ssc->ss_if.if_bpf != NULL;
     spl_t s;
 
     D(bug("[AROSTCP:SANA] %s: %s%d ioError=%d wireError=%ld len=%ld\n",
@@ -1267,6 +1330,8 @@ sana_ip6_read(struct sana_softc *ssc, struct IOIPReq *req)
           (long)req->ioip_s2.ios2_WireError,
           (long)req->ioip_s2.ios2_DataLength));
 
+    if(tap)
+        sana_rxaddr_save(ssc, req, &ra);
     m = sana_read(ssc, req, 0, &ssc->ss_ip6.sent, "sana_ip6_read",
                   ssc->ss_if.if_mtu);
 
@@ -1275,8 +1340,9 @@ sana_ip6_read(struct sana_softc *ssc, struct IOIPReq *req)
               __func__, ssc->ss_if.if_name, ssc->ss_if.if_unit,
               m->m_pkthdr.len, m->m_flags));
         /* BPF tap: let packet filters see incoming IPv6 packets */
-        if(ssc->ss_if.if_bpf)
-            bpf_mtap(&ssc->ss_if, m, BPF_D_IN);
+        if(tap)
+            sana_bpf_tap(ssc, m, BPF_D_IN, ra.ra_dst, ra.ra_src,
+                         ssc->ss_ip6.type, TRUE);
         s = splimp();
         if(IF_QFULL(&ip6intrq)) {
             IF_DROP(&ip6intrq);
@@ -1345,9 +1411,13 @@ sana_linkdown(struct sana_softc *ssc)
     if(ssc->ss_autoip.state != AUTOIP_DISABLED)
         autoip_stop(ifp);
 
+    /* in_control() scrubs only each address's interface route: a gateway
+     * route (the DHCP default) would keep rt_ifa on the freed address. */
+    rt_purgeif(ifp, AF_INET);
+
     /*
      * A request naming no address means "the first one on this interface", so
-     * this deletes them all; in_control() scrubs their routes on the way out.
+     * this deletes them all.
      */
     while(1) {
         bzero(&ifr, sizeof(ifr));
@@ -1389,7 +1459,19 @@ sana_connect(struct sana_softc *ssc, struct IOIPReq *req)
                                        | S2EVENT_DISCONNECT;
         BeginIO((struct IORequest *)req);
     } else {
+        /*
+         * No more events from the driver: it does not do S2_ONEVENT (as
+         * tap.device), or the interface went offline. The request is done,
+         * and off every list - sana_poll()'s GetMsg() took it - but still
+         * NT_REPLYMSG, with the links it had on the port: a WaitIO() on it
+         * later (sana_unrun()) would Remove() it from the port a second time,
+         * writing through them into whatever they point at by then. Free it
+         * now.
+         */
         ssc->ss_eventsent--;
+        if(ssc->ss_connectreq == req)
+            ssc->ss_connectreq = NULL;
+        DeleteIORequest((struct IORequest *)req);
     }
 }
 
@@ -1451,7 +1533,7 @@ sana_output(struct ifnet *ifp, struct mbuf *m0,
 
     register struct mbuf *m = m0, *tag;
     struct sana_sendtag *st;
-    UBYTE dst_hw[MAXADDRSANA];
+    UBYTE dst_hw[MAXADDRSANA] = { 0 };	/* a broadcast leaves it unset */
     UWORD ioflags = 0;
     BYTE  pri = 0;
 
@@ -1574,9 +1656,29 @@ sana_output(struct ifnet *ifp, struct mbuf *m0,
      * Queue packet to Sana-II driver
      */
 
-    /* BPF tap: let packet filters see outgoing packets */
-    if(ifp->if_bpf)
-        bpf_mtap(ifp, m, BPF_D_OUT);
+    /*
+     * BPF tap: let packet filters see outgoing packets. A raw packet (from
+     * bpf_write()) is a whole frame already. Otherwise the frame goes to
+     * dst_hw, which a broadcast leaves unset: the driver broadcasts it.
+     */
+    if(ifp->if_bpf) {
+        if(ioflags & SANA2IOF_RAW) {
+            if(ssc->ss_hwtype == S2WireType_Ethernet)
+                bpf_mtap(ifp, m, BPF_D_OUT);
+        } else {
+            static const UBYTE bcast_hw[SANA_ETHER_ADDRLEN] =
+                { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+
+            sana_bpf_tap(ssc, m, BPF_D_OUT,
+                         (m->m_flags & M_BCAST) ? bcast_hw : dst_hw,
+                         ssc->ss_hwaddr, type,
+                         dst->sa_family == AF_INET
+#if INET6
+                         || dst->sa_family == AF_INET6
+#endif
+                        );
+        }
+    }
 
     /*
      * Park the packet on the send queue behind a metadata tag and pump the

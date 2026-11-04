@@ -79,7 +79,6 @@ struct BtReadLock
     BOOL                brl_IsExcl;       /* Is this lock exclusive? */
     struct Task        *brl_Task;         /* Task waiting for or obtaining this lock */
     UWORD               brl_Count;        /* Shared lock count */
-    ULONG               brl_SigMask;      /* Signal the waiting task sleeps on */
 };
 
 struct BtSemaInfo
@@ -153,7 +152,6 @@ struct BtBase
     struct Library      bt_Library;       /* standard */
     UWORD               bt_Flags;         /* various flags */
     struct UtilityBase *bt_UtilityBase;   /* for tags etc */
-    APTR                bt_ExecLockBase;  /* execlock.resource on SMP Exec, else NULL */
     struct Library     *bt_DosBase;       /* for dos stuff */
     BOOL                bt_StackInit;     /* Did we initialize the stack yet? */
     APTR                bt_MemPool;       /* Public Memory Pool */
@@ -175,9 +173,6 @@ struct BtBase
     struct List         bt_AlienConfigs;  /* Configuration FORM from outer space */
     BOOL                bt_CfgChangeMute; /* Don't generate config changed events */
     struct SignalSemaphore bt_ReentrantLock; /* Lock for non-reentrant stuff */
-    /* Guards the library's lists and lock bookkeeping on every CPU. On an
-       SMP Exec, Forbid() only holds the local processor, so it cannot. */
-    struct SignalSemaphore bt_Guard;
     ULONG               bt_MemAllocated;  /* Bytes of memory allocated by stack */
     BOOL                bt_ConfigRead;    /* Has a config been loaded? */
     BOOL                bt_CheckConfigReq; /* Set to true, to check if config changed */
@@ -430,7 +425,27 @@ struct BtHardware
 
 #define BT_ADVDATA_MAX      62            /* adv + scan response */
 
-#include <libraries/bluetooth_secret.h>
+/* Bond keys of a device (private; persisted as the KEYS chunk of its DEVC
+   form, never handed out through btGetAttrs) */
+struct BtKeyCfg
+{
+    ULONG bkc_ChunkID;                    /* IFFCHNK_KEYS */
+    ULONG bkc_Length;                     /* sizeof(struct BtKeyCfg)-8 */
+    UBYTE bkc_Flags;                      /* BKCF_xxx */
+    UBYTE bkc_LinkKeyType;                /* BR/EDR link key type */
+    UBYTE bkc_LinkKey[16];                /* BR/EDR link key */
+    UBYTE bkc_LTK[16];                    /* LE long term key */
+    UBYTE bkc_EDIV[2];
+    UBYTE bkc_Rand[8];
+    UBYTE bkc_IRK[16];
+    UBYTE bkc_CSRK[16];
+    UBYTE bkc_Reserved[4];
+    /* Key our peripheral role distributed to a remote central.  It cannot
+       share bkc_LTK, which is the peer key used when we are central. */
+    UBYTE bkc_LocalLTK[16];
+    UBYTE bkc_LocalEDIV[2];
+    UBYTE bkc_LocalRand[8];
+};
 
 #define BKCF_LINKKEY 0x01
 #define BKCF_LTK     0x02
@@ -543,7 +558,6 @@ struct BtEndpoint
     UWORD               bep_UUID16;
     UWORD               bep_Properties;
     UWORD               bep_MaxPktSize;   /* MTU */
-    UWORD               bep_RemoteMTU;    /* peer's MTU while the L2CAP channel is open, else 0 */
     UWORD               bep_EndHandle;    /* GATT: last handle belonging to this characteristic */
     UWORD               bep_CCCDHandle;   /* GATT: Client Characteristic Configuration descriptor (0 = unknown) */
     UWORD               bep_RefHandle;    /* GATT: HID Report Reference descriptor (0 = none) */
@@ -552,7 +566,7 @@ struct BtEndpoint
     UWORD               bep_DescDone;     /* descriptors have been looked at */
     UWORD               bep_EnumMark;     /* matched by the current re-enumeration (hwconn.c) */
     UWORD               bep_Incoming;     /* opened by the peer to our server channel: never initiated by us */
-    UWORD               bep_Clone;        /* btCloneEndpoint(): own L2CAP channel to the original's PSM */
+    UWORD               bep_Secondary;    /* a further channel to a PSM another endpoint already has (AVDTP transport); not listened on */
     UBYTE               bep_UUID[16];
     STRPTR              bep_Name;
     struct BtHWEndpoint *bep_Chan;        /* open channel state (hwconn.c private) */

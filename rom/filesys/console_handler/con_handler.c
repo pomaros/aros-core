@@ -118,17 +118,6 @@ static void MakeConsAbout(struct Window *win, struct IntuitionBase *IntuitionBas
 #include "con_handler_intern.h"
 #include "support.h"
 
-/*
- * Set in the startup BPTR to ask for a device instead of a console window,
- * with the rest of the BPTR pointing at a FileSysStartupMsg naming it. A BPTR
- * is a longword address shifted right by two, so the top bits are spare.
- *
- * This is the established convention between an AUX: handler stub and the
- * console handler it hands over to, so stubs and console handlers from
- * different sources interoperate.
- */
-#define AUXF_DEVICE     0x40000000
-
 #if defined(CONSOLE_SHOW_MENU)
 enum
 {
@@ -498,7 +487,8 @@ static LONG MakeConWindow(struct filehandle *fh)
         D(bug("[con:handler] %s: Using window  @ 0x%p\n", __func__, fh->window));
 
 #if defined(CONSOLE_SHOW_MENU)
-        if (!con_install_menu(fh))
+        /* No gadtools.library (a ROM without it): no menu, as upstream */
+        if (fh->gtbase && !con_install_menu(fh))
             bug("[CONSOLE-SCALE] result=FAIL reason=initial-menu-context\n");
 #endif
         fh->conreadio->io_Data = (APTR) fh->window;
@@ -638,7 +628,11 @@ static void close_con(struct filehandle *fh)
     DeleteIORequest(ioReq(fh->conreadio));
 
     D(bug("[con:handler] Delete console.device MsgPort 0x%p\n", fh->conreadmp));
-    FreeVec(fh->conreadmp);
+    if (fh->conreadmp) {
+        FreeSignal((BYTE)fh->conreadmp->mp_SigBit);
+        FreeSignal((BYTE)fh->conwritemp->mp_SigBit);
+        FreeVec(fh->conreadmp);
+    }
 
     if (fh->screenname)
         FreeVec(fh->screenname);
@@ -649,10 +643,11 @@ static void close_con(struct filehandle *fh)
 
     CloseLibrary((struct Library*) fh->intuibase);
     CloseLibrary((struct Library*) fh->dosbase);
+    CloseLibrary(fh->utilbase);
     CloseLibrary((struct Library*) fh->workbenchbase);
     CloseLibrary((struct Library*) fh->iconbase);
 
-    /* These libraries are opened only if completion was used */
+    /* Graphics is opened only if completion was used. */
     if (fh->gfxbase)
         CloseLibrary((struct Library*) fh->gfxbase);
     if (fh->gtbase)
@@ -681,14 +676,12 @@ static struct filehandle *open_con(struct DosPacket *dp, LONG *perr)
     fh->dn = dn;
 
     /*
-     * The startup is either a small number selecting CON: or RAW:, or, with
-     * AUXF_DEVICE set, a FileSysStartupMsg naming a device to run over. Only
-     * the flag can tell those apart: a startup given as a string is a valid
-     * pointer too, so no test on the value alone is enough.
+     * aux-handler sets dp_Arg4 to ask for a device instead of a console
+     * window; dp_Arg2 is then a FileSysStartupMsg naming it. DOS clears
+     * dp_Arg4 in the startup packets it sends.
      */
-    if ((IPTR)dp->dp_Arg2 & AUXF_DEVICE) {
-        struct FileSysStartupMsg *fssm =
-            BADDR((BPTR)((IPTR)dp->dp_Arg2 & ~AUXF_DEVICE));
+    if (dp->dp_Arg4) {
+        struct FileSysStartupMsg *fssm = BADDR(dp->dp_Arg2);
 
         if (fssm && fssm->fssm_Device != BNULL) {
             ULONG len = AROS_BSTR_strlen(fssm->fssm_Device);
@@ -743,6 +736,7 @@ static struct filehandle *open_con(struct DosPacket *dp, LONG *perr)
     if (!fh->dosbase || !fh->utilbase ||
         (!(fh->flags & FHFLG_DEVICEMODE) && (!fh->intuibase || !fh->inputbase))) {
         CloseLibrary((APTR) fh->utilbase);
+        CloseLibrary(fh->gtbase);
         CloseLibrary((APTR) fh->dosbase);
         CloseLibrary((APTR) fh->intuibase);
         CloseLibrary((APTR) fh->workbenchbase);
@@ -752,11 +746,27 @@ static struct filehandle *open_con(struct DosPacket *dp, LONG *perr)
     }
 
     fh->timermp = CreateMsgPort();
+    if (!fh->timermp) {
+        close_con(fh);
+        return NULL;
+    }
     fh->timerreq = (struct timerequest*) CreateIORequest(fh->timermp, sizeof(struct timerequest));
-    OpenDevice(TIMERNAME, UNIT_MICROHZ, (struct IORequest *) fh->timerreq, 0);
+    if (!fh->timerreq) {
+        close_con(fh);
+        return NULL;
+    }
+    if (OpenDevice(TIMERNAME, UNIT_MICROHZ, (struct IORequest *) fh->timerreq, 0) != 0) {
+        *perr = ERROR_DEVICE_NOT_MOUNTED;
+        close_con(fh);
+        return NULL;
+    }
 
     err = 0;
     filename = BSTR2C((BSTR) dp->dp_Arg1);
+    if (!filename) {
+        close_con(fh);
+        return NULL;
+    }
     fn = filename;
     i = isdosdevicec(fn);
     if (i >= 0)
@@ -769,19 +779,26 @@ static struct filehandle *open_con(struct DosPacket *dp, LONG *perr)
     /* Create msgport for console.device communication */
     fh->conreadmp = AllocVec(sizeof(struct MsgPort) * 2, MEMF_PUBLIC | MEMF_CLEAR);
     if (fh->conreadmp) {
-        SetMem( fh->conreadmp, 0, sizeof( *fh->conreadmp ) );
+        fh->conwritemp = fh->conreadmp + 1;
+        fh->conreadmp->mp_SigBit = (UBYTE)-1;
+        fh->conwritemp->mp_SigBit = (UBYTE)-1;
         fh->conreadmp->mp_Node.ln_Type = NT_MSGPORT;
         fh->conreadmp->mp_Flags = PA_SIGNAL;
         fh->conreadmp->mp_SigBit = AllocSignal(-1);
+        if (fh->conreadmp->mp_SigBit == (UBYTE)-1) {
+            err = ERROR_NO_FREE_STORE;
+            goto out;
+        }
         fh->conreadmp->mp_SigTask = fh->contask;
         NEWLIST(&fh->conreadmp->mp_MsgList);
 
-        fh->conwritemp = fh->conreadmp + 1;
-
-        SetMem( fh->conwritemp, 0, sizeof( *fh->conwritemp ) );
         fh->conwritemp->mp_Node.ln_Type = NT_MSGPORT;
         fh->conwritemp->mp_Flags = PA_SIGNAL;
         fh->conwritemp->mp_SigBit = AllocSignal(-1);
+        if (fh->conwritemp->mp_SigBit == (UBYTE)-1) {
+            err = ERROR_NO_FREE_STORE;
+            goto out;
+        }
         fh->conwritemp->mp_SigTask = fh->contask;
         NEWLIST(&fh->conwritemp->mp_MsgList);
 
@@ -836,6 +853,7 @@ static struct filehandle *open_con(struct DosPacket *dp, LONG *perr)
     if (!(fh->flags & FHFLG_DEVICEMODE) && dn->dn_Startup)
         fh->flags |= FHFLG_RAW;
 
+out:
     if (!ok) {
         close_con(fh);
         fh = NULL;
@@ -1216,7 +1234,8 @@ LONG CONMain(struct ExecBase *SysBase)
 
             if (sigs & timermask) {
                 D(bug("[con:handler] %s: timer signal\n", __func__));
-                if (waitingdp) {
+                if (waitingdp && CheckIO((struct IORequest *)fh->timerreq)) {
+                    WaitIO((struct IORequest *)fh->timerreq);
                     replypkt(waitingdp, DOSFALSE);
                     waitingdp = NULL;
                 }
@@ -1345,11 +1364,19 @@ LONG CONMain(struct ExecBase *SysBase)
                     break;
                 case ACTION_READ:
                     DACTION(bug("[con:handler] ACTION_READ\n"));
+                    if (dp->dp_Arg3 < 0) {
+                        replypkt2(dp, -1, ERROR_BAD_NUMBER);
+                        break;
+                    }
+                    if (dp->dp_Arg3 == 0) {
+                        replypkt2(dp, 0, 0);
+                        break;
+                    }
                     if (!MakeSureWinIsOpen(fh)) {
                         if (fh->flags & FHFLG_NOWINDOW)
                             replypkt(dp, 0); /* sink: end-of-file */
                         else
-                            replypkt2(dp, DOSFALSE, ERROR_NO_FREE_STORE);
+                            replypkt2(dp, -1, ERROR_NO_FREE_STORE);
                         break;
                     }
                     fh->breaktask = dp->dp_Port->mp_SigTask;
@@ -1365,11 +1392,19 @@ LONG CONMain(struct ExecBase *SysBase)
                     break;
                 case ACTION_WRITE:
                     DACTION(bug("[con:handler] ACTION_WRITE\n"));
+                    if (dp->dp_Arg3 < 0) {
+                        replypkt2(dp, -1, ERROR_BAD_NUMBER);
+                        break;
+                    }
+                    if (dp->dp_Arg3 == 0) {
+                        replypkt2(dp, 0, 0);
+                        break;
+                    }
                     if (!MakeSureWinIsOpen(fh)) {
                         if (fh->flags & FHFLG_NOWINDOW)
                             replypkt(dp, dp->dp_Arg3); /* sink: swallowed */
                         else
-                            replypkt2(dp, DOSFALSE, ERROR_NO_FREE_STORE);
+                            replypkt2(dp, -1, ERROR_NO_FREE_STORE);
                         break;
                     }
                     fh->breaktask = dp->dp_Port->mp_SigTask;
@@ -1419,6 +1454,8 @@ LONG CONMain(struct ExecBase *SysBase)
                         }
                         else if (dp->dp_Arg1 == 0) {
                             replypkt(dp, DOSFALSE);
+                        } else if (waitingdp) {
+                            replypkt2(dp, DOSFALSE, ERROR_OBJECT_IN_USE);
                         } else {
                             LONG timeout = dp->dp_Arg1;
                             LONG sec = timeout / 1000000;
@@ -1535,7 +1572,7 @@ end:
 
     if (dp) {
         D(bug("[con:handler] Replying packet 0x%p, error %ld\n", dp, error));
-        replypkt2(dp, DOSFALSE, error);
+        replypkt2(dp, error ? DOSFALSE : DOSTRUE, error);
     }
 
     if (mp)

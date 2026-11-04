@@ -18,10 +18,6 @@
 #include <proto/utility.h>
 #include <proto/btclass.h>
 #include <proto/timer.h>
-#if defined(__AROSPLATFORM_SMP__)
-#include <proto/execlock.h>
-#include <resources/execlock.h>
-#endif
 
 #include <string.h>
 
@@ -98,8 +94,6 @@ static int GM_UNIQUENAME(libInit)(LIBBASETYPEPTR BluetoothBase)
         BluetoothBase->bt_NextGattHandle = 0x0001;
 
         InitSemaphore(&BluetoothBase->bt_ReentrantLock);
-        InitSemaphore(&BluetoothBase->bt_Guard);
-        BluetoothBase->bt_ExecLockBase = OpenResource("execlock.resource");
 
         if((BluetoothBase->bt_MemPool = CreatePool(MEMF_CLEAR|MEMF_PUBLIC|MEMF_SEM_PROTECTED, 16384, 1024))) {
             if((BluetoothBase->bt_SemaMemPool = CreatePool(MEMF_CLEAR|MEMF_PUBLIC, 16*sizeof(struct BtReadLock), sizeof(struct BtBorrowLock)))) {
@@ -227,14 +221,13 @@ int GM_UNIQUENAME(libExpunge)(LIBBASETYPEPTR BluetoothBase)
 
     bStopPopup(BluetoothBase);
     if(BluetoothBase->bt_EventHandler.bh_Task) {
-        BluetoothBase->bt_EventHandler.bh_ReadySignal = bAllocReadySignal();
+        BluetoothBase->bt_EventHandler.bh_ReadySignal = SIGB_SINGLE;
         BluetoothBase->bt_EventHandler.bh_ReadySigTask = FindTask(NULL);
         Signal(BluetoothBase->bt_EventHandler.bh_Task, SIGBREAKF_CTRL_C);
         while(BluetoothBase->bt_EventHandler.bh_Task) {
             Wait(1L<<BluetoothBase->bt_EventHandler.bh_ReadySignal);
         }
         BluetoothBase->bt_EventHandler.bh_ReadySigTask = NULL;
-        bFreeReadySignal(BluetoothBase->bt_EventHandler.bh_ReadySignal);
     }
     bGarbageCollectEvents(BluetoothBase);
 
@@ -277,6 +270,38 @@ struct btMemHeader
 };
 
 /* /// "btAllocVec()" */
+/*****************************************************************************
+    NAME
+        APTR btAllocVec(
+
+    SYNOPSIS
+        ULONG size)
+
+    FUNCTION
+        Allocate cleared public memory from the Bluetooth library pool.
+        The returned address meets AROS_WORSTALIGN.
+
+    INPUTS
+        size - Requested byte count.
+
+    RESULT
+        Allocated memory, or NULL if allocation fails.
+
+    NOTES
+        Release the exact returned address with btFreeVec(), not FreeVec().
+        Keep bluetooth.library open until all allocations are released.
+        A zero-size request may return a pointer, but provides no usable
+        bytes. Call from task context.
+
+    BUGS
+        Allocation overhead is added without overflow checking. Requests
+        near the ULONG limit can return a block smaller than requested;
+        do not use this function to validate externally supplied sizes.
+
+    SEE ALSO
+        btFreeVec(), btCopyStr()
+
+*****************************************************************************/
 AROS_LH1(APTR, btAllocVec,
          AROS_LHA(ULONG, size, D0),
          LIBBASETYPEPTR, BluetoothBase, 5, bt)
@@ -315,6 +340,32 @@ AROS_LH1(APTR, btAllocVec,
 /* \\\ */
 
 /* /// "btFreeVec()" */
+/*****************************************************************************
+    NAME
+        VOID btFreeVec(
+
+    SYNOPSIS
+        APTR memptr)
+
+    FUNCTION
+        Release memory allocated by btAllocVec() or an API that specifies
+        btFreeVec() as its release function.
+
+    INPUTS
+        memptr - Exact allocation address, or NULL for no operation.
+
+    RESULT
+        None.
+
+    NOTES
+        Release each allocation once, through the same library instance.
+        Interior pointers and memory from other allocators are invalid.
+        The allocation must no longer be in use. Call from task context.
+
+    SEE ALSO
+        btAllocVec(), btCopyStrFmtA()
+
+*****************************************************************************/
 AROS_LH1(void, btFreeVec,
          AROS_LHA(APTR, pmem, A1),
          LIBBASETYPEPTR, BluetoothBase, 6, bt)
@@ -373,114 +424,6 @@ static void bDebugSemaInfo(LIBBASETYPEPTR BluetoothBase, struct BtSemaInfo *bsi)
 }
 /* \\\ */
 
-/* /// "bGuard()" */
-/* The library's lists and lock bookkeeping are shared by tasks running on
-   every CPU. A recursive Exec semaphore serializes them; Forbid() would
-   only hold the local processor on an SMP Exec. */
-void bGuard(LIBBASETYPEPTR BluetoothBase)
-{
-    ObtainSemaphore(&BluetoothBase->bt_Guard);
-}
-
-void bUnguard(LIBBASETYPEPTR BluetoothBase)
-{
-    ReleaseSemaphore(&BluetoothBase->bt_Guard);
-}
-
-/* Waits with the guard fully released, as Wait() breaks a Forbid(), then
-   takes it back to the same nesting depth. */
-ULONG bGuardWait(LIBBASETYPEPTR BluetoothBase, ULONG signals)
-{
-    struct Task *thistask = FindTask(NULL);
-    ULONG depth = 0;
-    ULONG sigs;
-
-    while(BluetoothBase->bt_Guard.ss_Owner == thistask) {
-        ReleaseSemaphore(&BluetoothBase->bt_Guard);
-        depth++;
-    }
-    sigs = Wait(signals);
-    while(depth--) {
-        ObtainSemaphore(&BluetoothBase->bt_Guard);
-    }
-    return(sigs);
-}
-
-/* A task without a free signal cannot be woken: it polls with the guard
-   released instead of borrowing SIGF_SINGLE from Exec's semaphores. */
-void bGuardPoll(LIBBASETYPEPTR BluetoothBase)
-{
-    struct Task *thistask = FindTask(NULL);
-    ULONG depth = 0;
-
-    while(BluetoothBase->bt_Guard.ss_Owner == thistask) {
-        ReleaseSemaphore(&BluetoothBase->bt_Guard);
-        depth++;
-    }
-    btDelayMS(2);
-    while(depth--) {
-        ObtainSemaphore(&BluetoothBase->bt_Guard);
-    }
-}
-
-/* ReplyMsg() marks a message replied before it takes the port's lock and
-   links it, possibly on another CPU. Remove our message only once it is
-   really on the list, under that lock; FALSE means not there (yet). The
-   UP SDK names the same port field mp_Pad. */
-BOOL bTakeReply(LIBBASETYPEPTR BluetoothBase, struct MsgPort *port, struct Message *msg)
-{
-    struct Node *n;
-    BOOL taken = FALSE;
-#if defined(__AROSPLATFORM_SMP__)
-    APTR ExecLockBase = BluetoothBase->bt_ExecLockBase;
-#if defined(__AROSEXEC_SMP__)
-    APTR lock = &port->mp_SpinLock;
-#else
-    APTR lock = &port->mp_Pad;
-#endif
-#endif
-    Forbid();
-#if defined(__AROSPLATFORM_SMP__)
-    if(ExecLockBase) {
-        ObtainLock(lock, SPINLOCK_MODE_WRITE, 0);
-    }
-#endif
-    for(n = port->mp_MsgList.lh_Head; n->ln_Succ; n = n->ln_Succ) {
-        if(n == &msg->mn_Node) {
-            Remove(n);
-            taken = TRUE;
-            break;
-        }
-    }
-#if defined(__AROSPLATFORM_SMP__)
-    if(ExecLockBase) {
-        ReleaseLock(lock, 0);
-    }
-#endif
-    Permit();
-    return(taken);
-}
-
-/* Start/stop handshakes with sub tasks. A private signal keeps a late
-   Signal() from waking an Exec semaphore wait, which SIGF_SINGLE would. */
-BYTE bAllocReadySignal(void)
-{
-    BYTE bit = AllocSignal(-1);
-    if(bit < 0) {
-        bit = SIGB_SINGLE;
-    }
-    SetSignal(0, 1UL << bit);
-    return(bit);
-}
-
-void bFreeReadySignal(BYTE bit)
-{
-    if(bit != SIGB_SINGLE) {
-        FreeSignal(bit);
-    }
-}
-/* \\\ */
-
 /* /// "bInitSem()" */
 void bInitSem(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls, STRPTR name)
 {
@@ -493,15 +436,15 @@ void bInitSem(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls, STRPTR name)
     bls->bls_SharedLockCount = 0;
     bls->bls_Dead = FALSE;
 
-    bGuard(BluetoothBase);
+    Forbid();
     bsi = (struct BtSemaInfo *) AllocPooled(BluetoothBase->bt_SemaMemPool, sizeof(struct BtSemaInfo));
     if(!bsi) {
-        bUnguard(BluetoothBase);
+        Permit();
         return;
     }
     bsi->bsi_LockSem = bls;
     AddTail(&BluetoothBase->bt_DeadlockDebug, &bsi->bsi_Node);
-    bUnguard(BluetoothBase);
+    Permit();
 }
 /* \\\ */
 
@@ -509,7 +452,7 @@ void bInitSem(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls, STRPTR name)
 void bDeleteSem(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
 {
     struct BtSemaInfo *bsi;
-    bGuard(BluetoothBase);
+    Forbid();
     bls->bls_Dead = TRUE;
     bsi = (struct BtSemaInfo *) BluetoothBase->bt_DeadlockDebug.lh_Head;
     while(bsi->bsi_Node.ln_Succ) {
@@ -525,7 +468,7 @@ void bDeleteSem(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
         }
         bsi = (struct BtSemaInfo *) bsi->bsi_Node.ln_Succ;
     }
-    bUnguard(BluetoothBase);
+    Permit();
 }
 /* \\\ */
 
@@ -535,13 +478,10 @@ void bLockSemExcl(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
     struct BtReadLock waitbrl;
     struct Task *thistask = FindTask(NULL);
 
-    BYTE sig = -1;
-
     waitbrl.brl_Task = thistask;
     waitbrl.brl_IsExcl = TRUE;
-    waitbrl.brl_SigMask = 0;
 
-    bGuard(BluetoothBase);
+    Forbid();
     do {
         // it's already mine!!
         if(thistask == bls->bls_Owner) {
@@ -559,28 +499,17 @@ void bLockSemExcl(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
             }
         }
 
-        // okay, bad luck, we've got to wait somehow, on a signal of our own:
-        // SIGF_SINGLE belongs to Exec's semaphores, which the guard is
-        if(!waitbrl.brl_SigMask && sig < 0) {
-            sig = AllocSignal(-1);
-            waitbrl.brl_SigMask = (sig >= 0) ? (1UL << sig) : 0;
-        }
+        // okay, bad luck, we've got to wait somehow
         AddHead(&bls->bls_WaitQueue, &waitbrl.brl_Node);
-        if(waitbrl.brl_SigMask) {
-            SetSignal(0, waitbrl.brl_SigMask);
-            bGuardWait(BluetoothBase, waitbrl.brl_SigMask);
-        } else {
-            bGuardPoll(BluetoothBase);
-        }
+        thistask->tc_SigRecvd &= ~SIGF_SINGLE;
+
+        Wait(SIGF_SINGLE);
 
         Remove(&waitbrl.brl_Node);
     } while(TRUE);
     bls->bls_Owner = thistask;
     bls->bls_ExclLockCount++;
-    bUnguard(BluetoothBase);
-    if(sig >= 0) {
-        FreeSignal(sig);
-    }
+    Permit();
 }
 /* \\\ */
 
@@ -589,14 +518,13 @@ void bLockSemShared(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
 {
     struct BtReadLock *brl;
     struct Task *thistask = FindTask(NULL);
-    BYTE sig = -1;
 
-    bGuard(BluetoothBase);
+    Forbid();
     // is this already locked exclusively by me?
     if(thistask == bls->bls_Owner) {
         // yes? then just increase exclusive lock count
         bls->bls_ExclLockCount++;
-        bUnguard(BluetoothBase);
+        Permit();
         return;
     }
 
@@ -606,7 +534,7 @@ void bLockSemShared(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
         if(brl->brl_Task == thistask) {
             KPRINTF(1, ("Increasing ReadLock (%p) count to %ld\n", thistask, brl->brl_Count));
             brl->brl_Count++;
-            bUnguard(BluetoothBase);
+            Permit();
             return;
         }
         brl = (struct BtReadLock *) brl->brl_Node.ln_Succ;
@@ -616,7 +544,7 @@ void bLockSemShared(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
     if(!(brl = (struct BtReadLock *) AllocPooled(BluetoothBase->bt_SemaMemPool, sizeof(struct BtReadLock)))) {
         KPRINTF(20, ("No mem for shared lock! context (%p) on %p\n", thistask, bls));
         // try exclusive lock as fallback (needs no memory)
-        bUnguard(BluetoothBase);
+        Permit();
         bLockSemExcl(BluetoothBase, bls);
         return;
     }
@@ -625,28 +553,16 @@ void bLockSemShared(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
     brl->brl_Task = thistask;
     brl->brl_Count = 0;
     brl->brl_IsExcl = FALSE;
-    brl->brl_SigMask = 0;
 
     // if it's exclusively locked, wait for this lock to vanish
     while(bls->bls_Owner) {
-        if(!brl->brl_SigMask && sig < 0) {
-            sig = AllocSignal(-1);
-            brl->brl_SigMask = (sig >= 0) ? (1UL << sig) : 0;
-        }
         AddTail(&bls->bls_WaitQueue, &brl->brl_Node);
-        if(brl->brl_SigMask) {
-            SetSignal(0, brl->brl_SigMask);
-            bGuardWait(BluetoothBase, brl->brl_SigMask);
-        } else {
-            bGuardPoll(BluetoothBase);
-        }
+        thistask->tc_SigRecvd &= ~SIGF_SINGLE;
+
+        Wait(SIGF_SINGLE);
 
         Remove(&brl->brl_Node);
     }
-    if(sig >= 0) {
-        FreeSignal(sig);
-    }
-    brl->brl_SigMask = 0;
 
     if(brl->brl_IsExcl) {
         // we got promoted by BorrowLocks during the process! So we don't need the shared stuff anymore
@@ -659,7 +575,7 @@ void bLockSemShared(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
         brl->brl_Count++;
         bls->bls_SharedLockCount++;
     }
-    bUnguard(BluetoothBase);
+    Permit();
     return;
 }
 /* \\\ */
@@ -671,11 +587,11 @@ void bUnlockSem(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
     struct Task *thistask = FindTask(NULL);
     BOOL gotit = FALSE;
 
-    bGuard(BluetoothBase);
+    Forbid();
     if(bls->bls_Owner) {
         // exclusively locked, this means unlocking task must be owner
         if(bls->bls_Owner != thistask) {
-            bUnguard(BluetoothBase);
+            Permit();
             btDebugSemaphores();
             btAddErrorMsg(RETURN_WARN, (STRPTR) GM_UNIQUENAME(libname),
                            "Attempt to unlock exclusive semaphore %p not owned by task %s!",
@@ -685,14 +601,14 @@ void bUnlockSem(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
         }
         if(--bls->bls_ExclLockCount) {
             // still locked
-            bUnguard(BluetoothBase);
+            Permit();
             return;
         }
         bls->bls_Owner = NULL;
         // otherwise drop through and notify
     } else {
         if(!bls->bls_SharedLockCount) {
-            bUnguard(BluetoothBase);
+            Permit();
             btDebugSemaphores();
             btAddErrorMsg(RETURN_WARN, (STRPTR) GM_UNIQUENAME(libname),
                            "Attempt to unlock (free) semaphore %p once too often by task %s!",
@@ -705,7 +621,7 @@ void bUnlockSem(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
             if(brl->brl_Task == thistask) {
                 if(--brl->brl_Count) {
                     // can't be the last lock, so just reduce count and return
-                    bUnguard(BluetoothBase);
+                    Permit();
                     return;
                 }
                 // remove read lock, it's no longer needed
@@ -720,7 +636,7 @@ void bUnlockSem(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
             brl = (struct BtReadLock *) brl->brl_Node.ln_Succ;
         }
         if(!gotit) {
-            bUnguard(BluetoothBase);
+            Permit();
             btDebugSemaphores();
             btAddErrorMsg(RETURN_WARN, (STRPTR) GM_UNIQUENAME(libname),
                            "Attempt to unlock (shared) semaphore %p once too often by task %s!",
@@ -732,16 +648,42 @@ void bUnlockSem(LIBBASETYPEPTR BluetoothBase, struct BtLockSem *bls)
     // notify waiting tasks
     brl = (struct BtReadLock *) bls->bls_WaitQueue.lh_Head;
     while(brl->brl_Node.ln_Succ) {
-        if(brl->brl_SigMask) {
-            Signal(brl->brl_Task, brl->brl_SigMask);
-        }
+        Signal(brl->brl_Task, SIGF_SINGLE);
         brl = (struct BtReadLock *) brl->brl_Node.ln_Succ;
     }
-    bUnguard(BluetoothBase);
+    Permit();
 }
 /* \\\ */
 
 /* /// "btDebugSemaphores()" */
+/*****************************************************************************
+    NAME
+        VOID btDebugSemaphores(
+
+    SYNOPSIS
+        )
+
+    FUNCTION
+        Append diagnostic records for registered Bluetooth locks to the
+        Bluetooth error-message list. Include owners, nesting counts,
+        waiting tasks and reader records.
+
+    INPUTS
+        None.
+
+    RESULT
+        None. Individual message allocation failures are not reported.
+
+    NOTES
+        Call from task context. Records use RETURN_OK and can be suppressed
+        by the information-log setting. Logging can allocate memory, emit
+        events and perform configured debug output. This does not acquire
+        the reported locks, resolve a deadlock or validate lock ownership.
+
+    SEE ALSO
+        btAddErrorMsgA()
+
+*****************************************************************************/
 AROS_LH0(void, btDebugSemaphores,
          LIBBASETYPEPTR, BluetoothBase, 85, bt)
 {
@@ -752,18 +694,49 @@ AROS_LH0(void, btDebugSemaphores,
     btAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname),
                    "Debug Semaphores (%p)", thistask);
 
-    bGuard(BluetoothBase);
+    Forbid();
     bsi = (struct BtSemaInfo *) BluetoothBase->bt_DeadlockDebug.lh_Head;
     while(bsi->bsi_Node.ln_Succ) {
         bDebugSemaInfo(BluetoothBase, bsi);
         bsi = (struct BtSemaInfo *) bsi->bsi_Node.ln_Succ;
     }
-    bUnguard(BluetoothBase);
+    Permit();
     AROS_LIBFUNC_EXIT
 }
 /* \\\ */
 
 /* /// "btLockReadBase()" */
+/*****************************************************************************
+    NAME
+        VOID btLockReadBase(
+
+    SYNOPSIS
+        )
+
+    FUNCTION
+        Acquire shared access to the Bluetooth library base. The calling task
+        may nest acquisitions.
+
+    INPUTS
+        None.
+
+    RESULT
+        None. Return indicates that access has been acquired.
+
+    NOTES
+        Call from task context. The call may wait indefinitely and uses
+        SIGB_SINGLE while waiting. Balance every acquisition with one
+        btUnlockBase() in the same task. A read acquisition made by the
+        exclusive owner increases its exclusive nesting count.
+
+        If a reader record cannot be allocated, the call acquires exclusive
+        access instead. Do not depend on another reader entering while this
+        lock is held. No reader/writer fairness guarantee is provided.
+
+    SEE ALSO
+        btLockWriteBase(), btUnlockBase(), btBorrowLocksWait()
+
+*****************************************************************************/
 AROS_LH0(void, btLockReadBase,
          LIBBASETYPEPTR, BluetoothBase, 8, bt)
 {
@@ -775,6 +748,38 @@ AROS_LH0(void, btLockReadBase,
 /* \\\ */
 
 /* /// "btLockWriteBase()" */
+/*****************************************************************************
+    NAME
+        VOID btLockWriteBase(
+
+    SYNOPSIS
+        )
+
+    FUNCTION
+        Acquire exclusive access to the Bluetooth library base. Repeated
+        acquisitions by the owner increase the nesting count.
+
+    INPUTS
+        None.
+
+    RESULT
+        None. Return indicates that exclusive access has been acquired.
+
+    NOTES
+        Call from task context. The call may wait indefinitely and uses
+        SIGB_SINGLE while waiting. Balance every acquisition with one
+        btUnlockBase() in the same task.
+
+        An existing read lock can be promoted when this task is the only
+        reader. The read acquisition remains and needs its own unlock after
+        the exclusive acquisition is released. Do not attempt concurrent
+        read-to-write upgrades: waiting while retaining shared access can
+        deadlock with another upgrading reader.
+
+    SEE ALSO
+        btLockReadBase(), btUnlockBase(), btBorrowLocksWait()
+
+*****************************************************************************/
 AROS_LH0(void, btLockWriteBase,
          LIBBASETYPEPTR, BluetoothBase, 7, bt)
 {
@@ -786,6 +791,34 @@ AROS_LH0(void, btLockWriteBase,
 /* \\\ */
 
 /* /// "btUnlockBase()" */
+/*****************************************************************************
+    NAME
+        VOID btUnlockBase(
+
+    SYNOPSIS
+        )
+
+    FUNCTION
+        Release one lock acquisition held by the calling task on the Bluetooth library base.
+
+    INPUTS
+        None.
+
+    RESULT
+        None. Ownership errors are logged, not returned.
+
+    NOTES
+        Release exclusive acquisitions before any underlying shared
+        acquisitions. The last acquisition of a mode releases that mode and
+        wakes waiting tasks; it does not guarantee which waiter proceeds.
+        An unlock by a non-owner or without an acquisition leaves the lock
+        unchanged and can add diagnostic messages. Do not use this call
+        as an ownership test. Call from task context.
+
+    SEE ALSO
+        btLockReadBase(), btLockWriteBase()
+
+*****************************************************************************/
 AROS_LH0(void, btUnlockBase,
          LIBBASETYPEPTR, BluetoothBase, 9, bt)
 {
@@ -797,6 +830,48 @@ AROS_LH0(void, btUnlockBase,
 /* \\\ */
 
 /* /// "btBorrowLocksWait()" */
+/*****************************************************************************
+    NAME
+        ULONG btBorrowLocksWait(
+
+    SYNOPSIS
+        struct Task *task, ULONG signals)
+
+    FUNCTION
+        Temporarily lend the calling task's tracked Bluetooth locks to
+        another task while waiting for a signal, then restore the caller's
+        acquisitions. A target already waiting for a lock may be allowed
+        to acquire it instead of receiving its ownership directly.
+
+    INPUTS
+        task - Live, cooperating target task, distinct from the caller.
+        signals - Nonzero Exec signal mask to wait for in the calling task.
+
+    RESULT
+        Signal mask returned by Wait(). Restoring the locks may delay
+        return beyond receipt of the signal.
+
+    NOTES
+        Call from task context. This applies only to locks registered with
+        bluetooth.library, not arbitrary Exec semaphores. With no tracked
+        locks held, it is equivalent to Wait(signals).
+
+        Arrange a completion handshake before calling. The target must
+        balance its own acquisitions, leave borrowed acquisitions intact
+        and keep the protected objects and locks alive until restoration.
+        The target and entry code must remain valid through the handshake.
+        There is no timeout or cancellation result. Do not use a stale
+        signal as evidence that the target has finished.
+
+    BUGS
+        Allocation failure can leave some locks with the caller while it
+        waits, without an error result. A target needing those locks can
+        then deadlock. Lending is not an atomic all-or-nothing operation.
+
+    SEE ALSO
+        btLockReadBase(), btLockWriteBase(), btSpawnSubTask(), exec.library/Wait()
+
+*****************************************************************************/
 AROS_LH2(ULONG, btBorrowLocksWait,
          AROS_LHA(struct Task *, task, A1),
          AROS_LHA(ULONG, signals, D0),
@@ -817,7 +892,7 @@ AROS_LH2(ULONG, btBorrowLocksWait,
     XPRINTF(10, ("Borrowing locks from %p (%s) to %p (%s)!\n",
                  thistask, thistask->tc_Node.ln_Name, task, task->tc_Node.ln_Name));
 
-    bGuard(BluetoothBase);
+    Forbid();
     bsi = (struct BtSemaInfo *) BluetoothBase->bt_DeadlockDebug.lh_Head;
     while(bsi->bsi_Node.ln_Succ) {
         bls = bsi->bsi_LockSem;
@@ -836,7 +911,7 @@ AROS_LH2(ULONG, btBorrowLocksWait,
         bsi = (struct BtSemaInfo *) bsi->bsi_Node.ln_Succ;
     }
     if(!cnt) {
-        bUnguard(BluetoothBase);
+        Permit();
         XPRINTF(10, ("Nothing to borrow!\n"));
         return(Wait(signals));
     }
@@ -866,9 +941,7 @@ AROS_LH2(ULONG, btBorrowLocksWait,
 
                         bls->bls_ExclLockCount = 0;
                         bls->bls_Owner = NULL;
-                        if(brl->brl_SigMask) {
-                            Signal(task, brl->brl_SigMask);
-                        }
+                        Signal(task, SIGF_SINGLE);
                         XPRINTF(10, ("Waiting lock %p transfer\n", bls));
                     }
                     moveowner = FALSE;
@@ -904,9 +977,7 @@ AROS_LH2(ULONG, btBorrowLocksWait,
                                 Remove(&brl->brl_Node);
                                 FreePooled(BluetoothBase->bt_SemaMemPool, brl, sizeof(struct BtReadLock));
                                 bls->bls_SharedLockCount--;
-                                if(brl2->brl_SigMask) {
-                                    Signal(task, brl2->brl_SigMask);
-                                }
+                                Signal(task, SIGF_SINGLE);
                             }
                             moveowner = FALSE;
                             XPRINTF(10, ("Waiting shared lock %p transfer\n", bls));
@@ -952,7 +1023,7 @@ AROS_LH2(ULONG, btBorrowLocksWait,
         bsi = (struct BtSemaInfo *) bsi->bsi_Node.ln_Succ;
     }
 
-    sigmask = bGuardWait(BluetoothBase, signals);
+    sigmask = Wait(signals);
 
     // try to get moved locks back first
     bbl = (struct BtBorrowLock *) borrows.lh_Head;
@@ -1009,7 +1080,7 @@ AROS_LH2(ULONG, btBorrowLocksWait,
         FreePooled(BluetoothBase->bt_SemaMemPool, bbl, sizeof(struct BtBorrowLock));
         bbl = (struct BtBorrowLock *) reclaims.lh_Head;
     }
-    bUnguard(BluetoothBase);
+    Permit();
 
     return(sigmask);
     AROS_LIBFUNC_EXIT
@@ -1019,6 +1090,32 @@ AROS_LH2(ULONG, btBorrowLocksWait,
 /* *** Support *** */
 
 /* /// "btCopyStr()" */
+/*****************************************************************************
+    NAME
+        STRPTR btCopyStr(
+
+    SYNOPSIS
+        CONST_STRPTR name)
+
+    FUNCTION
+        Allocate a copy of a NUL-terminated string, including its terminator.
+
+    INPUTS
+        name - Non-NULL source string, valid for the duration of the call.
+
+    RESULT
+        Independent string copy, or NULL on allocation failure.
+
+    NOTES
+        Release with btFreeVec(). Keep the library open until the copy is
+        freed. The source is not retained. Call from task context. The
+        string length and allocation overhead must fit the allocator's
+        ULONG size range.
+
+    SEE ALSO
+        btFreeVec(), btAllocVec(), btCopyStrFmtA()
+
+*****************************************************************************/
 AROS_LH1(STRPTR, btCopyStr,
          AROS_LHA(CONST_STRPTR, name, A0),
          LIBBASETYPEPTR, BluetoothBase, 10, bt)
@@ -1035,6 +1132,40 @@ AROS_LH1(STRPTR, btCopyStr,
 /* \\\ */
 
 /* /// "btSafeRawDoFmtA()" */
+/*****************************************************************************
+    NAME
+        VOID btSafeRawDoFmtA(
+
+    SYNOPSIS
+        STRPTR buf, ULONG len, CONST_STRPTR fmtstr, RAWARG fmtdata)
+
+    FUNCTION
+        Format a RawDoFmt argument stream into a bounded buffer. Retain
+        at most len - 1 output bytes and terminate the result when len
+        is nonzero.
+
+    INPUTS
+        buf - Writable buffer of at least len bytes.
+        len - Capacity including the terminating NUL; zero writes nothing
+            and does not inspect the format or arguments.
+        fmtstr - NUL-terminated RawDoFmt format, not a printf format.
+        fmtdata - Argument stream in the target's RawDoFmt layout. It may
+            be NULL only when the format consumes no arguments.
+
+    RESULT
+        None. Truncation and the required output length are not reported.
+
+    NOTES
+        For nonzero len, the format and all referenced arguments must remain
+        valid throughout formatting. Filling the buffer does not stop
+        format processing or argument access. Do not overlap the output
+        with the format, argument stream or referenced strings. Inputs are
+        not retained. A one-byte buffer receives only a NUL.
+
+    SEE ALSO
+        btCopyStrFmtA(), exec.library/RawDoFmt()
+
+*****************************************************************************/
 AROS_LH4(void, btSafeRawDoFmtA,
          AROS_LHA(STRPTR, buf, A0),
          AROS_LHA(ULONG, len, D0),
@@ -1070,6 +1201,36 @@ AROS_UFH2(void, bPutChar,
 /* \\\ */
 
 /* /// "btCopyStrFmtA()" */
+/*****************************************************************************
+    NAME
+        STRPTR btCopyStrFmtA(
+
+    SYNOPSIS
+        CONST_STRPTR fmtstr, RAWARG fmtdata)
+
+    FUNCTION
+        Allocate a string containing formatted RawDoFmt output.
+
+    INPUTS
+        fmtstr - Non-NULL, NUL-terminated RawDoFmt format.
+        fmtdata - Matching RawDoFmt argument stream; NULL is valid only
+            when no arguments are consumed.
+
+    RESULT
+        Allocated terminated string, or NULL on allocation failure.
+
+    NOTES
+        The format is evaluated twice, first to measure and then to write.
+        Keep the argument stream and all referenced data unchanged through
+        both passes. The result is independent of those inputs. Release it
+        with btFreeVec() before closing the library. Call from task context.
+        Output length, terminators and allocation overhead must fit ULONG;
+        length arithmetic is not checked for overflow.
+
+    SEE ALSO
+        btSafeRawDoFmtA(), btFreeVec(), exec.library/RawDoFmt()
+
+*****************************************************************************/
 AROS_LH2(STRPTR, btCopyStrFmtA,
          AROS_LHA(CONST_STRPTR, fmtstr, A0),
          AROS_LHA(RAWARG, fmtdata, A1),
@@ -1101,39 +1262,92 @@ AROS_UFH2(void, bRawFmtLength,
 /* \\\ */
 
 /* /// "btDelayMS()" */
+/*****************************************************************************
+    NAME
+        VOID btDelayMS(
+
+    SYNOPSIS
+        ULONG milli)
+
+    FUNCTION
+        Submit a timer.device delay and wait for its completion.
+
+    INPUTS
+        milli - Requested delay in milliseconds.
+
+    RESULT
+        None. Timer errors are not returned.
+
+    NOTES
+        Call from task context with bluetooth.library open. The wait uses
+        SIGB_SINGLE in the calling task; do not use that signal concurrently
+        for another protocol. Scheduling may extend the elapsed delay.
+        Zero still submits a zero-duration timer request; this is not a
+        precision timing or cancellation interface.
+
+*****************************************************************************/
 AROS_LH1(void, btDelayMS,
          AROS_LHA(ULONG, milli, D0),
          LIBBASETYPEPTR, BluetoothBase, 11, bt)
 {
     AROS_LIBFUNC_INIT
-    struct MsgPort mp, *port;
+    struct MsgPort mp;
     struct timerequest tr;
 
+    memset(&mp, 0, sizeof(mp));
+
     KPRINTF(1, ("btDelayMS(%ld)\n", milli));
-    /* A private signal: the timer's reply, possibly from another CPU, must
-       not reach an Exec semaphore wait as SIGF_SINGLE would. The stack
-       port remains only as a fallback without a free signal. */
-    if(!(port = CreateMsgPort())) {
-        memset(&mp, 0, sizeof(mp));
-        mp.mp_Flags = PA_SIGNAL;
-        mp.mp_SigBit = SIGB_SINGLE;
-        mp.mp_SigTask = FindTask(NULL);
-        NewList(&mp.mp_MsgList);
-        port = &mp;
-    }
+    mp.mp_Flags = PA_SIGNAL;
+    mp.mp_SigBit = SIGB_SINGLE;
+    mp.mp_SigTask = FindTask(NULL);
+    NewList(&mp.mp_MsgList);
     CopyMem(&BluetoothBase->bt_TimerIOReq, &tr, sizeof(tr));
-    tr.tr_node.io_Message.mn_ReplyPort = port;
+    tr.tr_node.io_Message.mn_ReplyPort = &mp;
     tr.tr_time.tv_secs  = milli / 1000;
     tr.tr_time.tv_micro = (milli % 1000) * 1000;
     DoIO((struct IORequest *) &tr);
-    if(port != &mp) {
-        DeleteMsgPort(port);
-    }
     AROS_LIBFUNC_EXIT
 }
 /* \\\ */
 
 /* /// "btSpawnSubTask()" */
+/*****************************************************************************
+    NAME
+        struct Task * btSpawnSubTask(
+
+    SYNOPSIS
+        STRPTR name, APTR initpc, APTR userdata)
+
+    FUNCTION
+        Start a worker using the configured Bluetooth subtask priority and
+        AROS_STACKSIZE. Create a DOS process when dos.library can be opened;
+        otherwise create an Exec task.
+
+    INPUTS
+        name - Non-NULL, NUL-terminated task name; copied during creation.
+        initpc - Non-NULL entry point compatible with both possible startup
+            environments. It receives no ordinary C argument from this call.
+        userdata - Borrowed pointer installed in the worker's tc_UserData.
+            The worker can retrieve it through FindTask(NULL).
+
+    RESULT
+        Task pointer, or NULL if required arguments are NULL or creation
+        fails. The result can point to a Process. It is not an initialization
+        completion notification or a lifetime reference.
+
+    NOTES
+        Call from task context. The worker may run or exit before the caller
+        resumes. Establish an explicit startup and shutdown handshake before
+        using the returned pointer. Keep userdata and entry code alive until
+        the worker finishes; neither is copied or freed by this function.
+        A DOS process does not copy the caller's local variables (NP_CopyVars
+        is FALSE). An Exec task must not assume a DOS process environment.
+        The caller must keep libraries used by the worker open.
+
+    SEE ALSO
+        btBorrowLocksWait(), exec.library/FindTask(), dos.library/CreateNewProc()
+
+*****************************************************************************/
 AROS_LH3(struct Task *, btSpawnSubTask,
          AROS_LHA(STRPTR, name, A0),
          AROS_LHA(APTR, initpc, A1),
@@ -1633,6 +1847,235 @@ static const ULONG *BtPTArray[BGA_LAST+1] = {
 /* \\\ */
 
 /* /// "btGetAttrsA()" */
+/*****************************************************************************
+    NAME
+        LONG btGetAttrsA(
+
+    SYNOPSIS
+        ULONG type, APTR btstruct, struct TagItem *taglist)
+
+    FUNCTION
+        Read attributes of a Bluetooth object into caller-provided result storage.
+
+    INPUTS
+        type - BGA_* object type listed under TAGS.
+        btstruct - Live object of that type. Ignored for BGA_STACK and
+            BGA_STACKCFG, which use the library's current objects.
+        taglist - Query tags, or NULL. Each ti_Data is a result address,
+            not the value to retrieve.
+
+    TAGS
+        Supported tags follow, grouped by object type. Enum and flag values
+        are defined in <libraries/bluetooth.h>. All table results use IPTR
+        storage, including pointer-valued and narrow numeric attributes.
+
+        BGA_STACK:
+
+            Pointer or IPTR values:
+                BSA_GlobalConfig.
+
+            Unsigned values and booleans:
+                BSA_ConfigRead, BSA_MemPoolUsage, BSA_CurrConfigHash,
+                BSA_SavedConfigHash, BSA_ReleaseVersion, BSA_OSVersion,
+                BSA_LEAdvertising, BSA_EIRServices, BSA_LEConnInterval.
+
+            BSA_HardwareList, BSA_ClassList, BSA_ErrorMsgList,
+            BSA_ServiceRecordList - borrowed struct List pointers.
+            BSA_LENotifyPayload - ULONG result; minimum nonzero cached adapter
+                payload, with a floor of 20 bytes. A snapshot, not a reservation.
+
+        BGA_BTCLASS:
+
+            Pointer or IPTR values:
+                BCA_ClassBase, BCA_ClassName, BCA_FullPath.
+
+            Unsigned values and booleans:
+                BCA_UseCount.
+
+        BGA_HARDWARE:
+
+            Pointer or IPTR values:
+                BHA_DeviceName, BHA_ProductName, BHA_Manufacturer,
+                BHA_Description, BHA_Copyright, BHA_LocalName.
+
+            Unsigned values and booleans:
+                BHA_DeviceUnit, BHA_Version, BHA_Revision,
+                BHA_DriverVersion, BHA_NumDevices, BHA_State,
+                BHA_ClassOfDevice, BHA_HCIVersion, BHA_HCIRevision,
+                BHA_LMPVersion, BHA_LMPSubversion, BHA_ManufacturerID,
+                BHA_ACLMaxPktSize, BHA_ACLNumPkts, BHA_SCOMaxPktSize,
+                BHA_SCONumPkts, BHA_LEACLMaxPktSize, BHA_LEACLNumPkts,
+                BHA_ErrorCount, BHA_LastHCIError, BHA_IsClassic, BHA_IsLE,
+                BHA_IsDiscovering, BHA_Discoverable, BHA_Connectable.
+
+            BHA_DeviceList - borrowed struct List pointer.
+            BHA_Address - borrowed BD_ADDR pointer.
+            BHA_AddressString, BHA_ManufacturerName - borrowed strings.
+            BHA_Features, BHA_LEFeatures - borrowed eight-byte feature arrays.
+            BHA_LECaps, BHA_AcceptListSize, BHA_ResolvingListSize,
+            BHA_LEReconnect, BHA_IsReady - IPTR results.
+
+        BGA_DEVICE:
+
+            Pointer or IPTR values:
+                BDA_Name, BDA_OrigName, BDA_Hardware, BDA_Binding,
+                BDA_BindingClass, BDA_IDString.
+
+            Signed values:
+                BDA_RSSI.
+
+            Unsigned values and booleans:
+                BDA_AddressType, BDA_ClassOfDevice, BDA_Appearance,
+                BDA_ConnHandle, BDA_Role, BDA_LinkType, BDA_BondFlags,
+                BDA_NumServices, BDA_VendorID, BDA_ProductID,
+                BDA_ProductVersion, BDA_VendorIDSource, BDA_LMPVersion,
+                BDA_ManufacturerID, BDA_AdvDataLength, BDA_PairingState,
+                BDA_PairingRequest, BDA_PairingPasskey, BDA_IsNewToMe,
+                BDA_InhibitPopup, BDA_InhibitClassBind, BDA_AutoConnect,
+                BDA_Trusted, BDA_IsClassic, BDA_IsLE, BDA_IsDiscovered,
+                BDA_IsRegistered, BDA_IsBonded, BDA_IsConnected,
+                BDA_IsEncrypted, BDA_IsDead, BDA_HasAppBinding,
+                BDA_ServicesKnown.
+
+            BDA_ServiceList - borrowed struct List pointer.
+            BDA_Address - borrowed BD_ADDR pointer.
+            BDA_AddressString - borrowed string.
+            BDA_AdvData - borrowed byte array; length is BDA_AdvDataLength.
+            BDA_LastSeen, BDA_FirstSeen - borrowed DateStamp pointers.
+
+        BGA_SERVICE:
+
+            Pointer or IPTR values:
+                BSVA_Device, BSVA_Name, BSVA_Binding, BSVA_BindingClass,
+                BSVA_IDString, BSVA_ServiceClassIDs, BSVA_HIDDescriptor.
+
+            Unsigned values and booleans:
+                BSVA_UUID16, BSVA_Protocol, BSVA_PSM, BSVA_RFCOMMChannel,
+                BSVA_RecordHandle, BSVA_StartHandle, BSVA_EndHandle,
+                BSVA_Version, BSVA_IsPrimary, BSVA_NumEndpoints,
+                BSVA_HIDDescriptorLen, BSVA_Incoming.
+
+            BSVA_EndpointList - borrowed struct List pointer.
+            BSVA_UUID - borrowed 16-byte UUID.
+            BSVA_UUIDString - the borrowed service ID string, also returned
+                by BSVA_IDString; not a separately formatted UUID string.
+
+        BGA_ENDPOINT:
+
+            Pointer or IPTR values:
+                BEA_Service, BEA_Name.
+
+            Unsigned values and booleans:
+                BEA_CanRead, BEA_CanWrite, BEA_Type, BEA_PSM, BEA_CID,
+                BEA_RFCOMMChannel, BEA_Handle, BEA_UUID16, BEA_Properties,
+                BEA_MaxPktSize, BEA_ReportID, BEA_ReportType,
+                BEA_CCCDHandle, BEA_ReportRefHandle.
+
+            BEA_UUID - borrowed 16-byte UUID.
+            BEA_IsOpen - IPTR boolean; tests the endpoint's channel pointer.
+
+        BGA_ERRORMSG:
+
+            Pointer or IPTR values:
+                BEMA_Origin, BEMA_Msg.
+
+            Unsigned values and booleans:
+                BEMA_Level.
+
+            BEMA_DateStamp - borrowed DateStamp pointer.
+
+        BGA_CHANNEL:
+
+            Pointer or IPTR values:
+                BCHA_Endpoint, BCHA_Device.
+
+            Signed values:
+                BCHA_Error.
+
+            Unsigned values and booleans:
+                BCHA_Actual, BCHA_Timeout, BCHA_AutoConnect, BCHA_NoWait.
+
+            BCHA_MaxPktSize - IPTR result from the endpoint, or zero for a
+                channel without an endpoint.
+
+        BGA_APPBINDING:
+
+            Pointer or IPTR values:
+                BABA_ReleaseHook, BABA_Device, BABA_UserData, BABA_Task.
+
+            Unsigned values and booleans:
+                BABA_ForceRelease.
+
+        BGA_EVENTNOTE:
+
+            Pointer or IPTR values:
+                BENA_Param1, BENA_Param2, BENA_Data, BENA_Device.
+
+            Unsigned values and booleans:
+                BENA_EventID, BENA_DataLength.
+
+        BGA_STACKCFG:
+
+            Signed values:
+                BGCA_SubTaskPri.
+
+            Unsigned values and booleans:
+                BGCA_LogInfo, BGCA_LogWarning, BGCA_LogError,
+                BGCA_LogFailure, BGCA_BootDelay, BGCA_PopupDeviceNew,
+                BGCA_PopupDeviceGone, BGCA_PopupPairing,
+                BGCA_PopupCloseDelay, BGCA_PopupActivateWin,
+                BGCA_PopupWinToFront, BGCA_Discoverable, BGCA_Connectable,
+                BGCA_DiscoveryTime, BGCA_AutoConnect, BGCA_PrefsVersion.
+
+            BGCA_LocalName - borrowed string in the global configuration.
+
+        BGA_SERVICERECORD:
+
+            Pointer or IPTR values:
+                BSRA_Name, BSRA_Owner.
+
+            Unsigned values and booleans:
+                BSRA_UUID16, BSRA_Protocol, BSRA_RFCOMMChannel, BSRA_PSM,
+                BSRA_NumCharacteristics, BSRA_LEConnInterval, BSRA_Enabled,
+                BSRA_FirstHandle, BSRA_LastHandle.
+
+            BSRA_UUID128 - borrowed 16-byte UUID, or NULL when the record
+                does not use a 128-bit UUID.
+
+    RESULT
+        Number of recognized attributes written, or -1 for an unsupported
+        type. Zero means no requested attribute was handled. Unknown tags
+        leave their destination untouched. Only the first occurrence of each
+        recognized tag is used; the count is not the tag-list length.
+
+    NOTES
+        Use an aligned IPTR slot for each table-derived result, even when
+        the underlying value is a byte, word or ULONG. Signed fields are
+        sign-extended; interpret their result as SIPTR when needed. For the
+        explicit pointer results listed under TAGS, supply the address of a
+        pointer of the stated type. BSA_LENotifyPayload is the exception
+        among scalar results: its destination must be ULONG storage.
+
+        No destination may be NULL for a recognized query. For types other
+        than STACK and STACKCFG, the object must match type and remain live;
+        there is no runtime handle validation. Pointer-valued attributes may return NULL.
+
+        Returned strings, arrays, lists and object pointers are borrowed.
+        Do not modify or free them. Coordinate object lifetime and updates;
+        return does not acquire a reference or copy pointed-to data. Traverse
+        base-owned lists under the base read lock and device-owned lists under
+        the appropriate device lock. Event data is valid only until ReplyMsg().
+
+        Call from task context with bluetooth.library open. Apart from the
+        payload calculation's internal base lock, this function does not lock
+        objects or provide an atomic snapshot across attributes. Copy needed
+        data while its owner is protected. Service and endpoint pointers can
+        be invalidated by remote service refresh.
+
+    SEE ALSO
+        btSetAttrsA(), btLockReadBase(), btLockReadDevice(), UnpackStructureTags()
+
+*****************************************************************************/
 AROS_LH3(LONG, btGetAttrsA,
          AROS_LHA(ULONG, type, D0),
          AROS_LHA(APTR, btstruct, A0),
@@ -1825,10 +2268,6 @@ AROS_LH3(LONG, btGetAttrsA,
             *((IPTR *) ti->ti_Data) = bch->bch_Endpoint ? bch->bch_Endpoint->bep_MaxPktSize : 0;
             count++;
         }
-        if((ti = FindTagItem(BCHA_RemoteMTU, tags))) {
-            *((IPTR *) ti->ti_Data) = bch->bch_Endpoint ? bch->bch_Endpoint->bep_RemoteMTU : 0;
-            count++;
-        }
         break;
     }
     }
@@ -1842,6 +2281,126 @@ AROS_LH3(LONG, btGetAttrsA,
 /* \\\ */
 
 /* /// "btSetAttrsA()" */
+/*****************************************************************************
+    NAME
+        LONG btSetAttrsA(
+
+    SYNOPSIS
+        ULONG type, APTR btstruct, struct TagItem *taglist)
+
+    FUNCTION
+        Set writable attributes of a Bluetooth object.
+
+    INPUTS
+        type - BGA_* object type.
+        btstruct - Live object of that type. Ignored for BGA_STACK and
+            BGA_STACKCFG, which use the library's current objects.
+        taglist - Assignment tags, or NULL. ti_Data contains the value;
+            string and object values are pointers, not output addresses.
+
+    TAGS
+        BGA_STACK:
+            BSA_ConfigRead - Stored UWORD configuration-loaded flag.
+            BSA_SavedConfigHash - Stored ULONG saved-configuration hash.
+            BSA_LEAdvertising - Boolean LE advertising policy.
+            BSA_EIRServices - Boolean classic service-advertising policy.
+            BSA_LEConnInterval - Preferred peripheral connection interval
+                in 1.25 ms units; 0 leaves selection to the central, and
+                values above 1199 are limited to 1199.
+
+        BGA_HARDWARE:
+            BHA_LocalName - NUL-terminated name; NULL requests an empty name.
+            BHA_ClassOfDevice - ULONG class-of-device value.
+            BHA_Discoverable, BHA_Connectable - Boolean classic scan modes.
+                An omitted mode keeps its current flag value.
+
+        BGA_DEVICE:
+            BDA_Name - Nonempty NUL-terminated custom name, copied. NULL,
+                empty and identical names are counted without replacing it.
+            BDA_InhibitPopup, BDA_InhibitClassBind, BDA_AutoConnect,
+            BDA_Trusted - Stored UWORD policy fields; use zero or one.
+            BDA_Binding, BDA_BindingClass - Direct binding pointers. No claim,
+                release callback or usage-count adjustment is performed.
+
+        BGA_SERVICE:
+            BSVA_Binding, BSVA_BindingClass - Direct binding pointers, with
+                no binding lifecycle management.
+
+        BGA_CHANNEL:
+            BCHA_Timeout - Stored ULONG timeout in milliseconds; setting it
+                does not establish that a request path enforces the timeout.
+            BCHA_AutoConnect, BCHA_NoWait - Boolean channel flags. Their
+                effect depends on the request and transport.
+
+        BGA_APPBINDING:
+            BABA_ReleaseHook, BABA_Device, BABA_Task - Borrowed pointers.
+            BABA_UserData - IPTR callback data.
+            BABA_ForceRelease - Stored UWORD flag. Assigning it does not
+                release anything. Use btClaimAppBindingA() to make a claim.
+
+        BGA_STACKCFG:
+            BGCA_LogInfo, BGCA_LogWarning, BGCA_LogError, BGCA_LogFailure,
+            BGCA_PopupDeviceNew, BGCA_PopupDeviceGone, BGCA_PopupPairing,
+            BGCA_PopupActivateWin, BGCA_PopupWinToFront, BGCA_Discoverable,
+            BGCA_Connectable, BGCA_AutoConnect - UWORD flags; use zero or one.
+            BGCA_SubTaskPri - Signed WORD priority for subsequently spawned
+                subtasks; values are not validated against scheduler limits.
+            BGCA_BootDelay - ULONG delay in seconds used during stack startup.
+            BGCA_PopupCloseDelay - ULONG popup close-delay setting.
+            BGCA_DiscoveryTime - ULONG default discovery duration in seconds.
+            BGCA_LocalName - Copied into the 64-byte global name buffer;
+                supply at most 63 bytes plus NUL. NULL clears the name.
+
+        BGA_SERVICERECORD:
+            BSRA_Enabled - Boolean local service availability. Updates the
+                relevant advertising sequence and, for GATT, interval policy.
+
+        BGA_BTCLASS, BGA_ENDPOINT, BGA_ERRORMSG and BGA_EVENTNOTE have no
+        writable attributes. Other tags, including read-only fields and
+        creation-only service-record tags, are ignored.
+
+    RESULT
+        Number of recognized assignments, or -1 for an unsupported type.
+        Zero means no writable tag was handled. Only the first occurrence of
+        each recognized tag is used. The count does not confirm allocation,
+        controller-command success, persistence or completion of side effects.
+
+    NOTES
+        Assignments are not transactional or processed in tag-list order.
+        Manual handlers run before table assignments. Numeric table values
+        are narrowed to their stored field width without range checks.
+        Pointer fields are assigned directly, without copying or retaining
+        objects; only the documented string setters copy their input.
+
+        Coordinate object lifetime and concurrent writers. No general object
+        lock is taken. Change channel attributes only while the channel is
+        idle. Direct binding setters are for code that already owns the
+        binding protocol; use claim/release APIs for normal binding changes.
+
+        Hardware assignments wait for the hardware task using SIGF_SINGLE;
+        call from another task without locks that worker needs. No caller
+        timeout is provided. Device and global configuration updates can
+        also acquire configuration locks. Keep all input pointers and the
+        library valid until return.
+
+        Device name/policy changes update in-memory configuration, without a
+        disk save. STACKCFG updates its configuration chunk and checks for
+        changes even with an empty tag list. Applying global defaults does
+        not synchronously reconfigure every adapter. Advertising and interval
+        changes are consumed later; no negotiated radio setting is promised.
+
+    BUGS
+        Hardware command errors are discarded although their tags are counted.
+        Device-name replacement frees the old name before allocating its copy;
+        failure loses the old value. A replacement must not alias that storage.
+        BGCA_LocalName copies at most 63 bytes without explicitly writing the
+        last byte of the buffer. A short terminated input avoids depending on
+        that byte's prior contents; truncation is not reported.
+
+    SEE ALSO
+        btGetAttrsA(), btClaimAppBindingA(), btSaveCfgToDisk(), PackStructureTags()
+
+*****************************************************************************/
 AROS_LH3(LONG, btSetAttrsA,
          AROS_LHA(ULONG, type, D0),
          AROS_LHA(APTR, btstruct, A0),
@@ -1972,7 +2531,7 @@ AROS_LH3(LONG, btSetAttrsA,
     if(savepopocfg) {
         /* per-device settings (name, popup/bind/connect policy): in memory
            only, the prefs' Save/Use writes them - as Poseidon does */
-        if(!bStoreDevConfig(BluetoothBase, (struct BtDevice *) btstruct, FALSE)) res = -1;
+        bStoreDevConfig(BluetoothBase, (struct BtDevice *) btstruct, FALSE);
     }
     if(checkcfgupdate) {
         struct BtIFFContext *pic;

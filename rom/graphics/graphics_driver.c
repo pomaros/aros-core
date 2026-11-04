@@ -31,7 +31,6 @@
 #include <utility/tagitem.h>
 #include <aros/asmcall.h>
 
-#include <hidd/compositor.h>
 #include <hidd/gfx.h>
 
 #include <cybergraphx/cybergraphics.h>
@@ -42,7 +41,6 @@
 #include "graphics_intern.h"
 #include "graphics_driver.h"
 #include "graphics_display.h"
-#include "graphics_compositor.h"
 #include "intregions.h"
 #include "dispinfo.h"
 #include "gfxfuncsupport.h"
@@ -99,9 +97,10 @@ int driver_init(struct GfxBase * GfxBase)
     __IHidd_Sync     = OOP_ObtainAttrBase(IID_Hidd_Sync);
     __IHidd_PixFmt   = OOP_ObtainAttrBase(IID_Hidd_PixFmt);
     __IHidd_PlanarBM = OOP_ObtainAttrBase(IID_Hidd_PlanarBM);
+    __IHidd_Compositor = OOP_ObtainAttrBase(IID_Hidd_Compositor);
 
     if (__IHidd_Gfx && __IHidd_Display && __IHidd_DMEnum && __IHidd_BitMap &&
-        __IHidd_GC && __IHidd_Sync && __IHidd_PixFmt && __IHidd_PlanarBM)
+        __IHidd_GC && __IHidd_Sync && __IHidd_PixFmt && __IHidd_PlanarBM && __IHidd_Compositor)
     {
         OOP_Class *baseGfx;
 
@@ -113,7 +112,6 @@ int driver_init(struct GfxBase * GfxBase)
         InitSemaphore(&CDD(GfxBase)->displaydb_sem);
         CDD(GfxBase)->mdisplay.display_idbase    = INVALID_ID;
         CDD(GfxBase)->mdisplay.display_mask      = AROS_RTG_MONITOR_ID;
-        CDD(GfxBase)->mdisplay.display_compositor = NULL;
         CDD(GfxBase)->mdisplay.display_dmenum     = NULL;
 
         /* Init software driver, added as a driver of the gfx HW object */
@@ -133,6 +131,10 @@ int driver_init(struct GfxBase * GfxBase)
 
             if (CDD(GfxBase)->mdisplay.display_obj)
             {
+                /* Damage on bitmaps of the software display (never shown): resolved once like the others */
+                CDD(GfxBase)->mdisplay.display_UpdateRect = OOP_GetMethod(CDD(GfxBase)->mdisplay.display_obj,
+                                                                          HiddDisplayBase + moHidd_Display_UpdateRect,
+                                                                          &CDD(GfxBase)->mdisplay.display_UpdateRect_cl);
                 struct TagItem bm_create_tags[] =
                 {
                     { aHidd_BitMap_Display,  (IPTR)CDD(GfxBase)->mdisplay.display_obj },

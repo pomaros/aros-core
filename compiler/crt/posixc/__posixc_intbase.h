@@ -28,6 +28,7 @@ struct __random_state;
 struct __env_item;
 struct _fdesc;
 struct vfork_data;
+struct __flock_registry;
 
 struct PosixCIntBase
 {
@@ -92,8 +93,8 @@ struct PosixCIntBase
     int cd_changed;
     BPTR cd_lock;
 
-    /* flock.c */
-    struct MinList _file_locks, *file_locks;
+    /* flock.c: registry shared by all bases of this library */
+    struct __flock_registry *flock_registry;
 
     /* umask */
     mode_t umask;
@@ -143,6 +144,9 @@ struct PosixCIntBase *__cwd_runtime_base(void);
    execution of child code, even though that it's actually executed by parent
    process until execve() is called. */
 #define PRETEND_CHILD 0x00000004
+
+/* __threadhook.c: picks the malloc pool of the stdc bases this task opens */
+void __posixc_inherit_mempool(struct StdCBase *StdCBase, int inherit);
 
 /* __upath.c: frees the path buffers of other Tasks (upath_others) */
 void __upath_free_others(struct PosixCIntBase *PosixCBase);

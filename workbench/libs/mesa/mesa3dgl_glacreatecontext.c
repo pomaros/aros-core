@@ -131,6 +131,10 @@ static inline const void *gallium_core_get_api(void) { return (const void *)0; }
                      Invalid profiles or GLES versions fail without falling
                      back to desktop OpenGL.
 
+        GLA_SwapInterval - 0 (default): glASwapBuffers() does not wait for
+                     the display; 1: every swap waits until its frame is on
+                     screen. See glASwapInterval().
+
     RESULT
 
         A valid GL context or NULL of creation was not succesfull.
@@ -287,6 +291,8 @@ static inline const void *gallium_core_get_api(void) { return (const void *)0; }
         goto error_out;
     }
 
+    ctx->swap_interval = GetTagData(GLA_SwapInterval, 0, tagList) ? 1 : 0;
+
     attribs.visual = ctx->stvis;
 
     /* driconf defaults (driinfo_gallium.h) - we have no driconf, so the
@@ -310,6 +316,7 @@ static inline const void *gallium_core_get_api(void) { return (const void *)0; }
         bug("%s: ERROR -  failed to create frame buffer\n", __func__);
         goto error_out;
     }
+    ctx->own.framebuffer->drawable = &ctx->own;
     ctx->own.driver = ctx->driver;
     ctx->own.shared = ctx->shared;
 

@@ -32,6 +32,12 @@
 #include "pthread_intern.h"
 #include "debug.h"
 
+#if defined(__AROS__)
+#include <aros/config.h>
+#else
+#define _pthread_free_affinity(mask)
+#endif
+
 static void ClearThreadInfo(ThreadInfo *inf)
 {
     volatile UBYTE *p = (volatile UBYTE *)inf;
@@ -288,6 +294,7 @@ static void StarterFunc(void)
     BYTE sigbit;
     ULONG i;
     BOOL admitted;
+    APTR affinity = NULL;
 #endif
 
     D(bug("%s(%p, %p, %p, %p)\n", __FUNCTION__, thread, attr, start, arg));
@@ -296,10 +303,22 @@ static void StarterFunc(void)
         return EINVAL;
 
 #ifdef __AROS__
+    /* pthread_attr_setaffinity_np(): the CPUs the new thread may run on */
+    if (attr && attr->affinityset)
+    {
+        int err = _pthread_cpuset_to_mask(sizeof(cpu_set_t), &attr->affinity, &affinity);
+
+        if (err)
+            return err;
+    }
+
     // capture the creator's C-runtime contexts before anything exists; this
     // pins each provider's library and may wait, so not under thread_sem
     if (!CRTThreadContextCapture(&set))
+    {
+        _pthread_free_affinity(affinity);
         return EAGAIN;
+    }
     // AllocVec: memory from a thread's C runtime goes away with the thread
     admit = AllocVec(sizeof(*admit), MEMF_PUBLIC | MEMF_CLEAR);
     sigbit = admit ? AllocSignal(-1) : -1;
@@ -308,13 +327,13 @@ static void StarterFunc(void)
         if (admit)
             FreeVec(admit);
         CRTThreadContextCancel(&set);
+        _pthread_free_affinity(affinity);
         return EAGAIN;
     }
     admit->refs = 2;
     admit->creator = GET_THIS_TASK;
     admit->mask = 1UL << sigbit;
     SetSignal(0, admit->mask);
-
 #endif
 
     ObtainSemaphore(&thread_sem);
@@ -329,6 +348,7 @@ static void StarterFunc(void)
         FreeVec(admit);
         CRTThreadContextCancel(&set);
 #endif
+        _pthread_free_affinity(affinity);
         return EAGAIN;
     }
 
@@ -342,6 +362,7 @@ static void StarterFunc(void)
             FreeVec(admit);
             CRTThreadContextCancel(&set);
 #endif
+            _pthread_free_affinity(affinity);
             return EAGAIN;
         }
         __atomic_store_n(&threads_used, threadnew + 1, __ATOMIC_RELEASE);
@@ -391,6 +412,10 @@ static void StarterFunc(void)
         NP_UserData, inf,
 #endif
         NP_Name, (IPTR)name,
+#if defined(__AROS__)
+        /* the mask becomes the system's once the process exists */
+        affinity ? NP_Affinity : TAG_IGNORE, (IPTR)affinity,
+#endif
         TAG_DONE);
     inf->task = task;
     if (!task)
@@ -403,6 +428,7 @@ static void StarterFunc(void)
         FreeVec(admit);
         CRTThreadContextCancel(&set);
 #endif
+        _pthread_free_affinity(affinity);
         return EAGAIN;
     }
     ReleaseSemaphore(&thread_sem);

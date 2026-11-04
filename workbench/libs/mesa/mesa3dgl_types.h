@@ -14,6 +14,8 @@
 #include "frontend/api.h"
 #include "state_tracker/st_context.h"
 
+struct mesa3dgl_drawable;
+
 struct mesa3dgl_framebuffer
 {
     struct pipe_frontend_drawable base;
@@ -26,6 +28,24 @@ struct mesa3dgl_framebuffer
     ULONG                       width;
     ULONG                       height;
     BOOL                        resized;
+    BOOL                        linear_display;  /* the driver's DisplayResource needs linear colour buffers */
+
+    /* 3D scan-out (gallium.library scan-out framebuffer): when the window's
+     * display can show the colour buffers itself, the FRONT_LEFT attachment
+     * is the scan-out buffer being rendered (scanout_back) instead of a
+     * resource of our own; glASwapBuffers() flips it. NULL = the
+     * BltPipeResourceRastPort() path. The drawable is the one whose pixels
+     * this framebuffer keeps (a context's own target or an independent one). */
+    struct mesa3dgl_drawable    *drawable;
+    APTR                        scanout;
+    struct Window               *scanout_window; /* window/rectangle it was made for */
+    LONG                        scanout_left;
+    LONG                        scanout_top;
+    ULONG                       scanout_back;    /* buffer rendered next */
+    BOOL                        scanout_tried;   /* creation attempted for this size */
+    BOOL                        noscanout;       /* ENV:MESA3DGL_NOSCANOUT */
+    ULONG                       scanout_buffers; /* wanted (ENV:MESA3DGL_SCANOUT_BUFFERS, default 3) */
+    int                         scanout_vsync;   /* swap interval applied to the scan-out framebuffer, -1 = not yet */
 };
 
 /* The pipe screen and state tracker manager that contexts sharing objects
@@ -76,6 +96,7 @@ struct mesa3dgl_context
 
     struct mesa3dgl_drawable    own;            /* its own target */
     struct mesa3dgl_drawable    *draw, *read;   /* bound now (NULL: none) */
+    int                         swap_interval;  /* GLA_SwapInterval / glASwapInterval() */
 };
 
 /*  state trackers GL API */

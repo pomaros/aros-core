@@ -59,7 +59,10 @@
             /* the state tracker keeps per-drawable state; drop it before
              * the drawable memory goes away */
             if (_ctx->own.framebuffer)
+            {
+                MESA3DGLScanoutIdle(_ctx->own.framebuffer, st_ctx);
                 st_api_destroy_drawable(&_ctx->own.framebuffer->base);
+            }
             st_destroy_context(_ctx->st);
             MESA3DGLFreeFrameBuffer(_ctx->own.framebuffer);
             /* Release any presentation target before dropping the provider

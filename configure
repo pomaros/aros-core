@@ -1836,7 +1836,7 @@ Optional Packages:
   --with-iconset=NAME     Use a specific Icon-set (default=Gorilla).
   --with-theme=NAME       Use a specific GUI Theme
   --with-mesagl=family    Which version of MesaGL to build (defaults to
-                          26.0.0)
+                          26.2.5)
   --with-resolution=XRESxYRESxDEPTH
                           Default resolution of the initial WorkbenchScreen
   --with-serial-debug     Enable serial debug output in native (default=no)
@@ -3542,21 +3542,27 @@ fi
 { printf '%s\n' "$as_me:${as_lineno-$LINENO}: result: $target" >&5
 printf '%s\n' "$target" >&6; }
 
+# Record the build and source directories by their real paths, symlinks
+# resolved: TOP prefixes every target in the .d dependency files, and make
+# matches targets as strings, so a directory configured once through a
+# symlink and once directly would leave the old rules matching nothing.
 if test "$host_os" = "mingw32" ; then
     PWDCMD="pwd -W"
+else
+    PWDCMD="pwd -P"
 fi
 
 # Don't know where else to put this...
 { printf '%s\n' "$as_me:${as_lineno-$LINENO}: checking building AROS in" >&5
 printf %s "checking building AROS in... " >&6; }
-AROS_BUILDDIR=`${PWDCMD-pwd}`
-AROS_BUILDDIR_UNIX=${PWD}
+AROS_BUILDDIR=`${PWDCMD}`
+AROS_BUILDDIR_UNIX=`pwd -P`
 { printf '%s\n' "$as_me:${as_lineno-$LINENO}: result: $AROS_BUILDDIR" >&5
 printf '%s\n' "$AROS_BUILDDIR" >&6; }
 
 { printf '%s\n' "$as_me:${as_lineno-$LINENO}: checking AROS source in" >&5
 printf %s "checking AROS source in... " >&6; }
-srcpwd=`cd ${srcdir} ; ${PWDCMD-pwd}`
+srcpwd=`cd -P ${srcdir} ; ${PWDCMD}`
 SRCDIR=${srcpwd}
 { printf '%s\n' "$as_me:${as_lineno-$LINENO}: result: $SRCDIR" >&5
 printf '%s\n' "$SRCDIR" >&6; }
@@ -11460,6 +11466,11 @@ printf '%s\n' "$darwin_sdk_path" >&6; }
                 PLATFORM_EXECSMP="#define __AROSPLATFORM_SMP__"
                 aros_target_cpu="riscv64"
                 aros_object_format="riscv64elf_aros"
+                case "$aros_target_variant" in
+                    smp)
+                        ENABLE_EXECSMP="#define __AROSEXEC_SMP__"
+                    ;;
+                esac
                 ;;
             *riscv*)
                 aros_target_cpu="riscv"
@@ -13050,7 +13061,7 @@ if test ${with_mesagl+y}
 then :
   withval=$with_mesagl; aros_mesagl="$withval"
 else case e in #(
-  e) aros_mesagl="26.0.0" ;;
+  e) aros_mesagl="26.2.5" ;;
 esac
 fi
 
@@ -19970,7 +19981,10 @@ if test "$aros_target_variant" = ""; then
 else
     case "$aros_target_variant" in
         smp)
-            # SMP selects a build flavour, not a different platform directory.
+            # SMP is a build flavour of the platform, not a platform of its
+            # own: keep the real platform name so that distfiles-$(platform)
+            # and AROS_ARCHITECTURE resolve exactly as for the non-SMP build
+            # (e.g. raspi-aarch64, not smp-aarch64).
             aros_target_platform="$aros_target_arch-$aros_target_cpu"
             ;;
         *)

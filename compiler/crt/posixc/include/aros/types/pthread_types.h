@@ -35,6 +35,7 @@
 #include <aros/config.h>
 #include <aros/types/size_t.h>
 #include <aros/types/clockid_t.h>
+#include <sched.h>
 
 /* Twins of exec's Node, MinNode, MinList, SemaphoreRequest, spinlock_t and
    SignalSemaphore (exec/nodes.h, exec/lists.h, exec/semaphores.h,
@@ -134,6 +135,10 @@ struct pthread_attr
     struct sched_param param;
     int inheritsched;
     int contentionscope;
+#ifdef __AROS__
+    int affinityset;            /* pthread_attr_setaffinity_np() was called */
+    cpu_set_t affinity;
+#endif
 };
 typedef struct pthread_attr pthread_attr_t;
 

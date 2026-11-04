@@ -461,7 +461,6 @@ static BPTR internalBootLock(struct DosLibrary *DOSBase, struct ExpansionBase *E
     mp = mountBootNode(dn, fsr, DOSBase);
     if (!mp)
     {
-        bug("[DOS] Boot handler startup failed for %b\n", dn->dn_Name);
         ReleaseSemaphore(&IntExpBase(ExpansionBase)->BootSemaphore);
         SetIoErr(ERROR_OBJECT_WRONG_TYPE);
         return BNULL;
@@ -490,7 +489,6 @@ static BPTR internalBootLock(struct DosLibrary *DOSBase, struct ExpansionBase *E
             /* If we have a lock, check the per-platform conditional boot code. */
             if (!__dos_IsBootable(DOSBase, lock))
             {
-                bug("[DOS] Boot signature rejected on %s (error %ld)\n", name, IoErr());
                 UnLock(lock);
                 lock = BNULL;
                 err = ERROR_OBJECT_WRONG_TYPE; /* Something to more or less reflect "This disk is not bootable" */
@@ -502,7 +500,6 @@ static BPTR internalBootLock(struct DosLibrary *DOSBase, struct ExpansionBase *E
         else
         {
             err = IoErr();
-            bug("[DOS] Boot volume lock failed for %s (error %ld)\n", name, err);
         }
 
         if (!lock)
@@ -644,16 +641,17 @@ static LONG internalBootCliHandler(void)
     AddBootAssign("SYS:S",                "S", DOSBase);
     AddBootAssign("SYS:Fonts",            "FONTS", DOSBase);
 
-    /* Let hidds in DRIVERS: directory be found by OpenLibrary */
+    /* Let hidds in DRIVERS: directory be found by OpenLibrary.
+     * An assign owns its locks and unlocks them when it is removed or
+     * replaced, so DRIVERS: and LIBS: each need a lock of their own.
+     */
     if ((lock = Lock("DEVS:Drivers", SHARED_LOCK)) != BNULL) {
-        /* Both assignments own their lock and release it independently.
-         * Sharing one lock here double-frees it when the boot paths change. */
-        BPTR libsLock = DupLock(lock);
+        BPTR libslock = DupLock(lock);
 
         if (!AssignLock("DRIVERS", lock))
             UnLock(lock);
-        if (libsLock != BNULL && !AssignAdd("LIBS", libsLock))
-            UnLock(libsLock);
+        if (libslock != BNULL && !AssignAdd("LIBS", libslock))
+            UnLock(libslock);
     }
 
 #if !(mc68000)

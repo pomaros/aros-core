@@ -11,6 +11,7 @@
 #include <graphics/clip.h>
 #include <graphics/layers.h>
 #include "layers_intern.h"
+#include "basicfuncs.h"
 
 #define DEBUG 0
 #include <aros/debug.h>
@@ -47,11 +48,17 @@
         the responsibility of the caller to issue the lock via
         LockLayerInfo()/UnlockLayerInfo()
 
+        AROS: a composited layer with a per pixel alpha surface
+        (LA_AlphaSurface) is not hit where its surface pixel is fully
+        transparent; the layer behind it is returned there. See
+        IsLayerHitAt().
+
     EXAMPLE
 
     BUGS
 
     SEE ALSO
+        IsLayerHitAt()
 
     INTERNALS
 
@@ -67,11 +74,16 @@
 
     D(bug("WhichLayer(li @ $%lx, x %ld, y %ld)\n", li, x, y));
 
+    /*
+     * Front to back, the first layer the point hits. A composited layer
+     * with a per pixel alpha surface is missed where its pixel is fully
+     * transparent (see IsLayerHitAt()).
+     */
     for
     (
         l = li->top_layer;
-        l != NULL && !(!(l->Flags & LAYERINPUTTRANSPARENT) && IS_VISIBLE(l) &&
-            IsPointInRegion(l->visibleshape, x, y));
+        l != NULL && !(!(l->Flags & LAYERINPUTTRANSPARENT) &&
+            _IsLayerHitAt(l, x, y, LayersBase));
         l = l->back
     );
 

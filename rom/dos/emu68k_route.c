@@ -49,9 +49,9 @@ LONG Emu68k_RouteSegList(struct Emu68kLaunchCtx *ctx, LONG *result_out,
         if ((BPTR)segnode->ln_Name == ctx->elc_SegList &&
             segnode->ln_Type == SEGTYPE_HUNK)
         {
-            struct hunk_segnode *hnode = (struct hunk_segnode *)segnode;
-            ctx->elc_Image     = hnode->shn_Image;
-            ctx->elc_ImageSize = hnode->shn_ImageSize;
+            struct HunkSegNode *hnode = (struct HunkSegNode *)segnode;
+            ctx->elc_Image     = hnode->hsn_Image;
+            ctx->elc_ImageSize = hnode->hsn_ImageSize;
             break;
         }
     }

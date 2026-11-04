@@ -53,7 +53,7 @@ int main(int argc, char *argv[])
     struct Node *next;
     ULONG unit;
     STRPTR devname = NULL;
-    IPTR cmpunit;          /* btGetAttrs() stores an IPTR */
+    ULONG cmpunit;
     STRPTR cmpdevname;
 
     if(!(ArgsHook = ReadArgs(template, ArgsArray, NULL)))

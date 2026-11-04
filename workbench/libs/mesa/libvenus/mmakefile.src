@@ -17,6 +17,7 @@ VN_SOURCE_NAMES := \
             vn_command_buffer \
             vn_common \
             vn_cs \
+            vn_descriptor_heap \
             vn_descriptor_set \
             vn_device \
             vn_device_memory \
@@ -32,13 +33,15 @@ VN_SOURCE_NAMES := \
             vn_render_pass \
             vn_ring \
             vn_renderer_internal \
-            vn_renderer_util
+            vn_renderer_util \
+            vn_sync
 
 VN_SOURCES_C := \
             $(addprefix $(top_srcdir)/$(CUR_MESADIR)/,$(VN_SOURCE_NAMES)) \
             $(SRCDIR)/$(CURDIR)/../vn_renderer_aros \
             $(top_srcdir)/src/util/xmlconfig \
-            $(VN_GENDIR)/vn_entrypoints
+            $(VN_GENDIR)/vn_entrypoints \
+            $(VN_GENDIR)/vn_drirc
 
 #MM mesa3d-linklib-venus : mesa3d-generate-venus mesa3d-linklib-vulkan-runtime mesa3d-linklib-mesautil mesa3d-linklib-mesa-generated workbench-libs-vkr-includes
 #MM mesa3d-generate-venus : mesa3d-generate-vulkan-runtime
@@ -87,7 +90,12 @@ mesa3d-generate-venus :
 	  --xml $(top_srcdir)/src/vulkan/registry/vk.xml --proto --weak \
 	  --prefix vn --beta false \
 	  --out-h "$(VN_GENDIR)/vn_entrypoints.h" \
-	  --out-c "$(VN_GENDIR)/vn_entrypoints.c"
+	  --out-c "$(VN_GENDIR)/vn_entrypoints.c" && \
+	python3 $(top_srcdir)/$(CUR_MESADIR)/vn_drirc_gen.py \
+	  --import-path $(top_srcdir)/src/util \
+	  --drirc-src "$(VN_GENDIR)/vn_drirc.c" \
+	  --drirc-hdr "$(VN_GENDIR)/vn_drirc.h" \
+	  --validate $(top_srcdir)/$(CUR_MESADIR)/00-venus-defaults.conf
 	@python3 $(top_srcdir)/src/util/driconf_static.py $(top_srcdir)/src/util/00-mesa-defaults.conf \
 	  $(VN_GENDIR)/driconf_static.h
 

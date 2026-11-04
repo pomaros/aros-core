@@ -1,7 +1,7 @@
 #ifndef __EMUL_INTERN_H
 #define __EMUL_INTERN_H
 /*
-    Copyright ï¿½ 1995-2011, The AROS Development Team. All rights reserved.
+    Copyright © 1995-2011, The AROS Development Team. All rights reserved.
     $Id$
 
     Desc: Internal header-file for emulation-handler.

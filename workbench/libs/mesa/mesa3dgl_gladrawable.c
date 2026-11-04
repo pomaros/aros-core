@@ -67,6 +67,7 @@
         FreeVec(d);
         return NULL;
     }
+    d->framebuffer->drawable = d;
     d->driver = _ctx->driver;
     d->shared = _ctx->shared;
     __atomic_add_fetch(&d->shared->refs, 1, __ATOMIC_ACQ_REL);
@@ -95,6 +96,9 @@
 
     if (!d)
         return;
+    /* Scan-out buffers are display memory: no job may still render into
+     * them. The task's current context is the one that last drew here. */
+    MESA3DGLScanoutIdle(d->framebuffer, st_api_get_current());
     st_api_destroy_drawable(&d->framebuffer->base);
     MESA3DGLFreeFrameBuffer(d->framebuffer);
     MESA3DGLFreeTarget(d);

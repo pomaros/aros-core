@@ -1,8 +1,10 @@
+/* Copyright (C) 2026, The AROS Development Team. All rights reserved. */
 /* cdrom.h: */
 
 /*
  * History:
  *
+ * 29-Oct-26 aros      Remember cache allocation requirements for recovery.
  * 06-Mar-09 error     - Removed madness, fixed insanity. Cleanup started
  */
 
@@ -27,12 +29,14 @@ typedef struct SectorCacheSlot {
   long current_sector;
   uint32_t last_used;
   unsigned short buffer_sector;
-  unsigned short sector_count;
+  unsigned short sector_count; /* Allocated capacity and alignment */
+  unsigned short valid_sectors;
 } SectorCacheSlot;
 
 typedef struct CDROM {
   struct CDVDBase *global;
   unsigned char 	*buffer;
+  uint32_t buffer_bytes; /* Valid bytes starting at buffer */
   unsigned char 	*buffer_data;
   unsigned char 	*buffer_file2;
   unsigned char 	*buffer_metadata;
@@ -58,6 +62,8 @@ typedef struct CDROM {
   short			device_open;
   struct IOStdReq *iochangeint;
   struct Interrupt changeint;
+
+  uint32_t cache_memory_type;
 
 } CDROM;
 
@@ -92,7 +98,7 @@ CDROM *Open_CDROM
 	(
 		struct CDVDBase *global,
 		char *p_device,
-		int p_scsi_id,
+		IPTR p_scsi_id,
 		uint32_t p_memory_type,
 		int p_std_buffers,
 		int p_file_buffers

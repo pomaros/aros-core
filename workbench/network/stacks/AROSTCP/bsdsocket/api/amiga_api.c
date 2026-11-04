@@ -297,6 +297,18 @@ AROS_LH1(struct Library *, Open,
     ReleaseSemaphore(&baselist_semaphore);
 
     /*
+     * Hold the master's reference while the new base initializes, and
+     * publish the base only once it is complete: list readers on other
+     * CPUs must never see a half-built base.
+     */
+    newBase->libNode.lib_Node.ln_Succ = NULL;
+    newBase->libNode.lib_Node.ln_Pred = NULL;
+    ObtainSemaphore(&baselist_semaphore);
+    libPtr->lib_OpenCnt++;		/* mark us as having another opener */
+    libPtr->lib_Flags &= ~LIBF_DELEXP;	/* prevent delayed expunges */
+    ReleaseSemaphore(&baselist_semaphore);
+
+    /*
      * Initialize new library base
      */
     for(i = (WORD *)((struct Library *)newBase + 1);
@@ -512,7 +524,7 @@ ULONG *__UL_Close(struct SocketBase *libPtr)
     ReleaseSyscallSemaphore(libPtr);
 
     ObtainSemaphore(&baselist_semaphore);
-    /* Failed initialization calls this cleanup without publishing a node. */
+    /* A failed Open() cleans up through here without publishing the base. */
     if(libPtr->libNode.lib_Node.ln_Succ != NULL) {
         Remove((struct Node *)libPtr);
         libPtr->libNode.lib_Node.ln_Succ = NULL;
@@ -950,6 +962,8 @@ VOID api_sendreconfig(BOOL begin)
  * on RTM_NEWADDR/RTM_DELADDR, so it covers both IPv4 and IPv6.  A woken consumer
  * re-reads interface addresses (e.g. SIOCGIFCONF).
  */
+static BOOL api_addrchange_pending;
+
 VOID api_sendaddrchange(VOID)
 {
     extern struct List socketBaseList; /* :/ */
@@ -958,7 +972,20 @@ VOID api_sendaddrchange(VOID)
     if(api_state != API_SHOWN)
         return;         /* no external consumers before the API is visible */
 
-    ObtainSemaphoreShared(&baselist_semaphore);
+    /*
+     * The stack task (SLAAC, the end of duplicate address detection) does
+     * not wait for the list: a task opening or closing the library holds it
+     * and may wait for the stack. Without it the signal is left pending, and
+     * api_addrchange_retry() sends it from the stack's next timer tick.
+     */
+    if(FindTask(NULL) == AROSTCP_Task) {
+        if(!AttemptSemaphoreShared(&baselist_semaphore)) {
+            api_addrchange_pending = TRUE;
+            return;
+        }
+    } else
+        ObtainSemaphoreShared(&baselist_semaphore);
+    api_addrchange_pending = FALSE;
     for(libNode = socketBaseList.lh_Head; libNode->ln_Succ;
             libNode = libNode->ln_Succ) {
         struct SocketBase *sb = (struct SocketBase *)libNode;
@@ -966,6 +993,13 @@ VOID api_sendaddrchange(VOID)
             Signal(sb->thisTask, sb->sigAddrChangeMask);
     }
     ReleaseSemaphore(&baselist_semaphore);
+}
+
+/* A change signal the stack task could not send yet (api_sendaddrchange()). */
+VOID api_addrchange_retry(VOID)
+{
+    if(api_addrchange_pending)
+        api_sendaddrchange();
 }
 
 /*

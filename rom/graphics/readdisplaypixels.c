@@ -56,7 +56,7 @@ AROS_LH8(BOOL, ReadDisplayPixels,
     AROS_LHA(UBYTE *, rgb, A1),
     AROS_LHA(ULONG, stride, D4),
     AROS_LHA(ULONG, size, D5),
-    struct GfxBase *, GfxBase, 202, Graphics)
+    struct GfxBase *, GfxBase, 206, Graphics)
 {
     AROS_LIBFUNC_INIT
     struct HIDD_PixelMap map = {0};

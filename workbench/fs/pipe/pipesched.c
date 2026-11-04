@@ -59,6 +59,7 @@
 */
 
 static void EndPipeIO (PIPEDATA *pipe, WAITINGDATA *wd);
+static void FailPipeWrite (PIPEDATA *pipe, WAITINGDATA *wd);
 
 
 
@@ -94,12 +95,11 @@ SPIOEXIT:
   pipekey= (PIPEKEY *) pkt->dp_Arg1;
   pipe= pipekey->pipe;
 
-  /* Validate before allocating a waiting request, including zero-length I/O. */
-  if ((iotype == PIPEREAD && pipekey->iotype != PIPEREAD && pipekey->iotype != PIPERW) ||
-      (iotype == PIPEWRITE && pipekey->iotype != PIPEWRITE && pipekey->iotype != PIPERW))
-    { pkt->dp_Res2= ERROR_INVALID_LOCK;
-      goto SPIOEXIT;
-    }
+  pkt->dp_Res2= ERROR_INVALID_LOCK;
+  if ((pipekey->iotype != iotype) && (pipekey->iotype != PIPERW))
+    goto SPIOEXIT;
+
+  /* No buffer space, data or tap I/O is needed for an empty request. */
   if (pkt->dp_Arg3 == 0)
     { pkt->dp_Res1= 0;
       pkt->dp_Res2= 0;
@@ -111,9 +111,6 @@ SPIOEXIT:
     { pkt->dp_Res2= ERROR_NO_FREE_STORE;
       goto SPIOEXIT;
     }
-
-
-  pkt->dp_Res2= ERROR_INVALID_LOCK;     /* in case not open for iotype */
 
   if (iotype == PIPEREAD)
     { /* Non-blocking read on an empty pipe that still has a writer returns
@@ -131,9 +128,7 @@ SPIOEXIT:
       InsertTail (&pipe->readerlist, (PIPELISTNODE *)wd);
     }
   else     /* PIPEWRITE */
-    { InsertTail (&pipe->writerlist, (PIPELISTNODE *)wd);
-    }
-
+    InsertTail (&pipe->writerlist, (PIPELISTNODE *)wd);
 
   wd->pkt= pkt;
   wd->pktinfo.pipewait.reqtype= iotype;
@@ -150,6 +145,9 @@ SPIOEXIT:
 ** more requests are left.  Then, write requests are satisifed until the pipe
 ** is full or no more requests are left.  This alternating process is
 ** repeated until no further changes are possible.
+**      If the read end has been closed, nothing will ever drain the pipe, so
+** write requests are failed at once.  A pipe that has never had a reader is
+** not affected: its writer may still be waiting for the reader to open it.
 **      Finished requests are sent to EndPipeIO() so that replies may be sent
 ** to their owners.  Aftereward, if the pipe is empty and is not open for
 ** either read or write, then it is discarded.  If it is open for read, but
@@ -248,6 +246,10 @@ PIPEDATA  *pipe;
   SetPipeDate (pipe);
 #endif /* PIPEDIR */
 
+  if (pipe->flags & READER_GONE)
+    while ((wd= (WAITINGDATA *) FirstItem (&pipe->writerlist)) != NULL)
+      FailPipeWrite (pipe, wd);
+
   for (change= TRUE; change; )
     { change= FALSE;
 
@@ -304,6 +306,39 @@ PIPEDATA  *pipe;
 #endif /* PIPEDIR */
           DiscardPipe (pipe);
     }
+  else if ( (pipe->flags & READER_GONE)        &&
+            (! (pipe->flags & OPEN_FOR_WRITE))    )     /* unread data is lost */
+    {
+#if PIPEDIR
+      if (pipe->lockct == 0)
+#endif /* PIPEDIR */
+        DiscardPipe (pipe);
+    }
+}
+
+
+
+/*---------------------------------------------------------------------------
+** A write request that cannot complete because the read end was closed is
+** returned.  What it already put in the pipe is reported as written, so a
+** later write gets the error.
+*/
+
+static void  FailPipeWrite (pipe, wd)
+
+PIPEDATA     *pipe;
+WAITINGDATA  *wd;
+
+{ struct DosPacket  *pkt= wd->pkt;
+  LONG              written= pkt->dp_Arg3 - wd->pktinfo.pipewait.len;
+
+
+  pkt->dp_Res1= written ? written : -1;
+  pkt->dp_Res2= written ? 0 : ERROR_OBJECT_NOT_FOUND;
+
+  Delete (&pipe->writerlist, (PIPELISTNODE *)wd);
+  QuickReplyPkt (pkt);
+  FreeMem (wd, sizeof (WAITINGDATA));
 }
 
 
@@ -480,8 +515,8 @@ struct DosPacket  *pkt;
                OpenPipe (wd->pktinfo.tapwait.clientpkt, (BPTR)pkt->dp_Arg1);
              else     /* couldn't open tap */
                { FreeMem (wd->pktinfo.tapwait.handle, sizeof (struct FileHandle));
-                 pkt->dp_Res1= 0;
-                 pkt->dp_Res2= ERROR_INVALID_COMPONENT_NAME;
+                 wd->pktinfo.tapwait.clientpkt->dp_Res1= 0;
+                 wd->pktinfo.tapwait.clientpkt->dp_Res2= pkt->dp_Res2;
                  QuickReplyPkt (wd->pktinfo.tapwait.clientpkt);
                }
 

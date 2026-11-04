@@ -54,7 +54,7 @@ struct CallIPIEntry
 
 #ifndef CORE_IPI_MAX_CPUS
 #define CORE_IPI_MAX_CPUS 4
-#define CORE_IPI_ONLINE_MASK() 0xfU
+#define CORE_IPI_ONLINE_MASK() ((uint32_t)__arm_arosintern.ARMI_AffinityMask)  /* the online cores */
 #define CORE_IPI_SEND(msg, data, mask) __arm_arosintern.ARMI_SendIPI(msg, data, mask)
 #define CORE_IPI_AVAILABLE() (__arm_arosintern.ARMI_SendIPI != NULL)
 #endif
@@ -257,7 +257,7 @@ int core_DoCallIPI(struct Hook *hook, void *cpu_mask, int async,
      * buffer pointers - resolve them to bitmaps before dereference.
      */
     if ((IPTR)cpu_mask == TASKAFFINITY_ANY)
-        mask = CORE_IPI_ONLINE_MASK();
+        mask = CORE_IPI_ONLINE_MASK();                  /* the online cores */
     else if ((IPTR)cpu_mask == TASKAFFINITY_ALL_BUT_SELF)
         mask = CORE_IPI_ONLINE_MASK() & ~(1U << srcCpu);
     else

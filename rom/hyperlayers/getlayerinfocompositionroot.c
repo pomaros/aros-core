@@ -10,7 +10,7 @@
  * so resolving it requires no additional lock in the drawing lock path. */
 AROS_LH1(struct Layer_Info *, GetLayerInfoCompositionRoot,
     AROS_LHA(struct Layer_Info *, li, A0),
-    struct LayersBase *, LayersBase, 46, Layers)
+    struct LayersBase *, LayersBase, 54, Layers)
 {
     AROS_LIBFUNC_INIT
     struct LayerInfo_extra *extra;

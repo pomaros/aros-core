@@ -15,7 +15,7 @@
 AROS_LH2(BOOL, SetLayerInfoCompositionRoot,
     AROS_LHA(struct Layer_Info *, li, A0),
     AROS_LHA(struct Layer_Info *, root, A1),
-    struct LayersBase *, LayersBase, 47, Layers)
+    struct LayersBase *, LayersBase, 55, Layers)
 {
     AROS_LIBFUNC_INIT
     struct LayerInfo_extra *extra, *rootextra;

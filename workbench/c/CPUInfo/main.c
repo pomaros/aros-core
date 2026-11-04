@@ -92,7 +92,7 @@ int     main ( void )
 
 #if defined(__i386__) || defined(__x86_64__)
     printf( APPNAME " - CPU Information tool v" VERSSTRING ".\n" );
-    printf( "(C) Copyright the AROS Dev Team.\n");
+    printf( "© Copyright the AROS Dev Team.\n");
     printf( "-------------------------------------\n\n" );
 
     if (VERBOSE) printf( " Performing VERBOSE Probe...\n\n" );

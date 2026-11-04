@@ -2,8 +2,10 @@
     Copyright (C) 1995-2014, The AROS Development Team. All rights reserved.
 */
 
-#include "__malloc.h"
+#include <aros/cpu.h>
 #include <proto/exec.h>
+
+#include "__memalign.h"
 
 /*****************************************************************************
 
@@ -50,32 +52,40 @@
 
 ******************************************************************************/
 {
-    struct __stdc_malloc_header *header;
-    void *newmem;
+    UBYTE * mem, * newmem;
     size_t oldsize;
 
-    if (oldmem == NULL)
-        return malloc(size);
-    if (size == 0)
+    if (!oldmem)
+        return malloc (size);
+
+    mem = (UBYTE *)oldmem - MALLOC_HDRSIZE;
+    oldsize = *((size_t *)mem);
+
+    /* A block from aligned_alloc() has the magic number in place of its
+       size; there is nothing to keep, so always replace it. */
+    if (oldsize == MEMALIGN_MAGIC)
+        goto alloc;
+
+    /* Reduce or enlarge the memory ? */
+    if (size < oldsize)
     {
-        free(oldmem);
-        return NULL;
+        /* Don't change anything for small changes */
+        if ((oldsize - size) < 4096)
+            newmem = oldmem;
+        else
+            goto alloc;
+    }
+    else if (size == oldsize) /* Keep the size ? */
+        newmem = oldmem;
+    else
+    {
+alloc:
+        newmem = malloc (size);
+
+        if (newmem)
+            free (oldmem);
     }
 
-    header = __stdc_allocation_header(oldmem);
-    oldsize = header->requested_size;
-    if (size == oldsize || (size < oldsize && oldsize - size < 4096))
-    {
-        header->requested_size = size;
-        return oldmem;
-    }
-
-    /* Resizing retains the original allocation domain, even when a different
-       stdc opener calls realloc(). On failure the old block is untouched. */
-    newmem = __stdc_alloc_from_pool(header->pool, size, __alignof__(max_align_t));
-    if (newmem != NULL)
-    {
-        free(oldmem);
-    }
     return newmem;
-} /* realloc_nocopy */
+} /* realloc */
+

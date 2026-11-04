@@ -107,6 +107,7 @@ static void copyonepixel(PLANEPTR src, ULONG xsrc, PLANEPTR dest,
     INTERNALS
 
     HISTORY
+        20-Oct-26 Try native raw-bitmap copies before temporary wrappers.
 
 *****************************************************************************/
 {
@@ -180,6 +181,21 @@ static void copyonepixel(PLANEPTR src, ULONG xsrc, PLANEPTR dest,
             ySrc = 0;
         }
 
+        /* A negative destination is not clipped by the checks below (unsigned
+           compares) and the chunky blitters do not clip: rows/columns would land
+           in front of the destination buffer. */
+        if(xDest < 0) {
+            xSrc += -xDest;
+            xSize -= -xDest;
+            xDest = 0;
+        }
+
+        if(yDest < 0) {
+            ySrc += -yDest;
+            ySize -= -yDest;
+            yDest = 0;
+        }
+
         /* Clip width and height for source and dest */
         if(ySrc + ySize > srcBitMap->Rows) {
             ySize = srcBitMap->Rows - ySrc;
@@ -220,6 +236,12 @@ static void copyonepixel(PLANEPTR src, ULONG xsrc, PLANEPTR dest,
         /*
          * Otherwise we use the source driver.
          */
+
+        /* Native planar drivers can consume caller-owned bitmaps directly.
+         * Try that path after clipping, before allocating temporary wrappers. */
+        if (planar_driver && internal_TryRawBlit(driver, srcBitMap, destBitMap,
+                xSrc, ySrc, xDest, yDest, xSize, ySize, minterm, mask, GfxBase))
+            return 8; /* Match the existing driver-path return value below. */
 
         tmp_gc = obtain_cache_object(CDD(GfxBase)->gc_cache, GfxBase);
         if(NULL != tmp_gc) {
@@ -280,6 +302,21 @@ static void copyonepixel(PLANEPTR src, ULONG xsrc, PLANEPTR dest,
             yDest += -ySrc;
             ySize -= -ySrc;
             ySrc = 0;
+        }
+
+        /* A negative destination is not clipped by the checks below (unsigned
+           compares) and the chunky blitters do not clip: rows/columns would land
+           in front of the destination buffer. */
+        if(xDest < 0) {
+            xSrc += -xDest;
+            xSize -= -xDest;
+            xDest = 0;
+        }
+
+        if(yDest < 0) {
+            ySrc += -yDest;
+            ySize -= -yDest;
+            yDest = 0;
         }
 
         /* Clip width and height for source and dest */
