@@ -1343,41 +1343,6 @@ static void DoAutoRun(struct WifiMsg *m)
         /* The stack only runs DHCP on an interface it knows about. */
         snprintf((char *)dev, sizeof(dev), "%s UNIT %ld",
             (const char *)m->wm_Device, (long)m->wm_Unit);
-        ok = EnsureInterface(m, &created) &&
-             SetVar(WIRELESS_VAR, dev, -1, SAVE_VAR_FLAGS) &&
-             SetVar(WIRELESS_AUTORUN_VAR, "True", -1, SAVE_VAR_FLAGS) &&
-             SetVar(AUTORUN_VAR, "True", -1, SAVE_VAR_FLAGS);
-    }
-    else
-        ok = SetVar(WIRELESS_AUTORUN_VAR, "False", -1, SAVE_VAR_FLAGS);
-
-    m->wm_AutoRun = AutoRunEnabled();
-    strcpy(m->wm_Status, (const char *)_(!ok ? MSG_ST_AUTORUN_FAILED :
-        (m->wm_AutoRun ? MSG_ST_AUTORUN_ON : MSG_ST_AUTORUN_OFF)));
-}
-
-/*
- * The same switches the network preferences write. Turning it off only stops
- * the supplicant at boot: AutoRun also starts a wired interface.
- */
-static void DoAutoRun(struct WifiMsg *m)
-{
-    TEXT dev[WIFI_DEV_MAX + 16];
-    BOOL want = m->wm_AutoRun, created, ok;
-
-    m->wm_AutoRun = AutoRunEnabled();
-    if (!WifiDevice(m))
-        return;
-
-    /* SetVar cannot create the directories. */
-    UnLock(CreateDir("ENV:AROSTCP"));
-    UnLock(CreateDir("ENVARC:AROSTCP"));
-
-    if (want)
-    {
-        /* The stack only runs DHCP on an interface it knows about. */
-        snprintf((char *)dev, sizeof(dev), "%s UNIT %ld",
-            (const char *)m->wm_Device, (long)m->wm_Unit);
         ok = EnsureInterface(m, &created, TRUE) &&
              SetVar(WIRELESS_VAR, dev, -1, SAVE_VAR_FLAGS) &&
              SetVar(WIRELESS_AUTORUN_VAR, "True", -1, SAVE_VAR_FLAGS) &&
