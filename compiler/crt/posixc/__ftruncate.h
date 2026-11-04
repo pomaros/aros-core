@@ -103,7 +103,7 @@ restore:
     if (oldpos != -1)
     {
         SetIoErr(0);
-        if (__dos64_seek(file, oldpos, OFFSET_BEGINNING) == -1 && !error)
+        if (__dos64_lseek(file, oldpos, OFFSET_BEGINNING) == -1 && !error)
         {
             LONG ioerr = IoErr();
             error = ioerr == ERROR_OBJECT_TOO_LARGE ? EOVERFLOW :
