@@ -196,7 +196,7 @@ int virtio_submit_blk_request(struct virtio_queue *vq, struct virtio_request *te
     UWORD avail_idx;
 
     if (!dev || !dev->dev_PCIDriverObject || !VirtIOBase || !vq->q_Notify ||
-        (templ->vr_DataLength && !templ->vr_DataAddr) || templ->vr_DataLength == UINT32_MAX)
+        (templ->vr_DataLength && !templ->vr_DataAddr) || templ->vr_DataLength > UINT32_MAX - 4095)
         return -1;
 
     ObtainSemaphore(&vq->q_Lock);
@@ -206,17 +206,34 @@ int virtio_submit_blk_request(struct virtio_queue *vq, struct virtio_request *te
     }
 
     slot = &vq->q_Reqs[idxs[0]];
-    *slot = *templ;
+    {
+        /* The slot keeps its bounce buffer between requests: allocating and
+         * freeing DMA memory changes page mappings, which costs a CPU
+         * rendezvous on SMP for every block I/O. */
+        APTR buffer = slot->vr_DMABuffer;
+        ULONG capacity = slot->vr_DMACapacity;
+        *slot = *templ;
+        slot->vr_DMABuffer = buffer;
+        slot->vr_DMACapacity = capacity;
+    }
     slot->vr_HeadDesc  = idxs[0];
     slot->vr_DescCount = descs_needed;
     slot->vr_InUse     = 1;
     slot->vr_Status    = 0xff;
-    slot->vr_DMABuffer = NULL;
 
     if (!vq_address(dev, &slot->vr_Header, sizeof(slot->vr_Header), &hdr_phys) ||
         !vq_address(dev, &slot->vr_Status, 1, &status_phys)) goto fail;
     if (slot->vr_DataLength) {
-        slot->vr_DMABuffer = HIDD_PCIDriver_AllocPCIMem(dev->dev_PCIDriverObject, slot->vr_DataLength);
+        if (slot->vr_DMABuffer && slot->vr_DMACapacity < slot->vr_DataLength) {
+            HIDD_PCIDriver_FreePCIMem(dev->dev_PCIDriverObject, slot->vr_DMABuffer);
+            slot->vr_DMABuffer = NULL;
+            slot->vr_DMACapacity = 0;
+        }
+        if (!slot->vr_DMABuffer) {
+            ULONG capacity = (slot->vr_DataLength + 4095) & ~4095UL;
+            slot->vr_DMABuffer = HIDD_PCIDriver_AllocPCIMem(dev->dev_PCIDriverObject, capacity);
+            slot->vr_DMACapacity = slot->vr_DMABuffer ? capacity : 0;
+        }
         if (!slot->vr_DMABuffer ||
             !vq_address(dev, slot->vr_DMABuffer, slot->vr_DataLength, &data_phys)) goto fail;
         if (slot->vr_IsWrite) memcpy(slot->vr_DMABuffer, slot->vr_DataAddr, slot->vr_DataLength);
@@ -265,10 +282,6 @@ int virtio_submit_blk_request(struct virtio_queue *vq, struct virtio_request *te
 
     return idxs[0];
 fail:
-    if (slot->vr_DMABuffer) {
-        HIDD_PCIDriver_FreePCIMem(dev->dev_PCIDriverObject, slot->vr_DMABuffer);
-        slot->vr_DMABuffer = NULL;
-    }
     slot->vr_InUse = 0;
     vq_free_chain(vq, idxs[0]);
     ReleaseSemaphore(&vq->q_Lock);
@@ -303,10 +316,6 @@ ULONG virtio_process_used(struct virtio_queue *vq)
             IOStdReq(io)->io_Actual = success ? req->vr_DataLength : 0;
             io->io_Error = success ? 0 :
                 (length && length <= expected && status == VIRTIO_BLK_S_UNSUPP ? IOERR_NOCMD : IOERR_ABORTED);
-        }
-        if (req->vr_DMABuffer) {
-            HIDD_PCIDriver_FreePCIMem(vq->dev->dev_PCIDriverObject, req->vr_DMABuffer);
-            req->vr_DMABuffer = NULL;
         }
         req->vr_InUse = 0;
         vq_free_chain(vq, (UWORD)head);

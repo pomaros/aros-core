@@ -165,6 +165,7 @@ struct virtio_request {
     APTR                    vr_DataAddr;
     APTR                    vr_DMABuffer; /* owned bounce buffer, never caller memory */
     ULONG                   vr_DataLength;
+    ULONG                   vr_DMACapacity; /* bytes of vr_DMABuffer, kept across requests */
 };
 
 /*
