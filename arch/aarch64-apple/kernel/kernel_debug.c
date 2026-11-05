@@ -526,7 +526,25 @@ static int put_raw(int chr)
     if (debug_uart == 0 || debug_uart_failed != 0)
         return 0;
     if (debug_kind == DEBUG_KIND_VIRTIO) {
-        char c=(char)chr;return vm_console_write(vm_console,&c,1);
+        /* One descriptor and one ring index serve every CPU: two CPUs writing
+         * at once corrupt the ring and the device stops consuming. Serialize
+         * once the runtime (and with it the MMU and exclusives) is up; local
+         * interrupts stay masked so a handler cannot spin on our own lock. */
+        static volatile uint32_t console_lock;
+        char c=(char)chr;
+        int locked=AROSAppleRuntimeLocal()->active!=0;
+        uint64_t daif=0;
+        if (locked) {
+            __asm__ volatile("mrs %0, daif\n\tmsr daifset, #3" : "=r"(daif) :: "memory");
+            while (__atomic_exchange_n(&console_lock,1,__ATOMIC_ACQUIRE))
+                __asm__ volatile("yield");
+        }
+        int ok=vm_console_write(vm_console,&c,1);
+        if (locked) {
+            __atomic_store_n(&console_lock,0,__ATOMIC_RELEASE);
+            __asm__ volatile("msr daif, %0" :: "r"(daif) : "memory");
+        }
+        return ok;
     }
     if (debug_kind == DEBUG_KIND_PL011) {
         pl011_put(chr);
