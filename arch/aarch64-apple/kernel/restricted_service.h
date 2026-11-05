@@ -32,11 +32,11 @@ struct AROSRestrictedSharedBacking {
  * unmapped. */
 #define AROS_RESTRICTED_HIGH_BASE UINT64_C(0x500000000)
 #define AROS_RESTRICTED_HIGH_END UINT64_C(0x2000000000)
-/* API 36: the wide window, 1 TiB to 128 TiB, beyond every physical identity
+/* API 36: the wide window, 1 TiB to 64 TiB (the native code window follows), beyond every physical identity
  * mapping of a 40-bit physical space; admitted when the template leaves it
  * unmapped. Linux programs see a full 47-bit user address space. */
 #define AROS_RESTRICTED_WIDE_BASE UINT64_C(0x10000000000)
-#define AROS_RESTRICTED_WIDE_END UINT64_C(0x800000000000)
+#define AROS_RESTRICTED_WIDE_END UINT64_C(0x400000000000) /* native code window above */
 static inline int AROSRestrictedRangeValid(uintptr_t address,size_t length)
 {
     if (!length || ((address|length)&4095)) return 0;
