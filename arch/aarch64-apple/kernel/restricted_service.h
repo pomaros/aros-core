@@ -76,6 +76,8 @@ struct AROSRestrictedRegion {
      * mapping.chunk_pages physical addresses per attached chunk. */
     uintptr_t **backing;
     struct AROSRestrictedSharedBacking *shared;
+    /* API 36: object page shown at view page 0 */
+    size_t shared_first;
     uint64_t identity;
     unsigned publication_pending;
     size_t publication_page;
@@ -111,6 +113,8 @@ int AROSRestrictedSharedViewEnd(struct AROSRestrictedSharedBacking *,uintptr_t *
  * AROS_RESTRICTED_SHARED_COPY_MAX bytes per call. */
 int AROSRestrictedSpaceCopy(struct AROSRestrictedSpace *,uintptr_t,void *,size_t,unsigned);
 int AROSRestrictedRegionAttachShared(struct AROSRestrictedRegion *,struct AROSRestrictedSharedBacking *);
+/* API 36: attach object pages [first, first + region pages) */
+int AROSRestrictedRegionAttachSharedAt(struct AROSRestrictedRegion *,struct AROSRestrictedSharedBacking *,size_t first);
 int AROSRestrictedRegionCommitShared(struct AROSRestrictedRegion *,size_t,unsigned);
 /* Native owned-page adapter. The caller supplies zeroed record/backing arrays,
  * then freshly allocated and zero-filled pages; no guest PA is accepted.

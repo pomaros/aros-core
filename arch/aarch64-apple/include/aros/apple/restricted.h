@@ -237,5 +237,8 @@ struct AROSRestrictedAPI {
      * published code is refused. 1 on success, 0 on refusal. */
     int (*read_domain)(uint64_t domain,uintptr_t address,void *buffer,size_t length);
     int (*write_domain)(uint64_t domain,uintptr_t address,const void *buffer,size_t length);
+    /* Version 36: attach pages [first_page, first_page + n) of a shared object
+     * to an empty reservation of exactly n pages at address. */
+    int (*attach_shared_at)(uint64_t domain,uintptr_t address,uint64_t object,size_t first_page);
 };
 #endif

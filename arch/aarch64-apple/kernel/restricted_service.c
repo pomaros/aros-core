@@ -82,16 +82,19 @@ static int shared_publication_policy(struct AROSRestrictedRegion *r,size_t page,
     *other_execute=0;
     if (!r->shared) return 1;
     struct AROSRestrictedSharedBacking *b=r->shared;
-    if (!shared_registered(b) || (b->closing && (access&KMAP_EXEC)) || page>=b->count ||
+    size_t op=r->shared_first+page;
+    if (!shared_registered(b) || (b->closing && (access&KMAP_EXEC)) || op>=b->count ||
         (b->publication && b->publication!=r)) return 0;
     /* A native view is a writable peer of every page */
     if ((access&KMAP_EXEC) && (b->native_view || b->native_pending)) return 0;
     for (struct AROSRestrictedSpace *s=spaces;s;s=s->next)
         for (struct AROSRestrictedRegion *v=s->regions;v;v=v->next) {
-            uintptr_t backing=backing_of(v,page);
-            if (v==r || v->shared!=b || !backing) continue;
-            struct KrnMappingPage *p=KrnMappingPageAt(&v->mapping,page);
-            if (!p || p->physical!=b->pages[page] || p->physical!=backing) return 0;
+            if (v==r || v->shared!=b || op<v->shared_first || op-v->shared_first>=v->mapping.page_count) continue;
+            size_t vp=op-v->shared_first;
+            uintptr_t backing=backing_of(v,vp);
+            if (!backing) continue;
+            struct KrnMappingPage *p=KrnMappingPageAt(&v->mapping,vp);
+            if (!p || p->physical!=b->pages[op] || p->physical!=backing) return 0;
             if ((access&KMAP_EXEC) && (p->protection&KMAP_WRITE)) return 0;
             if ((access&KMAP_WRITE) && (p->protection&KMAP_EXEC)) return 0;
             if (p->protection&KMAP_EXEC) *other_execute=1;
@@ -133,9 +136,10 @@ static int shared_copy(struct AROSRestrictedSharedBacking *b,size_t offset,
         if (!b->pages[page] || (b->pages[page]&(PAGE-1))) return 0;
         for (struct AROSRestrictedSpace *space=spaces;space;space=space->next)
             for (struct AROSRestrictedRegion *r=space->regions;r;r=r->next) {
-                uintptr_t backing=backing_of(r,page);
-                if (r->shared!=b || !backing) continue;
-                struct KrnMappingPage *p=KrnMappingPageAt(&r->mapping,page);
+                if (r->shared!=b || page<r->shared_first || page-r->shared_first>=r->mapping.page_count) continue;
+                uintptr_t backing=backing_of(r,page-r->shared_first);
+                if (!backing) continue;
+                struct KrnMappingPage *p=KrnMappingPageAt(&r->mapping,page-r->shared_first);
                 if (!p || p->physical!=b->pages[page] || backing!=b->pages[page] ||
                     (write && (p->protection&KMAP_EXEC))) return 0;
             }
@@ -181,7 +185,7 @@ int AROSRestrictedSharedViewBegin(struct AROSRestrictedSharedBacking *b)
     for (struct AROSRestrictedSpace *space=spaces;space;space=space->next)
         for (struct AROSRestrictedRegion *r=space->regions;r;r=r->next) {
             if (r->shared!=b) continue;
-            for (size_t page=0;page<b->count;++page)
+            for (size_t page=0;page<r->mapping.page_count;++page)
                 if (backing_of(r,page) && (KrnMappingPageAt(&r->mapping,page)->protection&KMAP_EXEC)) return 0;
         }
     b->native_pending=1;++b->views;return 1;
@@ -204,14 +208,19 @@ int AROSRestrictedSharedViewEnd(struct AROSRestrictedSharedBacking *b,uintptr_t 
 }
 int AROSRestrictedRegionAttachShared(struct AROSRestrictedRegion *r,struct AROSRestrictedSharedBacking *b)
 {
+    if (!r || !b || b->count!=r->mapping.page_count) return 0;
+    return AROSRestrictedRegionAttachSharedAt(r,b,0);
+}
+int AROSRestrictedRegionAttachSharedAt(struct AROSRestrictedRegion *r,struct AROSRestrictedSharedBacking *b,size_t first)
+{
     if (!r || !r->space || r->space->domain.closing || r->mapping.closing ||
         r->shared || !b || !shared_registered(b) || b->closing || b->publication ||
-        b->views==SIZE_MAX || b->count!=r->mapping.page_count) return 0;
+        b->views==SIZE_MAX || first>b->count || r->mapping.page_count>b->count-first) return 0;
     for (size_t i=0;i<r->mapping.page_count;++i) {
         const struct KrnMappingPage *p=KrnMappingPageAt(&r->mapping,i);
         if (backing_of(r,i) || (p && p->state!=KMAP_RESERVED)) return 0;
     }
-    r->shared=b;++b->views;return 1;
+    r->shared=b;r->shared_first=first;++b->views;return 1;
 }
 int AROSRestrictedRegionCommitShared(struct AROSRestrictedRegion *r,size_t page,unsigned access)
 {
@@ -222,7 +231,7 @@ int AROSRestrictedRegionCommitShared(struct AROSRestrictedRegion *r,size_t page,
     if (!backing || *backing) return 0;
     unsigned other_execute;
     if (r->shared->publication || !shared_publication_policy(r,page,access,&other_execute)) return 0;
-    uintptr_t pa=r->shared->pages[page];*backing=pa;
+    uintptr_t pa=r->shared->pages[r->shared_first+page];*backing=pa;
     if (KrnMappingCommitResidentPage(&r->mapping,page,pa,access,&r->space->mapops)) return 1;
     *backing=0;return 0;
 }
@@ -367,7 +376,7 @@ int AROSRestrictedRegionPublish(struct AROSRestrictedRegion *r,size_t page,
     if (!shared_publication_policy(r,page,access,&other_execute)) return 0;
     struct KrnMappingPage *p=KrnMappingPageAt(&r->mapping,page);
     if (!p || !p->physical || p->physical!=backing_of(r,page) ||
-        (r->shared && p->physical!=r->shared->pages[page]) ||
+        (r->shared && p->physical!=r->shared->pages[r->shared_first+page]) ||
         (p->state!=KMAP_CLEAN && p->state!=KMAP_DIRTY) ||
         (!r->publication_pending && p->generation==UINT64_MAX)) return 0;
     /* No CPU may observe this intermediate state: native caller owns the
@@ -401,11 +410,11 @@ int AROSRestrictedRegionDetach(struct AROSRestrictedRegion *r)
     if (!KrnMappingRelease(&s->arena,&r->mapping)) return 0;
     if (r->shared) {
         if (r->shared->publication==r) r->shared->publication=NULL;
-        for (size_t i=0;i<r->shared->count;++i) {
+        for (size_t i=0;i<r->mapping.page_count;++i) {
             uintptr_t *backing=backing_at(r,i);
             if (backing) *backing=0;
         }
-        --r->shared->views;r->shared=NULL;
+        --r->shared->views;r->shared=NULL;r->shared_first=0;
     }
     *link=r->next;r->next=NULL;r->space=NULL;
     r->publication_pending=0;r->publication_page=0;return 1;

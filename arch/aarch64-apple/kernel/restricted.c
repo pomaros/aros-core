@@ -709,8 +709,8 @@ static const void *r_execution_alias(struct RestrictedDomain *d,uint64_t va,size
         const struct KrnMappingPage *p=KrnMappingPageAt(&a->region.mapping,page);
         if (page>=a->count || bytes>R_PAGE-in_page ||
             !backing || !p || p->physical!=backing ||
-            (a->region.shared && (page>=a->region.shared->count ||
-             a->region.shared->pages[page]!=backing))) return NULL;
+            (a->region.shared && (a->region.shared_first+page>=a->region.shared->count ||
+             a->region.shared->pages[a->region.shared_first+page]!=backing))) return NULL;
         return (const unsigned char *)backing+in_page;
     }
     return NULL;
@@ -987,12 +987,14 @@ static int r_shared_operation(struct AROSAppleRuntimeFrame *frame,void *context,
         frame->x[0]=p->operation==5 ?
             AROSRestrictedSharedWrite(&b->backing,p->offset,p->buffer,p->length) :
             AROSRestrictedSharedRead(&b->backing,p->offset,p->buffer,p->length);
-    } else if (p->operation==1) {
+    } else if (p->operation==1 || p->operation==12) {
         struct RestrictedDomain *d=r_domain_lookup(p->domain);
         if (!d || d->closing || d->owner_context!=context) return 1;
         for (struct RestrictedAllocation *a=d->allocations;a;a=a->next)
             if (a->region.mapping.start==p->address) {
-                frame->x[0]=AROSRestrictedRegionAttachShared(&a->region,&b->backing);break;
+                frame->x[0]=p->operation==1 ? AROSRestrictedRegionAttachShared(&a->region,&b->backing) :
+                    AROSRestrictedRegionAttachSharedAt(&a->region,&b->backing,p->offset);
+                break;
             }
     } else if ((p->operation==2 || p->operation==4) && AROSRestrictedSharedClose(&b->backing)) {
         b->releaser_context=context;p->record=b;frame->x[0]=1;
@@ -1915,6 +1917,12 @@ static int r_attach_shared(uint64_t domain,uintptr_t address,uint64_t handle)
     Forbid();struct RestrictedSharedOperation op={.operation=1,.handle=handle,.domain=domain,.address=address};
     int ok=r_shared_call(&op)!=0;Permit();return ok;
 }
+/* API 36: attach object pages [first_page, first_page + reservation pages) */
+static int r_attach_shared_at(uint64_t domain,uintptr_t address,uint64_t handle,size_t first_page)
+{
+    Forbid();struct RestrictedSharedOperation op={.operation=12,.handle=handle,.domain=domain,.address=address,.offset=first_page};
+    int ok=r_shared_call(&op)!=0;Permit();return ok;
+}
 static int r_commit_shared(uint64_t domain,uintptr_t address,unsigned protection)
 {
     Forbid();struct RestrictedMemoryOperation op={.handle=domain,.address=address,.operation=5,.protection=protection};
@@ -2035,7 +2043,7 @@ static int r_read_domain(uint64_t handle,uintptr_t address,void *buffer,size_t l
 { return r_copy_call(handle,address,buffer,length,KMAP_READ); }
 static int r_write_domain(uint64_t handle,uintptr_t address,const void *buffer,size_t length)
 { return r_copy_call(handle,address,(void *)buffer,length,KMAP_WRITE); }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {36,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread,r_read_shared,r_write_shared,r_take_domain,r_map_shared,r_unmap_shared,r_read_domain,r_write_domain};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {36,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread,r_read_shared,r_write_shared,r_take_domain,r_map_shared,r_unmap_shared,r_read_domain,r_write_domain,r_attach_shared_at};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"
