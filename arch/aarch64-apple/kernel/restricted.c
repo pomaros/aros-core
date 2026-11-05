@@ -812,8 +812,12 @@ static int r_prepare_low_page(struct RestrictedDomain *d,
     if (address >= AROS_RESTRICTED_LOW_END || r_backing(a,page)) return 1;
     if (!AROSAppleKernelTransitionRangeAvailable(address, R_PAGE)) return 0;
     uint64_t physical;
-    if (!AArch64MappingPhysical(&d->space.hardware,d->root,d->space.tcr,address,&physical))
-        return 1; /* Missing or unsupported mapping: MapPage still fails closed. */
+    if (!AArch64MappingPhysical(&d->space.hardware,d->root,d->space.tcr,address,&physical)) {
+        if (!AArch64TranslateResident(&d->space.hardware,d->root,d->space.tcr,address,&physical))
+            return 1; /* Missing or unsupported mapping: MapPage still fails closed. */
+        if (!AArch64PreparePrivilegedPage(&d->space.hardware,d->root,d->space.tcr,address,physical))
+            return 0;
+    }
     return AArch64UnmapPrivilegedPage(&d->space.hardware,d->root,
         d->space.tcr,address,physical);
 }

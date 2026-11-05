@@ -182,6 +182,35 @@ int AArch64UnmapPage(const struct AArch64ProtectionOps *ops, uint64_t ttbr0,
     return 1;
 }
 
+int AArch64PreparePrivilegedPage(const struct AArch64ProtectionOps *ops,
+    uint64_t ttbr0, uint64_t tcr, uint64_t va, uint64_t expected_physical)
+{
+    struct MappingWalk walk;
+    uint64_t actual;
+    if (!ops || !ops->resolve || !geometry(tcr,va,expected_physical,&walk) ||
+        !root_valid(&walk,ttbr0) ||
+        !AArch64TranslateResident(ops,ttbr0,tcr,va,&actual) || actual!=expected_physical)
+        return 0;
+    uint64_t *table=ops->resolve(ops->context,ttbr0 & walk.mask);
+    for (unsigned level=walk.first;table && level<=3;++level) {
+        unsigned shift=walk.page_bits+walk.stride*(3-level);
+        uint64_t desc=table[(va>>shift)&(walk.count-1)];
+        if (level==3 || (desc&3)==M_VALID) {
+            if ((desc & ((UINT64_C(1)<<6)|M_GUARDED|M_CONTIGUOUS)) ||
+                !(desc&M_UXN) || (!(desc&M_PXN) && !(desc&(UINT64_C(1)<<7)))) return 0;
+            if (level==3) return 1;
+            unsigned permissions=AARCH64_PROTECT_READ;
+            if (!(desc&(UINT64_C(1)<<7))) permissions|=AARCH64_PROTECT_WRITE;
+            if (!(desc&M_PXN)) permissions|=AARCH64_PROTECT_EXEC;
+            return AArch64ProtectPage(ops,ttbr0,tcr,va,permissions);
+        }
+        if ((desc & (M_TABLE_RESTRICTIONS|M_GUARDED|M_CONTIGUOUS)) ||
+            (desc&3)!=M_TABLE) return 0;
+        table=ops->resolve(ops->context,desc & walk.mask);
+    }
+    return 0;
+}
+
 int AArch64UnmapPrivilegedPage(const struct AArch64ProtectionOps *ops,
     uint64_t ttbr0, uint64_t tcr, uint64_t va, uint64_t expected_physical)
 {

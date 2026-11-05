@@ -45,6 +45,11 @@ int AArch64UnmapPage(const struct AArch64ProtectionOps *, uint64_t ttbr0,
  * root of a clone must not be passed here to make room for user mappings. */
 int AArch64UnmapPrivilegedPage(const struct AArch64ProtectionOps *, uint64_t ttbr0,
     uint64_t tcr, uint64_t virtual_address, uint64_t expected_physical);
+/* Demote an inherited privileged, EL0-NX block to page granularity before
+ * eviction. Equivalent splits may remain on allocation failure. User leaves,
+ * executable-user blocks and an unexpected backing are never admitted. */
+int AArch64PreparePrivilegedPage(const struct AArch64ProtectionOps *, uint64_t ttbr0,
+    uint64_t tcr, uint64_t virtual_address, uint64_t expected_physical);
 
 /* Change permissions only for the exact existing physical owner; supports a
  * retained invalid guard too. Never replaces backing or splits a block. Uses

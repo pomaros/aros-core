@@ -455,6 +455,32 @@ static void privileged_alias(unsigned page)
 }
 /* Reproduce an inherited low identity mapping in a separately owned root.
  * The QEMU failure used 48-bit VA / 4K tables; also cover 39-bit and 16K. */
+static void low_block_eviction(unsigned page,unsigned level)
+{
+    struct Fixture f;init(&f,page,48);struct AArch64ProtectionOps o=ops(&f);
+    f.va=UINT64_C(0x7ffe0000);uint64_t step=UINT64_C(1)<<page,source=f.root,clone=0,pa;
+    assert(AArch64MapPage(&o,source,f.tcr,f.va,f.va,3,1));
+    unsigned shift=page+(page-3)*(3-level);
+    uint64_t block=(f.va&~((UINT64_C(1)<<shift)-1))|1|PXN|UXN|(UINT64_C(1)<<10)|(UINT64_C(3)<<8)|4;
+    *slot_at(&f,f.va,level)=block;
+    size_t count=0;assert(AArch64CountPrivilegedRoot(&o,source,f.tcr,MAX_TABLES,&count));
+    assert(AArch64ClonePrivilegedRoot(&o,source,f.tcr,count,&clone));f.root=clone;
+    uint64_t *entry=slot_at(&f,f.va,level),saved=*entry;
+    assert(!AArch64PreparePrivilegedPage(&o,clone,f.tcr,f.va,f.va+step));
+    const uint64_t refused[]={saved|AP_EL0,saved&~UXN,saved|CONTIG};
+    for(unsigned i=0;i<sizeof(refused)/sizeof(*refused);++i){
+        *entry=refused[i];assert(!AArch64PreparePrivilegedPage(&o,clone,f.tcr,f.va,f.va));assert(*entry==refused[i]);
+    }
+    *entry=saved;
+    assert(AArch64PreparePrivilegedPage(&o,clone,f.tcr,f.va,f.va));
+    assert(AArch64UnmapPrivilegedPage(&o,clone,f.tcr,f.va,f.va));
+    assert(AArch64MapPage(&o,clone,f.tcr,f.va,DATA_PA,9,1));
+    assert(AArch64UserPagePhysical(&o,clone,f.tcr,f.va,1,1,&pa)&&pa==DATA_PA);
+    assert(AArch64TranslateResident(&o,clone,f.tcr,f.va+step,&pa)&&pa==f.va+step);
+    f.root=source;assert(*slot_at(&f,f.va,level)==block);
+    assert(AArch64TranslateResident(&o,source,f.tcr,f.va,&pa)&&pa==f.va);
+    finish(&f);
+}
 static void low_clone_eviction(unsigned page, unsigned bits)
 {
     struct Fixture f;init(&f,page,bits);struct AArch64ProtectionOps o=ops(&f);
@@ -522,6 +548,7 @@ static void range_unmapped(unsigned page)
 }
 int main(void)
 {
+    low_block_eviction(12,1);low_block_eviction(12,2);low_block_eviction(14,2);
     const unsigned widths[]={25,30,32,39,42,48};
     for (unsigned page=12;page<=14;page+=2) {
         for (unsigned i=0;i<sizeof(widths)/sizeof(*widths);++i) basic(page,widths[i]);
