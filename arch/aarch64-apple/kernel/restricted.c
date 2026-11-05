@@ -47,6 +47,7 @@
 #define R_SUSPEND 0xa56c
 #define R_RESUME 0xa56d
 #define R_DOMAIN_WORK 0xa56e
+#define R_COPY 0xa56f
 #define R_COOKIE UINT64_C(0x7265737472696374)
 enum RestrictedState { R_FREE, R_ALLOCATING, R_LIVE, R_REAPING };
 /* Address-space allocation lifetime is separate from an execution context.
@@ -827,6 +828,24 @@ static int r_prepare_low_page(struct RestrictedDomain *d,
     if (address >= AROS_RESTRICTED_LOW_END || r_backing(a,page)) return 1;
     return r_prepare_private_page(&d->space.hardware,d->root,d->space.tcr,address);
 }
+struct RestrictedCopyOperation {
+    uint64_t handle;
+    uintptr_t address;
+    void *buffer;
+    size_t length;
+    unsigned access;
+};
+/* API 36: the owner's copy into or out of its live domain's memory. */
+static int r_copy(struct AROSAppleRuntimeFrame *frame,void *context,unsigned svc)
+{
+    if (svc!=R_COPY) return 0;
+    struct RestrictedCopyOperation *p=(void *)(uintptr_t)frame->x[0];
+    frame->x[0]=0;if (!p) return 1;
+    struct RestrictedDomain *d=r_domain_lookup(p->handle);
+    if (!d || d->closing || d->state!=R_LIVE || d->owner_context!=context) return 1;
+    frame->x[0]=AROSRestrictedSpaceCopy(&d->space,p->address,p->buffer,p->length,p->access);
+    return 1;
+}
 static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned svc)
 {
     if (svc!=R_MEMORY) return 0;
@@ -1332,6 +1351,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
     if (ec==0x15 && r_table_transfer(frame,context,svc)) return 1;
     if (ec==0x15 && r_shared_operation(frame,context,svc)) return 1;
     if (ec==0x15 && r_memory(frame,context,svc)) return 1;
+    if (ec==0x15 && r_copy(frame,context,svc)) return 1;
     if (ec==0x15 && r_domain_lifecycle(frame,context,svc)) return 1;
     if (ec==0x15 && r_lifecycle(frame,task,context,svc)) return 1;
     if (ec != 0x15 || (svc != R_PREPARE && svc != AROS_RESTRICTED_ENTER && svc != 0xa534)) return 0;
@@ -1448,7 +1468,7 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
     unsigned ec=(unsigned)(frame->esr>>26)&63,svc=(unsigned)frame->esr&65535;
     if (!AROSAppleTaskExecution(context)->root &&
         (ec!=0x15 || ((svc<AROS_RESTRICTED_ENTER || svc>R_LIFETIME) &&
-         (svc<R_DOMAIN_CLAIM || svc>R_DOMAIN_WORK)))) return 0;
+         (svc<R_DOMAIN_CLAIM || svc>R_COPY)))) return 0;
     r_coordinate();
     int handled=r_trap_locked(frame);
     r_uncoordinate();
@@ -1983,7 +2003,19 @@ static int r_take_domain(uint64_t handle,struct AROSRestrictedWork *work)
     __asm__ volatile("svc #0xa56e":"+r"(domain),"+r"(request)::"memory","cc");
     return domain!=0;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {35,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread,r_read_shared,r_write_shared,r_take_domain,r_map_shared,r_unmap_shared};
+static int r_copy_call(uint64_t handle,uintptr_t address,void *buffer,size_t length,unsigned access)
+{
+    struct RestrictedCopyOperation op={.handle=handle,.address=address,.buffer=buffer,.length=length,.access=access};
+    Forbid();
+    register uintptr_t argument __asm__("x0")=(uintptr_t)&op;
+    __asm__ volatile("svc #0xa56f":"+r"(argument)::"memory","cc");
+    Permit();return argument!=0;
+}
+static int r_read_domain(uint64_t handle,uintptr_t address,void *buffer,size_t length)
+{ return r_copy_call(handle,address,buffer,length,KMAP_READ); }
+static int r_write_domain(uint64_t handle,uintptr_t address,const void *buffer,size_t length)
+{ return r_copy_call(handle,address,(void *)buffer,length,KMAP_WRITE); }
+const struct AROSRestrictedAPI AROSRestrictedAPI = {36,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread,r_read_shared,r_write_shared,r_take_domain,r_map_shared,r_unmap_shared,r_read_domain,r_write_domain};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

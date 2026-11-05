@@ -96,6 +96,9 @@ int AROSRestrictedSharedViewBegin(struct AROSRestrictedSharedBacking *);
 int AROSRestrictedSharedViewCommit(struct AROSRestrictedSharedBacking *,uintptr_t);
 int AROSRestrictedSharedViewAbort(struct AROSRestrictedSharedBacking *);
 int AROSRestrictedSharedViewEnd(struct AROSRestrictedSharedBacking *,uintptr_t *);
+/* API 36 owner copy; see restricted_service.c. At most
+ * AROS_RESTRICTED_SHARED_COPY_MAX bytes per call. */
+int AROSRestrictedSpaceCopy(struct AROSRestrictedSpace *,uintptr_t,void *,size_t,unsigned);
 int AROSRestrictedRegionAttachShared(struct AROSRestrictedRegion *,struct AROSRestrictedSharedBacking *);
 int AROSRestrictedRegionCommitShared(struct AROSRestrictedRegion *,size_t,unsigned);
 /* Native owned-page adapter. The caller supplies zeroed record/backing arrays,

@@ -230,5 +230,12 @@ struct AROSRestrictedAPI {
      * synchronization: the native peer validates what it reads. */
     void *(*map_shared)(uint64_t object);
     int (*unmap_shared)(uint64_t object);
+    /* Version 36: the owner copies between its native memory and committed,
+     * accessible pages of a live domain, up to AROS_RESTRICTED_SHARED_COPY_MAX
+     * bytes per call. The whole range is validated before any byte moves:
+     * owned, committed and mapped with the requested access, so a write to
+     * published code is refused. 1 on success, 0 on refusal. */
+    int (*read_domain)(uint64_t domain,uintptr_t address,void *buffer,size_t length);
+    int (*write_domain)(uint64_t domain,uintptr_t address,const void *buffer,size_t length);
 };
 #endif

@@ -587,6 +587,37 @@ int AROSRestrictedSpaceClose(struct AROSRestrictedSpace *s)
     return !s->root || KrnMappingDomainCanReclaim(&s->domain);
 }
 /* The tested portable mechanisms retain their single source of truth. */
+/* API 36: a copy between native memory and committed, accessible pages of
+ * the domain, for its owner. Every page of the range is validated first
+ * (owned, committed, mapped with the requested access, same backing), then
+ * the bytes move through the kernel's identity view of the backing. A write
+ * needs a writable leaf, so published code is refused by the access check. */
+int AROSRestrictedSpaceCopy(struct AROSRestrictedSpace *s,uintptr_t address,void *buffer,size_t length,unsigned access)
+{
+    if (!s || !s->handle || s->domain.closing || !buffer || (access!=KMAP_READ && access!=KMAP_WRITE)) return 0;
+    if (!length) return 1;
+    if (length>AROS_RESTRICTED_SHARED_COPY_MAX || address+length<address) return 0;
+    for (unsigned pass=0;pass<2;++pass) {
+        uintptr_t cursor=address;size_t left=length;unsigned char *native=buffer;
+        while (left) {
+            uintptr_t va=cursor&~(uintptr_t)(PAGE-1);size_t offset=cursor-va,n=PAGE-offset;
+            if (n>left) n=left;
+            struct KrnMappingObject *m=KrnMappingLookup(&s->arena,va);
+            if (!m || m->closing) return 0;
+            struct KrnMappingPage *page=KrnMappingPageAt(m,(va-m->start)/PAGE);uint64_t actual;
+            if (!page || !page->physical || (page->state!=KMAP_CLEAN && page->state!=KMAP_DIRTY) ||
+                !(page->protection&access) || !owns_page(s,va,page->physical) ||
+                !AArch64UserPagePhysical(&s->hardware,s->root,s->tcr,va,access,1,&actual) ||
+                actual!=page->physical) return 0;
+            if (pass) {
+                unsigned char *backing=(unsigned char *)page->physical+offset;
+                if (access==KMAP_WRITE) memcpy(backing,native,n); else memcpy(native,backing,n);
+            }
+            cursor+=n;native+=n;left-=n;
+        }
+    }
+    return 1;
+}
 #include "../../../rom/kernel/mapping/mapping.c"
 #include "../../../rom/kernel/mapping/domain.c"
 #include "../../../rom/kernel/mapping/service.c"
