@@ -1883,6 +1883,30 @@ static int r_protect_memory(uint64_t handle,uintptr_t address,unsigned protectio
     AROSAppleMemoryLockRelease(&AROSApplePageMapLock,saved);
     Permit();return ok;
 }
+/* API 36: protect consecutive pages under one rendezvous; the per-page
+ * transaction made every page wait for a peer CPU to leave WFI. Stops at
+ * the first refused page and returns how many pages changed. */
+static size_t r_protect_range(uint64_t handle,uintptr_t address,size_t pages,unsigned protection)
+{
+    if (!pages || !r_jit_protection(protection,&protection)) return 0;
+    size_t done=0;
+    Forbid();
+    uint64_t saved=AROSApplePageMapAcquire();
+    uint64_t token=AROSApplePageMutationBegin();
+    if (token) {
+        publication_context=r_context(r_current());
+        for (;publication_context && done<pages;++done) {
+            struct RestrictedMemoryOperation op={.handle=handle,.address=address+done*R_PAGE,.operation=3,.protection=protection};
+            register uintptr_t argument __asm__("x0")=(uintptr_t)&op;
+            __asm__ volatile("svc #0xa567":"+r"(argument)::"x1","memory","cc");
+            if (!argument) break;
+        }
+        publication_context=NULL;
+        AROSApplePageMutationEnd(token);
+    }
+    AROSAppleMemoryLockRelease(&AROSApplePageMapLock,saved);
+    Permit();return done;
+}
 static int r_release_memory(uint64_t handle,uintptr_t address)
 {
     Forbid();struct RestrictedMemoryOperation op={.handle=handle,.address=address,.operation=4};
@@ -2043,7 +2067,7 @@ static int r_read_domain(uint64_t handle,uintptr_t address,void *buffer,size_t l
 { return r_copy_call(handle,address,buffer,length,KMAP_READ); }
 static int r_write_domain(uint64_t handle,uintptr_t address,const void *buffer,size_t length)
 { return r_copy_call(handle,address,(void *)buffer,length,KMAP_WRITE); }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {36,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread,r_read_shared,r_write_shared,r_take_domain,r_map_shared,r_unmap_shared,r_read_domain,r_write_domain,r_attach_shared_at};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {36,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread,r_read_shared,r_write_shared,r_take_domain,r_map_shared,r_unmap_shared,r_read_domain,r_write_domain,r_attach_shared_at,r_protect_range};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

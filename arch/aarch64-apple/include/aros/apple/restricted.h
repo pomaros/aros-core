@@ -240,5 +240,8 @@ struct AROSRestrictedAPI {
     /* Version 36: attach pages [first_page, first_page + n) of a shared object
      * to an empty reservation of exactly n pages at address. */
     int (*attach_shared_at)(uint64_t domain,uintptr_t address,uint64_t object,size_t first_page);
+    /* Version 36: protect_memory for consecutive pages under one rendezvous;
+     * returns the number of pages changed (stops at the first refusal). */
+    size_t (*protect_range)(uint64_t domain,uintptr_t address,size_t pages,unsigned protection);
 };
 #endif
