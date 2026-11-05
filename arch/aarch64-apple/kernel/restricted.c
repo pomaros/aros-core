@@ -225,7 +225,7 @@ static int r_thread_addresses(struct Restricted *r,struct RestrictedDomain *doma
 {
     /* Include the guards between stacks/TLS and after TLS. Round the owned
      * interval to the allocation granule; retain it through release ACK. */
-    const size_t limit=AROS_RESTRICTED_DYNAMIC_BASE-AROS_RESTRICTED_STACK;
+    const size_t limit=AROS_RESTRICTED_THREAD_END-AROS_RESTRICTED_STACK;
     if (!r->stack_bytes || !r->fault_bytes ||
         ((r->stack_bytes|r->fault_bytes)&(R_PAGE-1)) ||
         r->stack_bytes>limit || r->fault_bytes>limit-r->stack_bytes ||
@@ -1617,7 +1617,7 @@ static int r_run_internal(uint64_t handle,const void *code, size_t bytes, uint64
 {
     if ((!handle && (!code || !r_code_storage(bytes))) || !result) return 0;
     /* Validate sizes without consulting the mutable published list. */
-    const size_t limit=AROS_RESTRICTED_DYNAMIC_BASE-AROS_RESTRICTED_STACK;
+    const size_t limit=AROS_RESTRICTED_THREAD_END-AROS_RESTRICTED_STACK;
     if (!stack_bytes || !fault_bytes || ((stack_bytes|fault_bytes)&(R_PAGE-1)) ||
         stack_bytes>limit || fault_bytes>limit-stack_bytes ||
         stack_bytes+fault_bytes>limit-4*R_PAGE-(AROS_RESTRICTED_THREAD_STRIDE-1)) return 0;
