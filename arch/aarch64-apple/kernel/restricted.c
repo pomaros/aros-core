@@ -214,6 +214,22 @@ static struct Restricted *r_slot(uintptr_t address)
         if ((uintptr_t)r==address) return r;
     return NULL;
 }
+/* A task whose execution record names no live restricted thread it owns
+ * carries stale or foreign state: never dispatch it into a domain root.
+ * Counted and kept for the debugger; the record is cleared. */
+volatile uint64_t AROSAppleStaleExecutions, AROSAppleStaleTask, AROSAppleStaleRoot, AROSAppleStaleDomain;
+int AROSAppleRestrictedExecutionCheck(struct Task *task, struct AROSAppleTaskExecution *execution)
+{
+    struct Restricted *r = execution->domain;
+    if (!execution->root) return 1;
+    if (r && r_slot((uintptr_t)r) == r && r->cookie == R_COOKIE && r->owner == task) return 1;
+    ++AROSAppleStaleExecutions;
+    AROSAppleStaleTask = (uintptr_t)task;
+    AROSAppleStaleRoot = execution->root;
+    AROSAppleStaleDomain = (uintptr_t)r;
+    *execution = (struct AROSAppleTaskExecution){0};
+    return 0;
+}
 static size_t r_code_storage(size_t bytes)
 {
     /* The native protection entry accepts a 32-bit byte length. Round only
@@ -1101,6 +1117,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
     struct Restricted *r = execution->domain;
     unsigned ec = (unsigned)(frame->esr >> 26) & 63;
     unsigned svc = (unsigned)frame->esr & 65535;
+    if (execution->root && !AROSAppleRestrictedExecutionCheck(task, execution)) return 0;
     if (execution->root) {
         /* Identity comes from this task's kernel context, never x0 or TLS. */
         if (!r || r->cookie != R_COOKIE || r->owner != task ||

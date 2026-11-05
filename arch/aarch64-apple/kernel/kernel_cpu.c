@@ -27,6 +27,7 @@
 #include <etask.h>
 #include "task_accounting.h"
 #include "task_tls.h"
+int AROSAppleRestrictedExecutionCheck(struct Task *, struct AROSAppleTaskExecution *);
 #include "restricted.h"
 
 extern int AROSAppleKernelDebugPutDirect(int chr);
@@ -429,7 +430,8 @@ dispatch_after_self_exit:
     AROSAppleRuntimeLocal()->kernel_tls = regs->task_tls;
     if (AROSAppleRuntimeLocal()->trusted_ttbr0)
         regs->return_ttbr0 = AROSAppleRuntimeLocal()->trusted_ttbr0;
-    if (AROSAppleTaskExecution(context)->root) {
+    if (AROSAppleTaskExecution(context)->root &&
+        AROSAppleRestrictedExecutionCheck(task, AROSAppleTaskExecution(context))) {
         regs->return_ttbr0 = AROSAppleTaskExecution(context)->root;
         regs->task_tls = AROSAppleTaskExecution(context)->user_tls;
     }
