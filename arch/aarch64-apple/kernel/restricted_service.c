@@ -272,7 +272,7 @@ int AROSRestrictedSpaceInit(struct AROSRestrictedSpace *s,uint64_t principal,
     s->bufferops=(struct KrnBufferOps){s,admit};
     if (!KrnMappingDomainJoin(&s->domain,&s->creator,s) ||
         !KrnMappingArenaInitialize(&s->arena,AROS_RESTRICTED_LOW_BASE,
-            AROS_RESTRICTED_THREAD_END-AROS_RESTRICTED_LOW_BASE,PAGE) ||
+            AROS_RESTRICTED_WIDE_END-AROS_RESTRICTED_LOW_BASE,PAGE) ||
         !KrnBufferRegister(&registry,&s->registration,s->principal,&s->domain,&s->arena,&s->handle)) return 0;
     s->next=spaces;spaces=s;
     void *identity=KrnBufferLookup(&registry,s->principal,s->handle);

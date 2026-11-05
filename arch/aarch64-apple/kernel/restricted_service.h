@@ -19,15 +19,24 @@ struct AROSRestrictedSharedBacking {
     uintptr_t native_view;
     unsigned native_pending;
 };
-/* Low fixed mappings exclude null and the complete bootstrap/thread window. */
+/* Low fixed mappings exclude null and the complete bootstrap/thread window.
+ * The low window reaches the dynamic window, so a domain sees one contiguous
+ * range from 64 KiB to the code window; physical RAM identity pages inside it
+ * become private on first use. */
 #define AROS_RESTRICTED_LOW_BASE UINT64_C(0x10000)
-#define AROS_RESTRICTED_LOW_END UINT64_C(0x100000000)
+#define AROS_RESTRICTED_LOW_END UINT64_C(0x200000000)
 #define AROS_RESTRICTED_DYNAMIC_BASE UINT64_C(0x200000000)
 #define AROS_RESTRICTED_DYNAMIC_END UINT64_C(0x400000000)
-/* API 34: a high window, admitted per domain only when the kernel template
- * leaves it unmapped. */
-#define AROS_RESTRICTED_HIGH_BASE UINT64_C(0x1000000000)
+/* API 34: a high window from the end of the code window to the private
+ * thread windows, admitted per domain only when the kernel template leaves it
+ * unmapped. */
+#define AROS_RESTRICTED_HIGH_BASE UINT64_C(0x500000000)
 #define AROS_RESTRICTED_HIGH_END UINT64_C(0x2000000000)
+/* API 36: the wide window, 1 TiB to 128 TiB, beyond every physical identity
+ * mapping of a 40-bit physical space; admitted when the template leaves it
+ * unmapped. Linux programs see a full 47-bit user address space. */
+#define AROS_RESTRICTED_WIDE_BASE UINT64_C(0x10000000000)
+#define AROS_RESTRICTED_WIDE_END UINT64_C(0x800000000000)
 static inline int AROSRestrictedRangeValid(uintptr_t address,size_t length)
 {
     if (!length || ((address|length)&4095)) return 0;
@@ -35,6 +44,8 @@ static inline int AROSRestrictedRangeValid(uintptr_t address,size_t length)
         return length<=AROS_RESTRICTED_LOW_END-address;
     if (address>=AROS_RESTRICTED_HIGH_BASE && address<AROS_RESTRICTED_HIGH_END)
         return length<=AROS_RESTRICTED_HIGH_END-address;
+    if (address>=AROS_RESTRICTED_WIDE_BASE && address<AROS_RESTRICTED_WIDE_END)
+        return length<=AROS_RESTRICTED_WIDE_END-address;
     return address>=AROS_RESTRICTED_DYNAMIC_BASE && address<AROS_RESTRICTED_DYNAMIC_END &&
         length<=AROS_RESTRICTED_DYNAMIC_END-address;
 }
