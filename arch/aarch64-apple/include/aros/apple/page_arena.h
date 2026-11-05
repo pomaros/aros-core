@@ -15,9 +15,5 @@
  * 100 MiB of hunks, Chromium about 400 MiB) need the bundle to reserve
  * enough stage-two memory too.
  */
-#if defined(AROS_VM_GUEST) && AROS_VM_GUEST
-#define AROS_APPLE_PAGE_ARENA_MAX_BYTES (UINT64_C(256) * 1024U * 1024U)
-#else
 #define AROS_APPLE_PAGE_ARENA_MAX_BYTES (UINT64_C(1024) * 1024U * 1024U)
-#endif
 #endif
