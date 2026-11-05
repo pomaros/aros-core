@@ -726,6 +726,19 @@ static size_t r_range_tables(uint64_t address,size_t bytes)
         count+=((address+bytes-1)>>shift)-(address>>shift)+1;
     return count;
 }
+/* Remove inherited privileged identity aliases only from the private clone.
+ * Data and stacks can overlap native RAM just as low Windows addresses do. */
+static int r_prepare_private_page(const struct AArch64ProtectionOps *ops,
+    uint64_t root,uint64_t tcr,uintptr_t address)
+{
+    uint64_t physical;
+    if (!AROSAppleKernelTransitionRangeAvailable(address,R_PAGE)) return 0;
+    if (!AArch64MappingPhysical(ops,root,tcr,address,&physical)) {
+        if (!AArch64TranslateResident(ops,root,tcr,address,&physical)) return 1;
+        if (!AArch64PreparePrivilegedPage(ops,root,tcr,address,physical)) return 0;
+    }
+    return AArch64UnmapPrivilegedPage(ops,root,tcr,address,physical);
+}
 static int r_prepare_domain(struct RestrictedDomain *d,uint64_t source)
 {
     uint64_t tcr,root=0;
@@ -746,6 +759,7 @@ static int r_prepare_domain(struct RestrictedDomain *d,uint64_t source)
      * nothing (above RAM on QEMU and on M1 machines up to 32 GB). */
     d->high_window=AArch64RangeUnmapped(&ops,root,tcr,AROS_RESTRICTED_HIGH_BASE,
         AROS_RESTRICTED_HIGH_END-AROS_RESTRICTED_HIGH_BASE);
+    if (!r_prepare_private_page(&ops,root,tcr,AROS_RESTRICTED_DATA)) return 0;
     return AROSRestrictedSpaceInit(&d->space,(uintptr_t)d,root,tcr,(uintptr_t)d->data,&ops);
 }
 static int r_prepare(struct Restricted *r,uint64_t source)
@@ -761,8 +775,9 @@ static int r_prepare(struct Restricted *r,uint64_t source)
     size_t bytes[]={r->stack_bytes,r->fault_bytes,R_PAGE};
     for (unsigned i=0;i<3;++i)
         for (size_t offset=0;offset<bytes[i];offset+=R_PAGE)
-            if (!AArch64MapPage(&d->space.hardware,d->root,d->space.tcr,
-                va[i]+offset,pa[i]+offset,rw,1)) return 0;
+            if (!r_prepare_private_page(&d->space.hardware,d->root,d->space.tcr,va[i]+offset) ||
+                !AArch64MapPage(&d->space.hardware,d->root,d->space.tcr,
+                    va[i]+offset,pa[i]+offset,rw,1)) return 0;
     return AROSRestrictedServiceInit(&r->service,&d->space,(uintptr_t)r->owner);
 }
 static int r_unmap_thread(struct Restricted *r)
@@ -810,16 +825,7 @@ static int r_prepare_low_page(struct RestrictedDomain *d,
     struct RestrictedAllocation *a, size_t page, uintptr_t address)
 {
     if (address >= AROS_RESTRICTED_LOW_END || r_backing(a,page)) return 1;
-    if (!AROSAppleKernelTransitionRangeAvailable(address, R_PAGE)) return 0;
-    uint64_t physical;
-    if (!AArch64MappingPhysical(&d->space.hardware,d->root,d->space.tcr,address,&physical)) {
-        if (!AArch64TranslateResident(&d->space.hardware,d->root,d->space.tcr,address,&physical))
-            return 1; /* Missing or unsupported mapping: MapPage still fails closed. */
-        if (!AArch64PreparePrivilegedPage(&d->space.hardware,d->root,d->space.tcr,address,physical))
-            return 0;
-    }
-    return AArch64UnmapPrivilegedPage(&d->space.hardware,d->root,
-        d->space.tcr,address,physical);
+    return r_prepare_private_page(&d->space.hardware,d->root,d->space.tcr,address);
 }
 static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned svc)
 {
