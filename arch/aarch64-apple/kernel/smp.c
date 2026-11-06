@@ -152,15 +152,20 @@ void AROSApplePageMutationEnd(uint64_t token)
 {
  AROSAppleMemoryRendezvousRelease(&memory_rendezvous);
  uint64_t start=AROSAppleSMPTimeUS();
+ uint64_t warning_after=MEMORY_RENDEZVOUS_TIMEOUT_US;
+ unsigned delayed=0;
  while(!AROSAppleMemoryRendezvousAll(memory_rendezvous.departed,token)) {
-  if(AROSAppleSMPTimeUS()-start>=MEMORY_RENDEZVOUS_TIMEOUT_US) {
-   /* Mutation already happened. Reusing the operation or claiming success
-    * before remote synchronization would be unsafe. Retain locks/evidence. */
-   bug("[SMP-MMU] fatal rendezvous departure timeout token=%llx\n",(unsigned long long)token);
-   for(;;) __asm__ volatile("yield" ::: "memory");
+  uint64_t now=AROSAppleSMPTimeUS();
+  if(now-start>=warning_after) {
+   /* Mutation already happened: retain ownership until every peer has
+    * synchronized. A descheduled peer can acknowledge after the warning;
+    * permanently latching a timeout would strand even a completed operation. */
+   bug("[SMP-MMU] waiting for rendezvous departure token=%llx\n",(unsigned long long)token);
+   start=now;warning_after=MEMORY_RENDEZVOUS_ARRIVAL_US;delayed=1;
   }
   __asm__ volatile("yield" ::: "memory");
  }
+ if(delayed) bug("[SMP-MMU] rendezvous departure acknowledged token=%llx\n",(unsigned long long)token);
  AROSAppleMemoryRendezvousEnd(&memory_rendezvous);
 }
 /* PageMapLock serializes the rendezvous and this target. Terminal freeze
