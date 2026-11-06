@@ -5,8 +5,20 @@
 #include <exec/types.h>
 #include <exec/libraries.h>
 #include <oop/oop.h>
+#include "include/virtiogpu.h"
 struct VirtioGPU;
 struct VirtioGPUSurface { APTR pixels;ULONG width,height,stride; };
+BOOL VirtioGPUAcquire(struct VirtioGPU *);
+BOOL VirtioGPUHasVirGL(struct VirtioGPU *);
+APTR VirtioGPUAlloc(struct VirtioGPU *,APTR owner,ULONG bytes);
+BOOL VirtioGPUFree(struct VirtioGPU *,APTR owner,APTR pointer);
+BOOL VirtioGPUAddress(struct VirtioGPU *,APTR owner,APTR pointer,UQUAD *address);
+BOOL VirtioGPUBackingBegin(struct VirtioGPU *,APTR owner,APTR pointer,ULONG flags);
+void VirtioGPUBackingEnd(struct VirtioGPU *,APTR owner,APTR pointer);
+void VirtioGPURelease(struct VirtioGPU *);
+ULONG VirtioGPUAllocateID(struct VirtioGPU *,BOOL context);
+BOOL VirtioGPUCommand(struct VirtioGPU *,const void *request,ULONG bytes,
+                     void *response,ULONG response_bytes,ULONG response_type);
 /* Task context with interrupts and scheduling enabled. Caller retains the
  * OOP/PCI provider while a context exists.
  * On failure *out is NULL after complete unwind, or a quarantined context

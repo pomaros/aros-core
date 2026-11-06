@@ -1,0 +1,28 @@
+include $(SRCDIR)/config/aros.cfg
+
+ifneq (,$(filter x86_64 aarch64,$(AROS_TARGET_CPU)))
+SAFETY_CFLAGS += -Werror=implicit-function-declaration
+USER_CFLAGS := -Wall -Wextra -Werror=implicit-function-declaration
+
+#MM test-virgl-gl : includes linklibs
+%build_progs mmake=test-virgl-gl \
+    files=virglglprobe uselibs="GL" targetdir=$(AROS_TESTS)/hidds/gfx
+
+#MM test-virtio-shared : includes linklibs kernel-hidd-virtiogfx-includes
+%build_progs mmake=test-virtio-shared \
+    files=virtiosharedtest uselibs="hiddstubs" targetdir=$(AROS_TESTS)/hidds/gfx
+
+#MM test-virtio-completion : includes linklibs kernel-hidd-virtiogfx-includes
+%build_progs mmake=test-virtio-completion \
+    files=virtiocompletiontest uselibs="hiddstubs" targetdir=$(AROS_TESTS)/hidds/gfx
+
+#MM test-virgl-run : includes linklibs
+%build_progs mmake=test-virgl-run \
+    files=virglrunprobe targetdir=$(AROS_TESTS)/hidds/gfx
+
+#MM test-virgl-pair : includes linklibs test-virgl-gl
+%build_progs mmake=test-virgl-pair \
+    files=virglpaircheck targetdir=$(AROS_TESTS)/hidds/gfx
+
+%common
+endif
