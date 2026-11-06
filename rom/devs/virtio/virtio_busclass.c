@@ -36,6 +36,7 @@
 #include "virtio_intern.h"
 #include "virtio_hw.h"
 #include "virtio_queue.h"
+#include "virtio_timer.h"
 
 extern const char GM_UNIQUENAME(LibName)[];
 
@@ -51,11 +52,21 @@ static AROS_INTH1(VIRTIO_IOIntCode, struct virtio_queue *, vq)
     AROS_INTFUNC_EXIT
 }
 
+/* Completions normally arrive with an interrupt. Under SMP load an
+ * interrupt has been seen to go missing (QEMU: used == avail, nothing in
+ * flight, the task still waiting), which stalled every filesystem on the
+ * device. The task therefore also checks the used ring every 20 ms and
+ * reports completions it found that way: the root cause remains open. */
 static void virtio_iotask(struct virtio_queue *vq)
 {
+    struct IORequest *tmr = virtio_OpenTimer(vq->dev->dev_VirtIOBase);
+    ULONG unsignalled = 0;
     for (;;) {
-        Wait(SIGBREAKF_CTRL_F);
-        virtio_process_used(vq);
+        ULONG sigs = tmr ? virtio_WaitTO(tmr, 0, 20000, SIGBREAKF_CTRL_F) : Wait(SIGBREAKF_CTRL_F);
+        ULONG handled = virtio_process_used(vq);
+        if (handled && !(sigs & SIGBREAKF_CTRL_F) && (++unsignalled <= 8 || !(unsignalled & 1023)))
+            bug("[VIRTIO] %lu completion(s) found without an interrupt (%lu so far)\n",
+                (unsigned long)handled, (unsigned long)unsignalled);
     }
 }
 
