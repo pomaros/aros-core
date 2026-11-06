@@ -1369,7 +1369,12 @@ findpcb:
             if(taop->tao_ccsent == 0)
                 taop->tao_ccsent = to.to_ccecho;
 
-            tp->rcv_adv += tp->rcv_wnd;
+            /* The SYN advertised an unscaled, 16-bit window.  The receive
+             * buffer may be larger, but that extra space has not yet been
+             * advertised.  Recording it here makes tcp_output's non-shrink
+             * rule override its wire-window limit when scaling was refused.
+             * The subsequent ACK can advertise the negotiated window. */
+            tp->rcv_adv += MIN(tp->rcv_wnd, TCP_MAXWIN);
             tp->snd_una++;		/* SYN is acked */
             TCP_UTO_PROGRESS(tp);   /* the SYN no longer waits */
             /*
