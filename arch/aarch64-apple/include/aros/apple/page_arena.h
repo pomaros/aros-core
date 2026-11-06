@@ -13,7 +13,9 @@
  * cap; a program whose hunks do not fit fails to load with
  * ERROR_NO_FREE_STORE. Large static programs (a WebKit browser has about
  * 100 MiB of hunks, Chromium about 400 MiB) need the bundle to reserve
- * enough stage-two memory too.
+ * enough stage-two memory too. Restricted processes and their private
+ * fork copies also allocate from this arena. The cap is metadata capacity,
+ * not a reservation; smaller boot profiles retain their actual arena size.
  */
-#define AROS_APPLE_PAGE_ARENA_MAX_BYTES (UINT64_C(1024) * 1024U * 1024U)
+#define AROS_APPLE_PAGE_ARENA_MAX_BYTES (UINT64_C(4096) * 1024U * 1024U)
 #endif
