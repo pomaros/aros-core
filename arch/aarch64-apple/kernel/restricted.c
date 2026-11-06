@@ -1171,7 +1171,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
              * Missing tables/pages produce translation faults; RO writes permission faults.
              * No instruction, external, alignment or unowned-address exception
              * supplies a continuation. Bind it to the retained page generation. */
-            if (ec==0x24 && ((fault>=4 && fault<=7) || fault==15) && !(frame->esr&(UINT64_C(1)<<10)) &&
+            if (ec==0x24 && ((fault>=4 && fault<=7) || (fault>=12 && fault<=15)) && !(frame->esr&(UINT64_C(1)<<10)) &&
                 r_capture_code(r,frame->elr,&r->fault_code) && r_stack_sp(r,frame->sp) &&
                 r->fault_handler && r_match_code(r,&r->handler_code) &&
                 !r->fault_active && !r->exception_active && r->fault_generation!=UINT64_MAX &&
