@@ -71,6 +71,9 @@ uint64_t AROSAppleSMPTimeUS(void)
  * no allocator, DOS, device, or scheduler operation while stopped. */
 #define AROS_APPLE_MEMORY_IPI (1U << 21)
 #define MEMORY_RENDEZVOUS_TIMEOUT_US UINT64_C(100000)
+/* A peer in WFI under a hypervisor can take longer than one window to run
+ * (HVF deschedules idle vCPUs); its IPI is sent again each window. */
+#define MEMORY_RENDEZVOUS_ARRIVAL_US UINT64_C(2000000)
 static struct AROSAppleMemoryRendezvous memory_rendezvous;
 static uint32_t dispatch_transition[AROS_APPLE_SMP_MAX_CPUS];
 static uint32_t memory_dispatch_snapshot[AROS_APPLE_SMP_MAX_CPUS];
@@ -122,15 +125,27 @@ uint64_t AROSApplePageMutationBegin(void)
  uint64_t token=AROSAppleMemoryRendezvousBegin(&memory_rendezvous,mask);
  if(!token) return 0;
  if(mask) AROSAppleSMPSendIPI(AROS_APPLE_MEMORY_IPI,0,mask);
- uint64_t start=AROSAppleSMPTimeUS();
+ uint64_t start=AROSAppleSMPTimeUS(),window=start;
+ unsigned resent=0;
  while(!AROSAppleMemoryRendezvousAll(memory_rendezvous.arrived,token)) {
-  if(AROSAppleSMPTimeUS()-start>=MEMORY_RENDEZVOUS_TIMEOUT_US) {
+  uint64_t now=AROSAppleSMPTimeUS();
+  if(now-start>=MEMORY_RENDEZVOUS_ARRIVAL_US) {
    AROSAppleMemoryRendezvousEnd(&memory_rendezvous);
-   bug("[SMP-MMU] rendezvous arrival timeout; no mutation\n");
+   bug("[SMP-MMU] rendezvous arrival timeout after %u resends; no mutation\n",resent);
    return 0;
+  }
+  if(now-window>=MEMORY_RENDEZVOUS_TIMEOUT_US) {
+   uint32_t missing=0;
+   for(unsigned peer=0;peer<32;++peer)
+    if((mask&(UINT32_C(1)<<peer)) &&
+       __atomic_load_n(&memory_rendezvous.arrived[peer],__ATOMIC_ACQUIRE)!=token)
+     missing|=UINT32_C(1)<<peer;
+   if(missing) AROSAppleSMPSendIPI(AROS_APPLE_MEMORY_IPI,0,missing);
+   window=now;++resent;
   }
   __asm__ volatile("yield" ::: "memory");
  }
+ if(resent) bug("[SMP-MMU] rendezvous arrived after %u resends\n",resent);
  return token;
 }
 void AROSApplePageMutationEnd(uint64_t token)
