@@ -211,13 +211,15 @@ int KrnMappingDecommitPage(struct KrnMappingObject *m,size_t index,
 struct KrnMappingObject *KrnMappingLookup(struct KrnMappingArena *a,
     uintptr_t address)
 {
-    if (!a || address < a->start || address-a->start >= a->length)
+    if (!a || !a->page_size || address < a->start || address-a->start >= a->length)
         return NULL;
-    for (unsigned i=0;i<8;++i) {
-        struct KrnMappingObject *m=a->recent[i];
+    uintptr_t page=address/a->page_size;
+    unsigned set=(unsigned)((page^(page>>8)^(page>>16))&63U)*2U;
+    for (unsigned i=0;i<2;++i) {
+        struct KrnMappingObject *m=a->recent[set+i];
         if (m && address>=m->start && address-m->start<m->length) {
-            for (unsigned j=i;j;j--) a->recent[j]=a->recent[j-1];
-            a->recent[0]=m;
+            if (i) a->recent[set+1]=a->recent[set];
+            a->recent[set]=m;
             return m;
         }
     }
@@ -225,8 +227,8 @@ struct KrnMappingObject *KrnMappingLookup(struct KrnMappingArena *a,
         if (address < m->start)
             break;
         if (address-m->start < m->length) {
-            for (unsigned i=7;i;i--) a->recent[i]=a->recent[i-1];
-            a->recent[0]=m;
+            a->recent[set+1]=a->recent[set];
+            a->recent[set]=m;
             return m;
         }
     }
@@ -235,7 +237,7 @@ struct KrnMappingObject *KrnMappingLookup(struct KrnMappingArena *a,
 
 static void forget_lookup(struct KrnMappingArena *a,struct KrnMappingObject *m)
 {
-    for (unsigned i=0;i<8;++i) if (a->recent[i]==m) a->recent[i]=NULL;
+    for (unsigned i=0;i<128;++i) if (a->recent[i]==m) a->recent[i]=NULL;
 }
 
 int KrnMappingRelease(struct KrnMappingArena *a, struct KrnMappingObject *m)

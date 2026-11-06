@@ -213,34 +213,35 @@ static void fixed_reservation_tests(void)
 
 static void lookup_lifetime_tests(void)
 {
+    enum { COUNT=192 };
     struct KrnMappingArena a;
-    struct KrnMappingObject m[12],right;
-    struct KrnMappingPage pages[12][3],rp[1];
+    struct KrnMappingObject m[COUNT],right;
+    struct KrnMappingPage pages[COUNT][3],rp[1];
     uintptr_t base=0x10000;
-    assert(KrnMappingArenaInitialize(&a,base,64*4096,4096));
-    for (unsigned i=0;i<12;++i) {
+    assert(KrnMappingArenaInitialize(&a,base,(COUNT*4+4)*4096,4096));
+    for (unsigned i=0;i<COUNT;++i) {
         assert(KrnMappingReserveAt(&a,&m[i],base+i*4*4096,3*4096,0,3,0,&a,pages[i],3));
         assert(KrnMappingLookup(&a,m[i].start+4095)==&m[i]);
     }
-    assert(KrnMappingLookup(&a,m[0].start)==&m[0]); /* cache eviction */
-    assert(KrnMappingLookup(&a,m[11].start)==&m[11]);
-    uintptr_t old=m[11].start;
-    assert(KrnMappingBeginClose(&m[11]) && KrnMappingRelease(&a,&m[11]));
+    assert(KrnMappingLookup(&a,m[0].start)==&m[0]); /* more objects than cache entries */
+    assert(KrnMappingLookup(&a,m[COUNT-1].start)==&m[COUNT-1]);
+    uintptr_t old=m[COUNT-1].start;
+    assert(KrnMappingBeginClose(&m[COUNT-1]) && KrnMappingRelease(&a,&m[COUNT-1]));
     /* Reusing released storage must not make an unlinked object visible. */
-    m[11].start=old;m[11].length=4096;
+    m[COUNT-1].start=old;m[COUNT-1].length=4096;
     assert(!KrnMappingLookup(&a,old));
-    assert(KrnMappingReserveAt(&a,&m[11],old,3*4096,0,3,0,&a,pages[11],3));
-    assert(KrnMappingLookup(&a,old+4096)==&m[11]);
-    assert(KrnMappingBeginClose(&m[11]));
-    assert(KrnMappingCut(&a,&m[11],old+4096,4096,&right,rp,1)==KMAP_CUT_SPLIT);
-    assert(KrnMappingLookup(&a,old)==&m[11]);
+    assert(KrnMappingReserveAt(&a,&m[COUNT-1],old,3*4096,0,3,0,&a,pages[COUNT-1],3));
+    assert(KrnMappingLookup(&a,old+4096)==&m[COUNT-1]);
+    assert(KrnMappingBeginClose(&m[COUNT-1]));
+    assert(KrnMappingCut(&a,&m[COUNT-1],old+4096,4096,&right,rp,1)==KMAP_CUT_SPLIT);
+    assert(KrnMappingLookup(&a,old)==&m[COUNT-1]);
     assert(!KrnMappingLookup(&a,old+4096));
     assert(KrnMappingLookup(&a,old+8192)==&right);
     assert(KrnMappingBeginClose(&right));
     assert(KrnMappingCut(&a,&right,old+8192,4096,NULL,NULL,0)==KMAP_CUT_RELEASED);
     right.length=4096; /* retired storage cannot survive in the cache */
     assert(!KrnMappingLookup(&a,old+8192));
-    for (unsigned i=0;i<12;++i)
+    for (unsigned i=0;i<COUNT;++i)
         assert(KrnMappingBeginClose(&m[i]) && KrnMappingRelease(&a,&m[i]));
     assert(!a.first && !KrnMappingLookup(&a,base));
 }
