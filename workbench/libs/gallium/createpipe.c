@@ -142,6 +142,7 @@ static OOP_Object *GalliumOnVulkan(struct Library *GalliumBase, OOP_Object *vk,
     {
         { aHidd_Gallium_InterfaceVersion,       0 },
         { aHidd_Gallium_CoreAPI,                0 },
+        { aHidd_Gallium_ScreenFactory,          0 },
         { TAG_DONE,                             0 }
     };
     OOP_Object                                  *_driver = NULL;
@@ -151,6 +152,7 @@ static OOP_Object *GalliumOnVulkan(struct Library *GalliumBase, OOP_Object *vk,
 
     galliumTags[0].ti_Data = GetTagData(CPS_GalliumInterfaceVersion, -1, tags);
     galliumTags[1].ti_Data = GetTagData(CPS_GalliumCoreAPI, 0, tags);
+    galliumTags[2].ti_Data = GetTagData(CPS_PipeScreenFactory, 0, tags);
     friendbm = (struct BitMap *)GetTagData(CPS_PipeFriendBitMap, 0, tags);
     driver = (OOP_Object **)GetTagData(CPS_PipeScreenDriver, (IPTR)&_driver, tags);
 

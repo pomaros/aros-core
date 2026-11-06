@@ -23,6 +23,7 @@
 
 #include "mesa3dgl_support.h"
 #include "mesa3dgl_gallium.h"
+#include "mesa_screen_factory.h"
 
 /* GalliumCoreAPI table provider (generated gca_table.c). Passed to the
  * pipe hidd via CPS_GalliumCoreAPI so a runtime-bound pipe driver can
@@ -148,11 +149,14 @@ static inline const void *gallium_core_get_api(void) { return (const void *)0; }
 *****************************************************************************/
 {
     struct mesa3dgl_context * ctx = NULL;
+    struct GalliumScreenFactory screen_factory;
+    mesa_screen_factory_init(&screen_factory);
     struct TagItem pscreen_tags[] =
     {
             { CPS_PipeFriendBitMap,     0       },
             { CPS_PipeScreenDriver,     0       },
             { CPS_GalliumCoreAPI,       0       },
+            { CPS_PipeScreenFactory,    (IPTR)&screen_factory },
             { TAG_DONE,                 0       }
     };
     struct pipe_screen * pscreen = NULL;

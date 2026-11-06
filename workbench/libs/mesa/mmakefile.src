@@ -29,6 +29,10 @@ include $(SRCDIR)/$(CURDIR)/mesa.cfg
 #MM- workbench-libs-mesa : mesa3dgl-library
 
 #MM mesa3dgl-library : includes workbench-libs-dxtn-includes linklibs-galliumauxiliary workbench-libs-gallium-linklib mesa3dgl-linklibs mesa3dgl-library-env workbench-libs-z-linklib linklibs-libatomic
+#MM- mesa3dgl-library : linklibs-gallium_virgl
+#MM- mesa3dgl-library : virgl-driconf-gen
+USER_CPPFLAGS += -DMESA3DGL_HAVE_VIRGL
+USER_INCLUDES += -iquote $(top_srcdir)/src/gallium/drivers -iquote $(top_srcdir)/src/virtio -I$(GENDIR)/workbench/hidds/virgl
 
 # Per-arch gallium core linklibs, mirroring MESA3DGL_GALLIUMCORE in
 # mesa.cfg. Declare each one's build-order dependency so mmake builds the
@@ -37,6 +41,7 @@ include $(SRCDIR)/$(CURDIR)/mesa.cfg
 #MM- mesa3dgl-galliumcore-raspi : linklibs-galliumcoreapi
 
 SHARED_LIB_SOURCES = \
+            mesa_screen_factory \
             emul_arosc \
             tls
 
@@ -110,8 +115,10 @@ MESA_COMPILEOPTIONS += $(CFLAGS_FUNCTION_SECTIONS)
 endif
 
 USER_LDFLAGS += $(TARGET_CXX_LDFLAGS) -L$(top_libdir)
+MESAGL_LIBRARY_SOURCES_C += $(top_srcdir)/src/util/xmlconfig
 
 #USER_CPPFLAGS += -DDEBUG=1
+USER_CFLAGS += -Werror=implicit-function-declaration
 
 %build_module_library mmake=mesa3dgl-library \
   modname="mesa3dgl$(MESAGLBUILD)" modtype=library \
@@ -120,7 +127,7 @@ USER_LDFLAGS += $(TARGET_CXX_LDFLAGS) -L$(top_libdir)
   objdir="$(OBJDIR)/$(MESAGLVERSION)" \
   files="$(MESAGL_LIBRARY_SOURCES_C)" \
   alwayscxxlink=yes \
-  uselibs="glapi mesa mesa-sse41 compiler galliumauxiliary gallium mesautil pthread $(MESA3DGL_GALLIUMCORE)"
+  uselibs="glapi mesa mesa-sse41 compiler gallium_virgl galliumauxiliary gallium mesautil pthread $(MESA3DGL_GALLIUMCORE)"
 
 $(AROS_ENVARC)/SYS:
 	%mkdir_q dir=$@

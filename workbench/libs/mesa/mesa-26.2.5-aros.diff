@@ -2535,3 +2535,21 @@ diff -ruN mesa-26.2.5/src/vulkan/runtime/vk_image.h mesa-26.2.5.aros/src/vulkan/
     /* VK_EXT_drm_format_modifier
      *
      * Initialized by vk_image_create/init() to DRM_FORMAT_MOD_INVALID.  It's
+diff --git a/src/gallium/drivers/virgl/virgl_context.c b/src/gallium/drivers/virgl/virgl_context.c
+--- a/src/gallium/drivers/virgl/virgl_context.c
++++ b/src/gallium/drivers/virgl/virgl_context.c
+@@ -24,4 +24,4 @@
+ #include <string.h>
+-#ifndef _WIN32
++#if !defined(_WIN32) && !defined(__AROS__)
+ #include <libsync.h>
+ #endif
+diff --git a/src/util/xmlconfig.c b/src/util/xmlconfig.c
+--- a/src/util/xmlconfig.c
++++ b/src/util/xmlconfig.c
+@@ -56,1 +56,5 @@
++#ifdef __AROS__
++#include <aros/posixc/regex.h>
++#else
+ #include <regex.h>
++#endif
