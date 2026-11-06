@@ -271,7 +271,7 @@ int main(int argc, char **argv)
     unsigned char pixel[4] = {0};
     int ok;
     int empty = 0, single = 0, multi = 0, openonly = 0, refresh = 0, arg;
-    int handles = 0, nativeonly = 0, log_error = -1, setrast = 0;
+    int handles = 0, nativeonly = 0, log_error = -1, setrast = 0, quick = 0;
     const char *pair_port = NULL;
     int pair_role = -1;
     test_stencil = 1;
@@ -279,6 +279,7 @@ int main(int argc, char **argv)
     for (arg = 2; arg < argc; ++arg) {
         if (strcmp(argv[arg], "empty") == 0) empty = 1;
         else if (strcmp(argv[arg], "single") == 0) single = 1;
+        else if (strcmp(argv[arg], "quick") == 0) quick = 1;
         else if (strcmp(argv[arg], "nostencil") == 0) test_stencil = 0;
         else if (strcmp(argv[arg], "multi") == 0) multi = 1;
         else if (strcmp(argv[arg], "openonly") == 0) openonly = 1;
@@ -405,7 +406,8 @@ int main(int argc, char **argv)
     }
     glASwapBuffers(ctx);
     fflush(stdout);
-    Delay(500);
+    /* Pixel checks still run in quick mode; only the viewing pause is omitted. */
+    if (!quick) Delay(500);
 cycles:
     {
         int cycle;

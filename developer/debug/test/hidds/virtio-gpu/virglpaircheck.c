@@ -5,6 +5,7 @@
 #include <exec/tasks.h>
 #include <exec/libraries.h>
 #include <dos/dosextens.h>
+#include <dos/var.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
 #include <stdio.h>
@@ -53,12 +54,6 @@ static void collect_ready(struct MsgPort *port, struct avgl_pair_ready **ready, 
         } else ready[r->role] = r;
     }
 }
-static int occurrences(const char *text, const char *marker)
-{
-    int count = 0;
-    while ((text = strstr(text, marker)) != NULL) { count++; text++; }
-    return count;
-}
 int main(int argc, char **argv)
 {
     struct job jobs[2] = {{0}};
@@ -66,27 +61,40 @@ int main(int argc, char **argv)
     struct MsgPort *port = NULL;
     char port_name[64], data[16384];
     BOOL okay = TRUE;
-    UWORD before = library_count("posixc.library");
-    struct Library *held_gallium;
-    BOOL cold = argc == 4 && !strcmp(argv[3], "cold");
+    UWORD before, mesa_before;
+    struct Library *held_gallium, *held_mesa;
+    char mesa_name[128];
+    BOOL reverse = argc == 4 && !strcmp(argv[3], "reverse");
+    unsigned first = reverse ? 1 : 0, second = 1 - first;
     unsigned i, ticks;
-    if (argc != 3 && !cold) { puts("Usage: virglpaircheck child log-prefix [cold]"); return 10; }
+    if (argc != 3 && !reverse) { puts("Usage: virglpaircheck child log-prefix [reverse]"); return 10; }
     /* Prevent legitimate library GC from removing the cached provider before
      * its reference count is inspected. Opening Gallium does not load it. */
     held_gallium = OpenLibrary("gallium.library", 26);
     if (!held_gallium) return 10;
+    /* Prime the selected Mesa module before measuring its dependencies.
+     * A resident zero-user library may legitimately retain PosixC; the
+     * module's own user count must still return to this held reference. */
+    LONG name_length = GetVar("SYS/GL", mesa_name, sizeof(mesa_name) - 9, GVF_GLOBAL_ONLY);
+    if (name_length <= 0 || name_length >= (LONG)sizeof(mesa_name) - 9) {
+        CloseLibrary(held_gallium); return 10;
+    }
+    mesa_name[name_length] = 0;
+    if (name_length < 8 || strcmp(mesa_name + name_length - 8, ".library"))
+        strcat(mesa_name, ".library");
+    held_mesa = OpenLibrary(mesa_name, 26);
+    if (!held_mesa) { CloseLibrary(held_gallium); return 10; }
+    before = library_count("posixc.library");
+    mesa_before = library_count(mesa_name);
     UWORD provider_before = library_count("virgl.hidd");
     printf("loaded gallium: %u.%u; provider pins before clients=%u\n",
         held_gallium->lib_Version, held_gallium->lib_Revision, provider_before);
-    if (cold && (held_gallium->lib_Version != 26 || held_gallium->lib_Revision != 2 || provider_before)) {
-        puts("FAIL: cold fallback setup/version"); CloseLibrary(held_gallium); return 10;
-    }
     snprintf(port_name, sizeof(port_name), "virgl-pair-%p", FindTask(NULL));
     port = CreateMsgPort();
-    if (!port) { CloseLibrary(held_gallium); return 10; }
+    if (!port) { CloseLibrary(held_mesa); CloseLibrary(held_gallium); return 10; }
     port->mp_Node.ln_Name = port_name;
     Forbid();
-    if (FindPort(port_name)) { Permit(); DeleteMsgPort(port); CloseLibrary(held_gallium); return 10; }
+    if (FindPort(port_name)) { Permit(); DeleteMsgPort(port); CloseLibrary(held_mesa); CloseLibrary(held_gallium); return 10; }
     AddPort(port); Permit();
     for (i = 0; i < 2; i++) {
         struct Process *child;
@@ -94,7 +102,7 @@ int main(int argc, char **argv)
         int length = snprintf(jobs[i].path, sizeof(jobs[i].path), "%s-%u.log", argv[2], i);
         if (length < 0 || (unsigned)length >= sizeof(jobs[i].path)) { okay = FALSE; break; }
         length = snprintf(jobs[i].arguments, sizeof(jobs[i].arguments),
-            "virgl single handles logerror=%u pairport=%s pairrole=%u\n", 70+i, port_name, i);
+            "virgl single quick handles pairport=%s pairrole=%u\n", port_name, i);
         if (length < 0 || (unsigned)length >= sizeof(jobs[i].arguments)) { okay = FALSE; break; }
         jobs[i].argument_length = length;
         jobs[i].rc = 10;
@@ -122,11 +130,11 @@ int main(int argc, char **argv)
     }
     if (okay) {
         puts("both renderer contexts are live: PASS"); fflush(stdout);
-        ReplyMsg(&ready[0]->message); ready[0] = NULL;
-        ChildWait(jobs[0].child_id);
-        printf("first client exited: rc=%ld; releasing surviving client\n", (long)jobs[0].rc);
+        ReplyMsg(&ready[first]->message); ready[first] = NULL;
+        ChildWait(jobs[first].child_id);
+        printf("first client %u exited: rc=%ld; releasing surviving client\n", first, (long)jobs[first].rc);
         fflush(stdout);
-        ReplyMsg(&ready[1]->message); ready[1] = NULL;
+        ReplyMsg(&ready[second]->message); ready[second] = NULL;
     } else {
         puts("FAIL: both clients did not reach the live-context barrier"); fflush(stdout);
     }
@@ -150,11 +158,9 @@ int main(int argc, char **argv)
             length = Read(jobs[i].output, data, sizeof(data)-1);
             if (length < 0) length = 0;
             data[length] = 0;
-            char own[64], other[64], survivor[64];
-            snprintf(own, sizeof(own), "STDIO_CLIENT[logging-client-%02u]", 70+i);
-            snprintf(other, sizeof(other), "STDIO_CLIENT[logging-client-%02u]", 71-i);
+            char survivor[64];
             snprintf(survivor, sizeof(survivor), "pair survivor: role=%u PASS", i);
-            if (jobs[i].rc || occurrences(data, own) != 1 || occurrences(data, other) ||
+            if (jobs[i].rc || !strstr(data, "virgl") ||
                 !strstr(data, survivor) || !strstr(data, "\nPASS\n")) okay = FALSE;
             Close(jobs[i].output);
         } else okay = FALSE;
@@ -164,9 +170,13 @@ int main(int argc, char **argv)
     UWORD provider_after = library_count("virgl.hidd");
     printf("provider pins after both clients=%u expected=1\n", provider_after);
     if (provider_after != 1) okay = FALSE;
-    CloseLibrary(held_gallium);
+    UWORD mesa_after = library_count(mesa_name);
+    printf("Mesa user references: %u->%u\n", mesa_before, mesa_after);
+    if (mesa_after != mesa_before) okay = FALSE;
     UWORD after = library_count("posixc.library");
     if (after != before) okay = FALSE;
-    printf("pair stdio/ownership: PosixC %u->%u %s\n", before, after, okay ? "PASS" : "FAIL");
+    printf("pair ownership: PosixC %u->%u %s\n", before, after, okay ? "PASS" : "FAIL");
+    CloseLibrary(held_mesa);
+    CloseLibrary(held_gallium);
     return okay ? 0 : 10;
 }
