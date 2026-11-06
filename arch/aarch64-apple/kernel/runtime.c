@@ -647,9 +647,15 @@ int AROSAppleKernelProveRuntime(
      * (UCI): code generators such as JIT compilers and compiler-rt's
      * __clear_cache rely on both. APs inherit this SCTLR. */
     {
-        uint64_t sctlr;
+        uint64_t sctlr, mmfr2;
         __asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
+        __asm__ volatile("mrs %0, id_aa64mmfr2_el1" : "=r"(mmfr2));
         sctlr |= (UINT64_C(1) << 15) | (UINT64_C(1) << 26);
+        /* FEAT_LSE2 permits non-aligned acquire/release accesses.  Without
+         * nAA, accesses crossing a 16-byte boundary still take alignment
+         * exceptions despite the CPU exposing that feature to EL0. */
+        if (((mmfr2 >> 32) & 15) == 1)
+            sctlr |= UINT64_C(1) << 6;
         __asm__ volatile("msr sctlr_el1, %0; isb" :: "r"(sctlr) : "memory");
     }
 #if defined(__AROSEXEC_SMP__)
