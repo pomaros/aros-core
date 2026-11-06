@@ -483,6 +483,14 @@ static void region_tests(uint64_t va)
     CHECK(AArch64MapPage(&spaces[0].hardware,spaces[0].root,tcr,va+2*PAGE,(uintptr_t)pages[4],AARCH64_PROTECT_USER|3,1),"reserved-fault-rogue-map");
     CHECK(!AROSRestrictedSpaceFaultIdentity(&spaces[0],va+2*PAGE,&identity,&identity_generation,&identity_reservation),"reserved-fault-pte-refused");
     CHECK(AArch64UnmapPage(&spaces[0].hardware,spaces[0].root,tcr,va+2*PAGE,(uintptr_t)pages[4]),"reserved-fault-rogue-unmap");
+    CHECK(AArch64MapPage(&spaces[0].hardware,spaces[0].root,tcr,va+2*PAGE,va+2*PAGE,3,1),"reserved-inherited-map");
+    CHECK(AROSRestrictedSpaceFaultIdentity(&spaces[0],va+2*PAGE,&identity,&identity_generation,&identity_reservation) &&
+        !identity && identity_generation==ap[2].generation && identity_reservation==a.identity,"reserved-inherited-fault");
+    CHECK(AArch64UnmapPrivilegedPage(&spaces[0].hardware,spaces[0].root,tcr,va+2*PAGE,va+2*PAGE),"reserved-inherited-unmap");
+    CHECK(AArch64MapPage(&spaces[0].hardware,spaces[0].root,tcr,va+2*PAGE,va+2*PAGE,AARCH64_PROTECT_USER|3,1),"reserved-user-identity-map");
+    CHECK(!AROSRestrictedSpaceFaultIdentity(&spaces[0],va+2*PAGE,&identity,&identity_generation,&identity_reservation),"reserved-user-identity-refused");
+    CHECK(AArch64UnmapPage(&spaces[0].hardware,spaces[0].root,tcr,va+2*PAGE,va+2*PAGE),"reserved-user-identity-unmap");
+
 
     CHECK(AArch64UnmapPage(&spaces[0].hardware,spaces[0].root,tcr,va,(uintptr_t)pages[0]) &&
         AArch64MapPage(&spaces[0].hardware,spaces[0].root,tcr,va,(uintptr_t)pages[4],AARCH64_PROTECT_USER|3,1),"identity-foreign-pte");

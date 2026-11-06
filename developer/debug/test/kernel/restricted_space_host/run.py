@@ -35,7 +35,7 @@ def main():
   ('reserved-fault-pending','adapter','backing_of(r,index) || r->publication_pending','backing_of(r,index)','reserved-fault-pending-refused'),
   ('reserved-fault-state','adapter','p->state!=KMAP_RESERVED || p->physical','p->physical','reserved-fault-state-refused'),
   ('reserved-fault-generation','adapter','p->physical || p->generation==UINT64_MAX','p->physical','reserved-fault-generation-exhausted'),
-  ('reserved-fault-pte','adapter','if (AArch64MappingPhysical(&s->hardware,s->root,s->tcr,address&~(uintptr_t)(PAGE-1),&actual)) return 0;','(void)actual;','reserved-fault-pte-refused'),
+  ('reserved-fault-pte','adapter','if (AArch64MappingPhysical(&s->hardware,s->root,s->tcr,va,&actual) &&\n        (actual!=va || !AArch64PrivilegedPagePhysical(&s->hardware,s->root,s->tcr,va,&actual))) return 0;','(void)actual;(void)va;','reserved-fault-pte-refused'),
   ('shared-exec-write-conflict','adapter','if ((access&KMAP_EXEC) && (p->protection&KMAP_WRITE)) return 0;','','shared-publish-write-conflict'),
   ('shared-write-exec-conflict','adapter','if ((access&KMAP_WRITE) && (p->protection&KMAP_EXEC)) return 0;','','shared-publish-commit-writer-refused'),
   ('shared-native-writer','adapter','((access&KMAP_EXEC) || other_execute)','(access&KMAP_EXEC)','shared-publish-keeps-native-readonly'),

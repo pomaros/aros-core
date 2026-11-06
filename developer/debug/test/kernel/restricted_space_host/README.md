@@ -101,3 +101,7 @@ advance the generation. A JIT commit installs the page as data first, since
 execute cache maintenance needs the resident native alias. Five mutations
 remove that ordering, the class translation, the
 writable native alias, the shared refusal and the JIT execute identity.
+
+Reserved-page fault identity admits an inherited privileged identity leaf without
+treating it as guest backing. EL0-accessible leaves and non-identity mappings
+are refused; page generation, ownership and publication checks still apply.

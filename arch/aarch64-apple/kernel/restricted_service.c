@@ -472,7 +472,12 @@ int AROSRestrictedSpaceFaultIdentity(struct AROSRestrictedSpace *s,uintptr_t add
     /* A page without a chunk is reserved at the reservation's generation. */
     if (p && (p->state!=KMAP_RESERVED || p->physical || p->generation==UINT64_MAX)) return 0;
     uint64_t actual;
-    if (AArch64MappingPhysical(&s->hardware,s->root,s->tcr,address&~(uintptr_t)(PAGE-1),&actual)) return 0;
+    uintptr_t va=address&~(uintptr_t)(PAGE-1);
+    /* A neighbouring commit can split an inherited privileged identity block
+     * into leaves. Such a leaf is not resident guest backing. Commit removes
+     * it from the private clone before installing the owned user page. */
+    if (AArch64MappingPhysical(&s->hardware,s->root,s->tcr,va,&actual) &&
+        (actual!=va || !AArch64PrivilegedPagePhysical(&s->hardware,s->root,s->tcr,va,&actual))) return 0;
     for (struct AROSRestrictedRegion *r=s->regions;r;r=r->next)
         if (&r->mapping==m) {
             if (!r->identity || backing_of(r,index) || r->publication_pending ||
