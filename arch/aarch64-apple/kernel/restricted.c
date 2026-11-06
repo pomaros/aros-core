@@ -12,6 +12,7 @@
 #include <proto/exec.h>
 #include <string.h>
 #include "restricted.h"
+#include "kernel_intern.h"
 #include "restricted_service.h"
 #include "code_window.h"
 #include "task_tls.h"
@@ -499,6 +500,34 @@ static void r_track_stack(struct Restricted *r, uint64_t sp)
 /* Synchronous exception classes a registered guest handler may receive. The
  * SVC class and asynchronous entries never reach this test; other classes
  * (trapped system registers, external aborts, debug steps) end the domain. */
+/* Linux emulates EL0 reads of the CPU identification registers (op0 3,
+ * op1 0, CRn 0) and advertises it with HWCAP_CPUID; restricted code reads
+ * the values this kernel recorded at boot. Others in that space read zero. */
+static int r_emulate_id_read(struct AROSAppleRuntimeFrame *frame)
+{
+    unsigned iss=(unsigned)frame->esr&0x1ffffffU;
+    unsigned op0=(iss>>20)&3,op2=(iss>>17)&7,op1=(iss>>14)&7,crn=(iss>>10)&15,rt=(iss>>5)&31,crm=(iss>>1)&15;
+    const struct AROSAppleCPUIDRegisters *ids=NULL;
+    intptr_t value=0;
+    uint64_t v=0;
+    if (!(iss&1) || op0!=3 || op1!=0 || crn!=0) return 0;
+    if (AROSAppleKernelIdentity(AROS_APPLE_KATTR_CPU_ID_REGISTERS,&value)) ids=(const void *)value;
+    if (ids) switch ((crm<<3)|op2) {
+    case 0x00: v=ids->midr;break;
+    case 0x20: v=ids->pfr0;break;
+    case 0x21: v=ids->pfr1;break;
+    case 0x24: v=ids->zfr0;break;
+    case 0x30: v=ids->isar0;break;
+    case 0x31: v=ids->isar1;break;
+    case 0x32: v=ids->isar2;break;
+    case 0x38: v=ids->mmfr0;break;
+    case 0x39: v=ids->mmfr1;break;
+    case 0x3a: v=ids->mmfr2;break;
+    }
+    if (rt!=31) frame->x[rt]=v;
+    frame->elr+=4;
+    return 1;
+}
 static int r_deliverable(unsigned ec)
 {
     return ec==0x00 || ec==0x20 || ec==0x21 || ec==0x22 || ec==0x24 || ec==0x25 ||
@@ -1137,6 +1166,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
             uintptr_t physical;uint64_t generation,reservation;
             unsigned fault=(unsigned)frame->esr&63;
             if (r_jit_switch(r,task,context,frame,ec,fault)) return 1;
+            if (ec==0x18 && r_emulate_id_read(frame)) return 1;
             /* Owned resident or reserved data pages can enter a repair handler.
              * Missing tables/pages produce translation faults; RO writes permission faults.
              * No instruction, external, alignment or unowned-address exception
