@@ -51,6 +51,22 @@ int main(int argc, char **argv)
     void *pt, *big, *small;
     int ok2m;
 
+    /* Metadata-only high-page coverage: no backing is touched without CLEAR.
+       Exercise indexes beyond the old 4 GiB capacity and its new upper bound. */
+    uintptr_t synthetic = UINT64_C(0x100000000);
+    uint64_t capacity = UINT64_C(8) * 1024 * 1024 * 1024;
+    assert(AROSApplePageAllocatorInitialize(synthetic, capacity));
+    void *high = (void *)(synthetic + UINT64_C(5) * 1024 * 1024 * 1024);
+    void *last = (void *)(synthetic + capacity - PG);
+    assert(AROSApplePageAllocate(high, PG, 0) == high);
+    assert(AROSApplePageAllocate(last, PG, 0) == last);
+    assert(!AROSApplePageAllocate(last, 2 * PG, 0));
+    assert(!AROSApplePageAllocate((void *)(synthetic + capacity), PG, 0));
+    assert(AROSApplePageFreeRaw(high, PG));
+    assert(AROSApplePageFreeRaw(last, PG));
+    assert(!AROSApplePageAllocatorInitialize(synthetic, capacity + PG));
+    puts("ARENA: high-page capacity and bounds PASS");
+
     base = (uintptr_t)aligned_alloc(PG, NPAGES * PG);
     assert(base && AROSApplePageAllocatorInitialize(base, NPAGES * PG));
     if (!scenario_only) {

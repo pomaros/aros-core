@@ -6,6 +6,8 @@
 `run.py --out DIR [--compare REV]` compiles `arch/aarch64-apple/kernel/page_allocator.c`
 unchanged against stub exec headers and runs `test.c` under ASan and UBSan:
 
+- metadata-only allocations beyond4GiB and at the8GiB capacity boundary,
+  with over-boundary allocation and initialization refusals;
 - 200,000 random allocations and frees, page tables among them: every block
   handed out is free, and a request fails only when no free run is long
   enough;

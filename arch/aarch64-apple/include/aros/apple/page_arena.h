@@ -17,5 +17,5 @@
  * fork copies also allocate from this arena. The cap is metadata capacity,
  * not a reservation; smaller boot profiles retain their actual arena size.
  */
-#define AROS_APPLE_PAGE_ARENA_MAX_BYTES (UINT64_C(4096) * 1024U * 1024U)
+#define AROS_APPLE_PAGE_ARENA_MAX_BYTES (UINT64_C(8192) * 1024U * 1024U)
 #endif
