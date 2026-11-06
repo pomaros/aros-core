@@ -57,6 +57,9 @@ struct KrnMappingObject {
     struct KrnMappingPage **chunks;
     size_t chunk_pages;
     uint64_t reserved_generation;
+    /* Intrusive AVL index, owned by the arena's mapping lock. */
+    struct KrnMappingObject *lookup_left, *lookup_right;
+    unsigned lookup_height;
 };
 struct KrnMappingArena {
     uintptr_t start;
@@ -67,6 +70,7 @@ struct KrnMappingArena {
      * Protected by the arena's mapping lock; release/cut evicts an object
      * from every set before its storage may be retired. */
     struct KrnMappingObject *recent[128];
+    struct KrnMappingObject *lookup_root;
 };
 struct KrnMappingRequest {
     struct KrnMappingObject *mapping;

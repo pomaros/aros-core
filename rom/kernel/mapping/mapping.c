@@ -3,6 +3,82 @@
  */
 #include "mapping.h"
 
+static unsigned lookup_height(const struct KrnMappingObject *m)
+{ return m ? m->lookup_height : 0; }
+
+static void lookup_height_update(struct KrnMappingObject *m)
+{
+    unsigned l=lookup_height(m->lookup_left),r=lookup_height(m->lookup_right);
+    m->lookup_height=1+(l>r ? l : r);
+}
+
+static struct KrnMappingObject *lookup_rotate_left(struct KrnMappingObject *m)
+{
+    struct KrnMappingObject *r=m->lookup_right;
+    m->lookup_right=r->lookup_left;r->lookup_left=m;
+    lookup_height_update(m);lookup_height_update(r);return r;
+}
+
+static struct KrnMappingObject *lookup_rotate_right(struct KrnMappingObject *m)
+{
+    struct KrnMappingObject *l=m->lookup_left;
+    m->lookup_left=l->lookup_right;l->lookup_right=m;
+    lookup_height_update(m);lookup_height_update(l);return l;
+}
+
+static struct KrnMappingObject *lookup_balance(struct KrnMappingObject *m)
+{
+    if (!m) return NULL;
+    lookup_height_update(m);
+    unsigned l=lookup_height(m->lookup_left),r=lookup_height(m->lookup_right);
+    if (l>r+1) {
+        if (lookup_height(m->lookup_left->lookup_right)>lookup_height(m->lookup_left->lookup_left))
+            m->lookup_left=lookup_rotate_left(m->lookup_left);
+        return lookup_rotate_right(m);
+    }
+    if (r>l+1) {
+        if (lookup_height(m->lookup_right->lookup_left)>lookup_height(m->lookup_right->lookup_right))
+            m->lookup_right=lookup_rotate_right(m->lookup_right);
+        return lookup_rotate_left(m);
+    }
+    return m;
+}
+
+static struct KrnMappingObject *lookup_insert(struct KrnMappingObject *root,
+    struct KrnMappingObject *m)
+{
+    if (!root) {
+        m->lookup_left=m->lookup_right=NULL;m->lookup_height=1;return m;
+    }
+    if (m->start<root->start) root->lookup_left=lookup_insert(root->lookup_left,m);
+    else root->lookup_right=lookup_insert(root->lookup_right,m);
+    return lookup_balance(root);
+}
+
+static struct KrnMappingObject *lookup_take_min(struct KrnMappingObject *root,
+    struct KrnMappingObject **minimum)
+{
+    if (!root->lookup_left) { *minimum=root;return root->lookup_right; }
+    root->lookup_left=lookup_take_min(root->lookup_left,minimum);
+    return lookup_balance(root);
+}
+
+static struct KrnMappingObject *lookup_remove(struct KrnMappingObject *root,
+    struct KrnMappingObject *m)
+{
+    if (!root) return NULL;
+    if (m->start<root->start) root->lookup_left=lookup_remove(root->lookup_left,m);
+    else if (m->start>root->start) root->lookup_right=lookup_remove(root->lookup_right,m);
+    else {
+        struct KrnMappingObject *l=root->lookup_left,*r=root->lookup_right;
+        root->lookup_left=root->lookup_right=NULL;root->lookup_height=0;
+        if (!r) return l;
+        r=lookup_take_min(r,&root);
+        root->lookup_left=l;root->lookup_right=r;
+    }
+    return lookup_balance(root);
+}
+
 struct KrnMappingPage *KrnMappingPageAt(const struct KrnMappingObject *m, size_t i)
 {
     if (!m || i >= m->page_count)
@@ -34,7 +110,7 @@ static int initialize(struct KrnMappingObject *m, uintptr_t start,
     }
     *m = (struct KrnMappingObject){start, length, size, length / size, offset,
         owner, pages, protection, !!shared, 0, 0, 0, NULL, 0, chunks,
-        chunks ? chunk_pages : 0, 0};
+        chunks ? chunk_pages : 0, 0, NULL, NULL, 0};
     for (size_t i = 0; pages && i < m->page_count; ++i)
         pages[i] = (struct KrnMappingPage){0, 0, KMAP_ABSENT, 0, protection};
     return 1;
@@ -54,7 +130,7 @@ int KrnMappingArenaInitialize(struct KrnMappingArena *a, uintptr_t start,
     if (!a || !start || !size || (size & (size-1)) || !length ||
         (start & (size-1)) || (length & (size-1)) || length > UINTPTR_MAX-start)
         return 0;
-    *a = (struct KrnMappingArena){start, length, size, NULL, {NULL}};
+    *a = (struct KrnMappingArena){start, length, size, NULL, {NULL}, NULL};
     return 1;
 }
 
@@ -84,6 +160,7 @@ static int reserve(struct KrnMappingArena *a, struct KrnMappingObject *m,
         return 0;
     m->next=*link;
     *link=m;
+    a->lookup_root=lookup_insert(a->lookup_root,m);
     return 1;
 }
 
@@ -112,6 +189,7 @@ static int reserve_at(struct KrnMappingArena *a, struct KrnMappingObject *m,
     struct KrnMappingObject **link=&a->first;
     while (*link && (*link)->start<start) link=&(*link)->next;
     m->next=*link;*link=m;
+    a->lookup_root=lookup_insert(a->lookup_root,m);
     return 1;
 }
 
@@ -223,10 +301,10 @@ struct KrnMappingObject *KrnMappingLookup(struct KrnMappingArena *a,
             return m;
         }
     }
-    for (struct KrnMappingObject *m=a->first; m; m=m->next) {
-        if (address < m->start)
-            break;
-        if (address-m->start < m->length) {
+    for (struct KrnMappingObject *m=a->lookup_root; m;) {
+        if (address < m->start) m=m->lookup_left;
+        else if (address-m->start >= m->length) m=m->lookup_right;
+        else {
             a->recent[set+1]=a->recent[set];
             a->recent[set]=m;
             return m;
@@ -250,6 +328,7 @@ int KrnMappingRelease(struct KrnMappingArena *a, struct KrnMappingObject *m)
     if (!*link)
         return 0;
     forget_lookup(a,m);
+    a->lookup_root=lookup_remove(a->lookup_root,m);
     *link=m->next;
     m->next=NULL;
     return 1;
@@ -317,6 +396,7 @@ enum KrnMappingCutResult KrnMappingCut(struct KrnMappingArena *a,
         }
         right->resident=resident_pages(right_pages,remaining);
         m->next=right;
+        a->lookup_root=lookup_insert(a->lookup_root,right);
     }
     if (first) {
         m->length=first*m->page_size;
@@ -327,6 +407,8 @@ enum KrnMappingCutResult KrnMappingCut(struct KrnMappingArena *a,
         return remaining ? KMAP_CUT_SPLIT : KMAP_CUT_TRIMMED;
     }
     if (remaining) {
+        /* A prefix cut stays between the same nonoverlapping neighbours,
+         * so increasing the key preserves the index ordering. */
         m->start=address+length;
         m->offset+=after*m->page_size;
         m->length=remaining*m->page_size;
@@ -340,6 +422,7 @@ enum KrnMappingCutResult KrnMappingCut(struct KrnMappingArena *a,
         return KMAP_CUT_TRIMMED;
     }
     forget_lookup(a,m);
+    a->lookup_root=lookup_remove(a->lookup_root,m);
     *link=m->next;
     m->next=NULL;
     m->length=m->page_count=m->resident=0;

@@ -246,10 +246,99 @@ static void lookup_lifetime_tests(void)
     assert(!a.first && !KrnMappingLookup(&a,base));
 }
 
+static unsigned check_lookup_index(struct KrnMappingObject *m, uintptr_t lo,
+    uintptr_t hi, unsigned *count)
+{
+    if (!m) return 0;
+    assert(m->start>=lo && m->start<hi && m->length<=hi-m->start);
+    unsigned l=check_lookup_index(m->lookup_left,lo,m->start,count);
+    unsigned r=check_lookup_index(m->lookup_right,m->start+m->length,hi,count);
+    assert(l<=r+1 && r<=l+1);
+    assert(m->lookup_height==1+(l>r ? l : r));
+    ++*count;return m->lookup_height;
+}
+
+static void lookup_index_tests(void)
+{
+    enum { COUNT=384 };
+    struct KrnMappingArena a;
+    struct KrnMappingObject m[COUNT];
+    struct KrnMappingPage pages[COUNT];
+    unsigned char live[COUNT]={0};
+    uintptr_t base=0x10000;
+    assert(KrnMappingArenaInitialize(&a,base,COUNT*8192,4096));
+    /* Sorted insertion is the worst case for an unbalanced search tree. */
+    for (unsigned i=0;i<COUNT;++i) {
+        assert(KrnMappingReserveAt(&a,&m[i],base+i*8192,4096,0,1,0,&a,&pages[i],1));
+        live[i]=1;
+    }
+    uint32_t random=0x12345678;
+    for (unsigned step=0;step<4000;++step) {
+        random^=random<<13;random^=random>>17;random^=random<<5;
+        unsigned i=random%COUNT;
+        /* Repeated root deletion exercises replacement with two children. */
+        if (!(step%7) && a.lookup_root) i=(unsigned)(a.lookup_root-m);
+        if (live[i]) {
+            assert(KrnMappingBeginClose(&m[i]) && KrnMappingRelease(&a,&m[i]));
+            live[i]=0;
+            assert(!m[i].lookup_left && !m[i].lookup_right && !m[i].lookup_height);
+        } else {
+            assert(KrnMappingReserveAt(&a,&m[i],base+i*8192,4096,0,1,0,&a,&pages[i],1));
+            live[i]=1;
+        }
+        unsigned count=0,expected=0;
+        check_lookup_index(a.lookup_root,base,base+COUNT*8192,&count);
+        for (unsigned j=0;j<COUNT;++j) expected+=live[j]!=0;
+        assert(count==expected);
+        for (unsigned q=0;q<16;++q) {
+            random^=random<<13;random^=random>>17;random^=random<<5;
+            unsigned slot=random%COUNT,offset=(random>>12)%8192;
+            struct KrnMappingObject *want=live[slot] && offset<4096 ? &m[slot] : NULL;
+            assert(KrnMappingLookup(&a,base+slot*8192+offset)==want);
+        }
+    }
+    for (unsigned i=0;i<COUNT;++i) if (live[i])
+        assert(KrnMappingBeginClose(&m[i]) && KrnMappingRelease(&a,&m[i]));
+    assert(!a.first && !a.lookup_root && !KrnMappingLookup(&a,base));
+}
+
+static void lookup_index_cut_tests(void)
+{
+    struct KrnMappingArena a;
+    struct KrnMappingObject m[4];
+    struct KrnMappingPage pages[4][8];
+    const uintptr_t base=0x10000,page=4096;
+    assert(KrnMappingArenaInitialize(&a,base,64*page,page));
+    for (unsigned i=0;i<3;++i)
+        assert(KrnMappingReserveAt(&a,&m[i],base+i*16*page,8*page,0,1,0,&a,pages[i],8));
+    uintptr_t start=m[1].start;
+    assert(KrnMappingBeginClose(&m[1]));
+    assert(KrnMappingCut(&a,&m[1],start,2*page,NULL,NULL,0)==KMAP_CUT_TRIMMED);
+    memset(a.recent,0,sizeof(a.recent));
+    assert(!KrnMappingLookup(&a,start) && KrnMappingLookup(&a,start+2*page)==&m[1]);
+    assert(KrnMappingBeginClose(&m[1]));
+    assert(KrnMappingCut(&a,&m[1],start+6*page,2*page,NULL,NULL,0)==KMAP_CUT_TRIMMED);
+    assert(KrnMappingBeginClose(&m[1]));
+    assert(KrnMappingCut(&a,&m[1],start+3*page,page,NULL,NULL,0)==KMAP_CUT_INVALID);
+    assert(KrnMappingCut(&a,&m[1],start+3*page,page,&m[3],pages[3],8)==KMAP_CUT_SPLIT);
+    memset(a.recent,0,sizeof(a.recent));
+    assert(KrnMappingLookup(&a,start+2*page)==&m[1]);
+    assert(!KrnMappingLookup(&a,start+3*page));
+    assert(KrnMappingLookup(&a,start+4*page)==&m[3]);
+    unsigned count=0;
+    check_lookup_index(a.lookup_root,base,base+64*page,&count);
+    assert(count==4);
+    for (unsigned i=0;i<4;++i)
+        assert(KrnMappingBeginClose(&m[i]) && KrnMappingRelease(&a,&m[i]));
+    assert(!a.first && !a.lookup_root);
+}
+
 int main(void)
 {
     object_tests(); reservation_tests(); close_completion_tests(); populate_tests(); fixed_reservation_tests();
     lookup_lifetime_tests();
+    lookup_index_tests();
+    lookup_index_cut_tests();
     puts("mapping-host PASS coalesced=1000 stale-completion=1 writeback=1 close-drain-no-pte=1 populate-preflight=1");
     return 0;
 }

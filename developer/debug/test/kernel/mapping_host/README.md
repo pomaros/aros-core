@@ -36,6 +36,12 @@ Lookup lifetime checks exceed the cache capacity with192 mappings, then release,
 reuse and split cached objects. Retired or trimmed ranges must never remain
 visible through a cached pointer.
 
+Cache misses use an intrusive AVL index rather than scanning every mapping.
+The suite checks sorted insertion, 4,000 deterministic insert/delete mutations,
+repeated root replacement, independent address/gap lookup results and index
+balance. Prefix/suffix trims, middle splits, refused cuts and complete retirement
+are also checked with the lookup cache cleared.
+
 The object runner also runs the domain test for retained execution membership
 and mapping/I/O pins. Both runners refuse dirty input unless
 `--allow-dirty-diagnostic` is specified; that mode records DIAGNOSTIC_PASS.
