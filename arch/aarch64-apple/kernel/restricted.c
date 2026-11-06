@@ -1535,9 +1535,19 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
 }
 static void r_free_allocation(struct RestrictedAllocation *a)
 {
-    for (size_t i=0;i<a->count;++i)
-        if (r_backing(a,i) && !AROSApplePageFree((void *)r_backing(a,i),R_PAGE))
-            for (;;) __asm__ volatile("wfe");
+    for (size_t i=0;i<a->count;) {
+        uintptr_t first=r_backing(a,i);
+        size_t pages=1;
+        /* The detached allocation owns every backing page. Coalesce adjacent
+         * physical pages so restoration shares a bounded SMP rendezvous. */
+        if (first) {
+            while (pages<64 && pages<a->count-i &&
+                    r_backing(a,i+pages)==first+pages*R_PAGE) ++pages;
+            if (!AROSApplePageFree((void *)first,pages*R_PAGE))
+                for (;;) __asm__ volatile("wfe");
+        }
+        i+=pages;
+    }
     for (size_t c=0;c<a->chunk_count;++c)
         if (a->pages[c] && !AROSApplePageFree(a->pages[c],a->chunk_bytes))
             for (;;) __asm__ volatile("wfe");

@@ -24,6 +24,7 @@
 
 struct AppleProtectionOperation {
     uintptr_t address;
+    uintptr_t end;
     unsigned permissions;
     uint64_t *tables[2];
     unsigned used;
@@ -108,9 +109,13 @@ static uintptr_t protect_operation(struct AppleProtectionOperation *operation,ui
 static uintptr_t protect_one_page(void)
 {
     uint64_t tcr;
-    if (!protect_operation(&protection_operation,&tcr)) return 0;
-    return AROSAppleRestrictedProtectAliases(protection_operation.address,tcr,
-        protection_operation.permissions);
+    do {
+        if (!protect_operation(&protection_operation,&tcr) ||
+            !AROSAppleRestrictedProtectAliases(protection_operation.address,tcr,
+                protection_operation.permissions)) return 0;
+        protection_operation.address += AROS_APPLE_PAGE_SIZE;
+    } while (protection_operation.address < protection_operation.end);
+    return 1;
 }
 int AROSApplePageProtectArenaLocked(uintptr_t address,unsigned permissions)
 {
@@ -162,6 +167,14 @@ int AROSApplePageProtect(void *address, uint32_t length, uint32_t flags)
     end = ((uintptr_t)address + length + AROS_APPLE_PAGE_SIZE - 1) &
         ~(AROS_APPLE_PAGE_SIZE - 1);
     while (start < end) {
+        /* Arena leaves are already split. Bound the rendezvous to 64 pages
+         * so large releases amortize IPIs without parking peers indefinitely.
+         * Device mappings retain their allocating, one-page retry path. */
+        uintptr_t batch_end = start + AROS_APPLE_PAGE_SIZE;
+        if (AROSApplePageArenaContains(start))
+            while (batch_end < end && batch_end - start < 64 * AROS_APPLE_PAGE_SIZE &&
+                    AROSApplePageArenaContains(batch_end))
+                batch_end += AROS_APPLE_PAGE_SIZE;
         uint64_t *tables[2] = { NULL, NULL };
         unsigned attempt, used = 0, needs_tables = 0, index;
         uintptr_t done = 0;
@@ -175,6 +188,7 @@ int AROSApplePageProtect(void *address, uint32_t length, uint32_t flags)
             uint64_t saved = AROSApplePageMapAcquire();
             uint64_t token = AROSApplePageMutationBegin();
             protection_operation.address = start;
+            protection_operation.end = batch_end;
             protection_operation.permissions = permissions;
             protection_operation.tables[0] = tables[0];
             protection_operation.tables[1] = tables[1];
@@ -201,7 +215,7 @@ int AROSApplePageProtect(void *address, uint32_t length, uint32_t flags)
                 AROSApplePageFreeRaw(tables[index], AROS_APPLE_PAGE_SIZE);
         if (!done)
             return 0;
-        start += AROS_APPLE_PAGE_SIZE;
+        start = batch_end;
     }
     AROSApplePageAllocatorRecordProtection(flags);
     return 1;
