@@ -62,6 +62,9 @@ struct KrnMappingArena {
     uintptr_t start;
     size_t length, page_size;
     struct KrnMappingObject *first;
+    /* Recent successful lookups, protected by the arena's mapping lock.
+     * Release/cut must evict an object before its storage may be retired. */
+    struct KrnMappingObject *recent[8];
 };
 struct KrnMappingRequest {
     struct KrnMappingObject *mapping;

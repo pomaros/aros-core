@@ -64,7 +64,7 @@ def main():
   ('reused-reservation','adapter','r->identity=++reservation_generation;','r->identity=1;','reused-reservation-distinct-identity'),
   ('identity-pte-mismatch','adapter','if (!ok || actual!=p->physical) return 0;','if (!ok) return 0;','identity-pte-mismatch'),
   ('shared-early-close','adapter','b->closing=1;if (b->views) return 0;','b->closing=1;','shared-close-retained'),
-  ('shared-unretained','adapter','r->shared=b;++b->views;','r->shared=b;','shared-view-count'),
+  ('shared-unretained','adapter','r->shared=b;r->shared_first=first;++b->views;','r->shared=b;r->shared_first=first;','shared-view-count'),
   ('shared-owned-decommit','adapter','if (r->shared) *released=0;\n    else if (*released)','if (*released)','shared-decommit-retains-object'),
   ('index-no-shift','adapter','if (((j-home)&INDEX_MASK)>=((j-i)&INDEX_MASK)) { backing_index[i]=backing_index[j];i=j; }','(void)home;','index-owned-refused'),
   ('index-no-remove','adapter','else if (*released) index_remove(*released);','else if (*released) (void)index_remove;','region-recommit'),

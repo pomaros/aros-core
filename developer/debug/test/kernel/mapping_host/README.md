@@ -83,3 +83,8 @@ The virtual reservation suite also checks the D-135 JIT class: it is admitted
 only for resident pages of a private anonymous reservation, in its exact
 read+write+execute form, and refused for lazy commits, mapping objects and
 file-backed pages.
+
+The arena caches eight recent successful mapping lookups under the mapping
+lock. Every hit checks the live object's bounds; releasing or completely
+cutting an object evicts it before its storage can be retired. Lifetime tests
+exercise eviction, reuse, a split hole and retirement through both paths.

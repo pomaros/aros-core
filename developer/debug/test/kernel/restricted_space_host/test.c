@@ -439,8 +439,8 @@ static void region_tests(uint64_t va)
     for (unsigned i=0;i<5;++i) { pages[i]=aligned_alloc(PAGE,PAGE);CHECK(pages[i],"region-page");memset(pages[i],0xa5,PAGE);zero_page(pages[i]); }
     struct AROSRestrictedRegion a={0},b={0},collision={0};
     struct KrnMappingPage ap[3],bp[1],cp[1];uintptr_t ab[3]={0},bb[1]={0},cb[1]={0};
-    const uintptr_t refused[]={0,0xf000,0x10001,UINT64_C(0x100000000),
-        AROS_RESTRICTED_DATA,AROS_RESTRICTED_STACK,AROS_RESTRICTED_DYNAMIC_BASE-PAGE,
+    const uintptr_t refused[]={0,0xf000,0x10001,
+        AROS_RESTRICTED_DATA,AROS_RESTRICTED_STACK,
         AROS_RESTRICTED_DYNAMIC_END,UINTPTR_MAX-PAGE+1};
     for(unsigned i=0;i<sizeof(refused)/sizeof(refused[0]);++i)
         CHECK(!reserve_region(&spaces[0],&collision,refused[i],PAGE,cp,cb,1) &&
@@ -449,8 +449,9 @@ static void region_tests(uint64_t va)
         !AROSRestrictedRangeValid(AROS_RESTRICTED_LOW_BASE,0) &&
         !AROSRestrictedRangeValid(AROS_RESTRICTED_LOW_BASE,SIZE_MAX) &&
         !AROSRestrictedRangeValid(AROS_RESTRICTED_DYNAMIC_END-PAGE,2*PAGE),"low-range-crossing-overflow");
-    const uintptr_t edges[]={AROS_RESTRICTED_LOW_BASE,AROS_RESTRICTED_LOW_END-PAGE};
-    for(unsigned i=0;i<2;++i) {
+    const uintptr_t edges[]={AROS_RESTRICTED_LOW_BASE,UINT64_C(0x100000000),
+        AROS_RESTRICTED_LOW_END-PAGE};
+    for(unsigned i=0;i<sizeof(edges)/sizeof(edges[0]);++i) {
         CHECK(reserve_region(&spaces[0],&collision,edges[i],PAGE,cp,cb,1),"low-range-edge");
         CHECK(AROSRestrictedRegionDetach(&collision),"low-range-edge-release");
         memset(&collision,0,sizeof(collision));

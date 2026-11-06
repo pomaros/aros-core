@@ -54,7 +54,7 @@ int KrnMappingArenaInitialize(struct KrnMappingArena *a, uintptr_t start,
     if (!a || !start || !size || (size & (size-1)) || !length ||
         (start & (size-1)) || (length & (size-1)) || length > UINTPTR_MAX-start)
         return 0;
-    *a = (struct KrnMappingArena){start, length, size, NULL};
+    *a = (struct KrnMappingArena){start, length, size, NULL, {NULL}};
     return 1;
 }
 
@@ -213,13 +213,29 @@ struct KrnMappingObject *KrnMappingLookup(struct KrnMappingArena *a,
 {
     if (!a || address < a->start || address-a->start >= a->length)
         return NULL;
+    for (unsigned i=0;i<8;++i) {
+        struct KrnMappingObject *m=a->recent[i];
+        if (m && address>=m->start && address-m->start<m->length) {
+            for (unsigned j=i;j;j--) a->recent[j]=a->recent[j-1];
+            a->recent[0]=m;
+            return m;
+        }
+    }
     for (struct KrnMappingObject *m=a->first; m; m=m->next) {
         if (address < m->start)
             break;
-        if (address-m->start < m->length)
+        if (address-m->start < m->length) {
+            for (unsigned i=7;i;i--) a->recent[i]=a->recent[i-1];
+            a->recent[0]=m;
             return m;
+        }
     }
     return NULL;
+}
+
+static void forget_lookup(struct KrnMappingArena *a,struct KrnMappingObject *m)
+{
+    for (unsigned i=0;i<8;++i) if (a->recent[i]==m) a->recent[i]=NULL;
 }
 
 int KrnMappingRelease(struct KrnMappingArena *a, struct KrnMappingObject *m)
@@ -231,6 +247,7 @@ int KrnMappingRelease(struct KrnMappingArena *a, struct KrnMappingObject *m)
         link=&(*link)->next;
     if (!*link)
         return 0;
+    forget_lookup(a,m);
     *link=m->next;
     m->next=NULL;
     return 1;
@@ -320,6 +337,7 @@ enum KrnMappingCutResult KrnMappingCut(struct KrnMappingArena *a,
         m->resident=resident_pages(m->pages,remaining);
         return KMAP_CUT_TRIMMED;
     }
+    forget_lookup(a,m);
     *link=m->next;
     m->next=NULL;
     m->length=m->page_count=m->resident=0;

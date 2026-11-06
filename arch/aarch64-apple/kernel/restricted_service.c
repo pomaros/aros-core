@@ -1,6 +1,7 @@
 /* Copyright (C) 2026 John KNIPPER <code@jkn.me>
  * Licensed under the AROS Public License (APL) Version 1.1. */
 #include "restricted_service.h"
+#include <string.h>
 #define PAGE 4096U
 _Static_assert(KS_RUNNING==AROS_RESTRICTED_RUNNING && KS_CANCELLED==AROS_RESTRICTED_CANCELLED,"public work states");
 static struct KrnBufferRegistry registry;
@@ -235,14 +236,23 @@ int AROSRestrictedRegionCommitShared(struct AROSRestrictedRegion *r,size_t page,
     if (KrnMappingCommitResidentPage(&r->mapping,page,pa,access,&r->space->mapops)) return 1;
     *backing=0;return 0;
 }
+/* The space publishes only its bootstrap mapping and embedded region mappings.
+ * Recover the region from that trusted mapping instead of rescanning the
+ * region list on every stack check and buffer page admission. */
+static struct AROSRestrictedRegion *mapping_region(struct AROSRestrictedSpace *s,
+    struct KrnMappingObject *m)
+{
+    if (!m || m==&s->mapping) return NULL;
+    struct AROSRestrictedRegion *r=(void *)((unsigned char *)m-
+        offsetof(struct AROSRestrictedRegion,mapping));
+    return r->space==s ? r : NULL;
+}
 static int owns_page(struct AROSRestrictedSpace *s,uintptr_t va,uintptr_t pa)
 {
     if (!pa || (va&(PAGE-1))) return 0;
     if (va==AROS_RESTRICTED_DATA) return pa==s->backing;
-    for (struct AROSRestrictedRegion *r=s->regions;r;r=r->next)
-        if (va>=r->mapping.start && va-r->mapping.start<r->mapping.length)
-            return r->space==s && backing_of(r,(va-r->mapping.start)/PAGE)==pa;
-    return 0;
+    struct AROSRestrictedRegion *r=mapping_region(s,KrnMappingLookup(&s->arena,va));
+    return r && backing_of(r,(va-r->mapping.start)/PAGE)==pa;
 }
 static unsigned char *admit(void *opaque,const struct KrnBufferSpace *space,
     uintptr_t va,uintptr_t pa,size_t size,unsigned access)
@@ -444,8 +454,10 @@ int AROSRestrictedSpacePageIdentity(struct AROSRestrictedSpace *s,uintptr_t addr
     if (!ok || actual!=p->physical) return 0;
     uint64_t identity=0;
     if (m==&s->mapping) identity=s->handle;
-    else for (struct AROSRestrictedRegion *r=s->regions;r;r=r->next)
-        if (m==&r->mapping) { identity=r->identity;break; }
+    else {
+        struct AROSRestrictedRegion *r=mapping_region(s,m);
+        if (r) identity=r->identity;
+    }
     if (!identity) return 0;
     *physical=p->physical;*generation=p->generation;*reservation=identity;return 1;
 }
