@@ -2547,9 +2547,15 @@ diff --git a/src/gallium/drivers/virgl/virgl_context.c b/src/gallium/drivers/vir
 diff --git a/src/util/xmlconfig.c b/src/util/xmlconfig.c
 --- a/src/util/xmlconfig.c
 +++ b/src/util/xmlconfig.c
-@@ -56,1 +56,5 @@
+@@ -54,7 +54,11 @@
+ static inline void regfree(regex_t* r) {}
+ #else
 +#ifdef __AROS__
 +#include <aros/posixc/regex.h>
 +#else
  #include <regex.h>
 +#endif
+ #endif
+ #include <fcntl.h>
+ #include <math.h>
+ #include "strndup.h"
