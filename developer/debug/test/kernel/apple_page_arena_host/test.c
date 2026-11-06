@@ -43,6 +43,15 @@ static int longest(void)
     for (i = 0; i < NPAGES; i++) { run = model[i] ? 0 : run + 1; if (run > best) best = run; }
     return best;
 }
+static uintptr_t first_fit(uintptr_t pages)
+{
+    uintptr_t run = 0;
+    for (uintptr_t i = 0; i < NPAGES; ++i) {
+        run = model[i] ? 0 : run + 1;
+        if (run == pages) return base + (i + 1 - pages) * PG;
+    }
+    return 0;
+}
 int main(int argc, char **argv)
 {
     int scenario_only = argc > 1;
@@ -80,6 +89,18 @@ int main(int argc, char **argv)
         assert(((uintptr_t)small - base) / PG == 0);          /* first fit */
         assert(((uintptr_t)big - base) / PG == 8);            /* right after it */
         give(pt, PG); give(small, 8 * PG); give(big, 512 * PG);
+        /* A full arena, then holes below its occupied prefix. A failed
+           large request must not hide a smaller free run from first fit. */
+        big = AROSApplePageAllocate(NULL, NPAGES * PG, 0);
+        assert(big == (void *)base); take(big, NPAGES * PG);
+        assert(!AROSApplePageAllocate(NULL, PG, 0));
+        give((void *)(base + 7 * PG), 2 * PG);
+        assert(!AROSApplePageAllocate(NULL, 3 * PG, 0));
+        small = AROSApplePageAllocate(NULL, PG, 0);
+        assert(small == (void *)(base + 7 * PG)); take(small, PG);
+        small = AROSApplePageAllocate((void *)(base + 8 * PG), PG, 0);
+        assert(small == (void *)(base + 8 * PG)); take(small, PG);
+        give(big, NPAGES * PG);
         /* Random sequences: every block returned is free in the model, and a
            request fails only when the model has no run long enough. */
         srand(7);
@@ -89,6 +110,7 @@ int main(int argc, char **argv)
                 int internal = rand() % 10 == 0;
                 void *p = internal ? AROSApplePageTableAllocate(PG) : AROSApplePageAllocate(NULL, pages * PG, 0);
                 if (internal) pages = 1;
+                if (!internal) assert((uintptr_t)p == first_fit(pages));
                 if (p) { take(p, pages * PG); live[nlive].p = p; live[nlive].len = pages * PG; nlive++; }
                 else assert(longest() < (int)pages);
             } else {

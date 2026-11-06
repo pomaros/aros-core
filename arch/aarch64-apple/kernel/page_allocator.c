@@ -22,6 +22,9 @@ struct ApplePageAllocator {
     uintptr_t start;
     uint32_t pages;
     uint32_t ready;
+    /* Every page below this bound is occupied. Preserve first-fit placement
+     * without rescanning that prefix for each page of a large process copy. */
+    uint32_t first_free;
     uint64_t used[APPLE_PAGE_ARENA_MAX_PAGES / 64U];
     uint64_t internal[APPLE_PAGE_ARENA_MAX_PAGES / 64U];
     struct AROSApplePageAllocatorStats stats;
@@ -85,6 +88,7 @@ int AROSApplePageAllocatorInitialize(uintptr_t start, uint64_t size)
         return 0;
     page_allocator.start = start;
     page_allocator.pages = (uint32_t)(size / AROS_APPLE_PAGE_SIZE);
+    page_allocator.first_free = 0;
     used_word = (volatile uint64_t *)page_allocator.used;
     internal_word = (volatile uint64_t *)page_allocator.internal;
     for (index = 0;
@@ -166,7 +170,8 @@ static void *page_allocate(
     else if (internal)
         found = page_bitmap_find_down(page_allocator.used, available, pages, &first);
     else
-        found = page_bitmap_find_up(page_allocator.used, 0, limit, pages, &first);
+        found = page_bitmap_find_up(page_allocator.used,
+            page_allocator.first_free, limit, pages, &first);
     if (!found) {
         uint32_t used = (uint32_t)(page_allocator.stats.pages_in_use +
             page_allocator.stats.internal_pages_in_use);
@@ -185,6 +190,10 @@ static void *page_allocate(
         set_page_used(first + index, 1);
         set_page_internal(first + index, internal);
     }
+    if (first <= page_allocator.first_free &&
+        page_allocator.first_free < first + pages)
+        page_allocator.first_free = page_bitmap_next(page_allocator.used,
+            first + pages, page_allocator.pages, 0);
     if (internal) {
         ++page_allocator.stats.internal_allocation_count;
         page_allocator.stats.internal_pages_in_use += pages;
@@ -251,6 +260,8 @@ int AROSApplePageFreeRaw(void *address, uintptr_t length)
         set_page_used(first + index, 0);
         set_page_internal(first + index, 0);
     }
+    if (first < page_allocator.first_free)
+        page_allocator.first_free = first;
     if (internal) {
         ++page_allocator.stats.internal_free_count;
         page_allocator.stats.internal_pages_in_use -= pages;
