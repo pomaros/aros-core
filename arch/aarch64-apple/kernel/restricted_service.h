@@ -11,6 +11,8 @@ struct AROSRestrictedRegion;
 struct AROSRestrictedSharedBacking {
     struct AROSRestrictedSharedBacking *next;
     uintptr_t *pages;
+    /* Only attached guest views of this object, retained through detach retry. */
+    struct AROSRestrictedRegion *regions;
     size_t count,views;
     struct AROSRestrictedRegion *publication;
     unsigned closing;
@@ -76,6 +78,7 @@ struct AROSRestrictedRegion {
      * mapping.chunk_pages physical addresses per attached chunk. */
     uintptr_t **backing;
     struct AROSRestrictedSharedBacking *shared;
+    struct AROSRestrictedRegion *shared_next;
     /* API 36: object page shown at view page 0 */
     size_t shared_first;
     uint64_t identity;

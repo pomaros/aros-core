@@ -352,6 +352,47 @@ static void shared_publication_tests(void)
     }
     CHECK(AROSRestrictedSharedClose(&b),"shared-publish-final-close");free(page);fail_native=0;
 }
+/* Disjoint object offsets must not conflict; detaching a writer in the middle
+ * of an object's views must remove exactly that peer, including on reuse. */
+static void shared_offset_peer_tests(void)
+{
+    struct Fixture *f=aligned_alloc(PAGE,sizeof(*f));
+    unsigned char *data=aligned_alloc(PAGE,PAGE),*pages=aligned_alloc(PAGE,2*PAGE);
+    CHECK(f && data && pages,"shared-offset-storage");memset(f,0,sizeof(*f));f->used=1;
+    struct AROSRestrictedSpace space={0};
+    struct AArch64ProtectionOps hw={f,resolve,allocate,clean,invalidate,sync_code,NULL};
+    CHECK(AROSRestrictedSpaceInit(&space,221,(uintptr_t)f->tables[0],25|(UINT64_C(5)<<32),(uintptr_t)data,&hw),"shared-offset-space");
+    uintptr_t backing[2]={(uintptr_t)pages,(uintptr_t)pages+PAGE},ledger[3]={0};
+    struct AROSRestrictedSharedBacking b={0};struct AROSRestrictedRegion r[3]={{0}};
+    struct KrnMappingPage metadata[3];uintptr_t va=AROS_RESTRICTED_DYNAMIC_BASE;
+    CHECK(AROSRestrictedSharedInitialize(&b,backing,2),"shared-offset-object");
+    for (unsigned i=0;i<3;++i) {
+        CHECK(reserve_region(&space,&r[i],va+i*PAGE,PAGE,&metadata[i],&ledger[i],1) &&
+            AROSRestrictedRegionAttachSharedAt(&r[i],&b,i==2 ? 1 : 0) &&
+            AROSRestrictedRegionCommitShared(&r[i],0,i ? 3 : 1),"shared-offset-view");
+    }
+    struct AROSRestrictedPublicationOps ops={NULL,native_publication};
+    fail_native=0;publishing=&r[0];
+    CHECK(!AROSRestrictedRegionPublish(&r[0],0,5,&ops),"shared-offset-overlap-refused");
+    r[1].mapping.in_flight=1;
+    CHECK(!AROSRestrictedRegionDetach(&r[1]) && b.views==3,"shared-offset-held-writer");
+    CHECK(!AROSRestrictedRegionPublish(&r[0],0,5,&ops),"shared-offset-held-still-conflicts");
+    r[1].mapping.in_flight=0;
+    CHECK(AROSRestrictedRegionDetach(&r[1]) && b.views==2,"shared-offset-middle-detach");
+    CHECK(AROSRestrictedRegionPublish(&r[0],0,5,&ops),"shared-offset-disjoint-writer-allowed");
+    uint64_t value=0x1234;
+    CHECK(!AROSRestrictedSharedWrite(&b,0,&value,8) &&
+        AROSRestrictedSharedWrite(&b,PAGE,&value,8),"shared-offset-copy-policy");
+    CHECK(AROSRestrictedRegionDetach(&r[0]) && AROSRestrictedSharedWrite(&b,0,&value,8),"shared-offset-executor-detach");
+    CHECK(reserve_region(&space,&r[1],va+PAGE,PAGE,&metadata[1],&ledger[1],1) &&
+        AROSRestrictedRegionAttachSharedAt(&r[1],&b,0) &&
+        AROSRestrictedRegionCommitShared(&r[1],0,1),"shared-offset-reuse");
+    publishing=&r[1];
+    CHECK(AROSRestrictedRegionPublish(&r[1],0,5,&ops),"shared-offset-reuse-publish");
+    CHECK(AROSRestrictedRegionDetach(&r[2]) && AROSRestrictedRegionDetach(&r[1]) &&
+        AROSRestrictedSharedClose(&b) && AROSRestrictedSpaceClose(&space),"shared-offset-final-drain");
+    publishing=NULL;free(pages);free(data);free(f);
+}
 /* API 35 native view: one per object, counted as a view, never beside an
  * executable page, never with executable publication, never a copy buffer */
 static void native_view_tests(void)
@@ -722,5 +763,5 @@ int main(void)
     CHECK(AROSRestrictedSpaceInit(&space,11,root,tcr,(uintptr_t)data,&ops),"space-reuse");
     CHECK(space.handle!=first_handle,"space-generation");
     CHECK(AROSRestrictedSpaceClose(&space),"reused-space-close");
-    free(data);free(f);region_tests(AROS_RESTRICTED_DYNAMIC_BASE);region_tests(UINT64_C(0x7ffe0000));shared_tests();shared_copy_tests();channel_growth();publication_tests();index_tests();chunk_tests();jit_tests();shared_publication_tests();native_view_tests();native_view_exec_tests();puts("PASS restricted space and channel ownership");return 0;
+    free(data);free(f);region_tests(AROS_RESTRICTED_DYNAMIC_BASE);region_tests(UINT64_C(0x7ffe0000));shared_tests();shared_copy_tests();channel_growth();publication_tests();index_tests();chunk_tests();jit_tests();shared_publication_tests();shared_offset_peer_tests();native_view_tests();native_view_exec_tests();puts("PASS restricted space and channel ownership");return 0;
 }

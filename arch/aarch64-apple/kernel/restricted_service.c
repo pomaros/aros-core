@@ -88,8 +88,7 @@ static int shared_publication_policy(struct AROSRestrictedRegion *r,size_t page,
         (b->publication && b->publication!=r)) return 0;
     /* A native view is a writable peer of every page */
     if ((access&KMAP_EXEC) && (b->native_view || b->native_pending)) return 0;
-    for (struct AROSRestrictedSpace *s=spaces;s;s=s->next)
-        for (struct AROSRestrictedRegion *v=s->regions;v;v=v->next) {
+    for (struct AROSRestrictedRegion *v=b->regions;v;v=v->shared_next) {
             if (v==r || v->shared!=b || op<v->shared_first || op-v->shared_first>=v->mapping.page_count) continue;
             size_t vp=op-v->shared_first;
             uintptr_t backing=backing_of(v,vp);
@@ -110,6 +109,7 @@ int AROSRestrictedSharedInitialize(struct AROSRestrictedSharedBacking *b,uintptr
         for (size_t j=0;j<i;++j) if (pages[j]==pages[i]) return 0;
     }
     b->pages=pages;b->count=count;b->views=0;b->closing=0;b->publication=NULL;
+    b->regions=NULL;
     b->native_view=0;b->native_pending=0;
     b->next=shared_backings;shared_backings=b;return 1;
 }
@@ -135,8 +135,7 @@ static int shared_copy(struct AROSRestrictedSharedBacking *b,size_t offset,
     size_t first=offset/PAGE,last=(offset+length-1)/PAGE;
     for (size_t page=first;page<=last;++page) {
         if (!b->pages[page] || (b->pages[page]&(PAGE-1))) return 0;
-        for (struct AROSRestrictedSpace *space=spaces;space;space=space->next)
-            for (struct AROSRestrictedRegion *r=space->regions;r;r=r->next) {
+        for (struct AROSRestrictedRegion *r=b->regions;r;r=r->shared_next) {
                 if (r->shared!=b || page<r->shared_first || page-r->shared_first>=r->mapping.page_count) continue;
                 uintptr_t backing=backing_of(r,page-r->shared_first);
                 if (!backing) continue;
@@ -183,8 +182,7 @@ int AROSRestrictedSharedViewBegin(struct AROSRestrictedSharedBacking *b)
     if (!b || b->closing || !shared_registered(b) || b->publication ||
         b->native_view || b->native_pending || b->views==SIZE_MAX) return 0;
     /* No page may be executable through any domain view */
-    for (struct AROSRestrictedSpace *space=spaces;space;space=space->next)
-        for (struct AROSRestrictedRegion *r=space->regions;r;r=r->next) {
+    for (struct AROSRestrictedRegion *r=b->regions;r;r=r->shared_next) {
             if (r->shared!=b) continue;
             for (size_t page=0;page<r->mapping.page_count;++page)
                 if (backing_of(r,page) && (KrnMappingPageAt(&r->mapping,page)->protection&KMAP_EXEC)) return 0;
@@ -221,7 +219,8 @@ int AROSRestrictedRegionAttachSharedAt(struct AROSRestrictedRegion *r,struct ARO
         const struct KrnMappingPage *p=KrnMappingPageAt(&r->mapping,i);
         if (backing_of(r,i) || (p && p->state!=KMAP_RESERVED)) return 0;
     }
-    r->shared=b;r->shared_first=first;++b->views;return 1;
+    r->shared=b;r->shared_first=first;++b->views;
+    r->shared_next=b->regions;b->regions=r;return 1;
 }
 int AROSRestrictedRegionCommitShared(struct AROSRestrictedRegion *r,size_t page,unsigned access)
 {
@@ -409,6 +408,12 @@ int AROSRestrictedRegionDetach(struct AROSRestrictedRegion *r)
     struct AROSRestrictedSpace *s=r->space;
     struct AROSRestrictedRegion **link=&s->regions;
     while (*link && *link!=r) link=&(*link)->next;
+    struct AROSRestrictedRegion **peer=NULL;
+    if (r->shared) {
+        peer=&r->shared->regions;
+        while (*peer && *peer!=r) peer=&(*peer)->shared_next;
+        if (!*peer) return 0;
+    }
     if (!*link || !KrnMappingBeginClose(&r->mapping)) return 0;
     for (size_t i=0;i<r->mapping.page_count;++i) {
         const struct KrnMappingPage *p=KrnMappingPageAt(&r->mapping,i);
@@ -419,6 +424,7 @@ int AROSRestrictedRegionDetach(struct AROSRestrictedRegion *r)
     }
     if (!KrnMappingRelease(&s->arena,&r->mapping)) return 0;
     if (r->shared) {
+        *peer=r->shared_next;r->shared_next=NULL;
         if (r->shared->publication==r) r->shared->publication=NULL;
         for (size_t i=0;i<r->mapping.page_count;++i) {
             uintptr_t *backing=backing_at(r,i);

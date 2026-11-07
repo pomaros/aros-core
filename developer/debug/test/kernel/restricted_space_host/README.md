@@ -105,3 +105,11 @@ writable native alias, the shared refusal and the JIT execute identity.
 Reserved-page fault identity admits an inherited privileged identity leaf without
 treating it as guest backing. EL0-accessible leaves and non-identity mappings
 are refused; page generation, ownership and publication checks still apply.
+
+Shared objects keep their own attached-view list. Publication, copy admission
+and native-view admission visit only peers of the same object; failed detach
+retains membership until unmap/release succeeds. A three-view offset test checks
+that an overlapping writable peer blocks execution, a held detach retains that
+conflict, removing the middle writer permits execution beside a disjoint writable
+page, copies retain per-page execute policy, and detached metadata can be reused
+and fully drained. These are HOST semantics, not a guest speed measurement.
