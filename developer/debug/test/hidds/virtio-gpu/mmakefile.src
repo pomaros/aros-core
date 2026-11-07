@@ -12,6 +12,10 @@ USER_CFLAGS := -Wall -Wextra -Werror=implicit-function-declaration
 %build_progs mmake=test-virtio-shared \
     files=virtiosharedtest uselibs="hiddstubs" targetdir=$(AROS_TESTS)/hidds/gfx
 
+#MM test-virtio-owned : includes linklibs kernel-hidd-virtiogfx-includes
+%build_progs mmake=test-virtio-owned \
+    files=virtioownedtest uselibs="hiddstubs" targetdir=$(AROS_TESTS)/hidds/gfx
+
 #MM test-virtio-completion : includes linklibs kernel-hidd-virtiogfx-includes
 %build_progs mmake=test-virtio-completion \
     files=virtiocompletiontest uselibs="hiddstubs" targetdir=$(AROS_TESTS)/hidds/gfx
