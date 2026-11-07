@@ -4037,7 +4037,7 @@ endif
 		if [ "$$orig_size" -eq 0 ]; then \
 			ratio="-"; \
 		else \
-			ratio=$$(awk -v o=$$orig_size -v c=$$comp_size 'BEGIN { printf "-%.0f%%", 100 - (100 * c / o) }'); \
+			ratio=$$(awk -v o="$$orig_size" -v c="$$comp_size" 'BEGIN { printf "-%.0f%%", 100 - (100 * c / o) }'); \
 		fi; \
 		echo ">> $(subst $(TARGETDIR)/,,$@) ($$ratio)"; \
 	}
@@ -4051,7 +4051,7 @@ endif
 		if [ "$$orig_size" -eq 0 ]; then \
 			ratio="-"; \
 		else \
-			ratio=$$(awk -v o=$$orig_size -v c=$$comp_size 'BEGIN { printf "-%.0f%%", 100 - (100 * c / o) }'); \
+			ratio=$$(awk -v o="$$orig_size" -v c="$$comp_size" 'BEGIN { printf "-%.0f%%", 100 - (100 * c / o) }'); \
 		fi; \
 		echo ">> $(subst $(TARGETDIR)/,,$@) ($$ratio)"; \
 	}
