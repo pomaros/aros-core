@@ -23,7 +23,8 @@ The source is an integration candidate; a compile is not runtime acceptance.
 
 `RestrictedTasks --orphan-cleanup` selects worker/owner retirement, shared
 domains, shared objects, Native shared views and managed-domain close with held
-worker leases. It requires zero resources at completion and emits a distinct
+worker leases. Shared-memory cases use the unmapped64GiB window, beyond the
+large guest boot allocation. It requires zero resources at completion and emits a distinct
 `orphan-cleanup` result. It omits the general memory, JIT and wait workloads;
 its result is not the full restricted-task verdict. The complete workload's
 kernel-exclusion assertions require the selected low-address kernel placement.
