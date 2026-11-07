@@ -4031,9 +4031,9 @@ endif
 %(file).gz: %(file)
 	$(Q)$(ECHO) Compressing $(subst $(TARGETDIR)/,,$^)...
 	$(Q){ \
-		orig_size=$$(stat -c%s "$^"); \
+		orig_size=$$(wc -c < "$^"); \
 		gzip $(%(mmake)-PACK_OPTS) $(%(mmake)-PACK_LVL) $(%(mmake)-PACK_FLAGS) "$^"; \
-		comp_size=$$(stat -c%s "$@"); \
+		comp_size=$$(wc -c < "$@"); \
 		if [ "$$orig_size" -eq 0 ]; then \
 			ratio="-"; \
 		else \
@@ -4045,9 +4045,9 @@ endif
 %(file).xz: %(file)
 	$(Q)$(ECHO) Compressing $(subst $(TARGETDIR)/,,$^)...
 	$(Q){ \
-		orig_size=$$(stat -c%s "$^"); \
+		orig_size=$$(wc -c < "$^"); \
 		xz $(%(mmake)-PACK_OPTS) $(%(mmake)-PACK_LVL) $(%(mmake)-PACK_FLAGS) "$^"; \
-		comp_size=$$(stat -c%s "$@"); \
+		comp_size=$$(wc -c < "$@"); \
 		if [ "$$orig_size" -eq 0 ]; then \
 			ratio="-"; \
 		else \
