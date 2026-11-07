@@ -19,7 +19,6 @@
 #define HiddGalliumAttrBase (SD(cl)->hiddGalliumAB)
 OOP_Object *METHOD(HiddVirgl,Root,New)
 {
-    bug("[virgl.hidd] client New\n");
     if(GetTagData(aHidd_Gallium_InterfaceVersion,-1,msg->attrList)!=GALLIUM_INTERFACE_VERSION)return NULL;
     o=(OOP_Object*)OOP_DoSuperMethod(cl,o,(OOP_Msg)msg);
     if(o){
@@ -36,7 +35,6 @@ OOP_Object *METHOD(HiddVirgl,Root,New)
                (factory->backends&GALLIUM_SCREEN_BACKEND_VIRGL) &&
                factory->module && factory->create && factory->destroy && factory->format)
                 module=OpenLibrary(factory->module->lib_Node.ln_Name,factory->module->lib_Version);
-            bug("[virgl.hidd] factory module=%p opened=%p\n",factory->module,module);
             if(!module){OOP_DisposeObject(o);return NULL;}
             d->factory=*factory;d->factory.module=module;
         }
