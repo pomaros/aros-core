@@ -5,6 +5,7 @@
 #include <aros/apple/restricted.h>
 #include <aros/debug.h>
 #include <stdint.h>
+#include <string.h>
 APTR KernelBase;
 static uint64_t counter(void)
 {
@@ -12,8 +13,10 @@ static uint64_t counter(void)
     __asm__ volatile("isb; mrs %0,cntvct_el0":"=r"(value)::"memory");
     return value;
 }
-int main(void)
+int main(int argc,char **argv)
 {
+    int stats=argc==2 && !strcmp(argv[1],"--stats");
+    if (argc!=1 && !stats) return 20;
     KernelBase=OpenResource((CONST_STRPTR)"kernel.resource");
     if (!KernelBase) return 20;
     intptr_t address=KrnGetSystemAttr(AROS_RESTRICTED_KATTR_API);
@@ -25,6 +28,15 @@ int main(void)
     if (!frequency) return 20;
     struct AROSRestrictedLifetime life;
     api->lifetime(&life);
+    if (stats) {
+        bug("[REAPSTATS] domains=%llu threads=%llu shared=%llu pages=%llu metadata=%llu tables=%llu pending=%llu retired=%llu reaped=%llu\n",
+            (unsigned long long)life.domains,(unsigned long long)life.live,
+            (unsigned long long)life.shared_objects,(unsigned long long)life.pages,
+            (unsigned long long)life.metadata_pages,(unsigned long long)life.table_pages,
+            (unsigned long long)life.pending,(unsigned long long)life.retired,
+            (unsigned long long)life.reaped);
+        return 0;
+    }
     if (life.live || life.domains || life.pages || life.shared_objects) return 20;
     uint64_t start=counter();
     for (unsigned i=0;i<10000;++i) api->lifetime(&life);

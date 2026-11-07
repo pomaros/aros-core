@@ -37,6 +37,9 @@ run it with no restricted resources, before and after a kernel change under
 the same VM configuration. It checks zero resources at both boundaries and
 prints elapsed counter ticks, frequency and microseconds. This isolates idle
 cleanup admission; it does not measure application startup or orphan drain.
+`ReapBench --stats` takes one lifetime snapshot during a workload and reports
+retained pages, metadata, tables, shared objects and pending work. It performs
+no timing loop and does not require idle resources.
 
 The API version is 9. Service submit/collect use kernel-derived task identity;
 collection yields when a response is unavailable. Close cancels and drains
