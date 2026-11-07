@@ -5,8 +5,11 @@
 #include <aros/debug.h>
 #include <aros/config.h>
 #include <dos/var.h>
-int main(void)
+#include <string.h>
+int main(int argc,char **argv)
 {
+    int orphan_cleanup=argc==2 && !strcmp(argv[1],"--orphan-cleanup");
+    if (argc!=1 && !orphan_cleanup) return 20;
 #if defined(__AROSEXEC_SMP__)
     UBYTE accepted[8];
     unsigned attempt;
@@ -17,7 +20,9 @@ int main(void)
     if (attempt==200) { bug("[ISOVM] FAIL desktop barrier timeout\n");return 20; }
     Delay(500);
 #endif
-    LONG result = SystemTags((CONST_STRPTR)"VMWORK0:System/C/RestrictedTasks",
+    CONST_STRPTR command=(CONST_STRPTR)(orphan_cleanup ?
+        "VMWORK0:System/C/RestrictedTasks --orphan-cleanup" : "VMWORK0:System/C/RestrictedTasks");
+    LONG result = SystemTags(command,
         NP_StackSize,(IPTR)(256*1024),TAG_DONE);
     bug("[ISOVM] observed-command-rc=%ld\n",(long)result);
     return result;

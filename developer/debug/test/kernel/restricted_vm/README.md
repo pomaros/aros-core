@@ -28,6 +28,8 @@ large guest boot allocation. It requires zero resources at completion and emits 
 `orphan-cleanup` result. It omits the general memory, JIT and wait workloads;
 its result is not the full restricted-task verdict. The complete workload's
 kernel-exclusion assertions require the selected low-address kernel placement.
+Launch it through `RestrictedRun --orphan-cleanup` to retain the large stack
+and the parent's `observed-command-rc=0` evidence after the child exits.
 
 `ReapBench.c` measures ten thousand idle lifetime calls using the architectural
 virtual counter. Compile it against the API36 header and matching guest SDK;
