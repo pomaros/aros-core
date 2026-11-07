@@ -278,9 +278,7 @@ static inline const void *gallium_core_get_api(void) { return (const void *)0; }
         {
             bug("%s: ERROR - failed to create ST Manager\n", __func__);
             DestroyPipeScreen(ctx->driver, pscreen);
-#if (0)
-            DestroyPipe(ctx->driver);
-#endif
+            /* The common no-stmanager error path releases the provider. */
             goto error_out;
         }
         if (!(ctx->shared = AllocVec(sizeof(*ctx->shared), MEMF_PUBLIC | MEMF_CLEAR)))
@@ -344,6 +342,8 @@ error_out:
     }
     else if (!ctx->shared && ctx->stmanager)
         MESA3DGLFreeStManager(ctx->driver, ctx->stmanager);
+    else if (!ctx->shared && ctx->driver)
+        DestroyPipe(ctx->driver);
     MESA3DGLFreeContext(ctx);
     return (GLAContext)NULL;
 }
