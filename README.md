@@ -55,6 +55,8 @@ wrapping or reusing identifiers; callers use the API from task context.
 
 - [Orphan cleanup admission](developer/debug/test/kernel/restricted_reap_hint_host/README.md): production retirement/pending predicates with retained leases and semantic negative controls; Native/SMP execution is separate.
 
+- [FAT directory metadata](developer/debug/test/filesys/fat_examine_host/README.md): enumerate entries held open exclusively without granting or releasing their data locks; cursor, error and cleanup controls.
+
 ## Licences
 
 AROS is a collection of components under different licences. Preserve each file's notices and consult [LEGAL](LEGAL), [LICENSE](LICENSE), [LICENSE.GPL](LICENSE.GPL), [LICENSE.LGPL](LICENSE.LGPL) and component-specific licence files. This fork does not relicense the upstream code.

@@ -261,7 +261,9 @@ void ProcessPackets(struct Globals *glob)
 
         case ACTION_EXAMINE_NEXT:
             {
-                struct ExtFileLock *fl = BADDR(pkt->dp_Arg1), *lock;
+                struct ExtFileLock *fl = BADDR(pkt->dp_Arg1), *lock = NULL;
+                struct ExtFileLock metadata_lock = {0};
+                struct GlobalLock *node;
                 struct FileInfoBlock *fib = BADDR(pkt->dp_Arg2);
                 struct DirHandle dh;
                 struct DirEntry de;
@@ -287,20 +289,37 @@ void ProcessPackets(struct Globals *glob)
                     break;
                 }
 
-                if ((err = LockFile(fl->ioh.first_cluster, dh.cur_index,
-                    SHARED_LOCK, &lock, glob)) != 0)
+                /* Enumeration reads metadata; it must not acquire a reader
+                 * lock on a child that is already open exclusively. Packets
+                 * are serialized by this handler, so an existing GlobalLock
+                 * stays valid through FillFIB without granting another lock. */
+                ForeachNode(&glob->sb->info->locks, node)
+                {
+                    if (node->dir_cluster == fl->ioh.first_cluster &&
+                        node->dir_entry == dh.cur_index)
+                    {
+                        metadata_lock.gl = node;
+                        break;
+                    }
+                }
+
+                if (!metadata_lock.gl &&
+                    (err = LockFile(fl->ioh.first_cluster, dh.cur_index,
+                        SHARED_LOCK, &lock, glob)) != 0)
                 {
                     ReleaseDirHandle(&dh, glob);
                     break;
                 }
 
-                if (!(err = FillFIB(lock, fib, glob)))
+                if (!(err = FillFIB(metadata_lock.gl ? &metadata_lock : lock,
+                    fib, glob)))
                 {
                     fib->fib_DiskKey = dh.cur_index;
                     res = DOSTRUE;
                 }
 
-                FreeLock(lock, glob);
+                if (lock)
+                    FreeLock(lock, glob);
                 ReleaseDirHandle(&dh, glob);
 
                 break;
