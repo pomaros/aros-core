@@ -888,13 +888,14 @@ static void *publication_context;
 static int r_publish_native(void *context,uintptr_t physical,unsigned protection)
 { (void)context;return AROSApplePageProtectArenaLocked(physical,protection); }
 static const struct AROSRestrictedPublicationOps publication_ops={NULL,r_publish_native};
-/* Only evict an inherited low leaf in this domain's private table clone.
+/* Evict inherited identity leaves in both low and dynamic windows, in this
+ * domain's private table clone. The dynamic window can overlap physical RAM.
  * Owned pages (including guards) are handled by RegionCommit itself. No native
  * physical backing is released here; the trusted identity map remains intact. */
 static int r_prepare_low_page(struct RestrictedDomain *d,
     struct RestrictedAllocation *a, size_t page, uintptr_t address)
 {
-    if (address >= AROS_RESTRICTED_LOW_END || r_backing(a,page)) return 1;
+    if (address >= AROS_RESTRICTED_DYNAMIC_END || r_backing(a,page)) return 1;
     return r_prepare_private_page(&d->space.hardware,d->root,d->space.tcr,address);
 }
 struct RestrictedCopyOperation {
@@ -926,7 +927,7 @@ static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned s
         struct RestrictedAllocation *a=p->allocation;
         if (a && (p->address < AROS_RESTRICTED_HIGH_BASE ||
             (p->address < AROS_RESTRICTED_WIDE_BASE ? d->high_window : d->wide_window)) &&
-            (p->address >= AROS_RESTRICTED_LOW_END ||
+            (p->address >= AROS_RESTRICTED_DYNAMIC_END ||
             AROSAppleKernelTransitionRangeAvailable(p->address,a->count*R_PAGE)) &&
             AROSRestrictedRegionReserve(&d->space,&a->region,p->address,
             a->count*R_PAGE,a->pages,a->backing,a->chunk_pages,a->count)) {
