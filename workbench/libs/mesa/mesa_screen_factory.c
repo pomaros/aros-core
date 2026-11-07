@@ -14,14 +14,12 @@ static APTR create_screen(struct Library *module, ULONG backend, APTR winsys)
     char *previous = __aros_getoffsettable();
     APTR screen = NULL;
     __aros_setoffsettable(module);
-    bug("[Mesa/VirGL] screen factory enter module=%p winsys=%p\n",module,winsys);
     switch (backend) {
 #ifdef MESA3DGL_HAVE_VIRGL
     case GALLIUM_SCREEN_BACKEND_VIRGL:
         screen = virgl_create_screen(winsys, NULL); break;
 #endif
     }
-    bug("[Mesa/VirGL] screen factory result=%p\n",screen);
     __aros_setoffsettable(previous);
     return screen;
 }

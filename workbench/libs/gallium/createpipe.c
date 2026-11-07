@@ -153,7 +153,6 @@ static OOP_Object *GalliumOnVulkan(struct Library *GalliumBase, OOP_Object *vk,
     galliumTags[0].ti_Data = GetTagData(CPS_GalliumInterfaceVersion, -1, tags);
     galliumTags[1].ti_Data = GetTagData(CPS_GalliumCoreAPI, 0, tags);
     galliumTags[2].ti_Data = GetTagData(CPS_PipeScreenFactory, 0, tags);
-    bug("[Gallium/VirGL] create pipe factory=%p\n",(APTR)galliumTags[2].ti_Data);
     friendbm = (struct BitMap *)GetTagData(CPS_PipeFriendBitMap, 0, tags);
     driver = (OOP_Object **)GetTagData(CPS_PipeScreenDriver, (IPTR)&_driver, tags);
 

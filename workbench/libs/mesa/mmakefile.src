@@ -105,9 +105,9 @@ MESAGL_LIBRARY_SOURCES_C := \
 # The generated module makefile forces a global `-include` of
 # `mesa3dgl$(MESAGLBUILD)_deflibdefs.h`. Make the dependency explicit to
 # avoid parallel build races where compilation starts before headers exist.
-$(OBJDIR)/$(MESAGLVERSION)/%.o: \
-            $(OBJDIR)/$(MESAGLVERSION)/include/mesa3dgl$(MESAGLBUILD)_libdefs.h \
-            $(OBJDIR)/$(MESAGLVERSION)/include/mesa3dgl$(MESAGLBUILD)_deflibdefs.h
+$(OBJDIR)/$(MESAGLVERSION)$(MESAGL_FAULT_SUFFIX)/%.o: \
+            $(OBJDIR)/$(MESAGLVERSION)$(MESAGL_FAULT_SUFFIX)/include/mesa3dgl$(MESAGLBUILD)$(MESAGL_FAULT_SUFFIX)_libdefs.h \
+            $(OBJDIR)/$(MESAGLVERSION)$(MESAGL_FAULT_SUFFIX)/include/mesa3dgl$(MESAGLBUILD)$(MESAGL_FAULT_SUFFIX)_deflibdefs.h
 
 ifneq ($(mesa3dgl_ENTRYPOINTS),)
 MESA_COMPILEOPTIONS += $(CFLAGS_FUNCTION_SECTIONS)
@@ -120,11 +120,20 @@ MESAGL_LIBRARY_SOURCES_C += $(top_srcdir)/src/util/xmlconfig
 #USER_CPPFLAGS += -DDEBUG=1
 USER_CFLAGS += -Werror=implicit-function-declaration
 
+# Test-only variant: `gmake mesa3dgl-library MESA3DGL_FAULT_INJECTION=1`
+# builds mesa3dgl$(MESAGLBUILD)fault.library with the allocation-failure
+# control of mesa3dgl_fault.h, in its own object directory. The regular
+# library and SYS/GL.default are never affected by it.
+ifneq ($(MESA3DGL_FAULT_INJECTION),)
+USER_CPPFLAGS += -DMESA3DGL_FAULT_INJECTION
+MESAGL_FAULT_SUFFIX := fault
+endif
+
 %build_module_library mmake=mesa3dgl-library \
-  modname="mesa3dgl$(MESAGLBUILD)" modtype=library \
+  modname="mesa3dgl$(MESAGLBUILD)$(MESAGL_FAULT_SUFFIX)" modtype=library \
   conffile="$(SRCDIR)/workbench/libs/gl/gl.conf" \
   confoverride="$(SRCDIR)/$(CURDIR)/mesa3dgl.conf" \
-  objdir="$(OBJDIR)/$(MESAGLVERSION)" \
+  objdir="$(OBJDIR)/$(MESAGLVERSION)$(MESAGL_FAULT_SUFFIX)" \
   files="$(MESAGL_LIBRARY_SOURCES_C)" \
   alwayscxxlink=yes \
   uselibs="glapi mesa mesa-sse41 compiler gallium_virgl galliumauxiliary gallium mesautil pthread $(MESA3DGL_GALLIUMCORE)"

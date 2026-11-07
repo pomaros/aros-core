@@ -24,6 +24,7 @@
 #include "mesa3dgl_support.h"
 #include "mesa3dgl_gallium.h"
 #include "mesa_screen_factory.h"
+#include "mesa3dgl_fault.h"
 
 /* GalliumCoreAPI table provider (generated gca_table.c). Passed to the
  * pipe hidd via CPS_GalliumCoreAPI so a runtime-bound pipe driver can
@@ -151,7 +152,6 @@ static inline const void *gallium_core_get_api(void) { return (const void *)0; }
     struct mesa3dgl_context * ctx = NULL;
     struct GalliumScreenFactory screen_factory;
     mesa_screen_factory_init(&screen_factory);
-    bug("[Mesa/VirGL] context entry module=%p\n",screen_factory.module);
     struct TagItem pscreen_tags[] =
     {
             { CPS_PipeFriendBitMap,     0       },
@@ -230,7 +230,6 @@ static inline const void *gallium_core_get_api(void) { return (const void *)0; }
 
     D(bug("[MESA3DGL] %s: ctx @ 0x%p\n", __func__, ctx));
 
-    bug("[Mesa/VirGL] prepare target\n");
     if (!MESA3DGLPrepareTarget(&ctx->own, tagList))
     {
         bug("%s: ERROR - failed to select visible rastport\n", __func__);
@@ -254,10 +253,9 @@ static inline const void *gallium_core_get_api(void) { return (const void *)0; }
     {
         pscreen_tags[2].ti_Data = (IPTR)gallium_core_get_api();
 
-        bug("[Mesa/VirGL] create pipe\n");
         if (CreatePipeV(pscreen_tags))
         {
-            pscreen = CreatePipeScreen(ctx->driver);
+            pscreen = MESA3DGL_FAULT("screen") ? NULL : CreatePipeScreen(ctx->driver);
 
             if (!pscreen)
             {
@@ -274,14 +272,16 @@ static inline const void *gallium_core_get_api(void) { return (const void *)0; }
         D(bug("[MESA3DGL] %s: pipe screen @ 0x%p\n", __func__, pscreen));
         D(bug("[MESA3DGL] %s: pipe driver @ 0x%p\n", __func__, ctx->driver));
 
-        if (!(ctx->stmanager = MESA3DGLNewStManager(pscreen)))
+        if (MESA3DGL_FAULT("stmanager") ||
+            !(ctx->stmanager = MESA3DGLNewStManager(pscreen)))
         {
             bug("%s: ERROR - failed to create ST Manager\n", __func__);
             DestroyPipeScreen(ctx->driver, pscreen);
-            /* The common no-stmanager error path releases the provider. */
+            /* error_out releases the provider through ctx->driver. */
             goto error_out;
         }
-        if (!(ctx->shared = AllocVec(sizeof(*ctx->shared), MEMF_PUBLIC | MEMF_CLEAR)))
+        if (MESA3DGL_FAULT("shared") ||
+            !(ctx->shared = AllocVec(sizeof(*ctx->shared), MEMF_PUBLIC | MEMF_CLEAR)))
             goto error_out;
         ctx->shared->driver = ctx->driver;
         ctx->shared->stmanager = ctx->stmanager;
@@ -314,7 +314,8 @@ static inline const void *gallium_core_get_api(void) { return (const void *)0; }
         goto error_out;
     }
 
-    ctx->own.framebuffer = MESA3DGLNewFrameBuffer(ctx, &ctx->stvis);
+    ctx->own.framebuffer = MESA3DGL_FAULT("framebuffer") ? NULL :
+        MESA3DGLNewFrameBuffer(ctx, &ctx->stvis);
 
     if (!ctx->own.framebuffer)
     {
@@ -335,6 +336,10 @@ error_out:
     if (ctx->st) st_destroy_context(ctx->st);
     if (ctx->own.framebuffer) MESA3DGLFreeFrameBuffer(ctx->own.framebuffer);
     MESA3DGLFreeTarget(&ctx->own);
+    /* Exactly one of these releases the provider this context created:
+     * the last reference of a shared record (new or joined), a manager
+     * that never got a shared record, or a bare pipe without a manager.
+     * A joined shared record with other users releases nothing. */
     if (ctx->shared && __atomic_sub_fetch(&ctx->shared->refs, 1, __ATOMIC_ACQ_REL) == 0)
     {
         MESA3DGLFreeStManager(ctx->driver, ctx->stmanager);
