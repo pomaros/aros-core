@@ -21,6 +21,20 @@ It restores the native wrapper after completion/fault and releases its owned
 backing. It implements bounded worker services. It supports one callback frame and worker reentry, and owned-page fault resumption. External worker/owner removal and SMP reclamation are exercised explicitly.
 The source is an integration candidate; a compile is not runtime acceptance.
 
+`RestrictedTasks --orphan-cleanup` selects worker/owner retirement, shared
+domains, shared objects, Native shared views and managed-domain close with held
+worker leases. It requires zero resources at completion and emits a distinct
+`orphan-cleanup` result. It omits the general memory, JIT and wait workloads;
+its result is not the full restricted-task verdict. The complete workload's
+kernel-exclusion assertions require the selected low-address kernel placement.
+
+`ReapBench.c` measures ten thousand idle lifetime calls using the architectural
+virtual counter. Compile it against the API36 header and matching guest SDK;
+run it with no restricted resources, before and after a kernel change under
+the same VM configuration. It checks zero resources at both boundaries and
+prints elapsed counter ticks, frequency and microseconds. This isolates idle
+cleanup admission; it does not measure application startup or orphan drain.
+
 The API version is 9. Service submit/collect use kernel-derived task identity;
 collection yields when a response is unavailable. Close cancels and drains
 worker leases from native context before reclaiming backing; the workload covers queued cancellation before worker creation, running

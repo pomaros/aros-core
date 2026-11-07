@@ -1498,8 +1498,10 @@ static void prove_suspension(void)
     bug("[ISOVM] suspend cpu_bound=2 nested=2 wake_held=2 peer_publications=2 held_checks=256 resumed=1 closed=1 foreign=8 native_refused=4 retained_pages=0 PASS\n");
 }
 
-int main(void)
+int main(int argc,char **argv)
 {
+    unsigned orphan_cleanup_only=argc==2 && !strcmp(argv[1],"--orphan-cleanup");
+    CHECK(argc==1 || orphan_cleanup_only);
     KernelBase = OpenResource((CONST_STRPTR)"kernel.resource");
     CHECK(KernelBase != NULL);
 #if defined(__AROSEXEC_SMP__)
@@ -1513,7 +1515,7 @@ int main(void)
     intptr_t address = KrnGetSystemAttr(AROS_RESTRICTED_KATTR_API);
     CHECK(address != -1 && address != 0);
     api = (const void *)address;
-    CHECK(api->version == 35 && api->size == sizeof(*api));
+    CHECK(api->version == 36 && api->size == sizeof(*api));
     extern const unsigned char RestrictedRestore[],RestrictedRestoreEnd[];
     static struct AROSRestrictedResult restored;
     CHECK(api->run(RestrictedRestore,(size_t)(RestrictedRestoreEnd-RestrictedRestore),0,&restored));
@@ -1589,6 +1591,15 @@ int main(void)
     CHECK(!fault_lifetime.live && !fault_lifetime.pending && !fault_lifetime.pages);
     bug("[ISOVM] fault-stack alternate=1 unregister=1 active-refusal=1 nested=1 guards=2 drained=5 PASS\n");
     prove_shared_domains();
+    if (orphan_cleanup_only) {
+        prove_shared_memory();
+        prove_shared_view();
+        prove_domain_close();
+        struct AROSRestrictedLifetime life;api->lifetime(&life);
+        CHECK(!life.live && !life.pending && !life.domains && !life.pages && !life.shared_objects);
+        bug("[ISOVM] orphan-cleanup removed_workers=1 removed_owners=8 managed_orphan=1 shared_orphan=1 native_view_orphan=1 resources=0 PASS\n");
+        return 0;
+    }
     prove_private_memory(UINT64_C(0x200000000));
     prove_private_memory(UINT64_C(0x7ffe0000));
     /* API 34 high window, free of kernel mappings on QEMU: the same private
