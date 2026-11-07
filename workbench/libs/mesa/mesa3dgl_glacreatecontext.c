@@ -151,6 +151,7 @@ static inline const void *gallium_core_get_api(void) { return (const void *)0; }
     struct mesa3dgl_context * ctx = NULL;
     struct GalliumScreenFactory screen_factory;
     mesa_screen_factory_init(&screen_factory);
+    bug("[Mesa/VirGL] context entry module=%p\n",screen_factory.module);
     struct TagItem pscreen_tags[] =
     {
             { CPS_PipeFriendBitMap,     0       },
@@ -229,6 +230,7 @@ static inline const void *gallium_core_get_api(void) { return (const void *)0; }
 
     D(bug("[MESA3DGL] %s: ctx @ 0x%p\n", __func__, ctx));
 
+    bug("[Mesa/VirGL] prepare target\n");
     if (!MESA3DGLPrepareTarget(&ctx->own, tagList))
     {
         bug("%s: ERROR - failed to select visible rastport\n", __func__);
@@ -252,6 +254,7 @@ static inline const void *gallium_core_get_api(void) { return (const void *)0; }
     {
         pscreen_tags[2].ti_Data = (IPTR)gallium_core_get_api();
 
+        bug("[Mesa/VirGL] create pipe\n");
         if (CreatePipeV(pscreen_tags))
         {
             pscreen = CreatePipeScreen(ctx->driver);
