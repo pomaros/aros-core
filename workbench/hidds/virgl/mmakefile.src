@@ -14,7 +14,8 @@ VIRGL_SOURCES := $(addprefix $(GALLIUM_PATH)/drivers/virgl/,$(VIRGL_FILES))
 #MM- hidd-virgl-prototype : kernel-hidd-virtiogfx-includes
 # Explicit local integration gate. One MetaMake invocation owns generation;
 # do not launch several top-level targets concurrently in the same build.
-#MM- virtio-shared-integration : kernel-hidd-virtiogfx hidd-virgl-prototype mesa3dgl-library workbench-libs-gallium test-virtio-shared test-virtio-completion test-virgl-pair
+#MM- virtio-shared-integration : kernel-hidd-virtiogfx hidd-virgl-prototype mesa3dgl-library workbench-libs-gallium workbench-tools-screengrabber test-virtio-shared test-virtio-completion test-virtio-owned test-virgl-pair
+#MM- virtio-shared-runtime : compiler-stdc compiler-stdcio compiler-posixc workbench-libs-fd
 
 VIRGL_GENDIR := $(GENDIR)/workbench/hidds/virgl
 #MM

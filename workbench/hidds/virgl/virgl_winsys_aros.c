@@ -250,6 +250,7 @@ static int ws_submit(struct virgl_winsys *vws,struct virgl_cmd_buf *base,struct 
 }
 static int ws_caps(struct virgl_winsys *vws,struct virgl_drm_caps *caps)
 {
+    bug("[virgl.hidd] core requests caps\n");
     struct avgl_ws *ws=ws_cast(vws);size_t bytes=ws->transport.caps_size;
     avgl_native_clear(ws->transport.utility_base,caps,sizeof(*caps));virgl_ws_fill_new_caps_defaults(caps);
     if(bytes>sizeof(caps->caps.v1))bytes=sizeof(caps->caps.v1);
