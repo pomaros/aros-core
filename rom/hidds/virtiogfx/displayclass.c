@@ -5,8 +5,17 @@
 
 /* The framebuffer frontend's CreateObject serves everything but Vulkan */
 #define EFIFBGfxDisplay__Hidd_Display__CreateObject VirtioGfxDisplay_CreateFramebufferObject
+#define EFIFBGfxDisplay__Root__New VirtioGfxDisplay_FramebufferNew
 #include "../efifbgfx/efifbgfx_displayclass.c"
 #undef EFIFBGfxDisplay__Hidd_Display__CreateObject
+#undef EFIFBGfxDisplay__Root__New
+OOP_Object *EFIFBGfxDisplay__Root__New(OOP_Class *cl,OOP_Object *o,struct pRoot_New *msg)
+{
+    bug("[VirtioGfx] display New %lux%lu\n",(unsigned long)XSD(cl)->data.width,(unsigned long)XSD(cl)->data.height);
+    OOP_Object *result=VirtioGfxDisplay_FramebufferNew(cl,o,msg);
+    bug("[VirtioGfx] display New result=%p\n",result);
+    return result;
+}
 
 #define VIRTIOGFX_VULKAN_CLASS  "hidd.vulkan"
 #define VIRTIOGFX_VENUS_CLASS   "hidd.vulkan.venus"
@@ -29,9 +38,11 @@ static OOP_Object *VirtioGfxDisplay_CreateVulkanObject(struct pHidd_Display_Crea
 
 static OOP_Object *VirtioGfxDisplay_CreateGalliumObject(OOP_Class *cl,struct pHidd_Display_CreateObject *msg)
 {
+    bug("[VirtioGfx] create Gallium client\n");
     struct VirtioGPU *gpu=XSD(cl)->data.present_data;
     if(!VirtioGPUHasVirGL(gpu))return NULL;
     struct Library *module=OpenLibrary("virgl.hidd",0);
+    bug("[VirtioGfx] VirGL module=%p\n",module);
     if(!module)return NULL;
     /* The installed device owner pins protocol code. Never make a client's
      * destructor close the last reference to its own executing module. */

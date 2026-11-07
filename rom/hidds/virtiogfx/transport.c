@@ -503,7 +503,14 @@ BOOL VirtioGPUOpen(struct Library *oop,OOP_Object *object,struct VirtioGPU **out
     gpu_request(gpu,0x100);
     if(!gpu_command(gpu,24,408,0x1101))goto fail;
     struct GPUDisplay *display=(void *)((UBYTE *)gpu->message+GPU_REQUEST_BYTES);
-    if(display->mode[0].enabled!=1 || display->mode[0].width!=1024 || display->mode[0].height!=768)goto fail;
+    bug("[VirtioGfx] host scanout hint %lux%lu enabled=%lu; fixed surface 1024x768\n",
+        (unsigned long)display->mode[0].width,(unsigned long)display->mode[0].height,
+        (unsigned long)display->mode[0].enabled);
+    /* GET_DISPLAY_INFO reports the host window's current size, which Cocoa
+     * can update from the legacy VGA console before this driver starts.
+     * It is a mode hint, not a requirement on RESOURCE_CREATE_2D dimensions.
+     * Keep the existing fixed boot mode and negotiate it with SET_SCANOUT. */
+    if(display->mode[0].enabled!=1 || !display->mode[0].width || !display->mode[0].height)goto fail;
     stage="pixels";
     gpu->pixels=HIDD_PCIDriver_AllocPCIMem(dev->dev_PCIDriverObject,1024*768*4);
     UQUAD pixel_bus;
