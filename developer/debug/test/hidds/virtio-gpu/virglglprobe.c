@@ -1,6 +1,7 @@
 /* Copyright (C) 2026, The AROS Development Team. All rights reserved. */
 /* Finite native AROS GL smoke test; no persistent settings or files. */
 #include <exec/types.h>
+#include <exec/libraries.h>
 #include <intuition/intuition.h>
 #include <dos/dosextens.h>
 #include <proto/exec.h>
@@ -13,6 +14,7 @@
 #include <aros/types/file_s.h>
 #include <string.h>
 #include "virglpair_protocol.h"
+extern struct Library *GLBase;
 
 /* Compare every RGB channel against the uploaded texel selected by nearest
  * sampling. The 192-pixel viewport is exactly divisible by the four texels. */
@@ -327,6 +329,8 @@ int main(int argc, char **argv)
         TAG_DONE);
     if (!win) return 10;
     puts("probe: creating context");
+    printf("GL module: %p %s %u.%u vectors=%u\n",(void *)GLBase,
+        GLBase->lib_Node.ln_Name,GLBase->lib_Version,GLBase->lib_Revision,GLBase->lib_NegSize);
     fflush(stdout);
     ctx = new_context(win);
     if (fail_context >= 0) {
