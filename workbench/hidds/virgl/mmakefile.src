@@ -1,0 +1,55 @@
+# Copyright (C) 2026, The AROS Development Team. All rights reserved.
+# Experimental manual build; deliberately not a workbench-hidds dependency.
+include $(SRCDIR)/config/aros.cfg
+include $(SRCDIR)/workbench/libs/mesa/mesa.cfg
+
+GALLIUM_PATH = $(top_srcdir)/src/gallium
+VIRGL_FILES := virgl_buffer virgl_context virgl_encode virgl_query \
+    virgl_resource virgl_screen virgl_staging_mgr virgl_streamout \
+    virgl_transfer_queue virgl_texture virgl_tgsi virgl_video
+VIRGL_SOURCES := $(addprefix $(GALLIUM_PATH)/drivers/virgl/,$(VIRGL_FILES))
+
+#MM linklibs-gallium_virgl : mesa3dgl-linklibs
+#MM hidd-virgl-prototype : includes hidd-gallium mesa3dgl-linklibs linklibs-libatomic linklibs-gallium_virgl virgl-driconf-gen test-virgl-gl
+#MM- hidd-virgl-prototype : kernel-hidd-virtiogfx-includes
+# Explicit local integration gate. One MetaMake invocation owns generation;
+# do not launch several top-level targets concurrently in the same build.
+#MM- virtio-shared-integration : kernel-hidd-virtiogfx hidd-virgl-prototype mesa3dgl-library workbench-libs-gallium workbench-tools-screengrabber test-virtio-shared test-virtio-completion test-virtio-owned test-virgl-pair
+#MM- virtio-shared-runtime : compiler-stdc compiler-stdcio compiler-posixc workbench-libs-fd
+
+VIRGL_GENDIR := $(GENDIR)/workbench/hidds/virgl
+#MM
+virgl-driconf-gen : $(VIRGL_GENDIR)/driconf_static.h
+$(VIRGL_GENDIR)/driconf_static.h : $(top_srcdir)/src/util/driconf_static.py $(top_srcdir)/src/util/00-mesa-defaults.conf
+	@$(IF) $(TEST) ! -d $(VIRGL_GENDIR) ; then $(MKDIR) $(VIRGL_GENDIR) ; else $(NOP) ; fi
+	$(Q)$(PYTHON) $(PYTHON_FLAGS) $^ $@
+
+#MM- virgl-driconf-gen : mesa3d-fetch
+
+USER_INCLUDES += -iquote $(SRCDIR)/workbench/libs/mesa -I$(VIRGL_GENDIR) \
+    -iquote $(GALLIUM_PATH)/drivers \
+    -iquote $(GALLIUM_PATH)/include \
+    -iquote $(GALLIUM_PATH)/auxiliary \
+    -iquote $(top_srcdir)/src/virtio \
+    -iquote $(top_builddir)/src \
+    -iquote $(top_builddir)/src/compiler \
+    -iquote $(top_builddir)/src/compiler/glsl \
+    -iquote $(top_builddir)/src/compiler/nir \
+    -iquote $(top_builddir)/src/util \
+    -iquote $(top_builddir)/src/util/format \
+    -iquote $(top_srcdir)/src/compiler/nir \
+    -iquote $(GENDIR)/workbench/libs/mesa/src/compiler/nir
+SAFETY_CFLAGS += -Werror=implicit-function-declaration
+USER_CFLAGS += -Wall -Werror=implicit-function-declaration
+
+%build_linklib mmake=linklibs-gallium_virgl libname=gallium_virgl \
+    libdir=$(top_libdir) objdir=$(top_builddir)/src/gallium/drivers/virgl \
+    files="$(VIRGL_SOURCES)"
+
+# Native transport/winsys only; the client Mesa module owns the driver core.
+USER_LDFLAGS := -nostdc -noposixc
+%build_module mmake=hidd-virgl-prototype modname=virgl modtype=hidd \
+    files="virgl_init virgl_galliumclass virgl_winsys_aros virgl_transport" \
+    uselibs="" objdir="$(OBJDIR)/$(MESAGLVERSION)"
+
+%common

@@ -17,6 +17,7 @@
  * can call the one Mesa compiler core. 0 when the build carries no
  * table; drivers that need it refuse CreatePipeScreen. */
 #define CPS_GalliumCoreAPI              (CPS_Dummy + 4)
+#define CPS_PipeScreenFactory           (CPS_Dummy + 5)
 
 /* A special version of CreatePipe function with version embeded in call */
 #define CreatePipeV(tags)                                               \

@@ -92,8 +92,12 @@ static LONG CaptureScreenToFile(CONST_STRPTR screenname, CONST_STRPTR filename)
             goto out;
         }
 
-        FPrintf(fh, "P6\n%ld %ld\n255\n",
-            (LONG)screen->Width, (LONG)screen->Height);
+        if (FPrintf(fh, "P6\n%ld %ld\n255\n",
+            (LONG)screen->Width, (LONG)screen->Height) < 0 || !Flush(fh))
+        {
+            fprintf(stderr, "%s: failed writing capture header\n", APPNAME);
+            goto out;
+        }
         for (y = 0; y < screen->Height; y++)
         {
             ULONG x;
