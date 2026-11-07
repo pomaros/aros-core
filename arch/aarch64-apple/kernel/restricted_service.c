@@ -18,9 +18,10 @@ static struct AROSRestrictedService *channel_lookup(uint64_t handle)
         if (s->channel==handle) return s;
     return NULL;
 }
-/* Index of every private backing page of every region, for constant-time
- * alias refusal: open addressing with linear probing, deletion by backward
- * shift, so a lookup ends at the first empty slot. Shared views never enter it. */
+/* Index of uniquely owned private and shared backing, for constant-time alias
+ * refusal. Shared views borrow an object's entry instead of entering again.
+ * Open addressing with linear probing and backward-shift deletion lets a
+ * lookup end at the first empty slot. The arena bounds the combined load. */
 #define INDEX_MASK (AROS_RESTRICTED_INDEX_SLOTS-1)
 _Static_assert((AROS_RESTRICTED_INDEX_SLOTS&INDEX_MASK)==0,"index slots are a power of two");
 static uintptr_t backing_index[AROS_RESTRICTED_INDEX_SLOTS];
@@ -63,8 +64,6 @@ static uintptr_t backing_of(const struct AROSRestrictedRegion *r,size_t page)
 }
 static int physical_in_use(uintptr_t pa)
 {
-    for (struct AROSRestrictedSharedBacking *b=shared_backings;b;b=b->next)
-        for (size_t i=0;i<b->count;++i) if (b->pages[i]==pa) return 1;
     for (struct AROSRestrictedSpace *s=spaces;s;s=s->next)
         if (s->backing==pa) return 1;
     return index_contains(pa);
@@ -104,9 +103,16 @@ static int shared_publication_policy(struct AROSRestrictedRegion *r,size_t page,
 int AROSRestrictedSharedInitialize(struct AROSRestrictedSharedBacking *b,uintptr_t *pages,size_t count)
 {
     if (!b || !pages || !count || b->pages || b->next || shared_registered(b)) return 0;
-    for (size_t i=0;i<count;++i) {
-        if (!pages[i] || (pages[i]&(PAGE-1)) || physical_in_use(pages[i])) return 0;
-        for (size_t j=0;j<i;++j) if (pages[j]==pages[i]) return 0;
+    size_t i;
+    for (i=0;i<count;++i) {
+        if (!pages[i] || (pages[i]&(PAGE-1)) || physical_in_use(pages[i])) break;
+        index_insert(pages[i]);
+    }
+    if (i!=count) {
+        /* No object has been published. Return every provisional entry,
+         * preserving any foreign entry that caused the refusal. */
+        while (i) index_remove(pages[--i]);
+        return 0;
     }
     b->pages=pages;b->count=count;b->views=0;b->closing=0;b->publication=NULL;
     b->regions=NULL;
@@ -175,6 +181,7 @@ int AROSRestrictedSharedClose(struct AROSRestrictedSharedBacking *b)
     b->closing=1;if (b->views) return 0;
     struct AROSRestrictedSharedBacking **link=&shared_backings;
     while (*link!=b) link=&(*link)->next;
+    for (size_t i=0;i<b->count;++i) index_remove(b->pages[i]);
     *link=b->next;b->next=NULL;b->pages=NULL;b->count=0;return 1;
 }
 int AROSRestrictedSharedViewBegin(struct AROSRestrictedSharedBacking *b)

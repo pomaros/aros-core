@@ -650,6 +650,7 @@ static void shared_tests(void)
     CHECK(AROSRestrictedRegionDecommit(&regions[1],0,&released) && !released && object.views==1 && page[0]==0x31,"shared-decommit-retains-object");
     CHECK(AROSRestrictedRegionCommitShared(&regions[1],0,3) && page[0]==0x31,"shared-recommit-preserves-data");
     CHECK(!AROSRestrictedSharedClose(&object) && object.views==1 && object.pages==backing,"shared-close-retained");
+    CHECK(!AROSRestrictedSharedInitialize(&duplicate,backing,1),"shared-closing-index-retained");
     struct AROSRestrictedRegion late={0};struct KrnMappingPage latepage;uintptr_t latebacking=0;
     CHECK(reserve_region(&spaces[1],&late,va+PAGE,PAGE,&latepage,&latebacking,1),"shared-late-reserve");
     CHECK(!AROSRestrictedRegionAttachShared(&late,&object),"shared-close-stops-attach");
@@ -660,7 +661,32 @@ static void shared_tests(void)
     CHECK(AROSRestrictedRegionDetach(&regions[1]) && !object.views && !ledger[1][0],"shared-final-detach");
     CHECK(AROSRestrictedSpaceClose(&spaces[1]),"shared-second-space-close");
     CHECK(AROSRestrictedSharedClose(&object) && !object.pages && !AROSRestrictedSharedClose(&object),"shared-final-close");
+    CHECK(AROSRestrictedSharedInitialize(&duplicate,backing,1),"shared-index-reuse-after-close");
+    CHECK(AROSRestrictedSharedClose(&duplicate),"shared-index-reused-close");
     free(page);for (unsigned i=0;i<2;++i) { free(data[i]);free(f[i]); }
+}
+static void shared_registration_rollback(void)
+{
+    unsigned char *memory=aligned_alloc(PAGE,3*PAGE);
+    CHECK(memory,"shared-rollback-allocation");
+    uintptr_t owned[]={(uintptr_t)memory};
+    uintptr_t provisional[]={(uintptr_t)memory+PAGE,(uintptr_t)memory};
+    struct AROSRestrictedSharedBacking owner={0},failed={0},probe={0};
+    CHECK(AROSRestrictedSharedInitialize(&owner,owned,1),"shared-rollback-owner");
+    CHECK(!AROSRestrictedSharedInitialize(&failed,provisional,2),"shared-rollback-conflict");
+    CHECK(!failed.pages && !failed.next && !failed.count,"shared-rollback-unpublished");
+    CHECK(AROSRestrictedSharedInitialize(&probe,provisional,1),"shared-registration-rollback");
+    CHECK(AROSRestrictedSharedClose(&probe),"shared-rollback-probe-close");
+    CHECK(!AROSRestrictedSharedInitialize(&failed,owned,1),"shared-rollback-foreign-retained");
+    uintptr_t repeated[]={(uintptr_t)memory+PAGE,(uintptr_t)memory+PAGE};
+    CHECK(!AROSRestrictedSharedInitialize(&failed,repeated,2),"shared-registration-internal-duplicate");
+    CHECK(AROSRestrictedSharedInitialize(&probe,repeated,1),"shared-internal-duplicate-rollback");
+    CHECK(AROSRestrictedSharedClose(&probe),"shared-internal-probe-close");
+    uintptr_t unaligned[]={(uintptr_t)memory+PAGE,(uintptr_t)memory+2*PAGE+1};
+    CHECK(!AROSRestrictedSharedInitialize(&failed,unaligned,2),"shared-registration-unaligned");
+    CHECK(AROSRestrictedSharedInitialize(&probe,unaligned,1),"shared-unaligned-rollback");
+    CHECK(AROSRestrictedSharedClose(&probe) && AROSRestrictedSharedClose(&owner),"shared-rollback-drain");
+    free(memory);
 }
 static void channel_growth(void)
 {
@@ -763,5 +789,5 @@ int main(void)
     CHECK(AROSRestrictedSpaceInit(&space,11,root,tcr,(uintptr_t)data,&ops),"space-reuse");
     CHECK(space.handle!=first_handle,"space-generation");
     CHECK(AROSRestrictedSpaceClose(&space),"reused-space-close");
-    free(data);free(f);region_tests(AROS_RESTRICTED_DYNAMIC_BASE);region_tests(UINT64_C(0x7ffe0000));shared_tests();shared_copy_tests();channel_growth();publication_tests();index_tests();chunk_tests();jit_tests();shared_publication_tests();shared_offset_peer_tests();native_view_tests();native_view_exec_tests();puts("PASS restricted space and channel ownership");return 0;
+    free(data);free(f);region_tests(AROS_RESTRICTED_DYNAMIC_BASE);region_tests(UINT64_C(0x7ffe0000));shared_tests();shared_copy_tests();channel_growth();publication_tests();index_tests();chunk_tests();jit_tests();shared_publication_tests();shared_offset_peer_tests();native_view_tests();native_view_exec_tests();shared_registration_rollback();puts("PASS restricted space and channel ownership");return 0;
 }

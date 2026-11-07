@@ -51,7 +51,7 @@ static inline int AROSRestrictedRangeValid(uintptr_t address,size_t length)
     return address>=AROS_RESTRICTED_DYNAMIC_BASE && address<AROS_RESTRICTED_DYNAMIC_END &&
         length<=AROS_RESTRICTED_DYNAMIC_END-address;
 }
-/* Slots of the service's index of private backing pages: backing comes from
+/* Slots of the service's index of private and shared backing: both come from
  * the page arena, so twice its page capacity keeps the load at most one half. */
 #define AROS_RESTRICTED_INDEX_SLOTS (2U*(size_t)(AROS_APPLE_PAGE_ARENA_MAX_BYTES/4096U))
 struct AROSRestrictedSpace {

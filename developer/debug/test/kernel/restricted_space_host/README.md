@@ -47,6 +47,14 @@ ownership transfer, closing-object admission and untracked physical aliases
 (seventeen adapter controls total). Two synthetic roots share one PA with
 independent permissions; held service output is cancelled without late writes.
 
+Private and shared backing use one physical-page index; borrowed views retain
+their object's entry. Registering shared pages rolls back provisional entries on
+foreign aliases, internal duplicates and malformed pages. A refused close keeps
+every entry while views remain; final close admits reuse. Three semantic controls
+check rollback, retained ownership and release. Bootstrap backing remains in the
+space ledger. The shared and private allocation total is bounded by the Native
+page arena, keeping the index at most half full.
+
 Executable pages require the native code-publication protocol and are refused.
 This component suite does not supply guest allocation syscalls or prove SMP
 cache/TLB maintenance. Native API integration and guest qualification are separate.
