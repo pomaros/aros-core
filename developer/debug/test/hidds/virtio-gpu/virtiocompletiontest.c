@@ -1,5 +1,9 @@
-/* Native bounded state-machine regression using the actual owner code.
- * Synthetic queue memory never belongs to a live PCI device. */
+/* Owner state-machine regression: the actual transport.c compiled against a
+ * synthetic used ring in ordinary memory. It drives gpu_reap and the owned
+ * state transitions through late, rejected and malformed completions. It
+ * never touches a PCI device, never waits on a timer and therefore proves
+ * nothing about a real host hang, a lost interrupt or the 1 second deadline;
+ * those remain the responsibility of runtime tests on a live owner. */
 #include "../../../../../rom/hidds/virtiogfx/transport.c"
 #include "../../crt/test.h"
 static struct VirtioGPU gpu;

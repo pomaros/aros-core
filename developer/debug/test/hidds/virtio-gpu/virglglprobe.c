@@ -2,6 +2,7 @@
 /* Finite native AROS GL smoke test; no persistent settings or files. */
 #include <exec/types.h>
 #include <exec/libraries.h>
+#include <exec/execbase.h>
 #include <intuition/intuition.h>
 #include <dos/dosextens.h>
 #include <proto/exec.h>
@@ -93,9 +94,10 @@ static int texture_and_blend(void)
 static int test_stencil = 1;
 static int fail_context = -1;
 
-static GLAContext new_context(struct Window *win)
+static GLAContext new_context_sharing(struct Window *win, Tag share_tag, GLAContext share)
 {
     struct TagItem attrs[] = {
+        {share ? share_tag : TAG_IGNORE, (IPTR)share},
         {GLA_Window, (IPTR)win},
         {GLA_Left, win->BorderLeft}, {GLA_Top, win->BorderTop},
         {GLA_Right, win->BorderRight}, {GLA_Bottom, win->BorderBottom},
@@ -107,6 +109,20 @@ static GLAContext new_context(struct Window *win)
         {GLA_ContextMinorVersion, 0}, {TAG_DONE, 0}
     };
     return glACreateContext(attrs);
+}
+static GLAContext new_context(struct Window *win)
+{
+    return new_context_sharing(win, TAG_IGNORE, NULL);
+}
+static UWORD library_users(CONST_STRPTR name)
+{
+    struct Library *base;
+    UWORD count = 0;
+    Forbid();
+    base = (struct Library *)FindName(&SysBase->LibList, name);
+    if (base) count = base->lib_OpenCnt;
+    Permit();
+    return count;
 }
 
 static int pixel_is(int x, int y, int r, int g, int b)
@@ -244,6 +260,75 @@ static int simultaneous_context(GLAContext *first_context, struct Window *first_
     return ok;
 }
 
+/* Contexts sharing one provider: B shares A's screen, C shares A's objects.
+ * The provider must survive until the last of them is gone, in either
+ * destruction order, and a fresh context must work after the teardown. */
+static int render_check(GLAContext context, int r, int g, int b)
+{
+    int ok;
+    glAMakeCurrent(context);
+    glViewport(0, 0, 192, 192);
+    glReadBuffer(GL_BACK);
+    glClearColor(r / 255.0f, g / 255.0f, b / 255.0f, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    ok = pixel_is(96, 96, r, g, b);
+    return glGetError() == GL_NO_ERROR && ok;
+}
+static int shared_contexts(GLAContext *first_context, struct Window *win,
+    const char *expected_renderer)
+{
+    int order, ok = 1;
+    for (order = 0; order < 2 && ok; ++order) {
+        GLAContext a = *first_context;
+        GLAContext b = new_context_sharing(win, GLA_ShareScreen, a);
+        GLAContext c = new_context_sharing(win, GLA_ShareContext, a);
+        const char *name;
+        if (!b || !c) {
+            puts("FAIL: shared context creation");
+            if (b) glADestroyContext(b);
+            if (c) glADestroyContext(c);
+            glAMakeCurrent(a);
+            return 0;
+        }
+        glAMakeCurrent(c);
+        name = (const char *)glGetString(GL_RENDERER);
+        ok = name && strstr(name, expected_renderer);
+        ok = render_check(b, 0, 255, 255) && ok;
+        ok = render_check(c, 255, 0, 255) && ok;
+        if (order == 0) {
+            /* Creator first: the provider outlives the context that made it. */
+            glAMakeCurrent(b);
+            glADestroyContext(a);
+            ok = render_check(c, 255, 255, 0) && ok;
+            ok = render_check(b, 0, 0, 255) && ok;
+            glAMakeCurrent(b);
+            glADestroyContext(c);
+            ok = render_check(b, 255, 0, 0) && ok;
+            glAMakeCurrent(NULL);
+            glADestroyContext(b);
+        } else {
+            /* Creator last: the joined contexts go first. */
+            glAMakeCurrent(a);
+            glADestroyContext(c);
+            ok = render_check(b, 0, 255, 0) && ok;
+            glAMakeCurrent(a);
+            glADestroyContext(b);
+            ok = render_check(a, 0, 0, 255) && ok;
+            glAMakeCurrent(NULL);
+            glADestroyContext(a);
+        }
+        /* Every context is gone: a new one must get a fresh provider. */
+        *first_context = new_context(win);
+        if (!*first_context) {
+            puts("FAIL: context after shared teardown");
+            return 0;
+        }
+        ok = render_check(*first_context, 128, 128, 128) && ok;
+        printf("shared contexts order %d: %s\n", order + 1, ok ? "PASS" : "FAIL");
+    }
+    return ok;
+}
+
 static int pair_barrier(const char *name, ULONG role)
 {
     struct MsgPort *reply = CreateMsgPort(), *parent;
@@ -274,6 +359,8 @@ int main(int argc, char **argv)
     int ok;
     int empty = 0, single = 0, multi = 0, openonly = 0, refresh = 0, arg;
     int handles = 0, nativeonly = 0, log_error = -1, setrast = 0, quick = 0;
+    int share = 0, pins = 0;
+    UWORD provider_before = 0;
     const char *pair_port = NULL;
     int pair_role = -1;
     test_stencil = 1;
@@ -284,6 +371,8 @@ int main(int argc, char **argv)
         else if (strcmp(argv[arg], "quick") == 0) quick = 1;
         else if (strcmp(argv[arg], "nostencil") == 0) test_stencil = 0;
         else if (strcmp(argv[arg], "multi") == 0) multi = 1;
+        else if (strcmp(argv[arg], "share") == 0) share = 1;
+        else if (strcmp(argv[arg], "pins") == 0) pins = 1;
         else if (strcmp(argv[arg], "openonly") == 0) openonly = 1;
         else if (strcmp(argv[arg], "refresh") == 0) refresh = 1;
         else if (strcmp(argv[arg], "handles") == 0) handles = 1;
@@ -321,6 +410,10 @@ int main(int argc, char **argv)
     if (openonly) { puts("openonly: PASS"); return 0; }
     printf("mode: empty=%d contexts=%d stencil=%d\n", empty, single ? 1 : 4, test_stencil);
 
+    if (pins) {
+        provider_before = library_users("virgl.hidd");
+        printf("provider pins before: virgl.hidd=%u\n", provider_before);
+    }
     puts("probe: opening window");
     fflush(stdout);
     win = OpenWindowTags(NULL, WA_Title, (IPTR)"AROS renderer probe",
@@ -340,6 +433,12 @@ int main(int argc, char **argv)
         int flushed = fflush(stdout);
         printf("failed-context: result=%s flush=%d\n", expected ? "PASS" : "FAIL", flushed);
         CloseWindow(win);
+        if (pins) {
+            UWORD provider_after = library_users("virgl.hidd");
+            printf("provider pins after: virgl.hidd=%u before=%u\n", provider_after, provider_before);
+            expected = (provider_after == provider_before ||
+                        (provider_before == 0 && provider_after == 1)) && expected;
+        }
         return expected && flushed == 0 ? 0 : 10;
     }
     if (!ctx) { puts("FAIL: context"); CloseWindow(win); return 10; }
@@ -403,6 +502,10 @@ int main(int argc, char **argv)
         ok = simultaneous_context(&ctx, win, argv[1]) && ok;
         if (!ctx) { puts("FAIL: restore first context"); CloseWindow(win); return 10; }
     }
+    if (share) {
+        ok = shared_contexts(&ctx, win, argv[1]) && ok;
+        if (!ctx) { CloseWindow(win); return 10; }
+    }
     {
         GLenum err = glGetError();
         printf("GL_ERROR: %u\n", (unsigned)err);
@@ -436,6 +539,14 @@ cycles:
     if (ctx) glADestroyContext(ctx);
     puts("probe: closing window"); fflush(stdout);
     CloseWindow(win);
+    if (pins) {
+        /* The display pins virgl.hidd on first use, so a cold boot may go
+         * from 0 to 1; any other change is a leaked or lost provider pin. */
+        UWORD provider_after = library_users("virgl.hidd");
+        printf("provider pins after: virgl.hidd=%u before=%u\n", provider_after, provider_before);
+        ok = (provider_after == provider_before ||
+              (provider_before == 0 && provider_after == 1)) && ok;
+    }
     printf("%s\n", ok ? "PASS" : "FAIL");
     return ok ? 0 : 10;
 }
