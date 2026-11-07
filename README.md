@@ -53,6 +53,8 @@ wrapping or reusing identifiers; callers use the API from task context.
 
 - [Native metadata allocation](developer/debug/test/kernel/restricted_allocation_host/README.md): extracted allocation wrappers with injected failures and ownership rollback.
 
+- [Orphan cleanup admission](developer/debug/test/kernel/restricted_reap_hint_host/README.md): production retirement/pending predicates with retained leases and semantic negative controls; Native/SMP execution is separate.
+
 ## Licences
 
 AROS is a collection of components under different licences. Preserve each file's notices and consult [LEGAL](LEGAL), [LICENSE](LICENSE), [LICENSE.GPL](LICENSE.GPL), [LICENSE.LGPL](LICENSE.LGPL) and component-specific licence files. This fork does not relicense the upstream code.

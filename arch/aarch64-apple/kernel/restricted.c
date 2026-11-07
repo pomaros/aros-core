@@ -49,6 +49,7 @@
 #define R_RESUME 0xa56d
 #define R_DOMAIN_WORK 0xa56e
 #define R_COPY 0xa56f
+#define R_REAP_REFRESH 0xa570
 #define R_COOKIE UINT64_C(0x7265737472696374)
 enum RestrictedState { R_FREE, R_ALLOCATING, R_LIVE, R_REAPING };
 /* Address-space allocation lifetime is separate from an execution context.
@@ -205,8 +206,29 @@ static int r_domain_retire(struct RestrictedDomain *d,void *context)
     if (!AROSRestrictedSpaceClose(&d->space)) return 0;
     d->state=R_REAPING;d->releaser_context=context;return 1;
 }
+/* Native callers may skip cleanup only while no retired owner's records remain.
+ * Refresh under the coordinator; an unclaimable lease keeps the hint set. */
+static unsigned orphan_reap_pending;
+static int r_orphan_work_pending(void)
+{
+    for (struct Restricted *r=restricted_slots;r;r=r->next)
+        if (r->abandoned && (r->state==R_LIVE || r->state==R_REAPING)) return 1;
+    for (struct RestrictedDomain *d=restricted_domains;d;d=d->next)
+        if (!d->owner_context && d->managed &&
+            (d->state==R_LIVE || d->state==R_REAPING)) return 1;
+    for (struct RestrictedShared *b=restricted_shared;b;b=b->next)
+        if (!b->owner_context) return 1;
+    return 0;
+}
+static int r_refresh_reap_hint(void)
+{
+    int pending=r_orphan_work_pending();
+    __atomic_store_n(&orphan_reap_pending,(unsigned)pending,__ATOMIC_RELEASE);
+    return pending;
+}
 static uint64_t owners_retired, owners_reaped;
 static void r_reap(void);
+static void r_mark_retired_resources(void *retired);
 static void r_coordinate(void);
 static void r_uncoordinate(void);
 static struct Restricted *r_slot(uintptr_t address)
@@ -1352,29 +1374,15 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
     if (ec==0x15 && svc==0xa536) {
         void *retired=(void *)(uintptr_t)frame->x[0];
         frame->x[0]=AROSRestrictedServiceRetireWorker(retired);
-        for (struct RestrictedShared *b=restricted_shared;b;b=b->next)
-            if (b->owner_context==retired && !b->releaser_context) {
-                b->owner_context=NULL;b->backing.closing=1;
-            }
-        for (struct RestrictedDomain *d=restricted_domains;d;d=d->next) {
-            if (d->managed && d->state==R_LIVE && d->owner_context==retired) {
-                d->owner_context=NULL;d->closing=1;AROSRestrictedSpaceStop(&d->space);
-                r_cancel_waiters(d);
-            }
-        }
-        for (struct Restricted *owned=restricted_slots;owned;owned=owned->next) {
-            if (owned->state!=R_LIVE || owned->owner_context!=retired) continue;
-            r_clear_wait(owned);owned->suspend_count=0;
-            owned->owner_context=NULL;owned->abandoned=1;++owners_retired;
-            /* Never dereference the removed Task after this hook. Service
-             * principal/member identities are opaque until their drain. */
-            owned->owner=NULL;
-            r_close(owned);
-        }
+        r_mark_retired_resources(retired);
         return 1;
     }
     if (ec==0x15 && svc==0xa537) {
         frame->x[0]=(uintptr_t)r_claim_reap(context);
+        return 1;
+    }
+    if (ec==0x15 && svc==R_REAP_REFRESH) {
+        frame->x[0]=(uintptr_t)r_refresh_reap_hint();
         return 1;
     }
     if (ec==0x15 && (svc==R_WAKE || svc==R_THREAD_STATE || svc==R_SUSPEND || svc==R_RESUME)) {
@@ -1512,6 +1520,30 @@ int AROSAppleRestrictedProtectAliases(uintptr_t address,uint64_t tcr,unsigned pe
     int ok=AROSAppleRestrictedProtectAliasesLocked(address,tcr,permissions);
     r_uncoordinate();return ok;
 }
+static void r_mark_retired_resources(void *retired)
+{
+    if (!retired) return;
+    unsigned orphaned=0;
+    for (struct RestrictedShared *b=restricted_shared;b;b=b->next)
+        if (b->owner_context==retired && !b->releaser_context) {
+            b->owner_context=NULL;b->backing.closing=1;orphaned=1;
+        }
+    for (struct RestrictedDomain *d=restricted_domains;d;d=d->next)
+        if (d->managed && d->state==R_LIVE && d->owner_context==retired) {
+            d->owner_context=NULL;d->closing=1;AROSRestrictedSpaceStop(&d->space);
+            r_cancel_waiters(d);orphaned=1;
+        }
+    for (struct Restricted *r=restricted_slots;r;r=r->next) {
+        if (r->state!=R_LIVE || r->owner_context!=retired) continue;
+        r_clear_wait(r);r->suspend_count=0;
+        r->owner_context=NULL;r->abandoned=1;++owners_retired;orphaned=1;
+        /* Never dereference the removed Task after this hook. Service
+         * principal/member identities are opaque until their drain. */
+        r->owner=NULL;
+        r_close(r);
+    }
+    if (orphaned) __atomic_store_n(&orphan_reap_pending,1,__ATOMIC_RELEASE);
+}
 int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
 {
     if (!frame || frame->vector!=8 || (frame->spsr&31)) return 0;
@@ -1621,6 +1653,7 @@ static void r_unmap_view(struct RestrictedSharedOperation *ended)
 }
 static void r_reap(void)
 {
+    if (!__atomic_load_n(&orphan_reap_pending,__ATOMIC_ACQUIRE)) return;
     Forbid();
     for (;;) {
         register uintptr_t ready __asm__("x0")=0;
@@ -1645,6 +1678,11 @@ static void r_reap(void)
         if (!r_shared_call(&op)) break;
         r_release_shared(op.record);
     }
+    /* A resource may still be pinned, or another CPU may be releasing it.
+     * Only a coordinated scan of all retired records can clear the hint. */
+    register uintptr_t pending __asm__("x0")=0;
+    __asm__ volatile("svc #0xa570":"+r"(pending)::"memory","cc");
+    (void)pending;
     Permit();
 }
 static void r_lifetime(struct AROSRestrictedLifetime *state)
