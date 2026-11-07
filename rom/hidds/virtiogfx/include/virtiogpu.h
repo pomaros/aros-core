@@ -30,6 +30,11 @@ enum {
 };
 struct pHidd_VirtioGPU_Acquire { STACKED OOP_MethodID mID; STACKED ULONG version; };
 struct pHidd_VirtioGPU_Release { STACKED OOP_MethodID mID; };
+/* IDs and complete contiguous backing allocations belong to this service
+ * object. Command rejects peer/unallocated IDs and unregistered bus ranges.
+ * Free is refused while backing is attached or completion is uncertain.
+ * Release of an abandoned device-visible object quarantines it; it never
+ * resets the display's device. Callers retain a reference across each call. */
 struct pHidd_VirtioGPU_Command {
     STACKED OOP_MethodID mID;
     STACKED const void *request;

@@ -24,6 +24,7 @@ VOID VirtioGPUService__Root__Dispose(OOP_Class *cl,OOP_Object *o,struct pRoot_Di
 {
     struct VirtioGPUServiceData *d=OOP_INST_DATA(cl,o);
     struct Library *module=d->module;
+    VirtioGPUForgetOwner(d->gpu,o);
     VirtioGPURelease(d->gpu);
     OOP_DoSuperMethod(cl,o,(OOP_Msg)msg);
     if(module)CloseLibrary(module);
@@ -45,12 +46,12 @@ IPTR VirtioGPUService__Hidd_VirtioGPU__Release(OOP_Class *cl,OOP_Object *o,struc
 IPTR VirtioGPUService__Hidd_VirtioGPU__Command(OOP_Class *cl,OOP_Object *o,struct pHidd_VirtioGPU_Command *msg)
 {
     struct VirtioGPUServiceData *d=OOP_INST_DATA(cl,o);
-    return VirtioGPUCommand(d->gpu,msg->request,msg->bytes,msg->response,msg->response_bytes,msg->response_type);
+    return VirtioGPUCommand(d->gpu,o,msg->request,msg->bytes,msg->response,msg->response_bytes,msg->response_type);
 }
 IPTR VirtioGPUService__Hidd_VirtioGPU__AllocateID(OOP_Class *cl,OOP_Object *o,struct pHidd_VirtioGPU_AllocateID *msg)
 {
     struct VirtioGPUServiceData *d=OOP_INST_DATA(cl,o);
-    return VirtioGPUAllocateID(d->gpu,msg->context);
+    return VirtioGPUAllocateID(d->gpu,o,msg->context);
 }
 IPTR VirtioGPUService__Hidd_VirtioGPU__Healthy(OOP_Class *cl,OOP_Object *o,struct pHidd_VirtioGPU_Healthy *msg)
 {

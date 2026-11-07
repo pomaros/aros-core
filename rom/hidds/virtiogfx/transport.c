@@ -2,7 +2,7 @@
     Copyright (C) 2026 John KNIPPER <code@jkn.me>
     Licensed under the AROS Public License (APL) Version 1.1.
 
-    Virtio GPU 2D transport. Reuses the maintained PCI/DMA/reset primitives.
+    Single-owner Virtio GPU transport. Reuses the maintained PCI/DMA/reset primitives.
     Derived from the project's MIT GPU qualification code by John Knipper.
 */
 #define __OOP_NOLIBBASE__
@@ -32,11 +32,22 @@ struct GPUAllocation {
     struct GPUAllocation *next;
     APTR owner,pointer;
     UQUAD bus;
-    ULONG bytes,dma_bytes,flags;
+    ULONG bytes,dma_bytes,flags,host_refs;
     BOOL dma_active;
+};
+struct GPUObject {
+    struct GPUObject *next;
+    APTR owner;
+    ULONG id;
+    BOOL context,live,uncertain;
+    struct GPUAllocation *backing;
+    ULONG backing_bytes,target,width,height,depth,array_size,last_level;
 };
 struct VirtioGPU {
     struct GPUAllocation *allocations;
+    struct GPUObject *objects,*owned_pending;
+    ULONG owned_pending_type;
+    struct { ULONG id,version,bytes; BOOL valid; } caps[16];
     struct VirtIOBase base;
     __typeof__(*(device_t)0) device;
     struct SignalSemaphore lock;
@@ -121,6 +132,41 @@ struct GPUHeader { uint32_t type,flags;uint64_t fence;uint32_t context;uint8_t r
 struct GPUDisplay { struct GPUHeader header;struct { uint32_t x,y,width,height,enabled,flags; } mode[16]; };
 _Static_assert(sizeof(struct GPUHeader)==24,"GPU header wire size");
 _Static_assert(sizeof(struct GPUDisplay)==408,"GPU display response wire size");
+static void gpu_remove_object(struct VirtioGPU *gpu,struct GPUObject *object)
+{
+    struct GPUObject **link=&gpu->objects;
+    while(*link && *link!=object)link=&(*link)->next;
+    if(*link){*link=object->next;FreeMem(object,sizeof(*object));}
+}
+/* Apply the same ownership transition for an immediate or a late reply.
+ * An invalid completion retains the provisional references in quarantine. */
+static void gpu_owned_complete(struct VirtioGPU *gpu,int success)
+{
+    struct GPUObject *o=gpu->owned_pending;
+    ULONG type=gpu->owned_pending_type;
+    if(!o || success<0)return;
+    gpu->owned_pending=NULL;gpu->owned_pending_type=0;o->uncertain=FALSE;
+    if(!success){
+        if(type==0x106 && o->backing){
+            o->backing->host_refs--;o->backing=NULL;o->backing_bytes=0;
+        }
+        return;
+    }
+    switch(type){
+        case 0x200:o->live=TRUE;gpu->contexts++;break;
+        case 0x204:o->live=TRUE;gpu->resources++;break;
+        case 0x201:
+            if(o->live)gpu->contexts--;
+            gpu_remove_object(gpu,o);break;
+        case 0x102:
+            if(o->backing)o->backing->host_refs--;
+            if(o->live)gpu->resources--;
+            gpu_remove_object(gpu,o);break;
+        case 0x107:
+            if(o->backing)o->backing->host_refs--;
+            o->backing=NULL;o->backing_bytes=0;break;
+    }
+}
 /* An interrupt is a wakeup hint, not ownership of a particular descriptor.
  * Observe the device's publication before reading its response. DMA memory on
  * the supported transport is coherent; this barrier orders those reads. */
@@ -142,13 +188,13 @@ static int gpu_reap(struct VirtioGPU *gpu)
             (unsigned)used,(unsigned long)id,(unsigned long)len,(unsigned long)gpu->pending_bytes,
             (unsigned long)type,(unsigned long)gpu->pending_type,(unsigned long)flags,
             (unsigned long)fence,(unsigned long)gpu->fence);
-        gpu->failed=TRUE;return -1;
+        gpu->failed=TRUE;gpu_owned_complete(gpu,-1);return -1;
     }
     /* A complete fenced protocol rejection is an operation failure, not
      * evidence that the queue or the desktop's scanout has been lost. */
-    if(type>=0x1200 && type<=0x1205)return -2;
-    if(len!=gpu->pending_bytes || type!=gpu->pending_type){gpu->failed=TRUE;return -1;}
-    return 1;
+    if(type>=0x1200 && type<=0x1205){gpu_owned_complete(gpu,0);return -2;}
+    if(len!=gpu->pending_bytes || type!=gpu->pending_type){gpu->failed=TRUE;gpu_owned_complete(gpu,-1);return -1;}
+    gpu_owned_complete(gpu,1);return 1;
 }
 static int gpu_command(struct VirtioGPU *gpu,unsigned request_bytes,
                        unsigned response_bytes,uint32_t response_type)
@@ -291,12 +337,12 @@ done:
 BOOL VirtioGPUFree(struct VirtioGPU *gpu,APTR owner,APTR pointer)
 {
     BOOL okay=FALSE;
-    if(!gpu)return FALSE;
+    if(!gpu || !owner || !pointer)return FALSE;
     struct VirtIOBase *VirtIOBase=&gpu->base;
     ObtainSemaphore(&gpu->lock);
     struct GPUAllocation **link=&gpu->allocations;
     while(*link && ((*link)->owner!=owner || (*link)->pointer!=pointer))link=&(*link)->next;
-    if(*link && !gpu->failed && !gpu->pending && !(*link)->dma_active){
+    if(*link && !gpu->failed && !gpu->pending && !(*link)->dma_active && !(*link)->host_refs){
         struct GPUAllocation *a=*link;*link=a->next;
         HIDD_PCIDriver_FreePCIMem(gpu->device.dev_PCIDriverObject,a->pointer);
         FreeMem(a,sizeof(*a));okay=TRUE;
@@ -305,7 +351,7 @@ BOOL VirtioGPUFree(struct VirtioGPU *gpu,APTR owner,APTR pointer)
 }
 BOOL VirtioGPUAddress(struct VirtioGPU *gpu,APTR owner,APTR pointer,UQUAD *address)
 {
-    BOOL okay=FALSE;if(!gpu || !address)return FALSE;
+    BOOL okay=FALSE;if(!gpu || !owner || !pointer || !address)return FALSE;
     ObtainSemaphore(&gpu->lock);
     struct GPUAllocation *a=gpu_allocation(gpu,owner,pointer);
     if(a && !gpu->failed){*address=a->bus;okay=TRUE;}
@@ -313,7 +359,7 @@ BOOL VirtioGPUAddress(struct VirtioGPU *gpu,APTR owner,APTR pointer,UQUAD *addre
 }
 BOOL VirtioGPUBackingBegin(struct VirtioGPU *gpu,APTR owner,APTR pointer,ULONG flags)
 {
-    BOOL okay=FALSE;if(!gpu)return FALSE;
+    BOOL okay=FALSE;if(!gpu || !owner || !pointer || (flags&~DMA_ReadFromRAM))return FALSE;
     ObtainSemaphore(&gpu->lock);
     struct GPUAllocation *a=gpu_allocation(gpu,owner,pointer);
     if(a && !gpu->failed && !gpu->pending && !a->dma_active){
@@ -328,7 +374,7 @@ BOOL VirtioGPUBackingBegin(struct VirtioGPU *gpu,APTR owner,APTR pointer,ULONG f
 }
 void VirtioGPUBackingEnd(struct VirtioGPU *gpu,APTR owner,APTR pointer)
 {
-    if(!gpu)return;
+    if(!gpu || !owner || !pointer)return;
     ObtainSemaphore(&gpu->lock);
     struct GPUAllocation *a=gpu_allocation(gpu,owner,pointer);
     /* Uncertain completion retains both registration and backing. */
@@ -351,57 +397,180 @@ void VirtioGPURelease(struct VirtioGPU *gpu)
         (unsigned long)gpu->pending,(unsigned long)gpu->failed);
     ReleaseSemaphore(&gpu->lock);
 }
-ULONG VirtioGPUAllocateID(struct VirtioGPU *gpu,BOOL context)
+static struct GPUObject *gpu_object(struct VirtioGPU *gpu,APTR owner,ULONG id,BOOL context)
+{
+    for(struct GPUObject *o=gpu->objects;o;o=o->next)
+        if(o->owner==owner && o->id==id && o->context==context)return o;
+    return NULL;
+}
+ULONG VirtioGPUAllocateID(struct VirtioGPU *gpu,APTR owner,BOOL context)
 {
     ULONG result=0;
-    if(!gpu)return 0;
+    if(!gpu || !owner)return 0;
+    context=!!context;
     ObtainSemaphore(&gpu->lock);
     ULONG *next=context?&gpu->next_context:&gpu->next_resource;
-    if(gpu->ready && !gpu->failed && *next!=~(ULONG)0)result=++*next;
+    if(gpu->ready && !gpu->failed && !gpu->pending && *next!=~(ULONG)0){
+        struct GPUObject *o=AllocMem(sizeof(*o),MEMF_PUBLIC|MEMF_CLEAR);
+        if(o){
+            result=++*next;o->id=result;o->owner=owner;o->context=context;
+            o->next=gpu->objects;gpu->objects=o;
+        }
+    }
     ReleaseSemaphore(&gpu->lock);return result;
 }
-/* Internal owner entry point. The cross-module OOP adapter must validate
- * client ownership before reaching this serialized queue operation. */
-BOOL VirtioGPUCommand(struct VirtioGPU *gpu,const void *request,ULONG bytes,
+/* Object addresses may be reused by OOP. Orphans lose the old identity and
+ * retain any device-visible state until physical stop; peers cannot adopt it. */
+void VirtioGPUForgetOwner(struct VirtioGPU *gpu,APTR owner)
+{
+    if(!gpu || !owner)return;
+    struct VirtIOBase *VirtIOBase=&gpu->base;
+    ObtainSemaphore(&gpu->lock);
+    struct GPUObject *o=gpu->objects;
+    while(o){
+        struct GPUObject *next=o->next;
+        if(o->owner==owner){
+            if(o->live || o->uncertain)o->owner=NULL;
+            else gpu_remove_object(gpu,o);
+        }
+        o=next;
+    }
+    struct GPUAllocation **link=&gpu->allocations;
+    while(*link){
+        struct GPUAllocation *a=*link;
+        if(a->owner!=owner){link=&a->next;continue;}
+        if(!a->host_refs && !a->dma_active && !gpu->pending && !gpu->failed){
+            *link=a->next;HIDD_PCIDriver_FreePCIMem(gpu->device.dev_PCIDriverObject,a->pointer);
+            FreeMem(a,sizeof(*a));
+        }else {a->owner=NULL;link=&a->next;}
+    }
+    ReleaseSemaphore(&gpu->lock);
+}
+static ULONG gpu_u32(const void *message,ULONG offset)
+{ ULONG value;CopyMem((const UBYTE*)message+offset,&value,sizeof(value));return value; }
+static UQUAD gpu_u64(const void *message,ULONG offset)
+{ UQUAD value;CopyMem((const UBYTE*)message+offset,&value,sizeof(value));return value; }
+/* The service validates the VirtIO envelope and owned DMA extents. VirGL
+ * retains format/block-layout and command-stream interpretation on the host. */
+BOOL VirtioGPUCommand(struct VirtioGPU *gpu,APTR owner,const void *request,ULONG bytes,
                      void *response,ULONG response_bytes,ULONG response_type)
 {
-    BOOL okay=FALSE;
-    if(!gpu || !request || !response || bytes<sizeof(struct GPUHeader) ||
+    BOOL okay=FALSE;ULONG type=0,expected=0x1100,info_index=0;
+    struct GPUObject *object=NULL,*context=NULL;
+    struct GPUAllocation *backing=NULL;
+    if(!gpu || !owner || !request || !response || bytes<sizeof(struct GPUHeader) ||
        bytes>GPU_REQUEST_BYTES || response_bytes<sizeof(struct GPUHeader) ||
        response_bytes>GPU_RESPONSE_BYTES)return FALSE;
-    uint32_t type;
-    CopyMem(request,&type,sizeof(type));
-    /* The protocol client may not replace the owner's scanout or publish
-     * 2D resources. Presentation remains the display owner's operation. */
-    switch(type){
-        case 0x100:case 0x108:case 0x109:
-        case 0x102:case 0x106:case 0x107:
-        case 0x200:case 0x201:case 0x202:case 0x203:
-        case 0x204:case 0x205:case 0x206:case 0x207:break;
-        default:return FALSE;
-    }
-    if(type==0x102 || type==0x106 || type==0x107 ||
-       type==0x202 || type==0x203 || type==0x204){
-        uint32_t resource;
-        if(bytes<28)return FALSE;
-        CopyMem((const UBYTE*)request+24,&resource,sizeof(resource));
-        if(resource<2)return FALSE;
-    }
     ObtainSemaphore(&gpu->lock);
     if(!gpu->ready || gpu->failed)goto done;
-    if(gpu->pending){
-        /* A late reply belongs to its original caller. Reap before reuse,
-         * but never return its bytes as this operation's result. */
-        if(gpu_reap(gpu)<=0)goto done;
-    }
+    if(gpu->pending && gpu_reap(gpu)<=0)goto done;
+    /* Copy once before inspecting fields, so caller mutation cannot change
+     * an already authorized request before it is published. */
     CopyMem(request,gpu->message,bytes);
+    const UBYTE *m=gpu->message;
+    const struct GPUHeader *header=(const void*)m;
+    type=header->type;
+    if(header->flags || header->ring)goto done;
+    switch(type){
+        case 0x100:
+            if(bytes!=24 || header->context || response_bytes!=408)goto done;
+            expected=0x1101;break;
+        case 0x108:
+            if(bytes!=32 || header->context || response_bytes!=40 || gpu_u32(m,28))goto done;
+            info_index=gpu_u32(m,24);if(info_index>=16)goto done;
+            expected=0x1102;break;
+        case 0x109:{
+            if(bytes!=32 || header->context)goto done;
+            BOOL found=FALSE;
+            for(unsigned i=0;i<16;i++)if(gpu->caps[i].valid &&
+                gpu->caps[i].id==gpu_u32(m,24) && gpu_u32(m,28)==gpu->caps[i].version &&
+                response_bytes==24+gpu->caps[i].bytes)found=TRUE;
+            if(!found)goto done;
+            expected=0x1103;break;
+        }
+        case 0x200:case 0x201:
+            object=gpu_object(gpu,owner,header->context,TRUE);
+            if(!object || object->uncertain)goto done;
+            if(type==0x200){
+                if(bytes!=96 || object->live || gpu_u32(m,24)>64 || gpu_u32(m,28))goto done;
+            }else if(bytes!=24 || !object->live)goto done;
+            break;
+        case 0x204:
+            if(bytes!=72 || header->context)goto done;
+            object=gpu_object(gpu,owner,gpu_u32(m,24),FALSE);
+            if(!object || object->live || object->uncertain || gpu_u32(m,28)>8 ||
+               !gpu_u32(m,40) || !gpu_u32(m,44) || !gpu_u32(m,48) ||
+               !gpu_u32(m,52) || gpu_u32(m,56)>=32)goto done;
+            break;
+        case 0x102:case 0x106:case 0x107:case 0x202:case 0x203:
+            if(bytes<32)goto done;
+            object=gpu_object(gpu,owner,gpu_u32(m,24),FALSE);
+            if(!object || !object->live || object->uncertain)goto done;
+            if(type==0x202 || type==0x203){
+                context=gpu_object(gpu,owner,header->context,TRUE);
+                if(bytes!=32 || !context || !context->live || context->uncertain)goto done;
+            }else if(header->context)goto done;
+            if(type==0x106){
+                /* This client currently uses one whole PCI allocation per
+                 * resource. Arbitrary/foreign bus addresses are never sent. */
+                if(bytes!=48 || gpu_u32(m,28)!=1 || object->backing)goto done;
+                for(backing=gpu->allocations;backing;backing=backing->next)
+                    if(backing->owner==owner && backing->bus==gpu_u64(m,32) &&
+                       backing->bytes==gpu_u32(m,40))break;
+                if(!backing || backing->host_refs==~(ULONG)0)goto done;
+            }else if(bytes!=32)goto done;
+            if(type==0x107 && !object->backing)goto done;
+            break;
+        case 0x205:case 0x206:{
+            if(bytes!=72)goto done;
+            context=gpu_object(gpu,owner,header->context,TRUE);
+            object=gpu_object(gpu,owner,gpu_u32(m,56),FALSE);
+            if(!context || !context->live || context->uncertain || !object ||
+               !object->live || object->uncertain || !object->backing ||
+               !object->backing->dma_active)goto done;
+            ULONG level=gpu_u32(m,60);if(level>object->last_level)goto done;
+            ULONG dims[3]={object->width>>level,object->height>>level,object->depth>>level};
+            for(unsigned i=0;i<3;i++)if(!dims[i])dims[i]=1;
+            if(dims[2]<object->array_size)dims[2]=object->array_size;
+            for(unsigned i=0;i<3;i++){
+                ULONG start=gpu_u32(m,24+i*4),extent=gpu_u32(m,36+i*4);
+                if(!extent || start>=dims[i] || extent>dims[i]-start)goto done;
+            }
+            UQUAD offset=gpu_u64(m,48);
+            if(offset>=object->backing_bytes ||
+               (gpu_u32(m,40)>1 && gpu_u32(m,64)>object->backing_bytes-offset) ||
+               (gpu_u32(m,44)>1 && gpu_u32(m,68)>object->backing_bytes-offset))goto done;
+            if(!object->target && gpu_u32(m,36)>object->backing_bytes-offset)goto done;
+            break;
+        }
+        case 0x207:
+            if(bytes<32 || (gpu_u32(m,24)&3) || gpu_u32(m,24)!=bytes-32)goto done;
+            context=gpu_object(gpu,owner,header->context,TRUE);
+            if(!context || !context->live || context->uncertain)goto done;
+            break;
+        default:goto done;
+    }
+    if(response_type!=expected || (expected==0x1100 && response_bytes!=24))goto done;
+    if(type==0x200 || type==0x201 || type==0x204 || type==0x102 || type==0x106 || type==0x107){
+        gpu->owned_pending=object;gpu->owned_pending_type=type;object->uncertain=TRUE;
+        if(type==0x204){
+            object->target=gpu_u32(m,28);object->width=gpu_u32(m,40);object->height=gpu_u32(m,44);
+            object->depth=gpu_u32(m,48);object->array_size=gpu_u32(m,52);object->last_level=gpu_u32(m,56);
+        }
+        if(type==0x106){object->backing=backing;object->backing_bytes=backing->bytes;backing->host_refs++;}
+    }
     okay=gpu_command(gpu,bytes,response_bytes,response_type);
+    /* Allocation of the signal/timer may fail before publication. */
+    if(!okay && !gpu->pending && !gpu->failed && gpu->owned_pending)gpu_owned_complete(gpu,0);
     if(okay){
-        if(type==0x200)gpu->contexts++;
-        if(type==0x201 && gpu->contexts)gpu->contexts--;
-        if(type==0x204)gpu->resources++;
-        if(type==0x102 && gpu->resources)gpu->resources--;
-        CopyMem((UBYTE*)gpu->message+GPU_REQUEST_BYTES,response,response_bytes);
+        const UBYTE *reply=(UBYTE*)gpu->message+GPU_REQUEST_BYTES;
+        if(type==0x108){
+            ULONG size=gpu_u32(reply,32);
+            gpu->caps[info_index].valid=size && size<=GPU_RESPONSE_BYTES-24;
+            gpu->caps[info_index].id=gpu_u32(reply,24);gpu->caps[info_index].version=gpu_u32(reply,28);
+            gpu->caps[info_index].bytes=size;
+        }
+        CopyMem(reply,response,response_bytes);
     }
 done:
     ReleaseSemaphore(&gpu->lock);return okay;
@@ -425,6 +594,7 @@ ULONG VirtioGPUClose(struct VirtioGPU *gpu)
             HIDD_PCIDriver_FreePCIMem(dev->dev_PCIDriverObject,a->pointer);
             FreeMem(a,sizeof(*a));
         }
+        while(gpu->objects)gpu_remove_object(gpu,gpu->objects);
         if(gpu->interrupt_installed) {
             HIDD_PCIDriver_RemoveInterrupt(dev->dev_PCIDriverObject,dev->dev_Object,&gpu->interrupt);
             gpu->interrupt_installed=FALSE;
