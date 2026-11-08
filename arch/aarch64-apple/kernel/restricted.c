@@ -1218,13 +1218,18 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
             if (ec==0x18 && r_emulate_id_read(frame)) return 1;
             /* Owned resident or reserved data pages can enter a repair handler.
              * Missing tables/pages produce translation faults; RO writes permission faults.
-             * No instruction, external, alignment or unowned-address exception
-             * supplies a continuation. Bind it to the retained page generation. */
-            if (ec==0x24 && ((fault>=4 && fault<=7) || (fault>=12 && fault<=15)) && !(frame->esr&(UINT64_C(1)<<10)) &&
+             * An inherited privileged Device identity mapping can report an
+             * alignment abort before its EL0 permission abort. Permit repair
+             * only when the owned reservation has no resident backing; after
+             * commitment, real alignment faults still reach the exception
+             * handler. No external or unowned-address abort is repairable.
+             * Bind the continuation to the retained page generation. */
+            if (ec==0x24 && ((fault>=4 && fault<=7) || (fault>=12 && fault<=15) || fault==0x21) && !(frame->esr&(UINT64_C(1)<<10)) &&
                 r_capture_code(r,frame->elr,&r->fault_code) && r_stack_sp(r,frame->sp) &&
                 r->fault_handler && r_match_code(r,&r->handler_code) &&
                 !r->fault_active && !r->exception_active && r->fault_generation!=UINT64_MAX &&
-                AROSRestrictedSpaceFaultIdentity(&r->domain->space,frame->far,&physical,&generation,&reservation)) {
+                AROSRestrictedSpaceFaultIdentity(&r->domain->space,frame->far,&physical,&generation,&reservation) &&
+                (fault!=0x21 || !physical)) {
                 r->fault_physical=physical;r->fault_page_generation=generation;r->fault_reservation=reservation;
                 r->fault=*frame;r->fault_active=1;++r->fault_generation;
                 frame->elr=r->fault_handler;frame->x[0]=r->fault.far;
