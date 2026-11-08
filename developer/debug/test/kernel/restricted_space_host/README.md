@@ -47,6 +47,14 @@ ownership transfer, closing-object admission and untracked physical aliases
 (seventeen adapter controls total). Two synthetic roots share one PA with
 independent permissions; held service output is cancelled without late writes.
 
+Single-page read-only shared views can become private writable pages while
+retaining their reservation identity. The COW checks compare every copied byte,
+verify a distinct physical page and advanced generation, retain the original
+object, close it independently, and release the private backing normally.
+Writable source views, reused physical backing and repeated privatization are
+refused. Semantic controls remove the copy, admit a writable source or omit
+view-count retirement; each must fail its corresponding assertion.
+
 Private and shared backing use one physical-page index; borrowed views retain
 their object's entry. Registering shared pages rolls back provisional entries on
 foreign aliases, internal duplicates and malformed pages. A refused close keeps

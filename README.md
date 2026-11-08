@@ -73,3 +73,10 @@ extracts the production SVC entry filter and owner checks, with semantic negativ
 controls. The [space/channel gate](developer/debug/test/kernel/restricted_space_host/run.py)
 checks selection between live spaces with identical virtual buffer addresses.
 HOST evidence does not qualify a compiled kernel or Native execution.
+
+Restricted API37 adds controller-owned privatization of a single-page read-only
+shared view. It copies the backing into an independently owned writable page,
+keeps the virtual reservation, and renews only pending write-fault tickets that
+match the replaced identity. Shared peers retain the original object. The
+space/channel and context-restore HOST diagnostics cover the backing transaction
+and ticket selection; Native execution has a separate acceptance scope.

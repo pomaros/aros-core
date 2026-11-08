@@ -243,5 +243,12 @@ struct AROSRestrictedAPI {
     /* Version 36: protect_memory for consecutive pages under one rendezvous;
      * returns the number of pages changed (stops at the first refusal). */
     size_t (*protect_range)(uint64_t domain,uintptr_t address,size_t pages,unsigned protection);
+    /* Version 37: turn a committed read-only, single-page shared reservation
+     * into private read-write backing containing the same bytes. Keeps the
+     * reservation identity. Only the owning controller can call this; pending
+     * write-fault tickets matching the old page identity are renewed exactly
+     * once to the replacement identity. Other stale identities stay invalid.
+     * Returns 1 on success, 0 on refusal. */
+    int (*privatize_memory)(uint64_t domain,uintptr_t address);
 };
 #endif

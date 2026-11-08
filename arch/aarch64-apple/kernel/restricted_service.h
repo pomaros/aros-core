@@ -119,6 +119,7 @@ int AROSRestrictedRegionAttachShared(struct AROSRestrictedRegion *,struct AROSRe
 /* API 36: attach object pages [first, first + region pages) */
 int AROSRestrictedRegionAttachSharedAt(struct AROSRestrictedRegion *,struct AROSRestrictedSharedBacking *,size_t first);
 int AROSRestrictedRegionCommitShared(struct AROSRestrictedRegion *,size_t,unsigned);
+int AROSRestrictedRegionPrivatize(struct AROSRestrictedRegion *,uintptr_t);
 /* Native owned-page adapter. The caller supplies zeroed record/backing arrays,
  * then freshly allocated and zero-filled pages; no guest PA is accepted.
  * Reservation/commit/decommit/protection are coordinator-only and nonblocking.

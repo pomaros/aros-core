@@ -17,3 +17,9 @@ payload separately snapshots every restored architectural register and checks
 all 100 words against the source record under QEMU, with a wrong-size refusal
 and a drained lifetime assertion. That test must actually pass before runtime
 qualification is claimed.
+
+The production COW ticket-renewal helper renews only active write faults in the
+same domain, page, reservation, physical backing and generation. Checks retain
+stale generations, changed backing, foreign domains, read faults, other pages
+and inactive tickets unchanged, including a repeated renewal attempt. Actual
+fault resumption requires the separate Native memory diagnostic.

@@ -609,6 +609,59 @@ static void region_tests(uint64_t va)
     for (unsigned i=0;i<5;++i) free(pages[i]);
     for (unsigned i=0;i<2;++i) { free(data[i]);free(f[i]); }
 }
+static int cow_fail_once;
+static int (*cow_install)(void *,uintptr_t,uintptr_t,unsigned);
+static int cow_install_once(void *context,uintptr_t va,uintptr_t pa,unsigned access)
+{
+    if (cow_fail_once) { cow_fail_once=0;return 0; }
+    return cow_install(context,va,pa,access);
+}
+static void private_shared_page_tests(void)
+{
+    struct Fixture *f=aligned_alloc(PAGE,sizeof(*f));
+    unsigned char *data=aligned_alloc(PAGE,PAGE),*original=aligned_alloc(PAGE,PAGE),*copy=aligned_alloc(PAGE,PAGE);
+    CHECK(f && data && original && copy,"cow-allocation");
+    memset(f,0,sizeof(*f));memset(data,0,PAGE);memset(original,0x41,PAGE);memset(copy,0,PAGE);f->used=1;
+    struct AROSRestrictedSpace space={0};struct AROSRestrictedRegion view={0};
+    struct KrnMappingPage metadata;uintptr_t ledger=0,backing=(uintptr_t)original;
+    struct AROSRestrictedSharedBacking object={0};
+    uint64_t tcr=25|(UINT64_C(5)<<32),va=AROS_RESTRICTED_DYNAMIC_BASE;
+    struct AArch64ProtectionOps ops={f,resolve,allocate,clean,invalidate,sync_code,NULL};
+    CHECK(AROSRestrictedSpaceInit(&space,151,(uintptr_t)f->tables[0],tcr,(uintptr_t)data,&ops),"cow-space");
+    CHECK(AROSRestrictedSharedInitialize(&object,&backing,1),"cow-object");
+    CHECK(reserve_region(&space,&view,va,PAGE,&metadata,&ledger,1),"cow-reserve");
+    CHECK(AROSRestrictedRegionAttachShared(&view,&object) && AROSRestrictedRegionCommitShared(&view,0,3),"cow-attach");
+    CHECK(!AROSRestrictedRegionPrivatize(&view,(uintptr_t)copy),"cow-writable-refused");
+    CHECK(AROSRestrictedRegionProtect(&view,0,1),"cow-protect");
+    CHECK(!AROSRestrictedRegionPrivatize(&view,(uintptr_t)original),"cow-alias-refused");
+    view.mapping.in_flight=1;
+    CHECK(!AROSRestrictedRegionPrivatize(&view,(uintptr_t)copy),"cow-pinned-refused");
+    view.mapping.in_flight=0;
+    int (*remove)(void *,uintptr_t,uintptr_t)=space.mapops.remove;
+    space.mapops.remove=deny_remove;
+    CHECK(!AROSRestrictedRegionPrivatize(&view,(uintptr_t)copy) && view.shared==&object && ledger==(uintptr_t)original,"cow-remove-rollback");
+    space.mapops.remove=remove;
+    cow_install=space.mapops.install;space.mapops.install=cow_install_once;cow_fail_once=1;
+    CHECK(!AROSRestrictedRegionPrivatize(&view,(uintptr_t)copy) && view.shared==&object && ledger==(uintptr_t)original,"cow-install-rollback");
+    space.mapops.install=cow_install;
+    uintptr_t physical;uint64_t generation,reservation;
+    CHECK(AROSRestrictedSpacePageIdentity(&space,va,1,&physical,&generation,&reservation),"cow-before-identity");
+    CHECK(physical==(uintptr_t)original,"cow-before-backing");
+    CHECK(AROSRestrictedRegionPrivatize(&view,(uintptr_t)copy),"cow-privatize");
+    uintptr_t after;uint64_t after_generation,after_reservation;
+    CHECK(AROSRestrictedSpacePageIdentity(&space,va,2,&after,&after_generation,&after_reservation),"cow-after-identity");
+    CHECK(after==(uintptr_t)copy && after_generation==generation+2 && after_reservation==reservation,"cow-identity-transition");
+    CHECK(!view.shared && !object.views && !object.regions && ledger==(uintptr_t)copy,"cow-ledger");
+    CHECK(!memcmp(copy,original,PAGE),"cow-bytes");copy[0]=0x62;
+    CHECK(original[0]==0x41 && copy[0]==0x62,"cow-isolation");
+    CHECK(AROSRestrictedSharedClose(&object),"cow-original-close");
+    CHECK(!AROSRestrictedRegionPrivatize(&view,(uintptr_t)original),"cow-repeat-refused");
+    uintptr_t released=0;
+    CHECK(AROSRestrictedRegionDecommit(&view,0,&released) && released==(uintptr_t)copy,"cow-private-release");
+    CHECK(AROSRestrictedRegionDetach(&view) && AROSRestrictedSpaceClose(&space),"cow-cleanup");
+    free(copy);free(original);free(data);free(f);
+}
+
 static void shared_tests(void)
 {
     struct Fixture *f[2];unsigned char *data[2],*page=aligned_alloc(PAGE,PAGE);
@@ -789,5 +842,5 @@ int main(void)
     CHECK(AROSRestrictedSpaceInit(&space,11,root,tcr,(uintptr_t)data,&ops),"space-reuse");
     CHECK(space.handle!=first_handle,"space-generation");
     CHECK(AROSRestrictedSpaceClose(&space),"reused-space-close");
-    free(data);free(f);region_tests(AROS_RESTRICTED_DYNAMIC_BASE);region_tests(UINT64_C(0x7ffe0000));shared_tests();shared_copy_tests();channel_growth();publication_tests();index_tests();chunk_tests();jit_tests();shared_publication_tests();shared_offset_peer_tests();native_view_tests();native_view_exec_tests();shared_registration_rollback();puts("PASS restricted space and channel ownership");return 0;
+    free(data);free(f);region_tests(AROS_RESTRICTED_DYNAMIC_BASE);region_tests(UINT64_C(0x7ffe0000));shared_tests();private_shared_page_tests();shared_copy_tests();channel_growth();publication_tests();index_tests();chunk_tests();jit_tests();shared_publication_tests();shared_offset_peer_tests();native_view_tests();native_view_exec_tests();shared_registration_rollback();puts("PASS restricted space and channel ownership");return 0;
 }

@@ -916,6 +916,21 @@ static int r_copy(struct AROSAppleRuntimeFrame *frame,void *context,unsigned svc
     frame->x[0]=AROSRestrictedSpaceCopy(&d->space,p->address,p->buffer,p->length,p->access);
     return 1;
 }
+/* Only an authorized COW transition may renew pending write repairs.
+ * Releasing/remapping, stale generations and read faults stay invalid. */
+static void r_renew_private_faults(struct RestrictedDomain *d,uintptr_t address,
+    uintptr_t old_physical,uint64_t old_generation,uint64_t reservation,
+    const struct KrnMappingPage *replacement)
+{
+    for (struct Restricted *r=restricted_slots;r;r=r->next)
+        if (r->domain==d && r->fault_active && (r->fault.esr&64) &&
+            (r->fault.far&~(uintptr_t)(R_PAGE-1))==address &&
+            r->fault_reservation==reservation && r->fault_physical==old_physical &&
+            r->fault_page_generation==old_generation) {
+            r->fault_physical=replacement->physical;
+            r->fault_page_generation=replacement->generation;
+        }
+}
 static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned svc)
 {
     if (svc!=R_MEMORY) return 0;
@@ -970,6 +985,17 @@ static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned s
         } else frame->x[0]=AROSRestrictedRegionProtect(&a->region,page,p->protection);
     } else if (p->operation==5)
         frame->x[0]=AROSRestrictedRegionCommitShared(&a->region,page,p->protection);
+    else if (p->operation==6 && page==0 && a->count==1 &&
+        d->state==R_LIVE) {
+        uintptr_t old_physical=0;uint64_t old_generation=0,reservation=0;
+        if (!AROSRestrictedSpacePageIdentity(&d->space,p->address,KMAP_READ,
+            &old_physical,&old_generation,&reservation)) return 1;
+        if (!AROSRestrictedRegionPrivatize(&a->region,p->physical)) return 1;
+        ++d->memory_pages;
+        const struct KrnMappingPage *replacement=KrnMappingPageAt(&a->region.mapping,0);
+        r_renew_private_faults(d,p->address,old_physical,old_generation,reservation,replacement);
+        frame->x[0]=1;
+    }
     else if (p->operation==4 && p->address==a->region.mapping.start &&
         AROSRestrictedRegionDetach(&a->region)) {
         for (size_t i=0;i<a->count;++i) d->memory_pages-=r_backing(a,i)!=0;
@@ -2146,7 +2172,18 @@ static int r_read_domain(uint64_t handle,uintptr_t address,void *buffer,size_t l
 { return r_copy_call(handle,address,buffer,length,KMAP_READ); }
 static int r_write_domain(uint64_t handle,uintptr_t address,const void *buffer,size_t length)
 { return r_copy_call(handle,address,(void *)buffer,length,KMAP_WRITE); }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {36,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread,r_read_shared,r_write_shared,r_take_domain,r_map_shared,r_unmap_shared,r_read_domain,r_write_domain,r_attach_shared_at,r_protect_range};
+static int r_privatize_memory(uint64_t handle,uintptr_t address)
+{
+    if (address&(R_PAGE-1)) return 0;
+    Forbid();void *page=AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
+    if (!page) { Permit();return 0; }
+    struct RestrictedMemoryOperation op={.handle=handle,.address=address,
+        .operation=6,.physical=(uintptr_t)page};
+    int ok=r_memory_call(&op);
+    if (!ok && !AROSApplePageFree(page,R_PAGE)) for (;;) __asm__ volatile("wfe");
+    Permit();return ok;
+}
+const struct AROSRestrictedAPI AROSRestrictedAPI = {37,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread,r_read_shared,r_write_shared,r_take_domain,r_map_shared,r_unmap_shared,r_read_domain,r_write_domain,r_attach_shared_at,r_protect_range,r_privatize_memory};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

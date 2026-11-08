@@ -14,7 +14,10 @@ struct AROSRestrictedSpace { unsigned hardware;uint64_t root,tcr,handle; };
 struct RestrictedDomain { unsigned closing;void *code;size_t code_bytes;struct AROSRestrictedSpace space; };
 struct RestrictedCodeIdentity { uint64_t pc,generation,reservation;uintptr_t physical; };
 struct AROSAppleRuntimeFrame { uint64_t x[31],sp,elr,spsr,esr,far,vector,service,status,task_tls,simd[66],return_ttbr0,entry_ttbr0; };
+struct KrnMappingPage { uintptr_t physical;uint64_t generation; };
 struct Restricted {
+ struct Restricted *next;
+ uintptr_t fault_physical;uint64_t fault_reservation,fault_page_generation;struct AROSAppleRuntimeFrame fault;
  struct RestrictedDomain *domain;void *stack;uint64_t stack_address,fault_address;size_t stack_bytes,fault_bytes;
  unsigned fault_active,callback_active,wait_pending,exception_active;uint64_t callback_pc;
  struct { struct { void *queue; } request; } service;
@@ -37,6 +40,7 @@ static int AROSRestrictedSpacePageIdentity(struct AROSRestrictedSpace *space,uin
 /* No reserved pages in this fixture: a stack page is resident or refused. */
 static int AROSRestrictedSpaceFaultIdentity(struct AROSRestrictedSpace *space,uintptr_t va,uintptr_t *pa,uint64_t *gen,uint64_t *res)
 { (void)space;(void)va;(void)pa;(void)gen;(void)res;return 0; }
+static struct Restricted *restricted_slots;
 #include "actual.inc"
 static struct RestrictedDomain domain;
 static struct Restricted slot;
@@ -59,8 +63,33 @@ static void refused(void)
  publish();struct AROSAppleRuntimeFrame old=frame;
  assert(!r_restore_context(&slot,&frame));assert(!memcmp(&old,&frame,sizeof(frame)));
 }
+static void cow_tickets(void)
+{
+    struct RestrictedDomain d={0},foreign={0};
+    struct Restricted records[9];memset(records,0,sizeof(records));
+    for (unsigned i=0;i<9;++i) {
+        records[i].next=i<8 ? &records[i+1] : NULL;
+        records[i].domain=&d;records[i].fault_active=1;records[i].fault.esr=64;
+        records[i].fault.far=0x20001;records[i].fault_physical=0x90000;
+        records[i].fault_page_generation=7;records[i].fault_reservation=9;
+    }
+    records[1].fault_page_generation=6;records[2].fault_physical=0x91000;
+    records[3].fault_reservation=8;records[4].fault.esr=0;
+    records[5].fault_active=0;records[6].domain=&foreign;records[7].fault.far=0x21000;
+    struct Restricted original[9];memcpy(original,records,sizeof(records));
+    struct KrnMappingPage replacement={0xa0000,9};restricted_slots=records;
+    r_renew_private_faults(&d,0x20000,0x90000,7,9,&replacement);
+    assert(records[0].fault_physical==0xa0000 && records[0].fault_page_generation==9);
+    assert(records[8].fault_physical==0xa0000 && records[8].fault_page_generation==9);
+    assert(!memcmp(records+1,original+1,7*sizeof(records[0])));
+    replacement.physical=0xb0000;replacement.generation=11;
+    r_renew_private_faults(&d,0x20000,0x90000,7,9,&replacement);
+    assert(records[0].fault_physical==0xa0000 && records[0].fault_page_generation==9);
+    restricted_slots=NULL;
+}
 int main(void)
 {
+ cow_tickets();
  _Static_assert(sizeof(struct AROSRestrictedContext)==800,"context ABI");
  reset();publish();struct AROSAppleRuntimeFrame old=frame;
  assert(r_restore_context(&slot,&frame));

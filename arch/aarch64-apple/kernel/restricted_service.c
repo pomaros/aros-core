@@ -358,6 +358,42 @@ int AROSRestrictedRegionCommit(struct AROSRestrictedRegion *r,size_t page,uintpt
     }
     *backing=0;return 0;
 }
+/* A single-page view can exchange its backing without releasing its virtual
+ * reservation. Its shared peer views and the shared object's page stay intact.
+ * The caller serializes this transaction against domain execution. */
+int AROSRestrictedRegionPrivatize(struct AROSRestrictedRegion *r,uintptr_t pa)
+{
+    if (!r || !r->space || r->space->domain.closing || r->mapping.closing ||
+        r->mapping.in_flight || r->mapping.page_count!=1 || !r->shared ||
+        r->publication_pending || r->shared->publication || r->shared->closing ||
+        !shared_registered(r->shared) || !pa || (pa&(PAGE-1)) || physical_in_use(pa)) return 0;
+    struct KrnMappingPage *p=KrnMappingPageAt(&r->mapping,0);
+    uintptr_t *backing=backing_at(r,0);
+    if (!p || !backing || !*backing || p->physical!=*backing ||
+        p->physical!=r->shared->pages[r->shared_first] ||
+        p->protection!=KMAP_READ || p->generation>UINT64_MAX-4 ||
+        (p->state!=KMAP_CLEAN && p->state!=KMAP_DIRTY)) return 0;
+    struct AROSRestrictedSharedBacking *b=r->shared;
+    struct AROSRestrictedRegion **peer=&b->regions;
+    while (*peer && *peer!=r) peer=&(*peer)->shared_next;
+    if (!*peer || !b->views) return 0;
+    uintptr_t old=*backing,released=0;
+    memcpy((void *)pa,(const void *)old,PAGE);
+    if (!KrnMappingDecommitPage(&r->mapping,0,&r->space->mapops,&released)) return 0;
+    if (released!=old) for (;;) __asm__ volatile("wfe");
+    *backing=pa;
+    if (!KrnMappingCommitResidentPage(&r->mapping,0,pa,KMAP_READ|KMAP_WRITE,&r->space->mapops)) {
+        *backing=old;
+        if (!KrnMappingCommitResidentPage(&r->mapping,0,old,KMAP_READ,&r->space->mapops))
+            for (;;) __asm__ volatile("wfe");
+        return 0;
+    }
+    *peer=r->shared_next;--b->views;
+    r->shared=NULL;r->shared_next=NULL;r->shared_first=0;
+    index_insert(pa);
+    return 1;
+}
+
 int AROSRestrictedRegionDecommit(struct AROSRestrictedRegion *r,size_t page,uintptr_t *released)
 {
     if (!r || !r->space || r->space->domain.closing || page>=r->mapping.page_count || !released || r->publication_pending ||
