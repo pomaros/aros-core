@@ -19,7 +19,14 @@ def main():
     args=p.parse_args();out=args.out.resolve()
     if out.exists() or ROOT in out.parents:p.error('use a fresh output outside source')
     out.mkdir(parents=True);source=SOURCE.read_text()
-    code=''.join(function(source,n) for n in ('r_orphan_work_pending','r_refresh_reap_hint','r_mark_retired_resources'))
+    defines='\n'.join(line for line in source.splitlines() if any(line.startswith('#define '+name+' ') for name in ('R_LIFETIME','R_DOMAIN_CLAIM','R_COPY','R_REAP_REFRESH')))
+    begin=source.index('    if (!AROSAppleTaskExecution(context)->root &&')
+    guard=source[begin:source.index('    r_coordinate();',begin)]
+    begin=source.index('    if (ec==0x15 && svc==R_REAP_REFRESH) {')
+    dispatch=source[begin:source.index('    if (ec==0x15 && (svc==R_WAKE',begin)]
+    code=defines+'\n'+''.join(function(source,n) for n in ('r_orphan_work_pending','r_refresh_reap_hint','r_mark_retired_resources'))
+    code+='static int native_admits(void *context,unsigned ec,unsigned svc)\n{\n'+guard+'return 1;\n}\n'
+    code+='static int dispatch_refresh(struct frame *frame,void *context,unsigned ec,unsigned svc)\n{\nif (!native_admits(context,ec,svc)) return 0;\n'+dispatch+'return 0;\n}\n'
     variants=[('actual',code)]
     for name,old,new in [
         ('lost-thread-orphan','r->abandoned && (r->state==R_LIVE || r->state==R_REAPING)','0'),
@@ -35,6 +42,8 @@ def main():
         ('foreign-domain-retire','d->owner_context==retired','1'),
         ('foreign-shared-retire','b->owner_context==retired','1'),
         ('null-owner-retire','if (!retired) return;',''),
+        ('missing-native-refresh-admission','svc>R_REAP_REFRESH','svc>R_COPY'),
+        ('native-range-too-wide','svc>R_REAP_REFRESH','svc>R_REAP_REFRESH+1'),
     ]:
         assert code.count(old)==1,(name,old)
         variants.append((name,code.replace(old,new)))
@@ -42,7 +51,7 @@ def main():
     try:
         for name,body in variants:
             folder=out/name;folder.mkdir();(folder/'actual.inc').write_text(body);exe=folder/'test'
-            cmd=['clang','-std=c11','-g','-O1','-fsanitize=address,undefined','-I'+str(folder),str(HERE/'test.c'),'-o',str(exe)]
+            cmd=['clang','-std=c11','-g','-O1','-fsanitize=address,undefined','-I'+str(folder),'-I'+str(ROOT/'arch/aarch64-apple/include'),str(HERE/'test.c'),'-o',str(exe)]
             build=subprocess.run(cmd,capture_output=True,text=True,timeout=30);(folder/'build.log').write_text(build.stdout+build.stderr)
             if build.returncode:raise RuntimeError(name+' compile failed')
             run=subprocess.run([str(exe)],capture_output=True,text=True,timeout=10);(folder/'run.log').write_text(run.stdout+run.stderr);result['variants'].append({'name':name,'exit':run.returncode,'command':cmd})

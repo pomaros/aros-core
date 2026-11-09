@@ -9,7 +9,7 @@ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--out',type=Path,
 if out.exists() or ROOT in out.parents:p.error('fresh output outside checkout required')
 source=ROOT/'arch/aarch64-apple/kernel/restricted.c';text=source.read_text();start=text.index('    if (ec==0x15 && svc==0xa56e) {');end=text.index('\n    if (ec==0x15 && r_table_transfer',start);actual=text[start:end]
 guard_start=text.index('    if (!AROSAppleTaskExecution(context)->root &&');guard_end=text.index('    r_coordinate();',guard_start);guard=text[guard_start:guard_end]
-defines='\n'.join(line for line in text.splitlines() if any(line.startswith('#define '+name+' ') for name in ['R_LIFETIME','R_DOMAIN_CLAIM','R_RESUME','R_DOMAIN_WORK']))
+defines='\n'.join(line for line in text.splitlines() if any(line.startswith('#define '+name+' ') for name in ['R_LIFETIME','R_DOMAIN_CLAIM','R_RESUME','R_DOMAIN_WORK','R_COPY','R_REAP_REFRESH']))
 header='''#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -36,7 +36,7 @@ tests='''\nreturn 0;}
 #define CHECK(x,n) do{if(!(x)){puts("FAIL " n);return 1;}}while(0)
 int main(void)
 {
- CHECK(native_admits(&own,0x15,0xa56e) && native_admits(&own,0x15,0xa56d) && !native_admits(&own,0x15,0xa56f),"outer-trap-range");
+ CHECK(native_admits(&own,0x15,0xa56e) && native_admits(&own,0x15,0xa56d) && native_admits(&own,0x15,R_REAP_REFRESH) && !native_admits(&own,0x15,R_REAP_REFRESH+1),"outer-trap-range");
  struct AROSRestrictedWork work,prior;memset(&work,0x5a,sizeof(work));prior=work;
  domains[0]=(struct RestrictedDomain){11,1,R_LIVE,0,&own,{1}};
  domains[1]=(struct RestrictedDomain){22,1,R_LIVE,0,&foreign,{2}};
@@ -62,7 +62,7 @@ out.mkdir(parents=True);sha=lambda f:hashlib.sha256(f.read_bytes()).hexdigest();
 try:
  for name,body in variants:
   if name not in ('actual','old-trap-range') and body==actual:raise RuntimeError('mutation did not change source')
-  c=out/(name+'.c');selected_guard=guard.replace('svc>R_DOMAIN_WORK','svc>R_RESUME') if name=='old-trap-range' else guard
+  c=out/(name+'.c');selected_guard=guard.replace('svc>R_REAP_REFRESH','svc>R_RESUME') if name=='old-trap-range' else guard
   c.write_text(defines+'\n'+header+body+tests+'\nstatic int native_admits(void *context,unsigned ec,unsigned svc)\n{\n'+selected_guard+'return 1;\n}\n');binary=out/name
   cmd=['clang','-std=c11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-I'+str(ROOT/'arch/aarch64-apple/include'),str(c),'-o',str(binary)]
   build=subprocess.run(cmd,capture_output=True,text=True);(out/(name+'-build.log')).write_text(build.stdout+build.stderr)

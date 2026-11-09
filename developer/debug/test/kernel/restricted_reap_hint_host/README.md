@@ -5,10 +5,12 @@ resources remain. Retirement publishes a pending hint; a coordinated scan clears
 it only after all abandoned execution slots, managed domains and shared objects
 have drained. A retained worker lease or another reaper's claim keeps it set.
 The hint changes cleanup admission, not resource ownership or release rules.
+Its refresh SVC must be admitted from Native callers; a completed cleanup scan
+otherwise cannot clear the hint and subsequent API calls repeat the scan.
 
 Run `python3 run.py --out /absolute/fresh/output` from this directory with Clang
 available. The gate extracts the production retirement and pending predicates,
-uses AddressSanitizer and UndefinedBehaviorSanitizer, and requires thirteen
+uses AddressSanitizer and UndefinedBehaviorSanitizer, and requires fifteen
 semantic negative controls to fail. It checks foreign/null retirement, wait
 state removal, held leases, concurrent release ownership and final drain.
 

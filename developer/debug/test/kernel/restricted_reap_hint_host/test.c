@@ -3,6 +3,12 @@
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <aros/apple/restricted.h>
+struct execution { unsigned root; };
+static struct execution native_execution;
+static struct execution *AROSAppleTaskExecution(void *context)
+{ (void)context;return &native_execution; }
+struct frame { uint64_t x[31]; };
 enum RestrictedState { R_FREE,R_ALLOCATING,R_LIVE,R_REAPING };
 struct Space { unsigned stops; };
 struct RestrictedDomain {
@@ -39,6 +45,10 @@ static void AROSRestrictedSpaceStop(struct Space *s) { ++s->stops; }
 int main(void)
 {
     int a,b;
+    assert(native_admits(&a,0x15,R_REAP_REFRESH));
+    assert(native_admits(&a,0x15,R_COPY));
+    assert(!native_admits(&a,0x15,R_REAP_REFRESH+1));
+    assert(!native_admits(&a,0x24,R_REAP_REFRESH));
     assert(!r_refresh_reap_hint() && !orphan_reap_pending);
     struct Restricted other={.state=R_LIVE,.owner_context=&b,.owner=&b};
     struct Restricted r={.next=&other,.state=R_LIVE,.owner_context=&a,.owner=&a,
@@ -85,5 +95,17 @@ int main(void)
     restricted_slots=&r;r_mark_retired_resources(&a);
     assert(orphan_reap_pending && owners_retired==2 && r_refresh_reap_hint());
     restricted_slots=NULL;assert(!r_refresh_reap_hint() && !orphan_reap_pending);
+    /* Exercise refresh through its actual Native admission and dispatch, not
+     * just the pending predicate. A drained hint must not stay sticky. */
+    orphan_reap_pending=1;
+    struct frame frame={{0x123}};
+    assert(dispatch_refresh(&frame,&a,0x15,R_REAP_REFRESH)==1);
+    assert(!frame.x[0] && !orphan_reap_pending);
+    r.state=R_LIVE;r.abandoned=1;restricted_slots=&r;
+    assert(dispatch_refresh(&frame,&a,0x15,R_REAP_REFRESH)==1);
+    assert(frame.x[0]==1 && orphan_reap_pending);
+    restricted_slots=NULL;
+    assert(dispatch_refresh(&frame,&a,0x15,R_REAP_REFRESH)==1);
+    assert(!frame.x[0] && !orphan_reap_pending);
     return 0;
 }
