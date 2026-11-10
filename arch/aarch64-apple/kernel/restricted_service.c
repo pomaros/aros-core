@@ -11,12 +11,16 @@ static uint64_t reservation_generation;
 /* Generation storage outlives every service object and never resets on close. */
 static struct AROSRestrictedService *active;
 static uint64_t channel_generation;
+/* Channel handles are consecutive: a controller completes and wakes by
+ * handle for every call it serves, with hundreds of channels open. */
+#define CHANNEL_INDEX 256U
+static struct AROSRestrictedService *channel_index[CHANNEL_INDEX];
 static struct AROSRestrictedService *channel_lookup(uint64_t handle)
 {
     if (!handle) return NULL;
-    for (struct AROSRestrictedService *s=active;s;s=s->next)
-        if (s->channel==handle) return s;
-    return NULL;
+    struct AROSRestrictedService *s=channel_index[handle%CHANNEL_INDEX];
+    while (s && s->channel!=handle) s=s->index_next;
+    return s;
 }
 /* Index of uniquely owned private and shared backing, for constant-time alias
  * refusal. Shared views borrow an object's entry instead of entering again.
@@ -561,7 +565,10 @@ int AROSRestrictedServiceInit(struct AROSRestrictedService *s,
         KrnMappingDomainLeave(&s->member);return 0;
     }
     s->space=space;s->principal=requester;++space->channels;
-    s->channel=++channel_generation;*link=s;return 1;
+    s->channel=++channel_generation;*link=s;
+    s->space_next=space->services;space->services=s;
+    s->index_next=channel_index[s->channel%CHANNEL_INDEX];channel_index[s->channel%CHANNEL_INDEX]=s;
+    return 1;
 }
 
 int AROSRestrictedServiceSubmit(struct AROSRestrictedService *s,uintptr_t input,uintptr_t output,size_t length)
@@ -586,8 +593,8 @@ static int service_take(struct Task *worker,void *context,struct AROSRestrictedS
      * cleared before the scan and set again whenever a queued request was
      * seen, so a submit racing with the scan is never lost. */
     if (selected && !__atomic_exchange_n(&selected->queue_hint,0,__ATOMIC_ACQ_REL)) return 0;
-    for (struct AROSRestrictedService *s=active;s;s=s->next) {
-        if ((selected && s->space!=selected) || s->closing || s->worker || s->space->domain.closing || s->request.state!=KS_QUEUED) continue;
+    for (struct AROSRestrictedService *s=selected ? selected->services : active;s;s=selected ? s->space_next : s->next) {
+        if (s->closing || s->worker || s->space->domain.closing || s->request.state!=KS_QUEUED) continue;
         size_t length;
         __atomic_store_n(&s->space->queue_hint,1,__ATOMIC_RELEASE);
         if (!KrnBufferServiceTake(&s->request,s->request.token,work->bytes,sizeof(work->bytes),&length)) return 0;
@@ -650,6 +657,10 @@ int AROSRestrictedServiceClose(struct AROSRestrictedService *s)
     struct AROSRestrictedService **link=&active;
     while (*link!=s) link=&(*link)->next;
     *link=s->next;s->next=NULL;
+    for (link=&s->space->services;*link!=s;) link=&(*link)->space_next;
+    *link=s->space_next;s->space_next=NULL;
+    for (link=&channel_index[s->channel%CHANNEL_INDEX];*link!=s;) link=&(*link)->index_next;
+    *link=s->index_next;s->index_next=NULL;
     s->queue.domain=NULL;s->channel=0;s->space=NULL;return 1;
 }
 void AROSRestrictedSpaceStop(struct AROSRestrictedSpace *s)

@@ -76,6 +76,7 @@ struct AROSRestrictedSpace {
      * page's address with bit 0 set, so the hardware invalidation can name
      * the page instead of emptying every TLB. Zero at any other time. */
     uintptr_t flush_address;
+    struct AROSRestrictedService *services;
 };
 struct AROSRestrictedRegion {
     struct AROSRestrictedSpace *space;
@@ -187,6 +188,8 @@ struct AROSRestrictedService {
     void *worker_context;
     uint64_t principal, channel, worker_retirements;
     unsigned closing;
+    /* The channels of one space, and of one bucket of the channel index. */
+    struct AROSRestrictedService *space_next, *index_next;
 };
 /* All entry points share the EL1 coordinator lock. No allocation, blocking,
  * guest pointer dereference or callback into tasks. Spaces own mappings;
