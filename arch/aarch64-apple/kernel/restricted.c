@@ -1328,9 +1328,6 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
             r_finish(r,execution,frame,-2);
             return 1;
         }
-        if (r->exception_active && svc!=AROS_RESTRICTED_RESTORE_CONTEXT && svc!=AROS_RESTRICTED_EXIT) {
-            ++r->result.denied;frame->x[0]=UINT64_MAX;return 1;
-        }
         /* A program built before API 38 submits its request and collects
          * the reply in the same buffer. For a served thread that pair is
          * one call: the submit is the call it stands for, and the collect
@@ -1339,6 +1336,9 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
             frame->x[0]==frame->x[1] && frame->x[2]==256 && !frame->x[3]) svc=AROS_RESTRICTED_CALL;
         if (r->serve_buffer && svc==AROS_RESTRICTED_COLLECT) {
             ++r->result.replies;frame->x[0]=1;return 1;
+        }
+        if (r->exception_active && svc!=AROS_RESTRICTED_RESTORE_CONTEXT && svc!=AROS_RESTRICTED_EXIT) {
+            ++r->result.denied;frame->x[0]=UINT64_MAX;return 1;
         }
         switch (svc) {
         case AROS_RESTRICTED_RESTORE_CONTEXT:
