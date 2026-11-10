@@ -111,6 +111,11 @@ void AROSCPUCurrentState(uint32_t state)
     if (record) AROSCPUAccount(&record->accounting,state,counter());
 }
 const struct AROSCPUTopology *AROSCPUMonitorTopology(void) { return &topology; }
+int AROSCPUIdle(unsigned cpu)
+{
+    return __atomic_load_n(&initialized,__ATOMIC_ACQUIRE) && cpu<topology.count &&
+        records[cpu].runtime.idle_active!=0;
+}
 int AROSCPUMonitorFirmwareValid(void) { return firmware_valid; }
 int AROSCPUMonitorSample(unsigned cpu, struct AROSCPUSample *sample)
 {

@@ -4,6 +4,7 @@
 #include "restricted.h"
 #include "task_tls.h"
 #include "kernel_ipi.h"
+#include "cpu_monitor.h"
 static int restricted_park(struct Task *);
 #define CORE_SCHEDULER_PARK(task) restricted_park(task)
 #define CORE_SCHEDULER_BUG(...) _bug(NULL, __VA_ARGS__)
@@ -44,6 +45,33 @@ static int restricted_park(struct Task *task)
     task->tc_SigWait=0;
     return 1;
 }
+#if defined(__AROSEXEC_SMP__)
+/* A task has become ready, or a running one must park. An interrupt costs
+ * its target a forced switch (IPI_SCHEDULE expires the quantum) and, in a
+ * virtual machine, several exits to the hypervisor, so it goes to one CPU
+ * that has a use for it: the one running the task, else an idle one that
+ * may run it. With every such CPU busy the task waits its turn on the ready
+ * list like any other of its priority; this CPU looks at the list on its
+ * way out. */
+static void schedule_ready(struct Task *task)
+{
+    uint32_t online=AROSAppleSMPOnlineMask();
+    unsigned self=AROSCPUCurrentIndex();
+    if (task->tc_State==TS_RUN) {
+        unsigned cpu=(unsigned)GetIntETask(task)->iet_CpuNumber;
+        if (cpu==self) FLAG_SCHEDSWITCH_SET;
+        else AROSAppleSMPSendIPI(IPI_SCHEDULE,0,cpu<32 ? online&(1U<<cpu) : online);
+        return;
+    }
+    for (unsigned cpu=0;cpu<AROS_APPLE_SMP_MAX_CPUS;++cpu)
+        if (cpu!=self && (online&(1U<<cpu)) && AROSCPUIdle(cpu) &&
+            core_AffinityMatch(task,1U<<cpu)) {
+            AROSAppleSMPSendIPI(IPI_SCHEDULE,0,1U<<cpu);
+            return;
+        }
+    FLAG_SCHEDSWITCH_SET;
+}
+#endif
 static int restricted_park_control(struct Task *task,struct ExceptionContext *context,
     uint64_t set,uint64_t clear)
 {
@@ -113,7 +141,7 @@ static int restricted_park_control(struct Task *task,struct ExceptionContext *co
 done:
 #if defined(__AROSEXEC_SMP__)
     KrnSpinUnLock(&task->tc_SpinLock);
-    if (schedule) AROSAppleSMPSendIPI(IPI_SCHEDULE,0,AROSAppleSMPOnlineMask());
+    if (schedule) schedule_ready(task);
 #else
     if (schedule) FLAG_SCHEDSWITCH_SET;
 #endif

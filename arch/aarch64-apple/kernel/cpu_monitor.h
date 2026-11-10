@@ -12,6 +12,9 @@ int AROSCPUBindCurrent(void); /* EL1, before secondary uses any local state. */
 unsigned AROSCPUCurrentIndex(void);
 unsigned AROSCPUCurrentExecIndex(void); /* EL0-readable, AROS_CPU_MAX if unbound. */
 const struct AROSCPUTopology *AROSCPUMonitorTopology(void);
+/* A hint: the CPU sits in the dispatcher's idle context. It may leave or
+ * enter it at any moment; its tick bounds what a stale answer costs. */
+int AROSCPUIdle(unsigned cpu);
 int AROSCPUMonitorSample(unsigned cpu, struct AROSCPUSample *sample);
 int AROSCPUMonitorFirmwareValid(void);
 /* Opt-in isolated CPU execution probe; never advertises Exec SMP readiness. */
