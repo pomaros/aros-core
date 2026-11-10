@@ -32,9 +32,18 @@ int memcmp(const void *left, const void *right, size_t length);
 void *memset(void *destination, int value, size_t length)
 {
     volatile uint8_t *bytes = destination;
-    size_t index;
+    size_t index = 0;
 
-    for (index = 0; index < length; ++index)
+    /* Whole words when the block allows: the kernel clears and copies its
+     * exception frames, 864 bytes each, several times per trap. */
+    if (((uintptr_t)destination & 7) == 0) {
+        volatile uint64_t *words = destination;
+        uint64_t pattern = (uint8_t)value * UINT64_C(0x0101010101010101);
+
+        for (; index + 8 <= length; index += 8)
+            words[index / 8] = pattern;
+    }
+    for (; index < length; ++index)
         bytes[index] = (uint8_t)value;
     return destination;
 }
@@ -43,9 +52,16 @@ void *memcpy(void *destination, const void *source, size_t length)
 {
     volatile uint8_t *to = destination;
     const volatile uint8_t *from = source;
-    size_t index;
+    size_t index = 0;
 
-    for (index = 0; index < length; ++index)
+    if ((((uintptr_t)destination | (uintptr_t)source) & 7) == 0) {
+        volatile uint64_t *to_words = destination;
+        const volatile uint64_t *from_words = source;
+
+        for (; index + 8 <= length; index += 8)
+            to_words[index / 8] = from_words[index / 8];
+    }
+    for (; index < length; ++index)
         to[index] = from[index];
     return destination;
 }
