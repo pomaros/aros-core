@@ -69,6 +69,9 @@ struct AROSRestrictedSpace {
     uintptr_t backing;
     unsigned channels;
     struct AROSRestrictedRegion *regions;
+    /* Nonzero when a request of this space may be queued: set by every
+     * submit, cleared by the take that is about to look. */
+    unsigned queue_hint;
 };
 struct AROSRestrictedRegion {
     struct AROSRestrictedSpace *space;

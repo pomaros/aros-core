@@ -559,8 +559,10 @@ int AROSRestrictedServiceSubmit(struct AROSRestrictedService *s,uintptr_t input,
 {
     if (!s || !s->space || s->closing) return 0;
     struct AROSRestrictedSpace *space=s->space;
-    return KrnBufferServiceSubmit(&registry,space->principal,space->handle,s->principal,
+    int queued=KrnBufferServiceSubmit(&registry,space->principal,space->handle,s->principal,
         &s->queue,input,output,length,&space->bufferops,&s->request);
+    if (queued) __atomic_store_n(&space->queue_hint,1,__ATOMIC_RELEASE);
+    return queued;
 }
 int AROSRestrictedServiceCollect(struct AROSRestrictedService *s,uint64_t token)
 {
@@ -570,9 +572,15 @@ int AROSRestrictedServiceCollect(struct AROSRestrictedService *s,uint64_t token)
 static int service_take(struct Task *worker,void *context,struct AROSRestrictedSpace *selected,struct AROSRestrictedWork *work)
 {
     if (!worker || !context || !work) return 0;
+    /* A controller polls each of its spaces; most polls find nothing, and
+     * the scan below visits every channel of every space. The hint is
+     * cleared before the scan and set again whenever a queued request was
+     * seen, so a submit racing with the scan is never lost. */
+    if (selected && !__atomic_exchange_n(&selected->queue_hint,0,__ATOMIC_ACQ_REL)) return 0;
     for (struct AROSRestrictedService *s=active;s;s=s->next) {
         if ((selected && s->space!=selected) || s->closing || s->worker || s->space->domain.closing || s->request.state!=KS_QUEUED) continue;
         size_t length;
+        __atomic_store_n(&s->space->queue_hint,1,__ATOMIC_RELEASE);
         if (!KrnBufferServiceTake(&s->request,s->request.token,work->bytes,sizeof(work->bytes),&length)) return 0;
         s->worker=worker;s->worker_context=context;work->channel=s->channel;work->token=s->request.token;work->length=length;
         return 1;
