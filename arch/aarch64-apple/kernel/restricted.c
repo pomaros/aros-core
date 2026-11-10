@@ -117,6 +117,9 @@ struct Restricted {
     struct Restricted *next;
     size_t storage_bytes;
     struct RestrictedDomain *domain;
+    /* The last fault retried as spurious, and how often in a row. */
+    uint64_t spurious_far, spurious_pc;
+    unsigned spurious_count;
     enum RestrictedState state;
     void *releaser_context;
     uint64_t cookie;
@@ -610,6 +613,35 @@ static int r_jit_switch(struct Restricted *r,struct Task *task,
     if (ec==0x20 && writing && r_jit_page(r,frame->elr))
         return AROSAppleJitSetWritable(task,0)!=UINT64_MAX;
     return 0;
+}
+/* A translation or permission fault the page tables no longer explain: the
+ * leaf grants the access by the time the fault is examined. Another CPU has
+ * just installed the page or raised its permissions, and this CPU faulted on
+ * the earlier state, which a TLB entry that caused a permission fault may
+ * keep. Drop this CPU's entries and run the instruction again. A fault that
+ * recurs at the same place is not spurious and takes the ordinary path. */
+#define R_SPURIOUS_LIMIT 8
+static int r_spurious_fault(struct Restricted *r,struct AROSAppleRuntimeFrame *frame,
+    unsigned ec,unsigned fault)
+{
+    if ((ec!=0x20 && ec!=0x24) || ((fault&0x3c)!=0x04 && (fault&0x3c)!=0x0c)) return 0;
+    /* Cache maintenance and external aborts are never retried. */
+    if (ec==0x24 && (frame->esr&((UINT64_C(1)<<8)|(UINT64_C(1)<<10)))) return 0;
+    unsigned access=ec==0x20 ? KMAP_EXEC : (frame->esr&(UINT64_C(1)<<6)) ? KMAP_WRITE : KMAP_READ;
+    uintptr_t physical;uint64_t generation,reservation;
+    /* SPRR decides JIT pages per thread, not in the leaf. */
+    if ((AROSAppleJitMode()==AROS_APPLE_JIT_SPRR && r_jit_page(r,frame->far)) ||
+        !AROSRestrictedSpacePageIdentity(&r->domain->space,frame->far,access,
+            &physical,&generation,&reservation)) {
+        r->spurious_count=0;
+        return 0;
+    }
+    if (r->spurious_far!=frame->far || r->spurious_pc!=frame->elr) {
+        r->spurious_far=frame->far;r->spurious_pc=frame->elr;r->spurious_count=0;
+    }
+    if (++r->spurious_count>R_SPURIOUS_LIMIT) return 0;
+    __asm__ volatile("tlbi vmalle1; dsb nsh; isb":::"memory");
+    return 1;
 }
 static struct ExceptionContext *r_context(struct Task *task)
 {
@@ -1215,6 +1247,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
             uintptr_t physical;uint64_t generation,reservation;
             unsigned fault=(unsigned)frame->esr&63;
             if (r_jit_switch(r,task,context,frame,ec,fault)) return 1;
+            if (r_spurious_fault(r,frame,ec,fault)) return 1;
             if (ec==0x18 && r_emulate_id_read(frame)) return 1;
             /* Owned resident or reserved data pages can enter a repair handler.
              * Missing tables/pages produce translation faults; RO writes permission faults.
