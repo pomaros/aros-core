@@ -121,6 +121,10 @@ struct Restricted {
     /* The last fault retried as spurious, and how often in a row. */
     uint64_t spurious_far, spurious_pc;
     unsigned spurious_count;
+    /* The last fault whose access was run again because the page was no
+     * longer the repaired one, and how often in a row. */
+    uint64_t fault_retry_far, fault_retry_pc;
+    unsigned fault_retry_count;
     enum RestrictedState state;
     void *releaser_context;
     uint64_t cookie;
@@ -641,6 +645,7 @@ static int r_jit_switch(struct Restricted *r,struct Task *task,
  * keep. Drop this CPU's entries and run the instruction again. A fault that
  * recurs at the same place is not spurious and takes the ordinary path. */
 #define R_SPURIOUS_LIMIT 8
+#define R_FAULT_RETRY_LIMIT 8
 static int r_spurious_fault(struct Restricted *r,struct AROSAppleRuntimeFrame *frame,
     unsigned ec,unsigned fault)
 {
@@ -1419,14 +1424,28 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
             uintptr_t physical;uint64_t generation,reservation;
             if (!r->fault_active || frame->x[0]!=r->fault.elr ||
                 frame->x[1]!=r->fault_generation || r->service.request.queue ||
-                !r_match_code(r,&r->fault_code) || !r_owned_sp(r,r->fault.sp) ||
-                !AROSRestrictedSpacePageIdentity(&r->domain->space,r->fault.far,
+                !r_match_code(r,&r->fault_code) || !r_owned_sp(r,r->fault.sp)) {
+                ++r->result.denied;frame->x[0]=UINT64_MAX;return 1;
+            }
+            /* The page is no longer the one the handler repaired: another
+             * thread of the domain released, replaced or re-reserved it while
+             * this one waited. The saved frame runs the access again, so the
+             * CPU checks it against what is mapped now, and a fault that is
+             * still due comes back with a new ticket. Refusing instead turned
+             * the race into a signal for an access the mapping allowed. A
+             * repair that never holds is refused after a few rounds. */
+            if (!AROSRestrictedSpacePageIdentity(&r->domain->space,r->fault.far,
                     (r->fault.esr&64) ? KMAP_WRITE : KMAP_READ,&physical,&generation,&reservation) ||
                 reservation!=r->fault_reservation ||
                 (r->fault_physical ? (physical!=r->fault_physical || generation!=r->fault_page_generation) :
                  (r->fault_page_generation==UINT64_MAX || generation!=r->fault_page_generation+1))) {
-                ++r->result.denied;frame->x[0]=UINT64_MAX;return 1;
-            }
+                if (r->fault_retry_far!=r->fault.far || r->fault_retry_pc!=r->fault.elr) {
+                    r->fault_retry_far=r->fault.far;r->fault_retry_pc=r->fault.elr;r->fault_retry_count=0;
+                }
+                if (++r->fault_retry_count>R_FAULT_RETRY_LIMIT) {
+                    ++r->result.denied;frame->x[0]=UINT64_MAX;return 1;
+                }
+            } else r->fault_retry_count=0;
             *frame=r->fault;r->fault_active=0;r_track_stack(r,frame->sp);++r->result.resumed;
             return 1;
         }

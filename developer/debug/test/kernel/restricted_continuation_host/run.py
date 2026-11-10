@@ -47,7 +47,7 @@ def main():
    result['records'].append({'name':name,'exit':run.returncode})
    if expected:
     assertions={
-     'reserved-extra-commit':'frame.x[0]==UINT64_MAX && slot.fault_active && !slot.result.resumed',
+     'reserved-extra-commit':'!slot.fault_active && slot.result.resumed==1 && slot.fault_retry_count==1 && !memcmp(&frame,&saved,sizeof(frame))',
      'stale-generation':'!r_match_code(&slot,&id)',
      'stale-reservation':'!r_match_code(&slot,&id)',
      'wrong-backing':'!r_match_code(&slot,&id)',

@@ -12,6 +12,7 @@
 #define KMAP_WRITE 2
 struct AROSRestrictedSpace { uint64_t handle; };
 struct RestrictedDomain { unsigned closing;void *code;size_t code_bytes;struct AROSRestrictedSpace space; };
+#define R_FAULT_RETRY_LIMIT 8
 struct RestrictedCodeIdentity { uint64_t pc,generation,reservation;uintptr_t physical; };
 struct Frame { uint64_t x[31],elr,sp,esr,far,other[16]; };
 struct Service { struct { void *queue;uint64_t token; } request; };
@@ -19,6 +20,7 @@ struct Restricted {
  struct RestrictedDomain *domain;unsigned callback_active,fault_active;
  uint64_t callback_pc,fault_handler,fault_generation,seed,stack_address;size_t stack_bytes;
  uintptr_t fault_physical;uint64_t fault_page_generation,fault_reservation;
+ uint64_t fault_retry_far,fault_retry_pc;unsigned fault_retry_count;
  struct RestrictedCodeIdentity callback_entry,callback_return,fault_code,handler_code;
  struct Frame callback,fault;struct Service service;
  struct { unsigned rejected,replies,denied,callbacks,resumed;int status; } result;
@@ -96,26 +98,37 @@ static void fault(void)
  slot.fault=frame;slot.fault.elr=dynamic+4;slot.fault.far=dynamic+128;slot.fault.sp=0x5000;
  slot.fault_generation=3;slot.fault_physical=physical;slot.fault_page_generation=generation;slot.fault_reservation=reservation;
  assert(r_capture_code(&slot,slot.fault.elr,&slot.fault_code));
+ /* The code the access came from changed: never run it again. */
  ++generation;slot.fault_page_generation=generation;
  frame.x[0]=slot.fault.elr;frame.x[1]=3;dispatch(&slot,&frame,AROS_RESTRICTED_FAULT_RESUME);
  assert(frame.x[0]==UINT64_MAX && slot.fault_active && !slot.result.resumed);
  --generation;slot.fault_page_generation=generation;frame.x[0]=slot.fault.elr;frame.x[1]=3;
  struct Frame saved=slot.fault;dispatch(&slot,&frame,AROS_RESTRICTED_FAULT_RESUME);
- assert(!slot.fault_active && slot.result.resumed==1 && !memcmp(&frame,&saved,sizeof(frame)));
+ assert(!slot.fault_active && slot.result.resumed==1 && !slot.fault_retry_count && !memcmp(&frame,&saved,sizeof(frame)));
 }
 static void reserved_fault(void)
 {
  reset();slot.fault_active=1;slot.fault=frame;slot.fault.far=dynamic;
  slot.fault_generation=3;slot.fault_physical=0;slot.fault_page_generation=generation-1;slot.fault_reservation=reservation;
  assert(r_capture_code(&slot,slot.fault.elr,&slot.fault_code));
+ /* A page that is not the repaired one (an extra commit, then another
+  * reservation): the access runs again, counted, and is refused only when
+  * the same access keeps coming back. */
+ struct Frame saved=slot.fault;
  ++generation;frame.x[0]=slot.fault.elr;frame.x[1]=3;
  dispatch(&slot,&frame,AROS_RESTRICTED_FAULT_RESUME);
- assert(frame.x[0]==UINT64_MAX && slot.fault_active && !slot.result.resumed);
- --generation;++reservation;frame.x[0]=slot.fault.elr;frame.x[1]=3;
+ assert(!slot.fault_active && slot.result.resumed==1 && slot.fault_retry_count==1 && !memcmp(&frame,&saved,sizeof(frame)));
+ --generation;++reservation;
+ for (unsigned round=2;round<=8;++round) {
+  slot.fault_active=1;slot.fault=saved;frame.x[0]=saved.elr;frame.x[1]=3;
+  dispatch(&slot,&frame,AROS_RESTRICTED_FAULT_RESUME);
+  assert(!slot.fault_active && slot.result.resumed==round && slot.fault_retry_count==round);
+ }
+ slot.fault_active=1;slot.fault=saved;frame.x[0]=saved.elr;frame.x[1]=3;
  dispatch(&slot,&frame,AROS_RESTRICTED_FAULT_RESUME);
- assert(frame.x[0]==UINT64_MAX && slot.fault_active && !slot.result.resumed);
- --reservation;frame.x[0]=slot.fault.elr;frame.x[1]=3;
- struct Frame saved=slot.fault;dispatch(&slot,&frame,AROS_RESTRICTED_FAULT_RESUME);
- assert(!slot.fault_active && slot.result.resumed==1 && !memcmp(&frame,&saved,sizeof(frame)));
+ assert(frame.x[0]==UINT64_MAX && slot.fault_active && slot.result.resumed==8 && slot.result.denied==1);
+ --reservation;frame.x[0]=saved.elr;frame.x[1]=3;
+ dispatch(&slot,&frame,AROS_RESTRICTED_FAULT_RESUME);
+ assert(!slot.fault_active && slot.result.resumed==9 && !slot.fault_retry_count && !memcmp(&frame,&saved,sizeof(frame)));
 }
 int main(void) { identity();callback();fault();reserved_fault();puts("PASS continuation identity transitions"); }
