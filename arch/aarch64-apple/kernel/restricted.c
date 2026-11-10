@@ -1219,6 +1219,8 @@ void AROSAppleRestrictedCheckStack(struct AROSAppleRuntimeFrame *frame,
     else { r_track_stack(r,frame->sp);r_deliver_wait(r,frame); }
     r_uncoordinate();
 }
+/* How long a thread looks for its wake before it parks (microseconds). */
+#define R_WAIT_SPIN_US 100
 static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
 {
     if (!frame || frame->vector != 8 || (frame->spsr & 31)) return 0;
@@ -1298,6 +1300,26 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
             frame->x[0]=r_wait_clock();return 1;
         case AROS_RESTRICTED_WAIT:
         case AROS_RESTRICTED_WAIT_FOR: {
+#if defined(__AROSEXEC_SMP__)
+            /* A request is usually answered from another CPU within tens of
+             * microseconds. Parking for it costs two task switches and the
+             * interrupt that ends the park, so with a second CPU online
+             * look for the wake a little first. The coordinator is released
+             * meanwhile: the wake needs it. */
+            if (frame->x[0]==r->wake_generation && r->wake_generation!=UINT64_MAX &&
+                !r->wait_pending && (AROSAppleSMPOnlineMask()&(AROSAppleSMPOnlineMask()-1))) {
+                uint64_t generation=r->wake_generation,start=r_wait_clock();
+                r_uncoordinate();
+                while (start!=UINT64_MAX &&
+                       __atomic_load_n(&r->wake_generation,__ATOMIC_ACQUIRE)==generation &&
+                       r_wait_clock()-start<R_WAIT_SPIN_US) {
+                    AROSAppleMemoryRendezvousPoll();
+                    __asm__ volatile("yield" ::: "memory");
+                }
+                r_coordinate();
+                if (r->domain->closing) { r_finish(r,execution,frame,-5);return 1; }
+            }
+#endif
             if (frame->x[0]!=r->wake_generation || r->wake_generation==UINT64_MAX || r->wait_pending) {
                 frame->x[0]=0;return 1;
             }
