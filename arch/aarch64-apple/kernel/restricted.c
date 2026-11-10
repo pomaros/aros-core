@@ -115,6 +115,7 @@ struct RestrictedCodeIdentity {
 };
 struct Restricted {
     struct Restricted *next;
+    struct Restricted *index_next;
     size_t storage_bytes;
     struct RestrictedDomain *domain;
     /* The last fault retried as spurious, and how often in a row. */
@@ -234,9 +235,32 @@ static void r_reap(void);
 static void r_mark_retired_resources(void *retired);
 static void r_coordinate(void);
 static void r_uncoordinate(void);
+/* Every trap from a domain and every dispatch into one asks whether the
+ * task's record still names a linked slot. With one slot per thread and a
+ * few hundred threads, walking the list for that answer was a quarter of a
+ * CPU's time. The index holds exactly the slots of the list. */
+#define R_SLOT_INDEX 512U
+static struct Restricted *slot_index[R_SLOT_INDEX];
+static struct Restricted **r_slot_bucket(uintptr_t address)
+{ return &slot_index[(address/R_PAGE)%R_SLOT_INDEX]; }
+static void r_slot_link(struct Restricted *r)
+{
+    struct Restricted **link=&restricted_slots;
+    while (*link) link=&(*link)->next;
+    *link=r;
+    r->index_next=*r_slot_bucket((uintptr_t)r);*r_slot_bucket((uintptr_t)r)=r;
+}
+static void r_slot_unlink(struct Restricted *r)
+{
+    struct Restricted **link=&restricted_slots;
+    while (*link && *link!=r) link=&(*link)->next;
+    if (*link) *link=r->next;
+    for (link=r_slot_bucket((uintptr_t)r);*link && *link!=r;) link=&(*link)->index_next;
+    if (*link) *link=r->index_next;
+}
 static struct Restricted *r_slot(uintptr_t address)
 {
-    for (struct Restricted *r=restricted_slots;r;r=r->next)
+    for (struct Restricted *r=*r_slot_bucket(address);r;r=r->index_next)
         if ((uintptr_t)r==address) return r;
     return NULL;
 }
@@ -296,9 +320,7 @@ static int r_thread_addresses(struct Restricted *r,struct RestrictedDomain *doma
 }
 static void r_thread_forget(struct Restricted *r)
 {
-    struct Restricted **link=&restricted_slots;
-    while (*link && *link!=r) link=&(*link)->next;
-    if (*link) *link=r->next;
+    r_slot_unlink(r);
     memset(r,0,sizeof(*r));
 }
 /* Native-only SVCs, called with local scheduling excluded. The exclusive
@@ -321,9 +343,7 @@ static int r_lifecycle(struct AROSAppleRuntimeFrame *frame,struct Task *task,
         }
         ++domain->threads;r->domain=domain;
         r->state=R_ALLOCATING;r->owner=task;r->owner_context=context;
-        struct Restricted **link=&restricted_slots;
-        while (*link) link=&(*link)->next;
-        *link=r;frame->x[0]=(uintptr_t)r;return 1;
+        r_slot_link(r);frame->x[0]=(uintptr_t)r;return 1;
     }
     if (svc==R_PUBLISH) {
         const struct RestrictedPublication *p=(void *)(uintptr_t)frame->x[0];

@@ -24,7 +24,7 @@ def main():
  if out.exists() or ROOT in out.parents:p.error('fresh output outside source required')
  source=ROOT/'arch/aarch64-apple/kernel/kernel_scheduler.c';generic=ROOT/'arch/aarch64-native/kernel/kernel_scheduler.c';restricted=ROOT/'arch/aarch64-apple/kernel/restricted.c'
  s=source.read_text();g=generic.read_text()
- actual=''.join(function(s,name) for name in ['static struct ExceptionContext *restricted_context(', 'static int restricted_park(struct Task *task)', 'static int restricted_park_control(', 'int AROSAppleRestrictedSetWait(', 'int AROSAppleRestrictedSetSuspend(', 'int AROSAppleRestrictedCancelPark(', 'unsigned AROSAppleRestrictedWaitState('])
+ actual=''.join(function(s,name) for name in ['static struct ExceptionContext *restricted_context(', 'static int restricted_park(struct Task *task)', 'static void schedule_ready(struct Task *task)', 'static int restricted_park_control(', 'int AROSAppleRestrictedSetWait(', 'int AROSAppleRestrictedSetSuspend(', 'int AROSAppleRestrictedCancelPark(', 'unsigned AROSAppleRestrictedWaitState('])
  actual+='static void outgoing(struct Task *task) {\n'+block(g[g.index('#ifdef CORE_SCHEDULER_PARK\n        if (task->'):])+'}\n'
  start=g.index('#ifdef CORE_SCHEDULER_PARK\n        /* Native signals')
  actual+='static int incoming(struct Task *newtask) { int taskStateLocked=1;\n'+block(g[start:])+'return 1;\ndispatch_select:return 0; }\n'

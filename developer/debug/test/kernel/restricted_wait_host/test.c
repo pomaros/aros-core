@@ -33,7 +33,8 @@ static struct ExceptionContext context,foreign;
 static struct ETask etask;
 static struct AROSAppleTaskExecution execution,foreign_execution;
 static unsigned ipis;
-static struct { unsigned iet_FrozenState; } iet;
+/* The task under test runs, when it runs, on CPU 1; the caller is CPU 0. */
+static struct { unsigned iet_FrozenState,iet_CpuNumber; } iet={0,1};
 #define GetIntETask(t) (&iet)
 static struct Task *current_task=&task;
 #define GET_THIS_TASK current_task
@@ -46,7 +47,15 @@ static void Enqueue(unsigned *l,struct Node *n) { assert(task.tc_SpinLock && !n-
 static void exec_TaskEnqueueReady(struct Task *t) { Enqueue(&base.TaskReady,&t->tc_Node); }
 static void exec_TaskEnqueueWait(struct Task *t) { Enqueue(&base.TaskWait,&t->tc_Node); }
 static unsigned AROSAppleSMPOnlineMask(void) { return 3; }
-static void AROSAppleSMPSendIPI(unsigned kind,unsigned unused,unsigned mask) { assert(!task.tc_SpinLock && kind==IPI_SCHEDULE && !unused && mask==3);ipis++; }
+/* One interrupt, to the one CPU that has a use for it: never a broadcast. */
+static void AROSAppleSMPSendIPI(unsigned kind,unsigned unused,unsigned mask) { assert(!task.tc_SpinLock && kind==IPI_SCHEDULE && !unused && mask==2);ipis++; }
+#define AROS_APPLE_SMP_MAX_CPUS 2
+static unsigned local_switches;
+#define FLAG_SCHEDSWITCH_SET (++local_switches)
+static unsigned AROSCPUCurrentIndex(void) { return 0; }
+static int AROSCPUIdle(unsigned cpu) { return cpu==1; }
+static int core_AffinityMatch(struct Task *t,unsigned mask) { (void)t;return mask==2; }
+static int cpu_IdleKick(unsigned cpu) { (void)cpu;return 0; }
 #define R_LIVE 1
 struct RestrictedDomain { unsigned closing; };
 struct Restricted { struct Restricted *next;struct RestrictedDomain *domain;unsigned state;struct { uint64_t channel; } service;struct Task *owner;struct ExceptionContext *owner_context;uint64_t wake_generation;uint32_t suspend_count;uint64_t wait_deadline;unsigned wait_pending,wait_result; };
