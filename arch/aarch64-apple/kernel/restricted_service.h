@@ -72,6 +72,10 @@ struct AROSRestrictedSpace {
     /* Nonzero when a request of this space may be queued: set by every
      * submit, cleared by the take that is about to look. */
     unsigned queue_hint;
+    /* While install or remove_page changes one leaf of this space: that
+     * page's address with bit 0 set, so the hardware invalidation can name
+     * the page instead of emptying every TLB. Zero at any other time. */
+    uintptr_t flush_address;
 };
 struct AROSRestrictedRegion {
     struct AROSRestrictedSpace *space;

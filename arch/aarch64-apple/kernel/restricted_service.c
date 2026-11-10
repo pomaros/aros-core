@@ -278,15 +278,22 @@ static int install(void *opaque,uintptr_t va,uintptr_t pa,unsigned protection)
         AARCH64_PROTECT_JIT|AARCH64_PROTECT_READ|AARCH64_PROTECT_WRITE|
             AARCH64_PROTECT_EXEC|AARCH64_PROTECT_USER :
         protection|AARCH64_PROTECT_USER;
+    int ok;
+    s->flush_address=va|1;
     if (AArch64MappingPhysical(&s->hardware,s->root,s->tcr,va,&actual))
-        return actual==pa && AArch64RemapPage(&s->hardware,s->root,s->tcr,va,pa,access);
-    return AArch64MapPage(&s->hardware,s->root,s->tcr,va,pa,access,1);
+        ok=actual==pa && AArch64RemapPage(&s->hardware,s->root,s->tcr,va,pa,access);
+    else ok=AArch64MapPage(&s->hardware,s->root,s->tcr,va,pa,access,1);
+    s->flush_address=0;
+    return ok;
 }
 static int remove_page(void *opaque,uintptr_t va,uintptr_t pa)
 {
     struct AROSRestrictedSpace *s=opaque;
-    return owns_page(s,va,pa) &&
-        AArch64UnmapPage(&s->hardware,s->root,s->tcr,va,pa);
+    if (!owns_page(s,va,pa)) return 0;
+    s->flush_address=va|1;
+    int ok=AArch64UnmapPage(&s->hardware,s->root,s->tcr,va,pa);
+    s->flush_address=0;
+    return ok;
 }
 int AROSRestrictedSpaceInit(struct AROSRestrictedSpace *s,uint64_t principal,
     uint64_t root,uint64_t tcr,uintptr_t backing,const struct AArch64ProtectionOps *hardware)

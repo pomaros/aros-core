@@ -774,8 +774,22 @@ static void r_clean(void *unused, const void *address, size_t bytes)
         __asm__ volatile("dc cvac,%0"::"r"(p):"memory");
     __asm__ volatile("dsb ish":::"memory");
 }
-static void r_invalidate(void *unused)
-{ (void)unused; __asm__ volatile("dsb ish; tlbi vmalle1is; dsb ish; isb":::"memory"); }
+/* A change to one leaf of a domain's tables, and to the table levels above
+ * it that the change created, concerns the translations of that one page:
+ * invalidate those, on every CPU and for every ASID. Emptying every TLB for
+ * each committed page made both CPUs walk the tables again for everything
+ * they touched, thousands of times a second, and in a virtual machine each
+ * of those walks is a two-stage one. Anything else (a domain being
+ * prepared, inherited blocks being split) still empties the TLBs. */
+static void r_invalidate(void *context)
+{
+    struct RestrictedDomain *d=context;
+    uintptr_t page=d ? d->space.flush_address : 0;
+    if (page) {
+        uint64_t argument=((uint64_t)page>>12)&UINT64_C(0xfffffffffff);
+        __asm__ volatile("dsb ishst; tlbi vaae1is,%0; dsb ish; isb"::"r"(argument):"memory");
+    } else __asm__ volatile("dsb ish; tlbi vmalle1is; dsb ish; isb":::"memory");
+}
 static const void *r_execution_alias(struct RestrictedDomain *d,uint64_t va,size_t bytes)
 {
     if (!bytes) return NULL;
