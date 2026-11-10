@@ -58,7 +58,7 @@ static int core_AffinityMatch(struct Task *t,unsigned mask) { (void)t;return mas
 static int cpu_IdleKick(unsigned cpu) { (void)cpu;return 0; }
 #define R_LIVE 1
 struct RestrictedDomain { unsigned closing; };
-struct Restricted { struct Restricted *next;struct RestrictedDomain *domain;unsigned state;struct { uint64_t channel; } service;struct Task *owner;struct ExceptionContext *owner_context;uint64_t wake_generation;uint32_t suspend_count;uint64_t wait_deadline;unsigned wait_pending,wait_result; };
+struct Restricted { struct Restricted *next;struct RestrictedDomain *domain;unsigned state;struct { uint64_t channel; } service;struct Task *owner;struct ExceptionContext *owner_context;uint64_t wake_generation;uint32_t suspend_count;uint64_t wait_deadline;unsigned wait_pending,wait_result;unsigned call_active; };
 static struct Restricted *restricted_slots;
 struct AROSAppleRuntimeFrame { uint64_t x[4]; };
 static uint64_t timed_waiters,fake_now=100;

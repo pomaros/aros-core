@@ -9,7 +9,7 @@ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--out',type=Path,
 if out.exists() or ROOT in out.parents:p.error('fresh output outside checkout required')
 source=ROOT/'arch/aarch64-apple/kernel/restricted.c';text=source.read_text();start=text.index('    if (ec==0x15 && svc==0xa56e) {');end=text.index('\n    if (ec==0x15 && r_table_transfer',start);actual=text[start:end]
 guard_start=text.index('    if (!AROSAppleTaskExecution(context)->root &&');guard_end=text.index('    r_coordinate();',guard_start);guard=text[guard_start:guard_end]
-defines='\n'.join(line for line in text.splitlines() if any(line.startswith('#define '+name+' ') for name in ['R_LIFETIME','R_DOMAIN_CLAIM','R_RESUME','R_DOMAIN_WORK','R_COPY','R_REAP_REFRESH']))
+defines='\n'.join(line for line in text.splitlines() if any(line.startswith('#define '+name+' ') for name in ['R_LIFETIME','R_SERVE','R_DOMAIN_CLAIM','R_RESUME','R_DOMAIN_WORK','R_COPY','R_REAP_REFRESH']))
 header='''#include <stdint.h>
 #include <stdio.h>
 #include <string.h>

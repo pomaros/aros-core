@@ -19,7 +19,7 @@ def main():
     args=p.parse_args();out=args.out.resolve()
     if out.exists() or ROOT in out.parents:p.error('use a fresh output outside source')
     out.mkdir(parents=True);source=SOURCE.read_text()
-    defines='\n'.join(line for line in source.splitlines() if any(line.startswith('#define '+name+' ') for name in ('R_LIFETIME','R_DOMAIN_CLAIM','R_COPY','R_REAP_REFRESH')))
+    defines='\n'.join(line for line in source.splitlines() if any(line.startswith('#define '+name+' ') for name in ('R_LIFETIME','R_SERVE','R_DOMAIN_CLAIM','R_COPY','R_REAP_REFRESH')))
     begin=source.index('    if (!AROSAppleTaskExecution(context)->root &&')
     guard=source[begin:source.index('    r_coordinate();',begin)]
     begin=source.index('    if (ec==0x15 && svc==R_REAP_REFRESH) {')

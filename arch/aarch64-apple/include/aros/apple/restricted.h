@@ -81,6 +81,17 @@ struct AROSRestrictedContext {
  * backed on first access by a repair, as Windows charges commit without
  * backing it. */
 #define AROS_RESTRICTED_FAULT_DECLINE 0xa552
+/* Version 38, threads started with run_served only. x0 = address of a
+ * 256-byte request in the thread's own committed, writable memory. The
+ * thread leaves the domain and its native task, on the same CPU, receives
+ * the request in the handler it gave to run_served. When the handler
+ * returns, the 256 bytes it left are copied back to the same address and
+ * the thread continues with x0 = 1; every other register is preserved.
+ * Refusal (thread not served, a callback pending, memory not accessible)
+ * returns x0 = UINT64_MAX at once. A call is admitted from the fault and
+ * exception stacks too. No request is queued and nobody is woken: the
+ * thread that asks is the thread that answers. */
+#define AROS_RESTRICTED_CALL 0xa553
 struct AROSRestrictedException {
     struct AROSRestrictedContext context;
     uint64_t esr,far,generation,reserved;
@@ -250,5 +261,19 @@ struct AROSRestrictedAPI {
      * once to the replacement identity. Other stale identities stay invalid.
      * Returns 1 on success, 0 on refusal. */
     int (*privatize_memory)(uint64_t domain,uintptr_t address);
+    /* Version 38: run_domain_stacks for a thread that is served by its own
+     * native task. Each AROS_RESTRICTED_CALL of the thread returns into
+     * handler(context, bytes) on the calling task, outside the domain and
+     * outside the kernel: the handler may block, take locks and use any API
+     * of this structure as the controller that owns the domain, for this
+     * domain and every other one of that controller. It answers in bytes
+     * and returns nonzero to continue the thread, or zero to end it; the
+     * thread's result then reports the status given in the first 8 bytes.
+     * While a thread is inside its handler it executes no domain code:
+     * suspend_thread counts as usual and the thread re-enters the domain
+     * only when its count is back to zero. */
+    int (*run_served)(uint64_t handle,uint64_t seed,size_t stack_bytes,
+        size_t fault_bytes,struct AROSRestrictedResult *result,
+        int (*handler)(void *context,unsigned char bytes[256]),void *context);
 };
 #endif
