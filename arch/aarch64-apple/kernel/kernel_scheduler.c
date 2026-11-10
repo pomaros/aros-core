@@ -8,6 +8,8 @@ static int restricted_park(struct Task *);
 #define CORE_SCHEDULER_PARK(task) restricted_park(task)
 #define CORE_SCHEDULER_BUG(...) _bug(NULL, __VA_ARGS__)
 #if defined(__AROSEXEC_SMP__)
+static int resume_cpu(struct Task *);
+#define CORE_SCHEDULER_RESUME_CPU(task) resume_cpu(task)
 #define CORE_SCHEDULER_TIME_US() AROSAppleSMPTimeUS()
 #define CORE_SCHEDULER_TIME_AVAILABLE() 1
 #else
@@ -22,6 +24,14 @@ static struct ExceptionContext *restricted_context(struct Task *task)
     return task && (task->tc_Flags & TF_ETASK) && task->tc_UnionETask.tc_ETask ?
         task->tc_UnionETask.tc_ETask->et_RegFrame : NULL;
 }
+#if defined(__AROSEXEC_SMP__)
+/* A ready task's context is complete: its CPU saved it before queueing it. */
+static int resume_cpu(struct Task *task)
+{
+    struct ExceptionContext *context=restricted_context(task);
+    return context ? AROSAppleTaskResumeCPU(context) : -1;
+}
+#endif
 /* Called only with the task lock, after its complete outgoing save or before
  * incoming dispatch. No domain metadata is read under scheduler locks. */
 static int restricted_park(struct Task *task)

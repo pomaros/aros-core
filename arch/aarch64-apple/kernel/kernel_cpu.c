@@ -106,6 +106,24 @@ static struct ExceptionContext *task_context(struct Task *task)
     return etask->et_RegFrame;
 }
 
+#if defined(__AROSEXEC_SMP__)
+/*
+ * Whether the frame may lie inside a multi-instruction access to this CPU's
+ * Exec state (task_tls.h). Only a system call is known not to: the SVC is a
+ * boundary no such access spans. Trusted code interrupted anywhere else may
+ * hold this CPU's block address. Restricted code has no access to it.
+ */
+static int frame_resumes_here(const regs_t *regs)
+{
+    uint64_t trusted = AROSAppleRuntimeLocal()->trusted_ttbr0;
+
+    if (trusted != 0 && regs->entry_ttbr0 != trusted)
+        return 0;
+    /* Lower-EL synchronous vector, exception class SVC from AArch64. */
+    return !(regs->vector == 8 && ((regs->esr >> 26) & 0x3f) == 0x15);
+}
+#endif
+
 /* The frame into the task's saved context; 0 when it has none. */
 int cpu_SaveContext(regs_t *regs, struct Task *task)
 {
@@ -124,6 +142,9 @@ int cpu_SaveContext(regs_t *regs, struct Task *task)
     context->pc = regs->elr;
     context->cpsr = (uint32_t)regs->spsr;
     context->Flags |= ECF_FPU;
+#if defined(__AROSEXEC_SMP__)
+    AROSAppleTaskResumeCPUSet(context, frame_resumes_here(regs) ? GetCPUNumber() : -1);
+#endif
     for (index = 0; index < 66; ++index)
         ((volatile uint64_t *)context->fpuContext)[index] = regs->simd[index];
     if (AROSAppleTaskExecution(context)->root)

@@ -54,6 +54,32 @@ static inline struct AROSAppleTaskExecution *AROSAppleTaskExecution(
     return (void *)((unsigned char *)context + 816);
 }
 
+/*
+ * Exec reaches its per-CPU scheduler state in several instructions: the CPU
+ * anchor, the Exec block, then the field. A task interrupted between them
+ * holds the address of that CPU's block in a register; dispatched on another
+ * CPU it would complete the access there: FindTask() answers with another
+ * task, Forbid() raises the count of the CPU it left. So a saved context
+ * that may be inside such an access names the one CPU that may resume it,
+ * as index + 1 in the top byte of the kernel-owned context flags. A context
+ * saved at a system call, or in a restricted domain (which runs no Exec
+ * code), names none and resumes anywhere its affinity allows.
+ */
+#define AROS_TASK_RESUME_CPU_SHIFT 24
+#define AROS_TASK_RESUME_CPU_MASK UINT32_C(0xff000000)
+static inline void AROSAppleTaskResumeCPUSet(struct ExceptionContext *context,
+    int cpu)
+{
+    context->Flags = (context->Flags & ~AROS_TASK_RESUME_CPU_MASK) |
+        ((uint32_t)(cpu + 1) << AROS_TASK_RESUME_CPU_SHIFT);
+}
+/* -1 when the context resumes on any CPU. */
+static inline int AROSAppleTaskResumeCPU(const struct ExceptionContext *context)
+{
+    return (int)((context->Flags & AROS_TASK_RESUME_CPU_MASK) >>
+        AROS_TASK_RESUME_CPU_SHIFT) - 1;
+}
+
 static inline void AROSAppleTaskTLSInit(struct ExceptionContext *context)
 {
     ((struct AROSAppleTaskContext *)context)->tls_anchor = 0;

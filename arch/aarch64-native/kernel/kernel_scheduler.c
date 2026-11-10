@@ -50,6 +50,16 @@ static inline BOOL core_AffinityMatch(struct Task *t, uint32_t cpumask)
 {
     void *aff;
 
+#ifdef CORE_SCHEDULER_RESUME_CPU
+    /* A context saved inside an access to one CPU's scheduler state resumes
+     * there, whatever the affinity says since. */
+    {
+        int cpu = CORE_SCHEDULER_RESUME_CPU(t);
+
+        if (cpu >= 0)
+            return cpumask == (1U << cpu);
+    }
+#endif
     if (!(PrivExecBase(SysBase)->IntFlags & EXECF_CPUAffinity))
         return TRUE;
 
