@@ -205,6 +205,112 @@ __asm__(
     ".size AROSAppleKernelIdleLoop, . - AROSAppleKernelIdleLoop\n");
 extern void AROSAppleKernelIdleLoop(void);
 
+#if defined(__AROSEXEC_SMP__) && defined(AROS_VM_GUEST) && AROS_VM_GUEST
+/*
+ * Idle polling, for a virtual machine.
+ *
+ * Under a hypervisor WFI leaves the guest: the virtual CPU's host thread
+ * sleeps, and waking it costs a host thread wake-up, then the interrupt
+ * controller accesses of the IPI on both CPUs, each one more exit. A
+ * restricted domain's thread and its controller call each other across two
+ * CPUs thousands of times a second, and every call paid that wake-up.
+ *
+ * So an idle CPU first watches a word of its own for a short while. A CPU
+ * that makes a task ready for it stores IDLE_KICKED there instead of sending
+ * the interrupt (cpu_IdleKick); the loop sees it and enters the kernel with
+ * an SVC, which dispatches exactly as an interrupt taken from the idle loop
+ * does. When the watch expires the loop halts the word and falls into the
+ * WFI loop, and wakes cost what they did before.
+ *
+ * No wake is lost: the dispatcher arms the word, then looks at the ready
+ * list once more before it returns to the loop, and a waker queues its task
+ * before it looks at the word.
+ */
+#define IDLE_POLLING_AVAILABLE 1
+#define IDLE_POLL_US UINT64_C(200)
+#define IDLE_KICK_SVC 0xa5f0
+enum { IDLE_HALTED, IDLE_POLLING, IDLE_KICKED };
+static struct { volatile uint32_t state; } __attribute__((aligned(64)))
+    idle_poll[AROS_APPLE_SMP_MAX_CPUS];
+/* x0 = this CPU's word, x1 = virtual counter value that ends the watch. */
+__asm__(
+    ".text\n"
+    ".balign 16\n"
+    ".type AROSAppleKernelIdlePoll, %function\n"
+    "AROSAppleKernelIdlePoll:\n"
+    "1:  ldr w2, [x0]\n"
+    "    cmp w2, #2\n"
+    "    b.eq 3f\n"
+    "    yield\n"
+    "    mrs x3, cntvct_el0\n"
+    "    cmp x3, x1\n"
+    "    b.lo 1b\n"
+    "2:  ldxr w2, [x0]\n"
+    "    cmp w2, #1\n"
+    "    b.ne 3f\n"
+    "    stxr w3, wzr, [x0]\n"
+    "    cbnz w3, 2b\n"
+    "    b AROSAppleKernelIdleLoop\n"
+    "3:  clrex\n"
+    "    svc #0xa5f0\n"
+    "    b AROSAppleKernelIdleLoop\n"
+    ".size AROSAppleKernelIdlePoll, . - AROSAppleKernelIdlePoll\n");
+extern void AROSAppleKernelIdlePoll(void);
+_Static_assert(IDLE_KICKED == 2 && IDLE_POLLING == 1 && IDLE_HALTED == 0 &&
+    IDLE_KICK_SVC == 0xa5f0, "the idle poll loop is written with these values");
+
+/* The frame returns to the idle loop: make it the watching one. */
+static void idle_poll_arm(regs_t *regs)
+{
+    unsigned cpu = AROSCPUCurrentIndex();
+    uint32_t halted = IDLE_HALTED;
+    uint64_t now, frequency;
+
+    if (cpu >= AROS_APPLE_SMP_MAX_CPUS)
+        return;
+    __atomic_compare_exchange_n(&idle_poll[cpu].state, &halted, IDLE_POLLING, 0,
+        __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frequency));
+    __asm__ volatile("isb; mrs %0, cntvct_el0" : "=r"(now));
+    regs->x[0] = (uint64_t)(uintptr_t)&idle_poll[cpu].state;
+    regs->x[1] = now + frequency * IDLE_POLL_US / UINT64_C(1000000);
+    regs->elr = (uint64_t)(uintptr_t)AROSAppleKernelIdlePoll;
+}
+/* A task was selected: nobody may count on this CPU's watch any more. */
+static void idle_poll_disarm(void)
+{
+    unsigned cpu = AROSCPUCurrentIndex();
+
+    if (cpu < AROS_APPLE_SMP_MAX_CPUS)
+        __atomic_store_n(&idle_poll[cpu].state, IDLE_HALTED, __ATOMIC_SEQ_CST);
+}
+int cpu_IdleKick(unsigned cpu)
+{
+    uint32_t state = IDLE_POLLING;
+
+    if (cpu >= AROS_APPLE_SMP_MAX_CPUS)
+        return 0;
+    return __atomic_compare_exchange_n(&idle_poll[cpu].state, &state, IDLE_KICKED, 0,
+        __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) || state == IDLE_KICKED;
+}
+int cpu_IdleInterrupted(regs_t *regs);
+int cpu_IdleKicked(regs_t *regs)
+{
+    if (regs == NULL || regs->vector != 4 ||
+        ((regs->esr >> 26) & UINT64_C(0x3f)) != UINT64_C(0x15) ||
+        (regs->esr & UINT64_C(0xffff)) != IDLE_KICK_SVC)
+        return 0;
+    /* Refused when this CPU is not idle: nothing but the loop issues it. */
+    if (!cpu_IdleInterrupted(regs))
+        return 0;
+    cpu_ApplyCurrentTaskMasks(&regs->spsr);
+    return 1;
+}
+#else
+int cpu_IdleKick(unsigned cpu) { (void)cpu; return 0; }
+int cpu_IdleKicked(regs_t *regs) { (void)regs; return 0; }
+#endif
+
 /* 0 decide at the next entry, 1 plain WFI, 2 deep WFI. The desktop hold
  * writes it to compare the two (chosen aros,idle-ab). */
 volatile uint32_t AROSAppleKernelIdleMode;
@@ -378,6 +484,9 @@ void cpu_Dispatch(regs_t *regs)
     void *departing = TLS_GET(ThisTask);
     unsigned self_exit_rescanned = 0;
 #endif
+#if defined(IDLE_POLLING_AVAILABLE)
+    unsigned idle_poll_rescanned = 0;
+#endif
 
     if (regs == NULL)
         dispatch_contract_halt();
@@ -401,11 +510,24 @@ dispatch_after_self_exit:
             departing = NULL;
             goto dispatch_after_self_exit;
         }
+#if defined(IDLE_POLLING_AVAILABLE)
+        /* Arm the watch, then look once more: a task queued before the
+         * word said "polling" was not announced through it. */
+        idle_poll_arm(regs);
+        if (!idle_poll_rescanned) {
+            idle_poll_rescanned = 1;
+            departing = NULL;
+            goto dispatch_after_self_exit;
+        }
+#endif
         AROSAppleDispatchTransition(0);
 #endif
         return;
     }
     AROSAppleRuntimeLocal()->idle_active = 0;
+#if defined(IDLE_POLLING_AVAILABLE)
+    idle_poll_disarm();
+#endif
 #if defined(__AROSEXEC_SMP__)
     GetIntETask(task)->iet_CpuNumber = GetCPUNumber();
 #endif

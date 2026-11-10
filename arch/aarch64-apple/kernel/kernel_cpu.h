@@ -39,6 +39,11 @@ typedef struct AROSAppleRuntimeFrame regs_t;
  * otherwise it does nothing and returns zero.
  */
 int cpu_IdleInterrupted(regs_t *regs);
+/* Idle polling (virtual machines): cpu_IdleKick announces a ready task to an
+ * idle CPU that still watches for one, and returns 0 when the CPU needs an
+ * interrupt instead; cpu_IdleKicked handles the loop's entry into the kernel. */
+int cpu_IdleKick(unsigned cpu);
+int cpu_IdleKicked(regs_t *regs);
 
 struct AROSAppleSIMDContext {
     uint64_t words[66];

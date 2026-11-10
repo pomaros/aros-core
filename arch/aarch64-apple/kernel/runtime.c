@@ -420,6 +420,8 @@ int AROSAppleRuntimeHandleException(struct AROSAppleRuntimeFrame *frame)
         }
         goto unhandled;
     }
+    if (cpu_IdleKicked(frame))
+        return 1;
     /* Restricted synchronous traps never reach pointer-bearing native SVCs
      * or native crash unwinding. IRQ/FIQ retain the normal scheduler path. */
     if (AROSAppleRestrictedTrap(frame))

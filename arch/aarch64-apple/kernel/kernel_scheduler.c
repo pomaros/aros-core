@@ -66,7 +66,7 @@ static void schedule_ready(struct Task *task)
     for (unsigned cpu=0;cpu<AROS_APPLE_SMP_MAX_CPUS;++cpu)
         if (cpu!=self && (online&(1U<<cpu)) && AROSCPUIdle(cpu) &&
             core_AffinityMatch(task,1U<<cpu)) {
-            AROSAppleSMPSendIPI(IPI_SCHEDULE,0,1U<<cpu);
+            if (!cpu_IdleKick(cpu)) AROSAppleSMPSendIPI(IPI_SCHEDULE,0,1U<<cpu);
             return;
         }
     FLAG_SCHEDSWITCH_SET;
