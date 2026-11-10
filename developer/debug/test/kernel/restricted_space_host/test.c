@@ -780,7 +780,8 @@ static void selected_space_tests(void)
         CHECK(AROSRestrictedServiceSubmit(&channels[i],AROS_RESTRICTED_DATA,AROS_RESTRICTED_DATA+128,8),"take-space-submit");
     }
     struct AROSRestrictedWork work,original;memset(&work,0x55,sizeof(work));original=work;
-    struct AROSRestrictedSpace foreign={0};
+    /* The hint admits the poll to the scan; the scan must still find nothing. */
+    struct AROSRestrictedSpace foreign={0};foreign.queue_hint=1;
     CHECK(!AROSRestrictedServiceTakeSpace(&workers[1],&contexts[1],NULL,&work) && !memcmp(&work,&original,sizeof(work)),"take-space-null");
     CHECK(!AROSRestrictedServiceTakeSpace(&workers[1],&contexts[1],&foreign,&work) && !memcmp(&work,&original,sizeof(work)),"take-space-foreign");
     CHECK(AROSRestrictedServiceTakeSpace(&workers[1],&contexts[1],&spaces[1],&work) && work.channel==channels[1].channel && work.bytes[0]==0xa1,"take-space-routing");

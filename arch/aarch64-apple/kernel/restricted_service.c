@@ -289,10 +289,12 @@ static int install(void *opaque,uintptr_t va,uintptr_t pa,unsigned protection)
 static int remove_page(void *opaque,uintptr_t va,uintptr_t pa)
 {
     struct AROSRestrictedSpace *s=opaque;
-    if (!owns_page(s,va,pa)) return 0;
-    s->flush_address=va|1;
-    int ok=AArch64UnmapPage(&s->hardware,s->root,s->tcr,va,pa);
-    s->flush_address=0;
+    int ok=0;
+    if (owns_page(s,va,pa)) {
+        s->flush_address=va|1;
+        ok=AArch64UnmapPage(&s->hardware,s->root,s->tcr,va,pa);
+        s->flush_address=0;
+    }
     return ok;
 }
 int AROSRestrictedSpaceInit(struct AROSRestrictedSpace *s,uint64_t principal,
