@@ -90,7 +90,10 @@ struct AROSRestrictedContext {
  * Refusal (thread not served, a callback pending, memory not accessible)
  * returns x0 = UINT64_MAX at once. A call is admitted from the fault and
  * exception stacks too. No request is queued and nobody is woken: the
- * thread that asks is the thread that answers. */
+ * thread that asks is the thread that answers. A served thread's SUBMIT of
+ * 256 bytes with the reply in the same buffer and no callback is taken as
+ * this call, and its COLLECT succeeds at once, so programs built for the
+ * queue run served without being rebuilt. */
 #define AROS_RESTRICTED_CALL 0xa553
 struct AROSRestrictedException {
     struct AROSRestrictedContext context;
