@@ -214,6 +214,61 @@ static void index_tests(void)
 }
 /* A reservation holds no page record: a commit needs the page's chunk, which
  * then serves every page it covers until the region detaches. */
+static void region_cut_tests(void)
+{
+    struct Fixture *f=aligned_alloc(PAGE,sizeof(*f));
+    unsigned char *data=aligned_alloc(PAGE,PAGE),*bytes=aligned_alloc(PAGE,2*PAGE);
+    CHECK(f && data && bytes,"cut-storage");memset(f,0,sizeof(*f));f->used=1;
+    memset(bytes,0x5a,2*PAGE);
+    struct AROSRestrictedSpace space={0};
+    struct AArch64ProtectionOps hardware={f,resolve,allocate,clean,invalidate,sync_code,NULL};
+    uint64_t tcr=25|(UINT64_C(5)<<32);
+    CHECK(AROSRestrictedSpaceInit(&space,197,(uintptr_t)f->tables[0],tcr,(uintptr_t)data,&hardware),"cut-space");
+    struct AROSRestrictedRegion left={0},right={0},hole={0};
+    struct KrnMappingPage *chunks[3]={0},records[3][2];
+    uintptr_t *tables[3]={0},ledger[3][2]={{0}},va=AROS_RESTRICTED_DYNAMIC_BASE,physical;
+    CHECK(AROSRestrictedRegionReserve(&space,&left,va,6*PAGE,chunks,tables,2,6),"cut-reserve");
+    CHECK(AROSRestrictedRegionAttachChunk(&left,0,records[0],ledger[0]) &&
+        AROSRestrictedRegionAttachChunk(&left,4,records[2],ledger[2]),"cut-attach");
+    CHECK(AROSRestrictedRegionCommit(&left,0,(uintptr_t)bytes,1) &&
+        AROSRestrictedRegionCommit(&left,4,(uintptr_t)(bytes+PAGE),3),"cut-commit");
+    uint64_t generation,reservation;
+    CHECK(AROSRestrictedSpacePageIdentity(&space,va+4*PAGE,2,&physical,&generation,&reservation),"cut-identity-before");
+    unsigned invalidations=f->invalidations;
+    CHECK(AROSRestrictedRegionCut(&left,va,PAGE,&right)==KMAP_CUT_INVALID && !left.mapping.closing,"cut-live-refused");
+    CHECK(AROSRestrictedRegionCut(&left,va+PAGE,2*PAGE,&right)==KMAP_CUT_SPLIT,"cut-split");
+    CHECK(f->invalidations==invalidations,"cut-no-pte-changes");
+    CHECK(left.mapping.resident==1 && right.mapping.resident==1 && right.mapping.chunk_offset==3,"cut-view-ledgers");
+    uint64_t after_generation,after_reservation;
+    CHECK(AROSRestrictedSpacePageIdentity(&space,va+4*PAGE,2,&physical,&after_generation,&after_reservation) &&
+        physical==(uintptr_t)(bytes+PAGE) && after_generation==generation && after_reservation==reservation,"cut-retained-identity");
+    uint64_t translated;
+    CHECK(!AArch64UserPagePhysical(&space.hardware,space.root,tcr,va,2,1,&translated),"cut-retained-protection");
+    CHECK(AROSRestrictedRegionChunkMissing(&right,0) &&
+        AROSRestrictedRegionAttachChunk(&right,0,records[1],ledger[1]),"cut-offset-attach");
+    CHECK(KrnMappingPageAt(&right.mapping,0)==&records[1][1],"cut-offset-record");
+    struct AROSRestrictedService channel={0};struct Task worker={198};int context;
+    struct AROSRestrictedWork work;
+    CHECK(AROSRestrictedServiceInit(&channel,&space,198) &&
+        AROSRestrictedServiceSubmit(&channel,va+4*PAGE,va+4*PAGE+128,8),"cut-pin-submit");
+    CHECK(AROSRestrictedRegionCut(&right,va+3*PAGE,PAGE,NULL)==KMAP_CUT_INVALID &&
+        !right.mapping.closing,"cut-pin-refused");
+    CHECK(AROSRestrictedServiceTake(&worker,&context,&work) &&
+        AROSRestrictedServiceComplete(&worker,&work) && AROSRestrictedServiceCollect(&channel,work.token),"cut-pin-drain");
+    CHECK(AROSRestrictedRegionCut(&right,va+3*PAGE,PAGE,NULL)==KMAP_CUT_TRIMMED &&
+        right.mapping.chunk_offset==4,"cut-prefix");
+    struct KrnMappingPage hp[3];uintptr_t hb[3]={0};
+    CHECK(reserve_region(&space,&hole,va+PAGE,3*PAGE,hp,hb,3),"cut-hole-reusable");
+    CHECK(AROSRestrictedRegionDetach(&left),"cut-left-detach");
+    CHECK(AROSRestrictedSpacePageIdentity(&space,va+4*PAGE,2,&physical,&after_generation,&after_reservation) &&
+        physical==(uintptr_t)(bytes+PAGE) && after_generation==generation && after_reservation==reservation,"cut-peer-survives");
+    uintptr_t released=0;
+    CHECK(AROSRestrictedRegionDecommit(&right,0,&released) && released==(uintptr_t)(bytes+PAGE) && !ledger[2][0],"cut-offset-decommit");
+    CHECK(AROSRestrictedRegionDetach(&right) && AROSRestrictedRegionDetach(&hole) &&
+        AROSRestrictedServiceClose(&channel) && AROSRestrictedSpaceClose(&space),"cut-cleanup");
+    for (size_t i=0;i<2*PAGE;++i) CHECK(bytes[i]==0x5a,"cut-bytes-retained");
+    free(bytes);free(data);free(f);
+}
 static void chunk_tests(void)
 {
     struct Fixture *f=aligned_alloc(PAGE,sizeof(*f));unsigned char *data=aligned_alloc(PAGE,PAGE);
@@ -867,5 +922,5 @@ int main(void)
     CHECK(AROSRestrictedSpaceInit(&space,11,root,tcr,(uintptr_t)data,&ops),"space-reuse");
     CHECK(space.handle!=first_handle,"space-generation");
     CHECK(AROSRestrictedSpaceClose(&space),"reused-space-close");
-    free(data);free(f);region_tests(AROS_RESTRICTED_DYNAMIC_BASE);region_tests(UINT64_C(0x7ffe0000));shared_tests();private_shared_page_tests();shared_copy_tests();channel_growth();publication_tests();index_tests();chunk_tests();jit_tests();shared_publication_tests();shared_offset_peer_tests();native_view_tests();native_view_exec_tests();shared_registration_rollback();puts("PASS restricted space and channel ownership");return 0;
+    free(data);free(f);region_tests(AROS_RESTRICTED_DYNAMIC_BASE);region_tests(UINT64_C(0x7ffe0000));shared_tests();private_shared_page_tests();shared_copy_tests();channel_growth();publication_tests();index_tests();region_cut_tests();chunk_tests();jit_tests();shared_publication_tests();shared_offset_peer_tests();native_view_tests();native_view_exec_tests();shared_registration_rollback();puts("PASS restricted space and channel ownership");return 0;
 }

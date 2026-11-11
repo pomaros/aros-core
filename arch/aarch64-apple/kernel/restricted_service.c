@@ -58,6 +58,7 @@ static void index_remove(uintptr_t pa)
 static uintptr_t *backing_at(const struct AROSRestrictedRegion *r,size_t page)
 {
     if (page>=r->mapping.page_count) return NULL;
+    page+=r->mapping.chunk_offset;
     uintptr_t *chunk=r->backing[page/r->mapping.chunk_pages];
     return chunk ? &chunk[page%r->mapping.chunk_pages] : NULL;
 }
@@ -345,11 +346,44 @@ int AROSRestrictedRegionAttachChunk(struct AROSRestrictedRegion *r,size_t page,
     struct KrnMappingPage *pages,uintptr_t *backing)
 {
     if (!pages || !backing || !AROSRestrictedRegionChunkMissing(r,page) ||
-        r->space->domain.closing || r->backing[page/r->mapping.chunk_pages]) return 0;
+        r->space->domain.closing || r->backing[(page+r->mapping.chunk_offset)/r->mapping.chunk_pages]) return 0;
     for (size_t i=0;i<r->mapping.chunk_pages;++i) if (backing[i]) return 0;
     if (!KrnMappingAttachChunk(&r->mapping,page,pages)) return 0;
-    r->backing[page/r->mapping.chunk_pages]=backing;return 1;
+    r->backing[(page+r->mapping.chunk_offset)/r->mapping.chunk_pages]=backing;return 1;
 }
+enum KrnMappingCutResult AROSRestrictedRegionCut(struct AROSRestrictedRegion *r,
+    uintptr_t address,size_t length,struct AROSRestrictedRegion *right)
+{
+    if (!r || !r->space || r->space->domain.closing || r->shared ||
+        r->publication_pending || r->mapping.closing || r->mapping.in_flight ||
+        !r->list_link || *r->list_link!=r ||
+        (right && (right==r || right->space || right->list_link || right->next || right->identity)))
+        return KMAP_CUT_INVALID;
+    struct AROSRestrictedSpace *s=r->space;
+    /* A decommitted hole has no owned backing as well as no live PTE. */
+    if (!length || (address&(PAGE-1)) || (length&(PAGE-1)) ||
+        address<r->mapping.start || address-r->mapping.start>=r->mapping.length ||
+        length>r->mapping.length-(address-r->mapping.start)) return KMAP_CUT_INVALID;
+    size_t first=(address-r->mapping.start)/PAGE,count=length/PAGE;
+    for (size_t i=first;i<first+count;++i)
+        if (backing_of(r,i)) return KMAP_CUT_INVALID;
+    r->mapping.closing=1;
+    enum KrnMappingCutResult result=KrnMappingCutChunked(&s->arena,&r->mapping,
+        address,length,right ? &right->mapping : NULL);
+    if (result==KMAP_CUT_INVALID) { r->mapping.closing=0;return result; }
+    if (result==KMAP_CUT_SPLIT) {
+        right->space=s;right->backing=r->backing;right->identity=r->identity;
+        right->next=r->next;right->list_link=&r->next;
+        if (right->next) right->next->list_link=&right->next;
+        r->next=right;
+    } else if (result==KMAP_CUT_RELEASED) {
+        *r->list_link=r->next;
+        if (r->next) r->next->list_link=r->list_link;
+        r->next=NULL;r->list_link=NULL;r->space=NULL;
+    }
+    return result;
+}
+
 int AROSRestrictedRegionCommit(struct AROSRestrictedRegion *r,size_t page,uintptr_t pa,unsigned access)
 {
     if (!r || !r->space || r->space->domain.closing || page>=r->mapping.page_count ||

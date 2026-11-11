@@ -100,3 +100,13 @@ The arena caches eight recent successful mapping lookups under the mapping
 lock. Every hit checks the live object's bounds; releasing or completely
 cutting an object evicts it before its storage can be retired. Lifetime tests
 exercise eviction, reuse, a split hole and retirement through both paths.
+
+Chunked private reservations also support drained interval cuts. The tests
+exercise middle splits and prefix/suffix/full cuts, physical-page/generation/
+protection preservation, lookup publication, rejected live pages and requests,
+and late chunk attachment through a view whose first page is inside a chunk.
+Both slices borrow the original chunk table; the caller must keep it alive
+until every slice has retired. No data bytes or PTEs move in this operation.
+Three mutations remove the drained-page check or corrupt the slice/attachment
+offset; each must fail its designated semantic assertion. These component
+checks do not implement the native allocation lifetime or a Linux mmap API.

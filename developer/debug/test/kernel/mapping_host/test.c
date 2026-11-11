@@ -341,12 +341,92 @@ static void lookup_index_cut_tests(void)
     assert(KrnMappingBeginClose(&m[3]) && KrnMappingRelease(&a,&m[3]));
 }
 
+static void chunked_cut_tests(void)
+{
+    const uintptr_t base=0x100000; const size_t page=4096;
+    struct KrnMappingArena a,other;
+    struct KrnMappingObject m,right={0},saved;
+    struct KrnMappingPage records[3][4], *chunks[3]={0}, copies[3];
+    struct Memory memory={0};struct KrnMappingOps ops={&memory,install,remove_page};
+    assert(KrnMappingArenaInitialize(&a,base,64*page,page));
+    assert(KrnMappingArenaInitialize(&other,base,64*page,page));
+    assert(KrnMappingReserveVirtualChunked(&a,&m,base,12*page,&a,chunks,4));
+    for (size_t i=0;i<3;++i) assert(KrnMappingAttachChunk(&m,4*i,records[i]));
+    const size_t retained[]={0,5,11};
+    for (size_t i=0;i<3;++i) {
+        assert(KrnMappingCommitResidentPage(&m,retained[i],0x400000+i*page,i==1?3:1,&ops));
+        copies[i]=*KrnMappingPageAt(&m,retained[i]);
+        assert(KrnMappingLookup(&a,base+retained[i]*page)==&m);
+    }
+    assert(KrnMappingCutChunked(&a,&m,base+2*page,3*page,&right)==KMAP_CUT_INVALID);
+    assert(KrnMappingBeginClose(&m));saved=m;
+    assert(KrnMappingCutChunked(&a,&m,base,page,&right)==KMAP_CUT_INVALID);
+    assert(KrnMappingCutChunked(&other,&m,base+2*page,3*page,&right)==KMAP_CUT_INVALID);
+    assert(KrnMappingCutChunked(&a,&m,base+2*page+1,3*page,&right)==KMAP_CUT_INVALID);
+    assert(KrnMappingCutChunked(&a,&m,base+2*page,3*page,&m)==KMAP_CUT_INVALID);
+    assert(KrnMappingCutChunked(&a,&m,base+2*page,3*page,NULL)==KMAP_CUT_INVALID);
+    m.in_flight=1;
+    assert(KrnMappingCutChunked(&a,&m,base+2*page,3*page,&right)==KMAP_CUT_INVALID);
+    m.in_flight=0;assert(!memcmp(&m,&saved,sizeof(m)));
+    assert(KrnMappingCutChunked(&a,&m,base+2*page,3*page,&right)==KMAP_CUT_SPLIT);
+    assert(m.page_count==2 && m.chunk_offset==0 && m.resident==1);
+    assert(right.page_count==7 && right.chunk_offset==5 && right.resident==2);
+    assert(m.chunks==chunks && right.chunks==chunks && memory.installs==3 && !memory.removes);
+    assert(!memcmp(KrnMappingPageAt(&m,0),&copies[0],sizeof(copies[0])));
+    assert(!memcmp(KrnMappingPageAt(&right,0),&copies[1],sizeof(copies[1])));
+    assert(!memcmp(KrnMappingPageAt(&right,6),&copies[2],sizeof(copies[2])));
+    for (size_t i=0;i<12;++i)
+        assert(KrnMappingLookup(&a,base+i*page)==(i<2?&m:i>=5?&right:NULL));
+    unsigned count=0;check_lookup_index(a.lookup_root,base,base+64*page,&count);assert(count==2);
+    assert(KrnMappingBeginClose(&right));memory.physical=copies[1].physical;
+    assert(KrnMappingReleasePage(&right,0,&ops)==copies[1].physical);
+    assert(KrnMappingCutChunked(&a,&right,right.start,page,NULL)==KMAP_CUT_TRIMMED);
+    assert(right.chunk_offset==6 && right.page_count==6 && right.resident==1);
+    assert(!memcmp(KrnMappingPageAt(&right,5),&copies[2],sizeof(copies[2])));
+    assert(KrnMappingBeginClose(&m));
+    assert(KrnMappingCutChunked(&a,&m,base+page,page,NULL)==KMAP_CUT_TRIMMED);
+    assert(m.page_count==1 && m.resident==1);
+    assert(KrnMappingBeginClose(&m));memory.physical=copies[0].physical;
+    assert(KrnMappingReleasePage(&m,0,&ops)==copies[0].physical);
+    assert(KrnMappingCutChunked(&a,&m,m.start,m.length,NULL)==KMAP_CUT_RELEASED);
+    assert(KrnMappingLookup(&a,right.start)==&right);
+    assert(KrnMappingBeginClose(&right));memory.physical=copies[2].physical;
+    assert(KrnMappingReleasePage(&right,5,&ops)==copies[2].physical);
+    assert(KrnMappingCutChunked(&a,&right,right.start,right.length,NULL)==KMAP_CUT_RELEASED);
+    assert(!a.first && !a.lookup_root && memory.removes==3);
+
+    /* Both sides of a non-chunk-aligned hole share a still-missing chunk.
+     * Attaching it through the right view must address the original slot,
+     * become visible on the left and never overwrite a live peer record. */
+    memset(chunks,0,sizeof(chunks));
+    assert(KrnMappingReserveVirtualChunked(&a,&m,base,12*page,&a,chunks,4));
+    assert(KrnMappingBeginClose(&m));
+    assert(KrnMappingCutChunked(&a,&m,base+2*page,page,&right)==KMAP_CUT_SPLIT);
+    assert(KrnMappingChunkMissing(&right,0));
+    assert(KrnMappingAttachChunk(&right,0,records[0]));
+    assert(KrnMappingPageAt(&right,0)==&records[0][3]);
+    assert(KrnMappingPageAt(&m,0)==&records[0][0]);
+    assert(!KrnMappingAttachChunk(&m,0,records[1]));
+    assert(KrnMappingChunkMissing(&right,1));
+    assert(KrnMappingAttachChunk(&right,1,records[1]));
+    assert(KrnMappingPageAt(&right,1)==&records[1][0]);
+    assert(KrnMappingCommitResidentPage(&right,0,0x500000,3,&ops));
+    assert(!KrnMappingPageAt(&m,0)->physical && !KrnMappingPageAt(&m,1)->physical);
+    assert(KrnMappingBeginClose(&m) && KrnMappingRelease(&a,&m));
+    assert(KrnMappingPageAt(&right,0)->physical==0x500000);
+    assert(KrnMappingBeginClose(&right));memory.physical=0x500000;
+    assert(KrnMappingReleasePage(&right,0,&ops)==0x500000);
+    assert(KrnMappingRelease(&a,&right));assert(!a.first && !a.lookup_root);
+    for (size_t i=0;i<256;++i) assert(!a.members[i]);
+}
+
 int main(void)
 {
     object_tests(); reservation_tests(); close_completion_tests(); populate_tests(); fixed_reservation_tests();
     lookup_lifetime_tests();
     lookup_index_tests();
     lookup_index_cut_tests();
+    chunked_cut_tests();
     puts("mapping-host PASS coalesced=1000 stale-completion=1 writeback=1 close-drain-no-pte=1 populate-preflight=1");
     return 0;
 }

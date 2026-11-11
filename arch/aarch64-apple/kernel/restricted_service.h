@@ -161,6 +161,13 @@ int AROSRestrictedRegionReserve(struct AROSRestrictedSpace *,struct AROSRestrict
 int AROSRestrictedRegionChunkMissing(const struct AROSRestrictedRegion *,size_t page);
 int AROSRestrictedRegionAttachChunk(struct AROSRestrictedRegion *,size_t page,
     struct KrnMappingPage *,uintptr_t *backing);
+/* Remove an already-decommitted private interval without reinstalling retained
+ * pages. No active lease or publication may cross the operation. A split
+ * preserves reservation/page identities and shares caller-owned chunk/ledger
+ * storage; the caller must retain that storage until every slice is detached.
+ * right is fresh zeroed storage. Failure leaves the region open and unchanged. */
+enum KrnMappingCutResult AROSRestrictedRegionCut(struct AROSRestrictedRegion *,
+    uintptr_t,size_t,struct AROSRestrictedRegion *right);
 int AROSRestrictedRegionCommit(struct AROSRestrictedRegion *,size_t,uintptr_t,unsigned);
 int AROSRestrictedRegionDecommit(struct AROSRestrictedRegion *,size_t,uintptr_t *);
 int AROSRestrictedRegionProtect(struct AROSRestrictedRegion *,size_t,unsigned);

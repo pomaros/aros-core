@@ -30,6 +30,10 @@ def run(argv,name):
  (out/(name+'.log')).write_bytes(r.stdout);commands.append(dict(name=name,argv=list(map(str,argv)),returncode=r.returncode));(out/'commands.json').write_text(json.dumps(commands,indent=2)+'\n');return r
 EXPECTED_ASSERTIONS={'batch-no-rollback': ('pages[m][p].state==state', 'assert_all'), 'stale-generation': ('!KrnMappingEndWriteback(&wb, 0)', 'object_tests'), 'writeback-unprotected': ('memory.protection==1', 'object_tests'), 'drop-dirty-on-close': ('!KrnMappingReleasePage(&m, 0, &ops)', 'object_tests'), 'cut-live-page': ('KrnMappingCut(&arena,&object,BASE+2*PAGE,2*PAGE,&right,rpages,8)==KMAP_CUT_INVALID', 'main'), 'populate-preflight': ('!KrnMappingPopulate(&m,m.start,m.length,1,&resident,&pending,&error)', 'populate_tests'), 'cut-offset': ('right.start==BASE+4*PAGE && right.length==2*PAGE && right.offset==7*PAGE', 'main'), 'cut-neighbor': ('object.next==&right && right.next==&neighbor', 'main'), 'double-drain': ('m.resident==1 && !m.in_flight && memory.protection==1', 'object_tests'), 'cut-capacity': ('KrnMappingCut(&arena,&lazy,start+2*PAGE,2*PAGE,&extra,extra_pages,3)==KMAP_CUT_INVALID', 'main'), 'batch-partial-end': ('!KrnMappingEndWritebackBatch(batch,6,0)', 'main'), 'publish-after-close': ('!KrnMappingComplete(&first,0x200000,0,&ops)', 'close_completion_tests'), 'batch-duplicate': ('!KrnMappingBeginWritebackBatch(batch,6,&ops) && !installs', 'main'), 'cut-generation': ('!KrnMappingComplete(&stale,0xa00000,0,&ops)', 'main'), 'batch-not-shared': ('!KrnMappingBeginWritebackBatch(batch,6,&ops) && !installs', 'main')}
 EXPECTED_ASSERTIONS.update({'fixed-overlap': ('!KrnMappingReserveAt(&arena,&reject,base+2*4096,2*4096,0,3,0,&arena,rp,2)', 'fixed_reservation_tests'), 'fixed-outside': ('!KrnMappingReserveAt(&other,&reject,base+7*4096,2*4096,0,3,0,&other,rp,2)', 'fixed_reservation_tests')})
+EXPECTED_ASSERTIONS.update({
+ 'chunk-cut-live': ('KrnMappingCutChunked(&a,&m,base,page,&right)==KMAP_CUT_INVALID', 'chunked_cut_tests'),
+ 'chunk-cut-offset': ('right.page_count==7 && right.chunk_offset==5 && right.resident==2', 'chunked_cut_tests'),
+ 'chunk-attach-offset': ('KrnMappingPageAt(&right,1)==&records[1][0]', 'chunked_cut_tests')})
 def expected_assertion(name, completed):
  expression,function=EXPECTED_ASSERTIONS[name]
  text=completed.stdout.decode(errors='replace')
@@ -57,6 +61,9 @@ try:
  r=run([domain],'domain')
  assert r.returncode==0,r.stdout.decode()
  for name,before,after,test in [
+  ('chunk-cut-live','(drained && p->physical)','(0 && drained && p->physical)',here/'test.c'),
+  ('chunk-cut-offset','right->chunk_offset+=after;','right->chunk_offset+=0;',here/'test.c'),
+  ('chunk-attach-offset','m->chunks[(page+m->chunk_offset)/m->chunk_pages]=records;','m->chunks[page/m->chunk_pages]=records;',here/'test.c'),
   ('fixed-overlap','if ((before && start<before->start+before->length) ||\n        (after && after->start<start+length))','if (0 && ((before && start<before->start+before->length) ||\n        (after && after->start<start+length)))',here/'test.c'),
   ('fixed-outside','length>a->length-(start-a->start)','(0 && length>a->length-(start-a->start))',here/'test.c'),
   ('writeback-unprotected','p->physical, p->protection & ~KMAP_WRITE))\n        return 0;','p->physical, p->protection))\n        return 0;',here/'test.c'),

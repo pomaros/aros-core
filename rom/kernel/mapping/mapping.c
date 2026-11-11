@@ -113,6 +113,7 @@ struct KrnMappingPage *KrnMappingPageAt(const struct KrnMappingObject *m, size_t
         return NULL;
     if (!m->chunks)
         return &m->pages[i];
+    i += m->chunk_offset;
     struct KrnMappingPage *chunk = m->chunks[i / m->chunk_pages];
     return chunk ? &chunk[i % m->chunk_pages] : NULL;
 }
@@ -138,7 +139,7 @@ static int initialize(struct KrnMappingObject *m, uintptr_t start,
     }
     *m = (struct KrnMappingObject){start, length, size, length / size, offset,
         owner, pages, protection, !!shared, 0, 0, 0, NULL, 0, chunks,
-        chunks ? chunk_pages : 0, 0, NULL, NULL, 0, NULL};
+        chunks ? chunk_pages : 0, 0, 0, NULL, NULL, 0, NULL};
     for (size_t i = 0; pages && i < m->page_count; ++i)
         pages[i] = (struct KrnMappingPage){0, 0, KMAP_ABSENT, 0, protection};
     return 1;
@@ -253,14 +254,14 @@ int KrnMappingReserveVirtualChunked(struct KrnMappingArena *a, struct KrnMapping
 }
 int KrnMappingChunkMissing(const struct KrnMappingObject *m,size_t page)
 {
-    return m && m->chunks && page<m->page_count && !m->chunks[page/m->chunk_pages];
+    return m && m->chunks && page<m->page_count && !m->chunks[(page+m->chunk_offset)/m->chunk_pages];
 }
 int KrnMappingAttachChunk(struct KrnMappingObject *m,size_t page,struct KrnMappingPage *records)
 {
     if (!records || !KrnMappingChunkMissing(m,page) || m->closing) return 0;
     for (size_t i=0;i<m->chunk_pages;++i)
         records[i]=(struct KrnMappingPage){0,m->reserved_generation,KMAP_RESERVED,0,m->protection};
-    m->chunks[page/m->chunk_pages]=records;
+    m->chunks[(page+m->chunk_offset)/m->chunk_pages]=records;
     return 1;
 }
 int KrnMappingCommitRange(struct KrnMappingObject *m,uintptr_t address,
@@ -459,6 +460,85 @@ enum KrnMappingCutResult KrnMappingCut(struct KrnMappingArena *a,
     membership_remove(a,m);
     *link=m->next;
     m->next=NULL;
+    m->length=m->page_count=m->resident=0;
+    return KMAP_CUT_RELEASED;
+}
+
+/* Skip absent chunks: a huge sparse reservation must cost metadata traversal,
+ * not one iteration for every possible page. */
+static int chunked_range(const struct KrnMappingObject *m, size_t first,
+    size_t count, int drained, size_t *resident)
+{
+    *resident=0;
+    size_t end=first+count;
+    while (first<end) {
+        size_t at=m->chunk_offset+first, offset=at%m->chunk_pages;
+        size_t n=m->chunk_pages-offset;
+        if (n>end-first) n=end-first;
+        const struct KrnMappingPage *chunk=m->chunks[at/m->chunk_pages];
+        for (size_t i=0;chunk && i<n;++i) {
+            const struct KrnMappingPage *p=&chunk[offset+i];
+            if (p->state==KMAP_LOADING || p->state==KMAP_WRITEBACK ||
+                (drained && p->physical)) return 0;
+            if (p->physical && (p->state==KMAP_CLEAN || p->state==KMAP_DIRTY))
+                ++*resident;
+        }
+        first+=n;
+    }
+    return 1;
+}
+
+enum KrnMappingCutResult KrnMappingCutChunked(struct KrnMappingArena *a,
+    struct KrnMappingObject *m, uintptr_t address, size_t length,
+    struct KrnMappingObject *right)
+{
+    if (!a || !m || !m->closing || m->in_flight || !m->chunks ||
+        !m->chunk_pages || !m->virtual_reservation || m->shared || !length ||
+        !m->page_size || (address&(m->page_size-1)) ||
+        (length&(m->page_size-1)) || address<m->start ||
+        address-m->start>=m->length || length>m->length-(address-m->start) ||
+        m->chunk_offset>SIZE_MAX-m->page_count) return KMAP_CUT_INVALID;
+    struct KrnMappingObject **link=&a->first;
+    while (*link && *link!=m) link=&(*link)->next;
+    if (!*link) return KMAP_CUT_INVALID;
+    size_t first=(address-m->start)/m->page_size;
+    size_t after=first+length/m->page_size, remaining=m->page_count-after;
+    size_t left_resident,right_resident,discarded;
+    if (!chunked_range(m,first,after-first,1,&discarded) ||
+        !chunked_range(m,0,first,0,&left_resident) ||
+        !chunked_range(m,after,remaining,0,&right_resident)) return KMAP_CUT_INVALID;
+    if (first && remaining) {
+        if (!right) return KMAP_CUT_INVALID;
+        for (struct KrnMappingObject *p=a->first;p;p=p->next)
+            if (p==right) return KMAP_CUT_INVALID;
+    }
+    /* All validation precedes publication. Retained records keep their exact
+     * identities; only the address ranges and page-index origins change. */
+    forget_lookup(a,m);
+    if (first && remaining) {
+        *right=*m;
+        right->start=address+length;
+        right->offset+=after*m->page_size;
+        right->chunk_offset+=after;
+        right->length=remaining*m->page_size;right->page_count=remaining;
+        right->resident=right_resident;right->closing=0;
+        m->next=right;
+        a->lookup_root=lookup_insert(a->lookup_root,right);
+        membership_add(a,right);
+    }
+    if (first) {
+        m->length=first*m->page_size;m->page_count=first;
+        m->resident=left_resident;m->closing=0;
+        return remaining ? KMAP_CUT_SPLIT : KMAP_CUT_TRIMMED;
+    }
+    if (remaining) {
+        m->start=address+length;m->offset+=after*m->page_size;
+        m->chunk_offset+=after;m->length=remaining*m->page_size;
+        m->page_count=remaining;m->resident=right_resident;m->closing=0;
+        return KMAP_CUT_TRIMMED;
+    }
+    a->lookup_root=lookup_remove(a->lookup_root,m);
+    membership_remove(a,m);*link=m->next;m->next=NULL;
     m->length=m->page_count=m->resident=0;
     return KMAP_CUT_RELEASED;
 }

@@ -56,6 +56,8 @@ struct KrnMappingObject {
      * reserved_generation and no backing. */
     struct KrnMappingPage **chunks;
     size_t chunk_pages;
+    /* First record of this view in caller-owned shared chunk storage. */
+    size_t chunk_offset;
     uint64_t reserved_generation;
     /* Intrusive AVL index, owned by the arena's mapping lock. */
     struct KrnMappingObject *lookup_left, *lookup_right;
@@ -139,7 +141,8 @@ int KrnMappingCommitRange(struct KrnMappingObject *, uintptr_t address,
  * write a page record (commit, protect, fault) refuse a missing chunk;
  * ChunkMissing tells the caller to attach one first. Decommit of a missing
  * chunk releases nothing. Range commit, cut, populate and writeback are not
- * available on chunked objects. Chunks stay attached until release; the
+ * available on chunked objects; CutChunked supplies metadata-only slicing.
+ * Chunks stay attached until the last slice is released; the
  * caller owns their storage. PageAt returns the record of a page, or NULL
  * for a missing chunk. */
 int KrnMappingReserveVirtualChunked(struct KrnMappingArena *, struct KrnMappingObject *,
@@ -173,6 +176,17 @@ enum KrnMappingCutResult KrnMappingCut(struct KrnMappingArena *,
     struct KrnMappingObject *, uintptr_t address, size_t length,
     struct KrnMappingObject *right, struct KrnMappingPage *right_pages,
     size_t right_capacity);
+/* Slice a drained private chunked reservation without changing retained page
+ * records, generations, physical backing or PTEs. The cut must already have
+ * no physical pages. Caller holds the arena lock and owns chunk storage until
+ * ALL resulting slices have retired; attached chunks are shared metadata.
+ * There must be no outstanding page-index request or lease across the cut.
+ * A middle cut needs an unpublished right object. Failure changes nothing.
+ * Retained generations stay unchanged; the caller owns native fault identity.
+ */
+enum KrnMappingCutResult KrnMappingCutChunked(struct KrnMappingArena *,
+    struct KrnMappingObject *, uintptr_t address, size_t length,
+    struct KrnMappingObject *right);
 enum KrnMappingFaultResult KrnMappingFault(struct KrnMappingObject *,
     uintptr_t address, unsigned access, int may_block,
     struct KrnMappingRequest *, const struct KrnMappingOps *);

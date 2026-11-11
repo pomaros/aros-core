@@ -20,6 +20,8 @@ def main():
  original=source.read_text()
  generic=ROOT/'rom/kernel/mapping/mapping.c';pager=ROOT/'rom/kernel/mapping/pager.c'
  cases=[('baseline','adapter',None,None,None),
+  ('cut-identity','adapter','right->identity=r->identity;','right->identity=0;','cut-retained-identity'),
+  ('cut-ledger-offset','adapter','page+=r->mapping.chunk_offset;','page+=0;','cut-retained-identity'),
   ('cow-copy','adapter','memcpy((void *)pa,(const void *)old,PAGE);','(void)old;','cow-bytes'),
   ('cow-writable','adapter','p->protection!=KMAP_READ || p->generation','(p->protection&~(KMAP_READ|KMAP_WRITE)) || p->generation','cow-writable-refused'),
   ('cow-count','adapter','*peer=r->shared_next;--b->views;','*peer=r->shared_next;','cow-ledger'),

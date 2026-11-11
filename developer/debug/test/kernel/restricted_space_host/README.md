@@ -133,3 +133,15 @@ and fully drained. These are HOST semantics, not a guest speed measurement.
 Region retirement checks out-of-order head, middle and tail removal, duplicate
 detach rejection, surviving address-index membership and reuse of records.
 The incoming list link avoids rescanning every region during each detach.
+
+Private reservation slicing is checked against actual synthetic AArch64 page
+tables: retained physical backing, protection, page generation and reservation
+identity must survive unchanged, with no new invalidation callback. The test
+attaches a missing metadata chunk through an offset view, rejects slicing while
+a real service request holds the mapping, drains that request, reuses the hole,
+and detaches one slice while its peer stays usable. Decommit through the peer
+must update the correct original backing entry. Mutations of the retained
+reservation identity and backing-index offset must fail the identity check.
+The native allocator must still retain shared metadata until all slices retire;
+this fixture uses caller-owned storage and does not qualify that lifetime or
+execution in a VM.
