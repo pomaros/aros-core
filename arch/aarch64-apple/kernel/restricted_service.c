@@ -540,14 +540,11 @@ int AROSRestrictedSpaceFaultIdentity(struct AROSRestrictedSpace *s,uintptr_t add
      * it from the private clone before installing the owned user page. */
     if (AArch64MappingPhysical(&s->hardware,s->root,s->tcr,va,&actual) &&
         (actual!=va || !AArch64PrivilegedPagePhysical(&s->hardware,s->root,s->tcr,va,&actual))) return 0;
-    for (struct AROSRestrictedRegion *r=s->regions;r;r=r->next)
-        if (&r->mapping==m) {
-            if (!r->identity || backing_of(r,index) || r->publication_pending ||
-                (r->shared && r->shared->publication)) return 0;
-            *physical=0;*generation=p ? p->generation : m->reserved_generation;
-            *reservation=r->identity;return 1;
-        }
-    return 0;
+    struct AROSRestrictedRegion *r=mapping_region(s,m);
+    if (!r || !r->identity || backing_of(r,index) || r->publication_pending ||
+        (r->shared && r->shared->publication)) return 0;
+    *physical=0;*generation=p ? p->generation : m->reserved_generation;
+    *reservation=r->identity;return 1;
 }
 int AROSRestrictedServiceInit(struct AROSRestrictedService *s,
     struct AROSRestrictedSpace *space,uint64_t requester)

@@ -58,8 +58,46 @@ static uintptr_t r_shared_call(struct RestrictedSharedOperation *op)
     return 0;
 }
 #include "actual.inc"
+static void indexed_allocations(void)
+{
+    enum { COUNT=1024 };
+    struct RestrictedDomain domain={0};
+    struct RestrictedAllocation *items=calloc(COUNT,sizeof(*items));
+    struct KrnMappingPage **chunks=calloc(COUNT,sizeof(*chunks));
+    assert(items && chunks);
+    assert(KrnMappingArenaInitialize(&domain.space.arena,R_PAGE,(COUNT*2+2)*R_PAGE,R_PAGE));
+    struct KrnMappingPage bootstrap={0};
+    assert(KrnMappingReserveVirtual(&domain.space.arena,&domain.space.mapping,R_PAGE,R_PAGE,&domain,&bootstrap,1));
+    assert(!r_allocation_at(&domain,R_PAGE));
+    for (unsigned n=0;n<COUNT;++n) {
+        unsigned i=(n*513)%COUNT;
+        items[i].region.space=&domain.space;
+        assert(KrnMappingReserveVirtualChunked(&domain.space.arena,&items[i].region.mapping,
+            (i*2+3)*R_PAGE,R_PAGE,&domain,chunks+i,1));
+    }
+    for (unsigned n=0;n<COUNT;++n) {
+        unsigned i=(n*137)%COUNT;uintptr_t address=(i*2+3)*R_PAGE;
+        assert(r_allocation_at(&domain,address)==&items[i]);
+        assert(r_allocation_at(&domain,address+R_PAGE-1)==&items[i]);
+        assert(!r_allocation_at(&domain,address+R_PAGE));
+    }
+    /* Removed objects must never survive in the arena's lookup cache. */
+    for (unsigned i=0;i<COUNT;i+=2) {
+        assert(KrnMappingBeginClose(&items[i].region.mapping));
+        assert(KrnMappingRelease(&domain.space.arena,&items[i].region.mapping));
+        assert(!r_allocation_at(&domain,(i*2+3)*R_PAGE));
+        memset(&items[i],0xa5,sizeof(items[i]));
+    }
+    for (unsigned i=1;i<COUNT;i+=2)
+        assert(r_allocation_at(&domain,(i*2+3)*R_PAGE)==&items[i]);
+    items[1].region.space=NULL;
+    assert(!r_allocation_at(&domain,5*R_PAGE));
+    assert(!r_allocation_at(&domain,0) && !r_allocation_at(&domain,UINTPTR_MAX));
+    free(chunks);free(items);
+}
 int main(void)
 {
+    indexed_allocations();
     Forbid();
     assert(!r_supply_tables(77,NULL,NULL,0));
     assert(!r_supply_tables(77,NULL,NULL,SIZE_MAX));
@@ -97,7 +135,9 @@ int main(void)
     assert(!r_reserve_memory(1,AROS_RESTRICTED_DYNAMIC_BASE,R_PAGE) && !live && !exclusion);
     publish=1;assert(r_reserve_memory(1,AROS_RESTRICTED_DYNAMIC_BASE,2048*R_PAGE) && live==1 && !exclusion);
     struct RestrictedAllocation *a=owned;
-    assert(a->count==2048 && a->storage_bytes>R_PAGE && !a->backing[2047]);
+    assert(a->count==2048 && a->chunk_count==4 && a->storage_bytes==R_PAGE);
+    for (size_t i=0;i<a->chunk_count;++i) assert(!a->pages[i] && !a->backing[i]);
+    assert(!r_backing(a,2047));
     Forbid();r_free_allocation(a);Permit();owned=NULL;
     assert(!live && !exclusion);puts("PASS native allocation failure rollback and ownership");return 0;
 }

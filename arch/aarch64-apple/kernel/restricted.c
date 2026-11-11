@@ -1015,6 +1015,16 @@ static void r_renew_private_faults(struct RestrictedDomain *d,uintptr_t address,
             r->fault_page_generation=replacement->generation;
         }
 }
+/* The domain arena indexes exactly its bootstrap and its allocation mappings.
+ * Use that index for page operations; the allocation list is for teardown. */
+static struct RestrictedAllocation *r_allocation_at(struct RestrictedDomain *d,uintptr_t address)
+{
+    struct KrnMappingObject *m=KrnMappingLookup(&d->space.arena,address);
+    if (!m || m==&d->space.mapping) return NULL;
+    struct RestrictedAllocation *a=(void *)((unsigned char *)m-
+        offsetof(struct RestrictedAllocation,region)-offsetof(struct AROSRestrictedRegion,mapping));
+    return a->region.space==&d->space ? a : NULL;
+}
 static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned svc)
 {
     if (svc!=R_MEMORY) return 0;
@@ -1035,10 +1045,7 @@ static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned s
         }
         return 1;
     }
-    struct RestrictedAllocation **link=&d->allocations;
-    while (*link && !(p->address>=(*link)->region.mapping.start &&
-        p->address-(*link)->region.mapping.start<(*link)->region.mapping.length)) link=&(*link)->next;
-    struct RestrictedAllocation *a=*link;
+    struct RestrictedAllocation *a=r_allocation_at(d,p->address);
     if (!a || (p->address&(R_PAGE-1))) return 1;
     size_t page=(p->address-a->region.mapping.start)/R_PAGE;
     if ((p->operation==1 || p->operation==5) && !r_tables_need(d,3)) {
@@ -1080,8 +1087,10 @@ static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned s
         r_renew_private_faults(d,p->address,old_physical,old_generation,reservation,replacement);
         frame->x[0]=1;
     }
-    else if (p->operation==4 && p->address==a->region.mapping.start &&
-        AROSRestrictedRegionDetach(&a->region)) {
+    else if (p->operation==4 && p->address==a->region.mapping.start) {
+        struct RestrictedAllocation **link=&d->allocations;
+        while (*link && *link!=a) link=&(*link)->next;
+        if (!*link || !AROSRestrictedRegionDetach(&a->region)) return 1;
         for (size_t i=0;i<a->count;++i) d->memory_pages-=r_backing(a,i)!=0;
         size_t metadata=a->storage_bytes/R_PAGE+a->chunks_attached*(a->chunk_bytes/R_PAGE);
         d->memory_pages-=metadata;d->memory_metadata_pages-=metadata;
