@@ -26,11 +26,6 @@
 #include "jit_protect.h"
 #include "restricted.h"
 #include <aros/apple/jit.h>
-#if defined(__AROSEXEC_SMP__)
-#include "../exec/tls.h"
-static struct { int td; uintptr_t pc; unsigned valid; } mask_td[AROS_CPU_MAX][64];
-static unsigned mask_td_reports[AROS_CPU_MAX];
-#endif
 
 #define ESR_EC_SHIFT 26U
 #define ESR_EC_SVC64 UINT64_C(0x15)
@@ -140,11 +135,6 @@ static int irq_mask_enter(void)
     if (local->irq_mask_depth==UINT32_MAX) return 0;
     if (!local->irq_mask_depth) local->irq_mask_started=irq_mask_clock();
     ++local->irq_mask_depth;
-#if defined(__AROSEXEC_SMP__)
-    unsigned cpu=AROSCPUCurrentIndex();
-    if (cpu<AROS_CPU_MAX && local->irq_mask_depth<=64)
-        mask_td[cpu][local->irq_mask_depth-1].valid=0;
-#endif
     ++local->irq_mask_entries;
     return 1;
 }
@@ -502,33 +492,10 @@ int AROSAppleRuntimeHandleException(struct AROSAppleRuntimeFrame *frame)
         return 1;
     case AROS_APPLE_RUNTIME_SVC_IRQ_SAVE:
         if (!irq_mask_enter()) goto rejected;
-#if defined(__AROSEXEC_SMP__)
-        {
-            unsigned cpu=AROSCPUCurrentIndex(),depth=AROSAppleRuntimeLocal()->irq_mask_depth;
-            if (cpu<AROS_CPU_MAX && depth<=64) {
-                mask_td[cpu][depth-1].td=TLS_GET(TDNestCnt);
-                mask_td[cpu][depth-1].pc=frame->x[30];
-                mask_td[cpu][depth-1].valid=1;
-            }
-        }
-#endif
         frame->x[0] = frame->spsr & SPSR_INTERRUPT_MASK;
         frame->spsr |= SPSR_INTERRUPT_MASK;
         return 1;
     case AROS_APPLE_RUNTIME_SVC_IRQ_RESTORE:
-#if defined(__AROSEXEC_SMP__)
-        {
-            unsigned cpu=AROSCPUCurrentIndex(),depth=AROSAppleRuntimeLocal()->irq_mask_depth;
-            if (cpu<AROS_CPU_MAX && depth && depth<=64 && mask_td[cpu][depth-1].valid &&
-                mask_td[cpu][depth-1].td!=TLS_GET(TDNestCnt) && mask_td_reports[cpu]++<16) {
-                halt_puts("[SCHED] masked counter changed cpu=");halt_put_hex(cpu);
-                halt_puts(" before=");halt_put_hex((uint64_t)(int64_t)mask_td[cpu][depth-1].td);
-                halt_puts(" after=");halt_put_hex((uint64_t)(int64_t)TLS_GET(TDNestCnt));
-                halt_puts(" enter=");halt_put_hex(mask_td[cpu][depth-1].pc);
-                halt_puts(" leave=");halt_put_hex(frame->x[30]);halt_puts("\n");
-            }
-        }
-#endif
         if (!irq_mask_leave()) goto rejected;
         frame->spsr = (frame->spsr & ~SPSR_INTERRUPT_MASK) |
             (frame->x[0] & SPSR_INTERRUPT_MASK) | cpu_RequiredCurrentTaskMasks();
