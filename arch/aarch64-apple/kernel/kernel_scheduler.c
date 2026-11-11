@@ -26,6 +26,21 @@ static struct ExceptionContext *restricted_context(struct Task *task)
         task->tc_UnionETask.tc_ETask->et_RegFrame : NULL;
 }
 #if defined(__AROSEXEC_SMP__)
+/* Insert a woken task before the ready tasks of its own priority. */
+static void enqueue_ready_first(struct Task *task)
+{
+    unsigned int fiq=EXEC_FIQ_DISABLE();
+    EXEC_BLOCK_DISPATCH_INC;
+    EXEC_SPINLOCK_LOCK(&PrivExecBase(SysBase)->TaskReadySpinLock,NULL,SPINLOCK_MODE_WRITE);
+    struct Node *next;
+    ForeachNode(&SysBase->TaskReady,next)
+        if (next->ln_Pri<=task->tc_Node.ln_Pri) break;
+    /* Before next; at the tail when the walk ran off the list. */
+    Insert(&SysBase->TaskReady,&task->tc_Node,next->ln_Pred);
+    EXEC_SPINLOCK_UNLOCK(&PrivExecBase(SysBase)->TaskReadySpinLock);
+    EXEC_BLOCK_DISPATCH_DEC;
+    EXEC_FIQ_RESTORE(fiq);
+}
 /* A ready task's context is complete: its CPU saved it before queueing it. */
 static int resume_cpu(struct Task *task)
 {
@@ -123,7 +138,12 @@ static int restricted_park_control(struct Task *task,struct ExceptionContext *co
 #endif
             task->tc_State=TS_READY;
 #if defined(__AROSEXEC_SMP__)
-            exec_TaskEnqueueReady(task);
+            /* A parked restricted thread woken by its reply goes ahead of the
+             * ready tasks of its priority, which have used their time: it
+             * does a little work and parks again (the Wine server answering a
+             * request). At the tail it waited for every compute-bound task's
+             * quantum, hundreds of microseconds per request. */
+            enqueue_ready_first(task);
 #else
             Enqueue(&SysBase->TaskReady,&task->tc_Node);
 #endif
