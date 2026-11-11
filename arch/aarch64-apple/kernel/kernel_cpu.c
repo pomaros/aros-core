@@ -227,7 +227,10 @@ extern void AROSAppleKernelIdleLoop(void);
  * before it looks at the word.
  */
 #define IDLE_POLLING_AVAILABLE 1
-#define IDLE_POLL_US UINT64_C(200)
+/* 2 ms: a restricted domain's calls come in bursts a few milliseconds apart.
+ * With 200 us most wakes found the CPU halted and paid the IPI; a page load
+ * sent 2,200 a second and the IPI write alone took 30% of a CPU. */
+#define IDLE_POLL_US UINT64_C(2000)
 #define IDLE_KICK_SVC 0xa5f0
 enum { IDLE_HALTED, IDLE_POLLING, IDLE_KICKED };
 static struct { volatile uint32_t state; } __attribute__((aligned(64)))
