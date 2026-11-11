@@ -5,7 +5,8 @@ from pathlib import Path
 import tempfile,subprocess
 root=Path(__file__).resolve().parents[4]
 s=(root/'rom/intuition/windowcomposition.c').read_text()
-struct=s[s.index('struct WindowComposition\n{'):s.index('\nstatic void mark_damage')]
+struct_start=s.index('struct WindowComposition\n{')
+struct=s[struct_start:s.index('\n};',struct_start)+3]
 mark=s[s.index('static void mark_damage'):s.index('\nAROS_UFH3')]
 present=s[s.index('BOOL WindowCompositionPresent(struct'):s.index('\nBOOL WindowCompositionPresentScreen')]
 prefix=r'''
@@ -32,6 +33,8 @@ struct GfxBase { int unused; }; struct LayersBase { int unused; }; struct Librar
 struct Screen { struct Layer_Info LayerInfo; struct { struct BitMap *BitMap; } RastPort; };
 struct Window { LONG LeftEdge,TopEdge,Width,Height; struct Screen *WScreen; struct WindowComposition *Composition; };
 struct IntuitionBase { struct GfxBase *GfxBase; struct LayersBase *LayersBase; struct Library *OOPBase; int ib_HiddBitMapBase; };
+/* Wake publication is covered separately; these checks exercise pixels/locks. */
+static void request_composition_wake(struct IntuitionBase *base) { assert(base); }
 #define GetPrivIBase(b) (b)
 #define IW(w) (w)
 #define IS_VISIBLE(l) ((l)->visible)

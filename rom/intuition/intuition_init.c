@@ -33,6 +33,7 @@
 #include LC_LIBDEFS_FILE
 
 #include "intuition_intern.h"
+#include "windowcomposition.h"
 #include "strgadgets.h" /* To get GlobalEditFunc prototype */
 #include "inputhandler.h"
 #include "menutask.h"
@@ -403,6 +404,8 @@ static int IntuitionOpen(LIBBASETYPEPTR LIBBASE)
         DoIO((struct IORequest *)GetPrivIBase(LIBBASE)->InputIO);
         D(bug("DoIO() called\n"));
     }
+
+    if (!WindowCompositionInitWake(GetPubIBase(LIBBASE))) return FALSE;
 
     if (!LIBBASE->ViewLord_ok)
     {

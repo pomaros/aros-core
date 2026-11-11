@@ -528,6 +528,8 @@ struct IntIntuitionBase
     struct MinList          	*IntuiActionQueue;
     struct IOStdReq         	*InputIO;
     struct MsgPort          	*InputMP;
+    /* Resident, coalesced presentation wake; contains no client/window pointer. */
+    struct WindowCompositionWake *CompositionWake;
 
     /* Intuition Screennotify Replyport if SNOTIFY_WAIT_REPLY is specified */
 

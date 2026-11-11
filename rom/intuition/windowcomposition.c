@@ -25,6 +25,82 @@
 #include <proto/graphics.h>
 #include <proto/layers.h>
 #include <proto/oop.h>
+#include <devices/input.h>
+#include <devices/inputevent.h>
+
+/* Intuition and its input.device reference are resident. One preallocated
+ * neutral input request wakes the existing serialized presentation pass;
+ * repeated damage coalesces while that request is pending. The reply owns
+ * no client pointer, so closing a window cannot leave a queued stale window.
+ * Input capture may reject the request; ordinary input ticks remain a
+ * fallback and the next damage can submit again after the error reply. */
+struct WindowCompositionWake
+{
+    struct SignalSemaphore lock;
+    struct MsgPort *port;
+    struct IOStdReq *request;
+    struct InputEvent event;
+    BOOL pending;
+};
+
+BOOL WindowCompositionInitWake(struct IntuitionBase *IntuitionBase)
+{
+    struct WindowCompositionWake *wake;
+    ObtainSemaphore(&GetPrivIBase(IntuitionBase)->IntuiActionLock);
+    if (GetPrivIBase(IntuitionBase)->CompositionWake)
+    {
+        ReleaseSemaphore(&GetPrivIBase(IntuitionBase)->IntuiActionLock);
+        return TRUE;
+    }
+    wake = AllocVec(sizeof(*wake), MEMF_PUBLIC | MEMF_CLEAR);
+    if (!wake) goto failed;
+    InitSemaphore(&wake->lock);
+    wake->port = CreateMsgPort();
+    if (wake->port)
+        wake->request = (struct IOStdReq *)CreateIORequest(wake->port, sizeof(*wake->request));
+    if (!wake->request)
+    {
+        if (wake->port) DeleteMsgPort(wake->port);
+        FreeVec(wake);
+        goto failed;
+    }
+    /* Completion is polled under lock, never waited for from a draw callback. */
+    FreeSignal(wake->port->mp_SigBit);
+    wake->port->mp_SigBit = -1;
+    wake->port->mp_Flags = PA_IGNORE;
+    wake->port->mp_SigTask = NULL;
+    wake->request->io_Device = GetPrivIBase(IntuitionBase)->InputIO->io_Device;
+    wake->request->io_Unit = GetPrivIBase(IntuitionBase)->InputIO->io_Unit;
+    wake->request->io_Command = IND_WRITEEVENT;
+    wake->request->io_Length = sizeof(wake->event);
+    wake->request->io_Data = &wake->event;
+    wake->event.ie_Class = IECLASS_NULL;
+    GetPrivIBase(IntuitionBase)->CompositionWake = wake;
+    ReleaseSemaphore(&GetPrivIBase(IntuitionBase)->IntuiActionLock);
+    return TRUE;
+failed:
+    ReleaseSemaphore(&GetPrivIBase(IntuitionBase)->IntuiActionLock);
+    return FALSE;
+}
+
+static void request_composition_wake(struct IntuitionBase *IntuitionBase)
+{
+    struct WindowCompositionWake *wake = GetPrivIBase(IntuitionBase)->CompositionWake;
+    BOOL submit = FALSE;
+    if (!wake) return;
+    ObtainSemaphore(&wake->lock);
+    /* Reuse only after removing the actual reply, not just observing a node
+     * type. pending is reserved before SendIO, so another CPU cannot submit
+     * the same request between unlock and the first SendIO publication. */
+    if (wake->pending && GetMsg(wake->port)) wake->pending = FALSE;
+    if (!wake->pending)
+    {
+        wake->pending = TRUE;
+        submit = TRUE;
+    }
+    ReleaseSemaphore(&wake->lock);
+    if (submit) SendIO((struct IORequest *)wake->request);
+}
 
 struct WindowComposition
 {
@@ -232,6 +308,7 @@ void ReleaseWindowCompositionScale(struct WindowCompositionScale *prepared,
 static void mark_damage(struct WindowComposition *state, LONG left, LONG top,
                         LONG right, LONG bottom)
 {
+    BOOL changed = FALSE;
     /* This semaphore protects only the bounded damage union. Its holder never
      * takes screen/logical locks or waits for a presenter. Drawing may already
      * hold a logical layer lock when the callback runs. */
@@ -251,8 +328,10 @@ static void mark_damage(struct WindowComposition *state, LONG left, LONG top,
             if (bottom > state->damage.bottom) state->damage.bottom = bottom;
         }
         state->dirty = TRUE;
+        changed = TRUE;
     }
     ReleaseSemaphore(&state->damageLock);
+    if (changed) request_composition_wake(state->base);
 }
 
 AROS_UFH3(IPTR, composition_update,
