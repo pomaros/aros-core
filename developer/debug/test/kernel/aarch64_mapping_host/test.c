@@ -548,13 +548,14 @@ static void range_unmapped(unsigned page)
 }
 int main(void)
 {
-    low_block_eviction(12,1);low_block_eviction(12,2);low_block_eviction(14,2);
     const unsigned widths[]={25,30,32,39,42,48};
     for (unsigned page=12;page<=14;page+=2) {
         for (unsigned i=0;i<sizeof(widths)/sizeof(*widths);++i) basic(page,widths[i]);
         low_clone_eviction(page,39);low_clone_eviction(page,48);
         privileged_alias(page);user_admission(page);range_unmapped(page);permissions(page);allocation_failures(page);invalid_geometry(page);corruption(page);parent_and_blocks(page);callback_contract(page);address_widths(page);
     }
+    /* Keep the original semantic mutation assertions ahead of extended cases. */
+    low_block_eviction(12,1);low_block_eviction(12,2);low_block_eviction(14,2);
     printf("[AARCH64-MAPPING-HOST] result=PASS cases=%u granules=4K,16K actual-production-walks=1 native=NOT_RUN\n",cases);
     return 0;
 }

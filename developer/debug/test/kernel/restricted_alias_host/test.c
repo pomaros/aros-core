@@ -18,15 +18,19 @@ static void r_uncoordinate(void) { assert(coordinator);coordinator=0; }
 static uint64_t *r_resolve(void *c,uint64_t p) { (void)c;(void)p;return NULL; }
 static void r_clean(void *c,const void *p,size_t n) { (void)c;(void)p;(void)n; }
 static void r_invalidate(void *c) { (void)c; }
+static uintptr_t alias_invalidated;
+static void r_alias_invalidate(void *c) { assert(c);alias_invalidated=*(uintptr_t *)c; }
 static void r_alias_sync(void *c,uint64_t a,size_t n) { (void)c;(void)a;(void)n; }
 static int AArch64RemapPrivilegedPage(const struct AArch64ProtectionOps *ops,uint64_t root,uint64_t tcr,uint64_t va,uint64_t pa,unsigned policy)
 {
     assert(coordinator && map_lock && rendezvous && va==pa && tcr==16 && calls<4);
     assert(ops->allocate && !ops->allocate(NULL,12));
     assert(ops->synchronize==r_alias_sync);
+    assert(ops->invalidate==r_alias_invalidate);
+    alias_invalidated=0;ops->invalidate(ops->context);assert(alias_invalidated==va);
     roots[calls]=root;policies[calls++]=policy;return root!=failed_root;
 }
-struct AppleProtectionOperation { uintptr_t address;unsigned permissions; };
+struct AppleProtectionOperation { uintptr_t address,end;unsigned permissions; };
 static struct AppleProtectionOperation protection_operation;
 static uint64_t *resolve_table(void *c,uint64_t p) { return r_resolve(c,p); }
 static uint64_t take_table(void *c,unsigned b) { (void)c;(void)b;return 0; }

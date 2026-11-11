@@ -1742,6 +1742,14 @@ static void r_alias_sync(void *context,uint64_t address,size_t bytes)
     r_clean(context,(const void *)(uintptr_t)address,bytes);
     __asm__ volatile("ic ialluis; dsb ish; isb":::"memory");
 }
+static void r_alias_invalidate(void *context)
+{
+    /* RemapPrivilegedPage requires an existing leaf and cannot split a block.
+     * Every snapshot changes the same native VA under the memory rendezvous.
+     * Invalidate that VA on all PEs/ASIDs, retaining unrelated translations. */
+    uint64_t argument=(*(const uintptr_t *)context>>12)&UINT64_C(0xfffffffffff);
+    __asm__ volatile("dsb ishst; tlbi vaae1is,%0; dsb ish; isb"::"r"(argument):"memory");
+}
 int AROSAppleRestrictedProtectAliasesLocked(uintptr_t address,uint64_t tcr,unsigned permissions)
 {
     /* The arena is pre-split in every snapshot; no table allocation is needed.
@@ -1750,7 +1758,7 @@ int AROSAppleRestrictedProtectAliasesLocked(uintptr_t address,uint64_t tcr,unsig
     unsigned policy=permissions & (AARCH64_PROTECT_READ|AARCH64_PROTECT_WRITE|AARCH64_PROTECT_EXEC);
     /* A writable user/JIT source is implicitly EL1-XN, as in root cloning. */
     if (policy & AARCH64_PROTECT_WRITE) policy&=~AARCH64_PROTECT_EXEC;
-    const struct AArch64ProtectionOps ops={NULL,r_resolve,r_alias_no_allocate,r_clean,r_invalidate,r_alias_sync,NULL};
+    const struct AArch64ProtectionOps ops={&address,r_resolve,r_alias_no_allocate,r_clean,r_alias_invalidate,r_alias_sync,NULL};
     int ok=1;
     for (struct RestrictedDomain *d=restricted_domains;d;d=d->next) {
         /* REAPING roots have no executing contexts, and native teardown can
