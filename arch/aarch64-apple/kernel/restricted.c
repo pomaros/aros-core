@@ -3,6 +3,7 @@
  * Experimental restricted-task integration in the shared AArch64 runtime.
  */
 #include <aros/config.h>
+#include <aros/debug.h>
 #include <aros/kernel.h>
 #include <aros/apple/startup.h>
 #include <aros/apple/jit.h>
@@ -1598,13 +1599,27 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
     r = r_slot(frame->x[0]);
     frame->x[0] = 0;
     if (!r || r->state!=R_LIVE || r->cookie != R_COOKIE || r->owner != task ||
-        frame->entry_ttbr0 != AROSAppleRuntimeLocal()->trusted_ttbr0) return 1;
+        frame->entry_ttbr0 != AROSAppleRuntimeLocal()->trusted_ttbr0) {
+        if (svc == R_SERVE)
+            bug("[RESTRICTED] served rejected identity slot=%p task=%p owner=%p state=%u mode=%llu root=%llx trusted=%llx\n",
+                r,task,r ? r->owner : NULL,r ? r->state : 0,(unsigned long long)serve_mode,
+                (unsigned long long)frame->entry_ttbr0,
+                (unsigned long long)AROSAppleRuntimeLocal()->trusted_ttbr0);
+        return 1;
+    }
     if (svc == R_SERVE && serve_mode == 0) {
         /* First entry of a served thread: as ENTER, with the buffer. */
-        if (!serve_buffer || r->call_active || r->serve_buffer) return 1;
+        if (!serve_buffer || r->call_active || r->serve_buffer) {
+            bug("[RESTRICTED] served rejected start slot=%p buffer=%llx active=%u previous=%p\n",
+                r,(unsigned long long)serve_buffer,r->call_active,r->serve_buffer);
+            return 1;
+        }
         r->serve_buffer=(void *)(uintptr_t)serve_buffer;
     } else if (svc == R_SERVE) {
-        if (!r->call_active) return 1;
+        if (!r->call_active) {
+            bug("[RESTRICTED] served rejected inactive slot=%p mode=%llu\n",r,(unsigned long long)serve_mode);
+            return 1;
+        }
         if (serve_mode == 2 || r->domain->closing || !r->domain->root) {
             /* The handler ends the thread, or its domain is going away. */
             r->callback_active=0;r->fault_active=0;r->exception_active=0;r->suspend_count=0;
@@ -1619,7 +1634,12 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
         /* Held by its controller: not now. The native side yields and asks again. */
         if (r->suspend_count) { frame->x[0]=3;return 1; }
 #if defined(__AROSEXEC_SMP__)
-        if (TLS_GET(IDNestCnt)>=0 || TLS_GET(TDNestCnt)>=0 || AROSAppleRuntimeLocal()->irq_mask_depth) return 1;
+        if (TLS_GET(IDNestCnt)>=0 || TLS_GET(TDNestCnt)>=0 || AROSAppleRuntimeLocal()->irq_mask_depth) {
+            bug("[RESTRICTED] served rejected masked slot=%p id=%ld td=%ld irq=%lu\n",r,
+                (long)TLS_GET(IDNestCnt),(long)TLS_GET(TDNestCnt),
+                (unsigned long)AROSAppleRuntimeLocal()->irq_mask_depth);
+            return 1;
+        }
         r->last_cpu=AROSCPUCurrentIndex();
 #else
         if (SysBase->IDNestCnt>=0 || SysBase->TDNestCnt>=0 || AROSAppleRuntimeLocal()->irq_mask_depth) return 1;
