@@ -157,6 +157,10 @@ void cpu_Switch(regs_t *regs)
 {
     struct Task *task = SysBase != NULL ? GET_THIS_TASK : NULL;
 #if defined(__AROSEXEC_SMP__)
+    if (TLS_GET(TDNestCnt)>=0)
+        bug("[SCHED] switching forbidden task=%p td=%ld pc=%llx lr=%llx esr=%llx\n",
+            task,(long)TLS_GET(TDNestCnt),(unsigned long long)regs->elr,
+            (unsigned long long)regs->x[30],(unsigned long long)regs->esr);
     AROSAppleDispatchTransition(1);
     BOOL wait_lock_held = task != NULL && task->tc_State == TS_WAIT;
 #endif
