@@ -4,6 +4,14 @@
 #define AROS_APPLE_SMP_H
 #include <stdint.h>
 #define AROS_APPLE_SMP_MAX_CPUS 32
+/* Read-only debugger counters, one cache line per source/receiving CPU.
+ * Class counters can overlap for combined messages. Sent counts requested
+ * target notifications, not hardware completion. Zero-message wakes matter.
+ * No reset protocol: compare snapshots from the same boot. */
+struct AROSIPIStats {
+ uint64_t sent,memory,timer,other,zero,already_pending,received,empty;
+};
+extern volatile struct AROSIPIStats AROSAppleIPIStats[AROS_APPLE_SMP_MAX_CPUS];
 uint32_t AROSAppleSMPOnlineMask(void);
 void AROSAppleSMPSendIPI(uint32_t message, uint32_t data, uint32_t mask);
 uint64_t AROSAppleSMPTimeUS(void);

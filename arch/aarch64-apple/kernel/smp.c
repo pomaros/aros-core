@@ -54,6 +54,8 @@ uint64_t AROSAppleSMPBootTicks(void)
 { return __atomic_load_n(&AROSSMPState.boot_ticks,__ATOMIC_RELAXED); }
 static uint32_t pending[AROS_APPLE_SMP_MAX_CPUS];
 static uint32_t notify[AROS_APPLE_SMP_MAX_CPUS];
+_Static_assert(sizeof(struct AROSIPIStats)==64,"IPI counters must occupy one cache line");
+_Alignas(64) volatile struct AROSIPIStats AROSAppleIPIStats[AROS_APPLE_SMP_MAX_CPUS];
 #define SCHEDULER_SGI AROS_SMP_SCHEDULER_IPI
 uint32_t AROSAppleSMPOnlineMask(void)
 {
@@ -223,7 +225,17 @@ void AROSAppleSMPSendIPI(uint32_t message,uint32_t data,uint32_t mask)
  }
  mask &= AROSAppleSMPOnlineMask();
  for(unsigned cpu=0;cpu<AROS_APPLE_SMP_MAX_CPUS;cpu++)
-  if(mask&(1U<<cpu)) __atomic_fetch_or(&pending[cpu],message&0x0fffffffU,__ATOMIC_RELEASE);
+  if(mask&(1U<<cpu)) {
+   uint32_t bits=message&0x0fffffffU;
+   uint32_t before=__atomic_fetch_or(&pending[cpu],bits,__ATOMIC_RELEASE);
+   volatile struct AROSIPIStats *stats=&AROSAppleIPIStats[src];
+   ++stats->sent;
+   if(bits&AROS_APPLE_MEMORY_IPI) ++stats->memory;
+   if(bits&AROS_APPLE_TIMER_IPI) ++stats->timer;
+   if(bits&~(AROS_APPLE_MEMORY_IPI|AROS_APPLE_TIMER_IPI)) ++stats->other;
+   if(!bits) ++stats->zero;
+   if(bits && (before&bits)==bits) ++stats->already_pending;
+  }
  notify[src]=mask;
  (void)AROSAppleRuntimeSupervisor(notify_ipi);
  AROSAppleRuntimeIRQRestore(saved);
@@ -240,6 +252,8 @@ int AROSAppleSMPHandleIPI(uint32_t id)
  unsigned cpu=AROSCPUCurrentIndex();
  if(cpu>=AROS_APPLE_SMP_MAX_CPUS) return 1;
  uint32_t message=__atomic_exchange_n(&pending[cpu],0,__ATOMIC_ACQ_REL);
+ ++AROSAppleIPIStats[cpu].received;
+ if(!message) ++AROSAppleIPIStats[cpu].empty;
  /* The first IPI after a held sleep restarts this core's tick. */
  if(ap_tick_lapsed[cpu] && !__atomic_load_n(&AROSAppleKernelTicksHeld,__ATOMIC_ACQUIRE)) {
   ap_tick_lapsed[cpu]=0;
