@@ -7,6 +7,7 @@
  */
 
 #include <aros/apple/runtime.h>
+#include <aros/debug.h>
 
 #include <exec/execbase.h>
 #include <exec/tasks.h>
