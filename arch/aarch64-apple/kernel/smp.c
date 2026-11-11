@@ -377,7 +377,11 @@ void AROSAppleSMPMain(void)
 static unsigned admission_limit(void)
 { return AROSPlatformSMPAdmissionLimit(); }
 int AROSAppleSMPPrepare(void)
-{ return AROSPlatformSMPPrepare(); }
+{
+ bug("[SMP] IPI counters version=1 at %p cpus=%u stride=%u\n",
+     (void *)AROSAppleIPIStats,AROS_APPLE_SMP_MAX_CPUS,(unsigned)sizeof(struct AROSIPIStats));
+ return AROSPlatformSMPPrepare();
+}
 static uintptr_t start_one(void)
 {
  const struct AROSCPUTopology *t=AROSCPUMonitorTopology();
