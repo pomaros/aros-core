@@ -2049,8 +2049,21 @@ static int r_run_internal(uint64_t handle,const void *code, size_t bytes, uint64
             register uintptr_t why __asm__("x3")=status;
             __asm__ volatile("svc #0xa53c":"+r"(slot),"+r"(buffer),"+r"(how),"+r"(why)::"memory","cc");
             if (slot==2) {
+#if defined(__AROSEXEC_SMP__)
+                int before_td=TLS_GET(TDNestCnt);
+                uint64_t request_head[4];
+                memcpy(request_head,request,sizeof(request_head));
+#endif
                 if (handler(handler_context,request)) mode=1;
                 else { mode=2;memcpy(&status,request,sizeof(status)); }
+#if defined(__AROSEXEC_SMP__)
+                int after_td=TLS_GET(TDNestCnt);
+                if (before_td>=0 || after_td>=0)
+                    bug("[RESTRICTED] handler scheduling slot=%p context=%p td=%ld->%ld request=%llx,%llx,%llx,%llx\n",
+                        r,handler_context,(long)before_td,(long)after_td,
+                        (unsigned long long)request_head[0],(unsigned long long)request_head[1],
+                        (unsigned long long)request_head[2],(unsigned long long)request_head[3]);
+#endif
                 continue;
             }
             if (slot==3) { krnSysCall(SC_SWITCH);continue; }
