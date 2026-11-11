@@ -31,3 +31,12 @@ No table count cap is inferred from fixture allocation tracking capacity.
 Reservation retirement also extracts the production allocation link/unlink
 helpers. Two rounds remove tail, middle and head records out of insertion
 order, reject duplicate retirement, verify each survivor and reuse records.
+
+API39 slice storage uses separate linked-view accounting and atomic native-free
+references. The fixture tests all36 combinations of three-view detach and free
+orders, including the root view disappearing first and a split from a non-root
+view. Original chunk metadata remains available until the last native free;
+each physical page and descriptor is released once and accounting reaches zero.
+Allocation and publication refusal of the cut wrapper also reclaim its temporary
+descriptor. This does not execute the privileged cut dispatcher or prove SMP
+interleavings; the coordinator and actual guest path require runtime checks.

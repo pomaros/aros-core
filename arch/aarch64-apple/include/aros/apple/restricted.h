@@ -278,5 +278,14 @@ struct AROSRestrictedAPI {
     int (*run_served)(uint64_t handle,uint64_t seed,size_t stack_bytes,
         size_t fault_bytes,struct AROSRestrictedResult *result,
         int (*handler)(void *context,unsigned char bytes[256]),void *context);
+    /* Version 39: remove an already-decommitted, page-aligned interval within
+     * one private reservation owned by this controller. Retained pages keep
+     * physical backing, protections and fault/code identities; a middle cut
+     * creates two independently releasable reservations. The kernel retains
+     * their shared metadata until the final native release finishes. Refuses
+     * live backing in the hole, shared views, publication and request leases.
+     * Allocation/refusal changes nothing. Returns1 on success,0 on refusal. */
+    int (*cut_memory)(uint64_t domain,uintptr_t address,size_t length);
+
 };
 #endif

@@ -45,7 +45,9 @@ static uintptr_t table_publish(struct RestrictedTableTransfer *p)
 }
 static int r_memory_call(struct RestrictedMemoryOperation *op)
 {
-    assert(exclusion==1 && op->operation==0);
+    assert(exclusion==1);
+    if (op->operation==7) { assert(op->slice && op->length);return 0; }
+    assert(op->operation==0);
     if (publish) owned=op->allocation;
     return publish;
 }
@@ -117,8 +119,50 @@ static void allocation_retirement(void)
         assert(!d.allocations);
     }
 }
+static void shared_metadata_retirement(void)
+{
+    const unsigned orders[6][3]={{0,1,2},{0,2,1},{1,0,2},{1,2,0},{2,0,1},{2,1,0}};
+    for (unsigned retire=0;retire<6;++retire) for (unsigned release=0;release<6;++release) {
+        publish=1;fail_at=0;
+        assert(r_reserve_memory(1,AROS_RESTRICTED_DYNAMIC_BASE,6*R_PAGE));
+        struct RestrictedAllocation *views[3]={owned,NULL,NULL},*root=owned;
+        Forbid();
+        root->pages[0]=AROSApplePageAllocate(NULL,root->chunk_bytes,MEMF_CLEAR);
+        root->backing[0]=(uintptr_t *)(root->pages[0]+root->chunk_pages);
+        root->chunks_attached=1;root->count=1;
+        uintptr_t physical[3];
+        for (unsigned i=0;i<3;++i) {
+            physical[i]=(uintptr_t)AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
+            root->backing[0][i*2]=physical[i];
+            if (!i) continue;
+            views[i]=AROSApplePageAllocate(NULL,R_PAGE,MEMF_CLEAR);
+            views[i]->storage_bytes=R_PAGE;
+            views[i]->region.mapping.page_count=1;
+            views[i]->region.mapping.chunk_offset=i*2;
+            r_storage_share(views[i-1],views[i]);
+        }
+        assert(root->storage_refs==3 && root->storage_views==3 && live==7);
+        size_t accounted=0;
+        for (unsigned i=0;i<3;++i) accounted+=r_storage_retire(views[orders[retire][i]]);
+        assert(accounted==4 && !root->storage_views && root->storage_refs==3);
+        unsigned released[3]={0};
+        for (unsigned i=0;i<3;++i) {
+            unsigned index=orders[release][i];
+            for (unsigned j=0;j<3;++j) if (!released[j])
+                assert(r_backing(views[j],0)==physical[j] && !r_backing(views[j],1));
+            r_free_allocation(views[index]);released[index]=1;
+            if (i<2) assert(root->storage_refs==2-i && root->pages[0]);
+        }
+        Permit();owned=NULL;assert(!live && !exclusion);
+    }
+}
 int main(void)
 {
+    shared_metadata_retirement();
+    fail_at=1;attempts=0;
+    assert(!r_cut_memory(1,AROS_RESTRICTED_DYNAMIC_BASE,R_PAGE) && !live && !exclusion);
+    fail_at=0;
+    assert(!r_cut_memory(1,AROS_RESTRICTED_DYNAMIC_BASE,R_PAGE) && !live && !exclusion);
     allocation_retirement();
     indexed_allocations();
     Forbid();
