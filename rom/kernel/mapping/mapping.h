@@ -60,6 +60,8 @@ struct KrnMappingObject {
     /* Intrusive AVL index, owned by the arena's mapping lock. */
     struct KrnMappingObject *lookup_left, *lookup_right;
     unsigned lookup_height;
+    /* Record identity index: admission must not read unpublished storage. */
+    struct KrnMappingObject *membership_next;
 };
 struct KrnMappingArena {
     uintptr_t start;
@@ -71,6 +73,7 @@ struct KrnMappingArena {
      * from every set before its storage may be retired. */
     struct KrnMappingObject *recent[128];
     struct KrnMappingObject *lookup_root;
+    struct KrnMappingObject *members[256];
 };
 struct KrnMappingRequest {
     struct KrnMappingObject *mapping;

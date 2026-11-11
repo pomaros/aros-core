@@ -40,7 +40,9 @@ Cache misses use an intrusive AVL index rather than scanning every mapping.
 The suite checks sorted insertion, 4,000 deterministic insert/delete mutations,
 repeated root replacement, independent address/gap lookup results and index
 balance. Prefix/suffix trims, middle splits, refused cuts and complete retirement
-are also checked with the lookup cache cleared.
+are also checked with the lookup cache cleared. Record-identity membership
+must include split children, reject their reuse into an address hole, and be
+empty after retirement; retired records must then be reusable.
 
 The object runner also runs the domain test for retained execution membership
 and mapping/I/O pins. Both runners refuse dirty input unless

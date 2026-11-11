@@ -17,6 +17,11 @@ cross-CPU synchronization belong to their platform coordinator.
   `KrnMappingReserveAt` selects an exact address without displacing any existing
   reservation; first-fit allocation remains available through `KrnMappingReserve`.
   Both use caller-owned unpublished metadata and publish under the mapping lock.
+  Exact-address admission finds its immediate neighbours through the AVL address
+  index and uses the predecessor for ordered-list insertion. A separate256-bucket
+  record-identity index rejects reuse of live metadata without reading unpublished
+  destination fields. Splits publish the new record in both indices; retirement
+  removes it from both. First-fit placement and list retirement may still scan.
 - `pager.c` fills a private, unpublished page in task context outside that lock.
   It supports zero backing and positioned reads on a retained private handle,
   detects short reads before the expected EOF, and zeroes the last page's tail.

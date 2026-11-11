@@ -79,6 +79,34 @@ static struct KrnMappingObject *lookup_remove(struct KrnMappingObject *root,
     return lookup_balance(root);
 }
 
+/* Membership is keyed by the record pointer, independently of the requested
+ * address. This catches live-record reuse without inspecting uninitialized
+ * destination fields or walking every reservation. The arena lock protects it. */
+static unsigned membership_bucket(const struct KrnMappingObject *m)
+{
+    uintptr_t key=(uintptr_t)m;
+    key^=key>>17;key^=key>>9;
+    return (unsigned)(key>>4)&255;
+}
+static int membership_contains(const struct KrnMappingArena *a,const struct KrnMappingObject *m)
+{
+    for (const struct KrnMappingObject *p=a->members[membership_bucket(m)];p;p=p->membership_next)
+        if (p==m) return 1;
+    return 0;
+}
+static void membership_add(struct KrnMappingArena *a,struct KrnMappingObject *m)
+{
+    unsigned bucket=membership_bucket(m);
+    m->membership_next=a->members[bucket];a->members[bucket]=m;
+}
+static void membership_remove(struct KrnMappingArena *a,struct KrnMappingObject *m)
+{
+    struct KrnMappingObject **link=&a->members[membership_bucket(m)];
+    while (*link && *link!=m) link=&(*link)->membership_next;
+    if (*link) *link=m->membership_next;
+    m->membership_next=NULL;
+}
+
 struct KrnMappingPage *KrnMappingPageAt(const struct KrnMappingObject *m, size_t i)
 {
     if (!m || i >= m->page_count)
@@ -110,7 +138,7 @@ static int initialize(struct KrnMappingObject *m, uintptr_t start,
     }
     *m = (struct KrnMappingObject){start, length, size, length / size, offset,
         owner, pages, protection, !!shared, 0, 0, 0, NULL, 0, chunks,
-        chunks ? chunk_pages : 0, 0, NULL, NULL, 0};
+        chunks ? chunk_pages : 0, 0, NULL, NULL, 0, NULL};
     for (size_t i = 0; pages && i < m->page_count; ++i)
         pages[i] = (struct KrnMappingPage){0, 0, KMAP_ABSENT, 0, protection};
     return 1;
@@ -130,7 +158,7 @@ int KrnMappingArenaInitialize(struct KrnMappingArena *a, uintptr_t start,
     if (!a || !start || !size || (size & (size-1)) || !length ||
         (start & (size-1)) || (length & (size-1)) || length > UINTPTR_MAX-start)
         return 0;
-    *a = (struct KrnMappingArena){start, length, size, NULL, {NULL}, NULL};
+    *a = (struct KrnMappingArena){start, length, size, NULL, {NULL}, NULL, {NULL}};
     return 1;
 }
 
@@ -141,10 +169,7 @@ static int reserve(struct KrnMappingArena *a, struct KrnMappingObject *m,
 {
     if (!a || !m || !a->page_size || !length || length > a->length)
         return 0;
-    /* Catch reuse of a live record before Initialize overwrites it. */
-    for (struct KrnMappingObject *p=a->first; p; p=p->next)
-        if (p==m)
-            return 0;
+    if (membership_contains(a,m)) return 0;
     uintptr_t start=a->start;
     struct KrnMappingObject **link=&a->first;
     while (*link) {
@@ -161,6 +186,7 @@ static int reserve(struct KrnMappingArena *a, struct KrnMappingObject *m,
     m->next=*link;
     *link=m;
     a->lookup_root=lookup_insert(a->lookup_root,m);
+    membership_add(a,m);
     return 1;
 }
 
@@ -179,17 +205,22 @@ static int reserve_at(struct KrnMappingArena *a, struct KrnMappingObject *m,
     if (!a || !m || !a->page_size || !length || start<a->start ||
         start-a->start>=a->length || length>a->length-(start-a->start))
         return 0;
-    /* Preflight the entire list: m may be linked after the requested hole. */
-    for (struct KrnMappingObject *p=a->first; p; p=p->next) {
-        if (p==m) return 0;
-        if (start<p->start+p->length && p->start<start+length) return 0;
+    if (membership_contains(a,m)) return 0;
+    /* Only the immediate address neighbours can overlap this range. Reuse
+     * the predecessor for list insertion instead of scanning the list again. */
+    struct KrnMappingObject *before=NULL,*after=NULL;
+    for (struct KrnMappingObject *p=a->lookup_root;p;) {
+        if (p->start<start) { before=p;p=p->lookup_right; }
+        else { after=p;p=p->lookup_left; }
     }
+    if ((before && start<before->start+before->length) ||
+        (after && after->start<start+length)) return 0;
     if (!initialize(m,start,length,a->page_size,offset,protection,
             shared,owner,pages,capacity,chunks,chunk_pages)) return 0;
-    struct KrnMappingObject **link=&a->first;
-    while (*link && (*link)->start<start) link=&(*link)->next;
+    struct KrnMappingObject **link=before ? &before->next : &a->first;
     m->next=*link;*link=m;
     a->lookup_root=lookup_insert(a->lookup_root,m);
+    membership_add(a,m);
     return 1;
 }
 
@@ -329,6 +360,7 @@ int KrnMappingRelease(struct KrnMappingArena *a, struct KrnMappingObject *m)
         return 0;
     forget_lookup(a,m);
     a->lookup_root=lookup_remove(a->lookup_root,m);
+    membership_remove(a,m);
     *link=m->next;
     m->next=NULL;
     return 1;
@@ -397,6 +429,7 @@ enum KrnMappingCutResult KrnMappingCut(struct KrnMappingArena *a,
         right->resident=resident_pages(right_pages,remaining);
         m->next=right;
         a->lookup_root=lookup_insert(a->lookup_root,right);
+        membership_add(a,right);
     }
     if (first) {
         m->length=first*m->page_size;
@@ -423,6 +456,7 @@ enum KrnMappingCutResult KrnMappingCut(struct KrnMappingArena *a,
     }
     forget_lookup(a,m);
     a->lookup_root=lookup_remove(a->lookup_root,m);
+    membership_remove(a,m);
     *link=m->next;
     m->next=NULL;
     m->length=m->page_count=m->resident=0;

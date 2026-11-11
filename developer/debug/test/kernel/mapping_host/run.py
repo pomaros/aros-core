@@ -57,7 +57,7 @@ try:
  r=run([domain],'domain')
  assert r.returncode==0,r.stdout.decode()
  for name,before,after,test in [
-  ('fixed-overlap','if (start<p->start+p->length && p->start<start+length)','if (0 && start<p->start+p->length && p->start<start+length)',here/'test.c'),
+  ('fixed-overlap','if ((before && start<before->start+before->length) ||\n        (after && after->start<start+length))','if (0 && ((before && start<before->start+before->length) ||\n        (after && after->start<start+length)))',here/'test.c'),
   ('fixed-outside','length>a->length-(start-a->start)','(0 && length>a->length-(start-a->start))',here/'test.c'),
   ('writeback-unprotected','p->physical, p->protection & ~KMAP_WRITE))\n        return 0;','p->physical, p->protection))\n        return 0;',here/'test.c'),
   ('stale-generation','p->state == state && p->generation == r->generation','p->state == state',here/'test.c'),

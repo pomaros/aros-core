@@ -325,12 +325,20 @@ static void lookup_index_cut_tests(void)
     assert(KrnMappingLookup(&a,start+2*page)==&m[1]);
     assert(!KrnMappingLookup(&a,start+3*page));
     assert(KrnMappingLookup(&a,start+4*page)==&m[3]);
+    /* A split publishes the right record in both indices. Its live storage
+     * cannot be reused even when the requested address is the new hole. */
+    assert(!KrnMappingReserveAt(&a,&m[3],start+3*page,page,0,1,0,&a,pages[3],8));
+    assert(m[3].start==start+4*page && m[3].length==2*page);
     unsigned count=0;
     check_lookup_index(a.lookup_root,base,base+64*page,&count);
     assert(count==4);
     for (unsigned i=0;i<4;++i)
         assert(KrnMappingBeginClose(&m[i]) && KrnMappingRelease(&a,&m[i]));
     assert(!a.first && !a.lookup_root);
+    for (unsigned i=0;i<256;++i) assert(!a.members[i]);
+    /* Retired records are admissible again, including a former split child. */
+    assert(KrnMappingReserveAt(&a,&m[3],base,page,0,1,0,&a,pages[3],8));
+    assert(KrnMappingBeginClose(&m[3]) && KrnMappingRelease(&a,&m[3]));
 }
 
 int main(void)
