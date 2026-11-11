@@ -129,3 +129,7 @@ that an overlapping writable peer blocks execution, a held detach retains that
 conflict, removing the middle writer permits execution beside a disjoint writable
 page, copies retain per-page execute policy, and detached metadata can be reused
 and fully drained. These are HOST semantics, not a guest speed measurement.
+
+Region retirement checks out-of-order head, middle and tail removal, duplicate
+detach rejection, surviving address-index membership and reuse of records.
+The incoming list link avoids rescanning every region during each detach.

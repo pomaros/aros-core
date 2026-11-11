@@ -497,6 +497,30 @@ static void region_tests(uint64_t va)
         CHECK(AROSRestrictedRegionDetach(&collision),"low-range-edge-release");
         memset(&collision,0,sizeof(collision));
     }
+    /* Retire tail, middle and head in a different order from reservation,
+     * then reuse the same records. Remaining reservations must stay linked. */
+    struct AROSRestrictedRegion chain[5]={{0}};
+    struct KrnMappingPage chain_pages[5];uintptr_t chain_backing[5]={0};
+    const unsigned order[]={2,0,4,1,3};
+    for (unsigned round=0;round<2;++round) {
+        unsigned remaining=5;
+        for (unsigned i=0;i<5;++i)
+            CHECK(reserve_region(&spaces[0],&chain[i],va+(i+8)*PAGE,PAGE,
+                &chain_pages[i],&chain_backing[i],1),"chain-reserve");
+        for (unsigned i=0;i<5;++i) {
+            struct AROSRestrictedRegion *r=&chain[order[i]];
+            CHECK(AROSRestrictedRegionDetach(r) && !r->next && !r->list_link &&
+                !AROSRestrictedRegionDetach(r),"chain-retire");
+            unsigned count=0;struct AROSRestrictedRegion **link=&spaces[0].regions;
+            while (*link) {
+                CHECK((*link)->list_link==link && ++count<=5,"chain-survivors");
+                CHECK(KrnMappingLookup(&spaces[0].arena,(*link)->mapping.start)==
+                    &(*link)->mapping,"chain-index");
+                link=&(*link)->next;
+            }
+            CHECK(count==--remaining,"chain-count");
+        }
+    }
     CHECK(reserve_region(&spaces[0],&a,va,3*PAGE,ap,ab,3),"region-reserve");
     CHECK(reserve_region(&spaces[1],&b,va,PAGE,bp,bb,1),"independent-region-va");
     CHECK(!reserve_region(&spaces[0],&collision,va,PAGE,cp,cb,1),"region-collision");

@@ -81,6 +81,8 @@ struct AROSRestrictedSpace {
 struct AROSRestrictedRegion {
     struct AROSRestrictedSpace *space;
     struct AROSRestrictedRegion *next;
+    /* Incoming list link, maintained under the space coordinator. */
+    struct AROSRestrictedRegion **list_link;
     struct KrnMappingObject mapping;
     /* Backing ledger in chunks parallel to mapping.chunks: one array of
      * mapping.chunk_pages physical addresses per attached chunk. */

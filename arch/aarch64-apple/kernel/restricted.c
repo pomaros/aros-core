@@ -65,6 +65,7 @@ enum RestrictedState { R_FREE, R_ALLOCATING, R_LIVE, R_REAPING };
 #define R_CHUNK_PAGES 512U
 struct RestrictedAllocation {
     struct RestrictedAllocation *next;
+    struct RestrictedAllocation **list_link;
     struct AROSRestrictedRegion region;
     size_t count,storage_bytes,chunk_pages,chunk_count,chunk_bytes,chunks_attached;
     struct KrnMappingPage **pages;
@@ -1026,6 +1027,23 @@ static struct RestrictedAllocation *r_allocation_at(struct RestrictedDomain *d,u
         offsetof(struct RestrictedAllocation,region)-offsetof(struct AROSRestrictedRegion,mapping));
     return a->region.space==&d->space ? a : NULL;
 }
+/* The address index identifies the allocation before removal. Preserve its
+ * incoming list link so retiring N pages does not walk N live records N times.
+ * Both list updates run under the domain coordinator. */
+static void r_allocation_link(struct RestrictedDomain *d,struct RestrictedAllocation *a)
+{
+    a->next=d->allocations;a->list_link=&d->allocations;
+    if (a->next) a->next->list_link=&a->next;
+    d->allocations=a;
+}
+static int r_allocation_unlink(struct RestrictedAllocation *a)
+{
+    struct RestrictedAllocation **link=a->list_link;
+    if (!link || *link!=a) return 0;
+    *link=a->next;
+    if (a->next) a->next->list_link=link;
+    a->next=NULL;a->list_link=NULL;return 1;
+}
 static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned svc)
 {
     if (svc!=R_MEMORY) return 0;
@@ -1041,7 +1059,7 @@ static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned s
             AROSAppleKernelTransitionRangeAvailable(p->address,a->count*R_PAGE)) &&
             AROSRestrictedRegionReserve(&d->space,&a->region,p->address,
             a->count*R_PAGE,a->pages,a->backing,a->chunk_pages,a->count)) {
-            a->next=d->allocations;d->allocations=a;d->memory_pages+=a->storage_bytes/R_PAGE;
+            r_allocation_link(d,a);d->memory_pages+=a->storage_bytes/R_PAGE;
             d->memory_metadata_pages+=a->storage_bytes/R_PAGE;frame->x[0]=1;
         }
         return 1;
@@ -1089,13 +1107,12 @@ static int r_memory(struct AROSAppleRuntimeFrame *frame,void *context,unsigned s
         frame->x[0]=1;
     }
     else if (p->operation==4 && p->address==a->region.mapping.start) {
-        struct RestrictedAllocation **link=&d->allocations;
-        while (*link && *link!=a) link=&(*link)->next;
-        if (!*link || !AROSRestrictedRegionDetach(&a->region)) return 1;
+        if (!a->list_link || *a->list_link!=a ||
+            !AROSRestrictedRegionDetach(&a->region)) return 1;
         for (size_t i=0;i<a->count;++i) d->memory_pages-=r_backing(a,i)!=0;
         size_t metadata=a->storage_bytes/R_PAGE+a->chunks_attached*(a->chunk_bytes/R_PAGE);
         d->memory_pages-=metadata;d->memory_metadata_pages-=metadata;
-        *link=a->next;a->next=NULL;p->allocation=a;frame->x[0]=1;
+        r_allocation_unlink(a);p->allocation=a;frame->x[0]=1;
     }
     return 1;
 }

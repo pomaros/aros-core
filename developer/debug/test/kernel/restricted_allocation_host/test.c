@@ -95,8 +95,31 @@ static void indexed_allocations(void)
     assert(!r_allocation_at(&domain,0) && !r_allocation_at(&domain,UINTPTR_MAX));
     free(chunks);free(items);
 }
+static void allocation_retirement(void)
+{
+    struct RestrictedDomain d={0};
+    struct RestrictedAllocation records[5]={{0}};
+    const unsigned order[]={2,0,4,1,3};
+    for (unsigned round=0;round<2;++round) {
+        unsigned live_records=5;
+        for (unsigned i=0;i<5;++i) r_allocation_link(&d,&records[i]);
+        for (unsigned i=0;i<5;++i) {
+            struct RestrictedAllocation *r=&records[order[i]];
+            assert(r_allocation_unlink(r) && !r->next && !r->list_link);
+            assert(!r_allocation_unlink(r));
+            unsigned count=0;struct RestrictedAllocation **link=&d.allocations;
+            while (*link) {
+                assert((*link)->list_link==link && ++count<=5);
+                link=&(*link)->next;
+            }
+            assert(count==--live_records);
+        }
+        assert(!d.allocations);
+    }
+}
 int main(void)
 {
+    allocation_retirement();
     indexed_allocations();
     Forbid();
     assert(!r_supply_tables(77,NULL,NULL,0));

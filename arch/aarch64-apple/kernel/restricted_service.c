@@ -333,7 +333,9 @@ int AROSRestrictedRegionReserve(struct AROSRestrictedSpace *s,struct AROSRestric
     if (!identity || !KrnMappingReserveVirtualChunked(&s->arena,&r->mapping,address,length,
         identity,chunks,chunk_pages)) return 0;
     r->identity=++reservation_generation;
-    r->space=s;r->backing=backing;r->next=s->regions;s->regions=r;return 1;
+    r->space=s;r->backing=backing;r->next=s->regions;r->list_link=&s->regions;
+    if (r->next) r->next->list_link=&r->next;
+    s->regions=r;return 1;
 }
 int AROSRestrictedRegionChunkMissing(const struct AROSRestrictedRegion *r,size_t page)
 {
@@ -462,8 +464,8 @@ int AROSRestrictedRegionDetach(struct AROSRestrictedRegion *r)
 {
     if (!r || !r->space) return 0;
     struct AROSRestrictedSpace *s=r->space;
-    struct AROSRestrictedRegion **link=&s->regions;
-    while (*link && *link!=r) link=&(*link)->next;
+    struct AROSRestrictedRegion **link=r->list_link;
+    if (!link || *link!=r) return 0;
     struct AROSRestrictedRegion **peer=NULL;
     if (r->shared) {
         peer=&r->shared->regions;
@@ -488,7 +490,9 @@ int AROSRestrictedRegionDetach(struct AROSRestrictedRegion *r)
         }
         --r->shared->views;r->shared=NULL;r->shared_first=0;
     }
-    *link=r->next;r->next=NULL;r->space=NULL;
+    *link=r->next;
+    if (r->next) r->next->list_link=link;
+    r->next=NULL;r->list_link=NULL;r->space=NULL;
     r->publication_pending=0;r->publication_page=0;return 1;
 }
 int AROSRestrictedSpaceProtect(struct AROSRestrictedSpace *s,unsigned access)
