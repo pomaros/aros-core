@@ -1,5 +1,6 @@
 /* Copyright (C) 2026 John KNIPPER <code@jkn.me>
  * Licensed under the AROS Public License (APL) Version 1.1. */
+#include <aros/config.h>
 #include "smp.h"
 #include "restricted.h"
 #include "task_tls.h"
@@ -19,6 +20,9 @@ static int resume_cpu(struct Task *);
 #define CORE_SCHEDULER_TIME_AVAILABLE() 0
 #endif
 #include "../../aarch64-native/kernel/kernel_scheduler.c"
+#if defined(__AROSEXEC_SMP__) && !defined(CORE_SCHEDULER_RESUME_CPU)
+#error "SMP dispatch must honor the CPU recorded in a native saved context"
+#endif
 
 static struct ExceptionContext *restricted_context(struct Task *task)
 {
