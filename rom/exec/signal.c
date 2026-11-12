@@ -500,6 +500,15 @@ void Exec_SignalSlow(struct Task *task, ULONG signalSet, struct ExecBase *SysBas
                         D(bug("[Exec] %s: Task has higher priority ...\n", __func__);)
                         Reschedule();
                     }
+                    else if (thisTask != NULL &&
+                             (targetPri == thisTask->tc_Node.ln_Pri) &&
+                             (thisTask->tc_State == TS_RUN))
+                    {
+                        /* An equal: the scheduler decides, by how long
+                         * this task has had the CPU, whether the woken
+                         * one runs now (Enable() asks it). */
+                        FLAG_SCHEDSWITCH_SET;
+                    }
                     Enable();
                     return;
                 }

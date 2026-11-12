@@ -99,6 +99,29 @@ static inline BOOL core_TrySpinLockWrite(spinlock_t *lock)
 }
 #endif
 
+/*
+ * Wake-up preemption. A task that left Wait (IETF_WOKEN) is first among the
+ * ready tasks of its priority; it also takes the CPU from a running task of
+ * the same priority that has had it for this long, instead of waiting for
+ * that task's quantum to end. Without it a handler woken by a request waits
+ * tens of milliseconds whenever every CPU computes. The preempted task
+ * keeps what is left of its quantum for its next turn.
+ */
+#define CORE_SCHEDULER_WAKE_PREEMPT_US 500
+#if defined(__AROSEXEC_SMP__) && defined(CORE_SCHEDULER_TIME_US)
+static UQUAD core_dispatched_us[32];
+static inline BOOL core_WakePreempts(struct Task *next, struct Task *running, int cpunum)
+{
+    struct IntETask *iet = GetIntETask(next);
+    return iet && cpunum < 32 && next->tc_Node.ln_Pri == running->tc_Node.ln_Pri &&
+        (__atomic_load_n(&iet->iet_FreezeFlags, __ATOMIC_ACQUIRE) & IETF_WOKEN) &&
+        CORE_SCHEDULER_TIME_AVAILABLE() &&
+        CORE_SCHEDULER_TIME_US() - core_dispatched_us[cpunum] >= CORE_SCHEDULER_WAKE_PREEMPT_US;
+}
+#else
+#define core_WakePreempts(next, running, cpunum) FALSE
+#endif
+
 /* Check if the currently running task on this cpu should be rescheduled */
 BOOL core_Schedule(void)
 {
@@ -153,8 +176,9 @@ BOOL core_Schedule(void)
 #endif
                     if (nexttask->tc_Node.ln_Pri <= task->tc_Node.ln_Pri)
                     {
-                        /* If the running task did not used it's whole quantum yet, let it work */
-                        if (!FLAG_SCHEDQUANTUM_ISSET)
+                        /* If the running task did not used it's whole quantum yet, let it work,
+                         * unless a task that just woke has waited long enough for it */
+                        if (!FLAG_SCHEDQUANTUM_ISSET && !core_WakePreempts(nexttask, task, cpunum))
                             corereschedule = FALSE;
                     }
                     break;
@@ -368,6 +392,12 @@ dispatch_rescan:
             SysBase->DispCount++;
             IDNESTCOUNT_SET(newtask->tc_IDNestCnt);
             SET_THIS_TASK(newtask);
+#if defined(__AROSEXEC_SMP__) && defined(CORE_SCHEDULER_TIME_US)
+            if (GetIntETask(newtask))
+                __atomic_fetch_and(&GetIntETask(newtask)->iet_FreezeFlags, (UBYTE)~IETF_WOKEN, __ATOMIC_RELEASE);
+            if (cpunum < 32 && CORE_SCHEDULER_TIME_AVAILABLE())
+                core_dispatched_us[cpunum] = CORE_SCHEDULER_TIME_US();
+#endif
             /* Only a fresh slice when the task changes or used its own,
              * or a fast-dispatching core never expires a quantum. */
             {

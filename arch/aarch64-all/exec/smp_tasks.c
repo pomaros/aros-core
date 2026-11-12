@@ -17,11 +17,13 @@
 void Exec_ReschedTask(struct Task *task, ULONG newState)
 {
     spinlock_t *fromLock = NULL;
+    BOOL woken;
     /* Raw masking, not Disable(): this also runs from the FIQ handler,
      * where Disable()'s syscall would nest an exception. */
     unsigned int __if = EXEC_IRQFIQ_DISABLE();
 
     EXEC_SPINLOCK_LOCK(&task->tc_SpinLock, NULL, SPINLOCK_MODE_WRITE);
+    woken = newState == TS_READY && task->tc_State == TS_WAIT;
 
     if (newState == TS_READY)
     {
@@ -70,7 +72,15 @@ void Exec_ReschedTask(struct Task *task, ULONG newState)
     switch (newState)
     {
         case TS_READY:
-            exec_TaskEnqueueReady(task);
+            if (woken && GetIntETask(task))
+            {
+                /* The scheduler lets it preempt a task of its priority
+                 * that has had the CPU for a while (core_Schedule). */
+                __atomic_fetch_or(&GetIntETask(task)->iet_FreezeFlags, IETF_WOKEN, __ATOMIC_RELEASE);
+                exec_TaskEnqueueReadyFirst(task);
+            }
+            else
+                exec_TaskEnqueueReady(task);
             break;
         case TS_WAIT:
             exec_TaskEnqueueWait(task);

@@ -29,6 +29,7 @@
 #define IETF_FREEZE_EXEMPT  0x01    /* SetTaskFreezeExempt(): FreezeTasks() leaves it running */
 #define IETF_RETIRE_PENDING 0x04    /* terminal freeze; no thaw allowed */
 #define IETF_FREEZE_PENDING 0x02    /* running on another CPU; core_Switch parks it           */
+#define IETF_WOKEN          0x08    /* left Wait for the ready list and has not run since     */
 
 /* Known alert context types */
 #define AT_NONE     0x00

@@ -147,6 +147,8 @@ static int restricted_park_control(struct Task *task,struct ExceptionContext *co
              * does a little work and parks again (the Wine server answering a
              * request). At the tail it waited for every compute-bound task's
              * quantum, hundreds of microseconds per request. */
+            if (GetIntETask(task))
+                __atomic_fetch_or(&GetIntETask(task)->iet_FreezeFlags,IETF_WOKEN,__ATOMIC_RELEASE);
             enqueue_ready_first(task);
 #else
             Enqueue(&SysBase->TaskReady,&task->tc_Node);

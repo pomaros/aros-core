@@ -229,6 +229,28 @@ static inline void exec_TaskEnqueueReady(struct Task *task)
     EXEC_FIQ_RESTORE(__fiq);
 }
 
+/*
+ * A task that leaves Wait goes before the ready tasks of its own priority:
+ * those were preempted or used their time, it gave the CPU up. A handler
+ * answering a request then runs as soon as a CPU of its priority class is
+ * free, instead of after every compute-bound task's quantum.
+ */
+static inline void exec_TaskEnqueueReadyFirst(struct Task *task)
+{
+    struct Node *next;
+    unsigned int __fiq = EXEC_FIQ_DISABLE();
+    EXEC_BLOCK_DISPATCH_INC;
+    EXEC_SPINLOCK_LOCK(&PrivExecBase(SysBase)->TaskReadySpinLock, NULL,
+                       SPINLOCK_MODE_WRITE);
+    ForeachNode(&SysBase->TaskReady, next)
+        if (next->ln_Pri <= task->tc_Node.ln_Pri) break;
+    /* Before next; at the tail when the walk ran off the list. */
+    Insert(&SysBase->TaskReady, &task->tc_Node, next->ln_Pred);
+    EXEC_SPINLOCK_UNLOCK(&PrivExecBase(SysBase)->TaskReadySpinLock);
+    EXEC_BLOCK_DISPATCH_DEC;
+    EXEC_FIQ_RESTORE(__fiq);
+}
+
 static inline void exec_TaskEnqueueWait(struct Task *task)
 {
     unsigned int __fiq = EXEC_FIQ_DISABLE();
