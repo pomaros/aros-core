@@ -12,15 +12,11 @@
 #include <kernel_base.h>
 
 #include "tls.h"
+#include "spinlock_wait.h"
 
 #include <proto/kernel.h>
 
-/*
- * Lock word (<aros/types/spinlock_s.h>): 0 free, SPINLOCKF_WRITE (bit 27)
- * write-held, otherwise the reader count in bits 0-23.
- * Waiters park in wfe and are woken by the sev in KrnSpinUnLock; the sevl
- * primes the event register so a free lock is never waited on.
- */
+/* The lock word and the waiting protocol: spinlock_wait.h. */
 AROS_LH3(spinlock_t *, KrnSpinLock,
         AROS_LHA(spinlock_t *, lock, A1),
         AROS_LHA(struct Hook *, failhook, A0),
@@ -34,12 +30,20 @@ AROS_LH3(spinlock_t *, KrnSpinLock,
     if (mode == SPINLOCK_MODE_WRITE)
     {
         asm volatile(
-                "       sevl                    \n\t"
-                "1:     wfe                     \n\t"
-                "2:     ldaxr   %w0, [%2]       \n\t"   // Load the lock value, gaining exclusive access
-                "       cbnz    %w0, 1b         \n\t"   // Taken? Wait for the unlock event
+                "1:     ldaxr   %w0, [%2]       \n\t"   // Load the lock value, gaining exclusive access
+                "       cbnz    %w0, 2f         \n\t"   // Held? Announce ourselves and wait
                 "       stxr    %w1, %w3, [%2]  \n\t"   // Try to write the write-locked value
-                "       cbnz    %w1, 2b         \n\t"   // Exclusive access lost - re-examine the lock
+                "       cbnz    %w1, 1b         \n\t"   // Exclusive access lost - re-examine the lock
+                "       b       5f              \n\t"
+                "2:     tbnz    %w0, #28, 3f    \n\t"   // Somebody already waits (SPINLOCKB_WAITING)
+                "       orr     %w0, %w0, #0x10000000 \n\t"
+                "       stxr    %w1, %w0, [%2]  \n\t"   // Set the waiting bit on the lock we saw held
+                "       cbnz    %w1, 1b         \n\t"   // The word changed - re-examine the lock
+                "       b       4f              \n\t"
+                "3:     clrex                   \n\t"
+                "4:     wfe                     \n\t"   // Until the release that frees the lock
+                "       b       1b              \n\t"
+                "5:                             \n\t"
                 : "=&r"(lock_value), "=&r"(result)
                 : "r"(&lock->lock), "r"(SPINLOCKF_WRITE)
                 : "memory"
@@ -51,13 +55,21 @@ AROS_LH3(spinlock_t *, KrnSpinLock,
     else
     {
         asm volatile(
-                "       sevl                    \n\t"
-                "1:     wfe                     \n\t"
-                "2:     ldaxr   %w0, [%2]       \n\t"   // Load the lock value, gaining exclusive access
-                "       tbnz    %w0, #27, 1b    \n\t"   // Write-held (SPINLOCKB_WRITE)? Wait for the unlock event
+                "1:     ldaxr   %w0, [%2]       \n\t"   // Load the lock value, gaining exclusive access
+                "       tbnz    %w0, #27, 2f    \n\t"   // Write-held (SPINLOCKB_WRITE)? Announce ourselves and wait
                 "       add     %w0, %w0, #1    \n\t"   // One more reader
                 "       stxr    %w1, %w0, [%2]  \n\t"   // Try to write the new reader count
-                "       cbnz    %w1, 2b         \n\t"   // Exclusive access lost - re-examine the lock
+                "       cbnz    %w1, 1b         \n\t"   // Exclusive access lost - re-examine the lock
+                "       b       5f              \n\t"
+                "2:     tbnz    %w0, #28, 3f    \n\t"   // Somebody already waits (SPINLOCKB_WAITING)
+                "       orr     %w0, %w0, #0x10000000 \n\t"
+                "       stxr    %w1, %w0, [%2]  \n\t"   // Set the waiting bit on the lock we saw held
+                "       cbnz    %w1, 1b         \n\t"   // The word changed - re-examine the lock
+                "       b       4f              \n\t"
+                "3:     clrex                   \n\t"
+                "4:     wfe                     \n\t"   // Until the release that frees the lock
+                "       b       1b              \n\t"
+                "5:                             \n\t"
                 : "=&r"(lock_value), "=&r"(result)
                 : "r"(&lock->lock)
                 : "memory"
