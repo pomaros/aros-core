@@ -102,21 +102,25 @@ static inline BOOL core_TrySpinLockWrite(spinlock_t *lock)
 /*
  * Wake-up preemption. A task that left Wait (IETF_WOKEN) is first among the
  * ready tasks of its priority; it also takes the CPU from a running task of
- * the same priority that has had it for this long, instead of waiting for
- * that task's quantum to end. Without it a handler woken by a request waits
- * tens of milliseconds whenever every CPU computes. The preempted task
- * keeps what is left of its quantum for its next turn.
+ * the same priority instead of waiting for that task's quantum to end.
+ * Without it a handler woken by a request waits tens of milliseconds
+ * whenever every CPU computes. The preempted task keeps what is left of its
+ * quantum for its next turn. One running task is spared: one that was
+ * itself dispatched from a wake less than this long ago. It is answering
+ * and about to wait again, and taking the CPU from it would only add two
+ * switches to every exchange between a client and its server.
  */
-#define CORE_SCHEDULER_WAKE_PREEMPT_US 500
+#define CORE_SCHEDULER_WAKE_GRACE_US 500
 #if defined(__AROSEXEC_SMP__) && defined(CORE_SCHEDULER_TIME_US)
-static UQUAD core_dispatched_us[32];
+static struct { UQUAD at; UBYTE woken; } core_dispatched[32];
 static inline BOOL core_WakePreempts(struct Task *next, struct Task *running, int cpunum)
 {
     struct IntETask *iet = GetIntETask(next);
-    return iet && cpunum < 32 && next->tc_Node.ln_Pri == running->tc_Node.ln_Pri &&
-        (__atomic_load_n(&iet->iet_FreezeFlags, __ATOMIC_ACQUIRE) & IETF_WOKEN) &&
-        CORE_SCHEDULER_TIME_AVAILABLE() &&
-        CORE_SCHEDULER_TIME_US() - core_dispatched_us[cpunum] >= CORE_SCHEDULER_WAKE_PREEMPT_US;
+    if (!iet || cpunum >= 32 || next->tc_Node.ln_Pri != running->tc_Node.ln_Pri ||
+        !(__atomic_load_n(&iet->iet_FreezeFlags, __ATOMIC_ACQUIRE) & IETF_WOKEN))
+        return FALSE;
+    return !(core_dispatched[cpunum].woken && CORE_SCHEDULER_TIME_AVAILABLE() &&
+        CORE_SCHEDULER_TIME_US() - core_dispatched[cpunum].at < CORE_SCHEDULER_WAKE_GRACE_US);
 }
 #else
 #define core_WakePreempts(next, running, cpunum) FALSE
@@ -393,10 +397,13 @@ dispatch_rescan:
             IDNESTCOUNT_SET(newtask->tc_IDNestCnt);
             SET_THIS_TASK(newtask);
 #if defined(__AROSEXEC_SMP__) && defined(CORE_SCHEDULER_TIME_US)
-            if (GetIntETask(newtask))
-                __atomic_fetch_and(&GetIntETask(newtask)->iet_FreezeFlags, (UBYTE)~IETF_WOKEN, __ATOMIC_RELEASE);
-            if (cpunum < 32 && CORE_SCHEDULER_TIME_AVAILABLE())
-                core_dispatched_us[cpunum] = CORE_SCHEDULER_TIME_US();
+            if (cpunum < 32)
+            {
+                UBYTE flags = GetIntETask(newtask) ?
+                    __atomic_fetch_and(&GetIntETask(newtask)->iet_FreezeFlags, (UBYTE)~IETF_WOKEN, __ATOMIC_ACQ_REL) : 0;
+                core_dispatched[cpunum].woken = (flags & IETF_WOKEN) != 0;
+                core_dispatched[cpunum].at = CORE_SCHEDULER_TIME_AVAILABLE() ? CORE_SCHEDULER_TIME_US() : 0;
+            }
 #endif
             /* Only a fresh slice when the task changes or used its own,
              * or a fast-dispatching core never expires a quantum. */
