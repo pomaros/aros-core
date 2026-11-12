@@ -602,13 +602,10 @@ static int r_emulate_id_read(struct AROSAppleRuntimeFrame *frame)
     frame->elr+=4;
     return 1;
 }
-/* 0x18: a system register or PSTATE access EL0 may not make and the kernel
- * does not emulate, DAIF among them (the domain runs without SCTLR_EL1.UMA).
- * It is the domain's own illegal instruction, as an undefined one is. */
 static int r_deliverable(unsigned ec)
 {
-    return ec==0x00 || ec==0x18 || ec==0x20 || ec==0x21 || ec==0x22 || ec==0x24 ||
-        ec==0x25 || ec==0x26 || ec==0x2c || ec==0x3c;
+    return ec==0x00 || ec==0x20 || ec==0x21 || ec==0x22 || ec==0x24 || ec==0x25 ||
+        ec==0x26 || ec==0x2c || ec==0x3c;
 }
 /* Coordinator held. Writes the faulting context through the kernel alias of the
  * fault stack and enters the registered handler there. Returns 0 when the
