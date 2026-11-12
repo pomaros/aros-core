@@ -122,6 +122,52 @@ static inline BOOL core_WakePreempts(struct Task *next, struct Task *running, in
 #define core_WakePreempts(next, running, cpunum) FALSE
 #endif
 
+#if defined(__AROSEXEC_SMP__) && defined(CORE_SCHEDULER_TIME_US)
+/*
+ * The last scheduling decisions of all CPUs, for a debugger on the host to
+ * read (wincompat-aros tools/sched-trace.py reads it from a stopped or
+ * running virtual machine): which task each CPU took and gave up, when, and
+ * in what state it left it. Nothing in the system reads it. One entry is
+ * four stores; the ring is 24 KiB.
+ */
+#define CORE_TRACE_ENTRIES 1024
+#define CORE_TRACE_DISPATCH 1   /* the CPU starts running the task */
+#define CORE_TRACE_SWITCH   2   /* the CPU stops running it; state = what it became */
+#define CORE_TRACE_IDLE     3   /* the CPU found no task to run */
+struct core_trace_entry
+{
+    UQUAD        us;
+    struct Task *task;
+    UBYTE        cpu, event, state, flags;  /* flags: 1 quantum over, 2 queued first */
+    BYTE         pri;
+    UBYTE        pad[3];
+};
+struct
+{
+    ULONG                   magic, entries, next, size;
+    struct core_trace_entry entry[CORE_TRACE_ENTRIES];
+} core_SchedulerTrace = { 0x53434854, CORE_TRACE_ENTRIES, 0, sizeof(struct core_trace_entry) };
+
+static inline void core_Trace(UBYTE event, struct Task *task, UBYTE state, UBYTE flags)
+{
+    struct core_trace_entry *e;
+
+    if (!CORE_SCHEDULER_TIME_AVAILABLE())
+        return;
+    e = &core_SchedulerTrace.entry[__atomic_fetch_add(&core_SchedulerTrace.next, 1,
+        __ATOMIC_RELAXED) % CORE_TRACE_ENTRIES];
+    e->us = CORE_SCHEDULER_TIME_US();
+    e->task = task;
+    e->cpu = (UBYTE)GetCPUNumber();
+    e->event = event;
+    e->state = state;
+    e->flags = flags;
+    e->pri = task ? task->tc_Node.ln_Pri : 0;
+}
+#else
+#define core_Trace(event, task, state, flags) do { } while (0)
+#endif
+
 #if defined(__AROSEXEC_SMP__)
 /* Is the task this CPU would run next of higher priority than `task`?
  * Called with interrupts off and task->tc_SpinLock held (task lock outer,
@@ -250,6 +296,8 @@ void core_Switch(void)
     if (GetIntETask(task))
         GetIntETask(task)->iet_QuantumLeft = SCHEDELAPSED_GET;
 
+    if (task->tc_State != TS_RUN)
+        core_Trace(CORE_TRACE_SWITCH, task, task->tc_State, 0);
     if (task->tc_State == TS_RUN)
     {
         DSCHED(bug("[Kernel:%02d] Switching away from '%s' @ 0x%p\n", cpunum, task->tc_Node.ln_Name, task));
@@ -320,9 +368,15 @@ void core_Switch(void)
              * answer that took microseconds. A task whose quantum is over,
              * or that gives the CPU to an equal, queues at the tail. */
             if (!FLAG_SCHEDQUANTUM_ISSET && core_HigherPriorityReady(task))
+            {
+                core_Trace(CORE_TRACE_SWITCH, task, TS_READY, 2);
                 exec_TaskEnqueueReadyFirst(task);
+            }
             else
+            {
+                core_Trace(CORE_TRACE_SWITCH, task, TS_READY, FLAG_SCHEDQUANTUM_ISSET ? 1 : 0);
                 exec_TaskEnqueueReady(task);
+            }
 #else
             Enqueue(&SysBase->TaskReady, &task->tc_Node);
 #endif
@@ -428,6 +482,7 @@ dispatch_rescan:
             SysBase->DispCount++;
             IDNESTCOUNT_SET(newtask->tc_IDNestCnt);
             SET_THIS_TASK(newtask);
+            core_Trace(CORE_TRACE_DISPATCH, newtask, newtask->tc_State, 0);
 #if defined(__AROSEXEC_SMP__) && defined(CORE_SCHEDULER_TIME_US)
             if (GetIntETask(newtask))
                 __atomic_fetch_and(&GetIntETask(newtask)->iet_FreezeFlags, (UBYTE)~IETF_WOKEN, __ATOMIC_RELEASE);
