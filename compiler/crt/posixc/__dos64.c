@@ -45,10 +45,38 @@ static struct Library *__dos64_base_for(fcb *fcb)
 
 void __dos64_probe(fcb *fcb)
 {
+    /* What a handler understands does not change from one open to the
+       next: ask each handler once, not each file. */
+    static struct { struct MsgPort *port; BOOL wide; } known[8];
+    static unsigned int next;
     struct Library *DOS64Base = __dos64_base();
+    struct FileHandle *fh = BADDR(fcb->handle);
+    struct MsgPort *port;
+    BOOL wide;
+    unsigned int i;
 
-    if (DOS64Base != NULL && fcb->handle != BNULL
-        && IsFileSystem64(fcb->handle))
+    if (DOS64Base == NULL || fh == NULL)
+        return;
+    port = fh->fh_Type;
+    Forbid();
+    for (i = 0; i < 8; i++)
+        if (port != NULL && known[i].port == port)
+            break;
+    wide = i < 8 && known[i].wide;
+    Permit();
+    if (i == 8)
+    {
+        wide = IsFileSystem64(fcb->handle);
+        if (port != NULL)
+        {
+            Forbid();
+            i = next++ % 8;
+            known[i].port = port;
+            known[i].wide = wide;
+            Permit();
+        }
+    }
+    if (wide)
         fcb->privflags |= _FCB_FS64;
 }
 

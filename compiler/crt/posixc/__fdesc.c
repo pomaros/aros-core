@@ -505,6 +505,26 @@ int __open(int wanted_fd, const char *pathname, int flags, int mode)
     reserved_fd = 1;
 
     /*
+     * An existing file opened to be read is the common case, and one packet
+     * answers it: a handler refuses to open a directory as a file. The
+     * steps below (is it a file system, lock, examine, unlock, open) look
+     * the name up twice; they remain for everything else, and say what a
+     * refused open was.
+     */
+    if (openmode == MODE_OLDFILE
+        && !(flags & (O_CREAT | O_EXCL | O_TRUNC | O_APPEND | O_DIRECTORY)))
+    {
+        fh = Open((char *)pathname, MODE_OLDFILE);
+        if (fh)
+            goto opened;
+        if (IoErr() == ERROR_OBJECT_NOT_FOUND || IoErr() == ERROR_DIR_NOT_FOUND)
+        {
+            __set_errno(PosixCBase, ENOENT);
+            goto err;
+        }
+    }
+
+    /*
      * In case of file system, test existance of file. Non-file system handlers (i.e CON:)
      * support opening a file while not supporting locking.
      */
@@ -620,6 +640,7 @@ int __open(int wanted_fd, const char *pathname, int flags, int mode)
         goto err;
     }
 
+opened:
     /* Allow opening NIL: (/dev/null) regardless of additional flags/modes */
     if (!strcasecmp(pathname, "NIL:"))
         goto success;
