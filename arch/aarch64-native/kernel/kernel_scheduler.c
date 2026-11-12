@@ -122,6 +122,32 @@ static inline BOOL core_WakePreempts(struct Task *next, struct Task *running, in
 #define core_WakePreempts(next, running, cpunum) FALSE
 #endif
 
+#if defined(__AROSEXEC_SMP__)
+/* Is the task this CPU would run next of higher priority than `task`?
+ * Called with interrupts off and task->tc_SpinLock held (task lock outer,
+ * list lock inner). */
+static BOOL core_HigherPriorityReady(struct Task *task)
+{
+    uint32_t cpumask = (1U << GetCPUNumber());
+    struct Task *next;
+    BOOL higher = FALSE;
+
+    KrnSpinLock(&PrivExecBase(SysBase)->TaskReadySpinLock, NULL,
+                SPINLOCK_MODE_READ);
+    for (next = (struct Task *)GetHead(&SysBase->TaskReady); next != NULL;
+         next = (struct Task *)GetSucc(next))
+    {
+        if (core_AffinityMatch(next, cpumask))
+        {
+            higher = next->tc_Node.ln_Pri > task->tc_Node.ln_Pri;
+            break;
+        }
+    }
+    KrnSpinUnLock(&PrivExecBase(SysBase)->TaskReadySpinLock);
+    return higher;
+}
+#endif
+
 /* Check if the currently running task on this cpu should be rescheduled */
 BOOL core_Schedule(void)
 {
@@ -286,7 +312,17 @@ void core_Switch(void)
         {
             DSCHED(bug("[Kernel:%02d] Setting '%s' @ 0x%p as ready\n", cpunum, task->tc_Node.ln_Name, task));
 #if defined(__AROSEXEC_SMP__)
-            exec_TaskEnqueueReady(task);
+            /* A task that loses the CPU to one of higher priority has not
+             * had its turn: it goes back to the head of its own priority
+             * and runs again when the other is done. At the tail, a caller
+             * preempted by the handler it had just signalled waited behind
+             * every task of its priority, a whole quantum each, for an
+             * answer that took microseconds. A task whose quantum is over,
+             * or that gives the CPU to an equal, queues at the tail. */
+            if (!FLAG_SCHEDQUANTUM_ISSET && core_HigherPriorityReady(task))
+                exec_TaskEnqueueReadyFirst(task);
+            else
+                exec_TaskEnqueueReady(task);
 #else
             Enqueue(&SysBase->TaskReady, &task->tc_Node);
 #endif
