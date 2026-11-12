@@ -21,14 +21,15 @@ AROS_LH1(void, KrnSpinUnLock,
     if (lock->lock == 0)
         return;
 
-    /* stlr publishes the critical section before the clear; the dsb keeps
-     * the sev from overtaking it and leaving a waiter parked. */
+    /* KrnSpinLock arms the exclusive monitor with LDAXR before every WFE.
+     * On Armv8-A a store that clears that monitor generates the waiter's
+     * event. Release ordering publishes the critical section; an explicit
+     * DSB/SEV would also wake unrelated waiters on every unlock.
+     * See Arm 100934, "Power efficient locks". */
     if (lock->lock & SPINLOCKF_WRITE)
     {
         lock->s_Owner = NULL;
         asm volatile("stlr wzr, [%0]" :: "r"(&lock->lock) : "memory");
-        dsb();
-        sev();
     }
     else
     {
@@ -44,12 +45,6 @@ AROS_LH1(void, KrnSpinUnLock,
                 : "memory"
         );
 
-        /* Send event to other cores if lock is free */
-        if (lock_value == 0)
-        {
-            dsb();
-            sev();
-        }
     }
 
     AROS_LIBFUNC_EXIT
