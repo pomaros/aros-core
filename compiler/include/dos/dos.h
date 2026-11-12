@@ -118,7 +118,8 @@ struct FileInfoBlock
         {
             UQUAD fib_un_ext_Size64      AROS_DOS64_ALIGN;
             UQUAD fib_un_ext_NumBlocks64 AROS_DOS64_ALIGN;
-            ULONG fib_un_ext_Pad0[3];
+            UQUAD fib_un_ext_ObjectKey   AROS_DOS64_ALIGN;
+            ULONG fib_un_ext_Pad0;
             UWORD fib_un_ext_Pad1;
             UBYTE fib_un_ext_ActExtFlags;
             UBYTE fib_un_ext_ReqExtFlags;
@@ -136,9 +137,20 @@ struct FileInfoBlock
 /* Extensions requested from the handler (FIBEXTF_ flags), or 0. */
 #define fib_ReqExtFlags fib_un.fib_un_ext.fib_un_ext_ReqExtFlags
 
-/* No FIBEXTF_ extensions are defined on AROS yet. Bit 0 is kept free
-   for compatibility: MorphOS uses it (FIBEXTB_POSIXDATE) for a POSIX
-   date in place of fib_Date. */
+/* Bit 0 is kept free for compatibility: MorphOS uses it
+   (FIBEXTB_POSIXDATE) for a POSIX date in place of fib_Date. */
+
+/* fib_ObjectKey identifies the object on its volume: two examines give
+   the same key if and only if they describe the same object, for as long
+   as the object exists (on a filesystem without object numbers: for as
+   long as it keeps its place in its directory). fib_DiskKey cannot say
+   it: handlers keep the position of a directory scan there. A handler
+   sets the flag in fib_ActExtFlags without being asked. The C library
+   takes st_ino from the key; without it, it has to derive one from the
+   object's full name. */
+#define fib_ObjectKey   fib_un.fib_un_ext.fib_un_ext_ObjectKey
+#define FIBEXTB_OBJECTKEY 1
+#define FIBEXTF_OBJECTKEY (1 << FIBEXTB_OBJECTKEY)
 
 /* Former names: the 64-bit examine calls use the standard structure */
 #define FileInfoBlock32 FileInfoBlock

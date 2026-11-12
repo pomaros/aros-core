@@ -40,6 +40,40 @@ static void __fill_stat64buffer(
     int                  fallback_to_defaults,
     BPTR                 lock);
 
+/* The block size of the volume a lock is on. It is a guideline for buffer
+   sizes and a volume keeps it while mounted, so one Info() per volume is
+   enough; stat() used to send one per call. */
+static ULONG stat_blocksize(BPTR lock)
+{
+    static struct { BPTR volume; struct MsgPort *task; ULONG size; } known[8];
+    static unsigned int next;
+    struct FileLock *fl = BADDR(lock);
+    struct InfoData info;
+    ULONG size = 0;
+    unsigned int i;
+
+    if (!fl)
+        return 1024;
+    Forbid();
+    for (i = 0; i < 8; i++)
+        if (known[i].size && known[i].volume == fl->fl_Volume
+            && known[i].task == fl->fl_Task)
+            size = known[i].size;
+    Permit();
+    if (size)
+        return size;
+    /* 1024 when Info() does not succeed */
+    if (!Info(lock, &info) || !info.id_BytesPerBlock)
+        return 1024;
+    Forbid();
+    i = next++ % 8;
+    known[i].volume = fl->fl_Volume;
+    known[i].task = fl->fl_Task;
+    known[i].size = info.id_BytesPerBlock;
+    Permit();
+    return info.id_BytesPerBlock;
+}
+
 /* Use the handler's final-component result, without DOS Lock's automatic
    soft-link resolution. The DevProc iterator preserves multidirectory assigns. */
 static BPTR stat_locate(struct MsgPort *port, BPTR base, const char *path)
@@ -139,9 +173,12 @@ int __stat(BPTR lock, struct stat *sb, BOOL filehandle)
         }
     }
 
-    /* Get the full path of the stated filesystem object and use it to
-       compute hash value */
-    do
+    /* A handler that identifies the object needs no name. Otherwise get
+       the full path of the object and use its hash: one ParentDir and one
+       Examine per path component. */
+    if (!fallback_to_defaults && (fib->fib_ActExtFlags & FIBEXTF_OBJECTKEY))
+        buffer = NULL;
+    else do
     {
         BOOL GotName;
 
@@ -234,9 +271,12 @@ int __stat64(BPTR lock, struct stat64 *sb, BOOL filehandle)
         }
     }
 
-    /* Get the full path of the stated filesystem object and use it to
-       compute hash value */
-    do
+    /* A handler that identifies the object needs no name. Otherwise get
+       the full path of the object and use its hash: one ParentDir and one
+       Examine per path component. */
+    if (!fallback_to_defaults && (fib->fib_ActExtFlags & FIBEXTF_OBJECTKEY))
+        buffer = NULL;
+    else do
     {
         BOOL GotName;
 
@@ -764,8 +804,13 @@ static void __fill_statbuffer(
     uint64_t hash;
     uint32_t pc = 1, pb = 1; /* initial hash values */
 
-    hashlittle2(buffer, strlen((char*) buffer), &pc, &pb);
-    hash = pc + (((uint64_t)pb)<<32);
+    if (buffer)
+    {
+        hashlittle2(buffer, strlen((char*) buffer), &pc, &pb);
+        hash = pc + (((uint64_t)pb)<<32);
+    }
+    else
+        hash = fib->fib_ObjectKey;
 
     if(fallback_to_defaults)
     {
@@ -800,20 +845,7 @@ static void __fill_statbuffer(
     sb->st_gid     = __id_a2u(fib->fib_OwnerGID);
     sb->st_mode    = __prot_a2u(fib->fib_Protection);
 
-    {
-        struct InfoData info;
-
-        if (lock && Info(lock, &info))
-        {
-            sb->st_blksize = info.id_BytesPerBlock;
-        }
-        else
-        {
-            /* The st_blksize is just a guideline anyway, so we set it
-               to 1024 in case Info() didn't succeed */
-            sb->st_blksize = 1024;
-        }
-    }
+    sb->st_blksize = stat_blocksize(lock);
     if(fib->fib_Size64 > 0 && sb->st_blksize > 0)
         sb->st_blocks =
             (1 + ((QUAD) fib->fib_Size64 - 1) / sb->st_blksize) *
@@ -858,8 +890,13 @@ static void __fill_stat64buffer(
     uint64_t hash;
     uint32_t pc = 1, pb = 1; /* initial hash values */
 
-    hashlittle2(buffer, strlen((char*) buffer), &pc, &pb);
-    hash = pc + (((uint64_t)pb)<<32);
+    if (buffer)
+    {
+        hashlittle2(buffer, strlen((char*) buffer), &pc, &pb);
+        hash = pc + (((uint64_t)pb)<<32);
+    }
+    else
+        hash = fib->fib_ObjectKey;
 
     if(fallback_to_defaults)
     {
@@ -895,20 +932,7 @@ static void __fill_stat64buffer(
     sb->st_gid     = __id_a2u(fib->fib_OwnerGID);
     sb->st_mode    = __prot_a2u(fib->fib_Protection);
 
-    {
-        struct InfoData info;
-
-        if (lock && Info(lock, &info))
-        {
-            sb->st_blksize = info.id_BytesPerBlock;
-        }
-        else
-        {
-            /* The st_blksize is just a guideline anyway, so we set it
-               to 1024 in case Info() didn't succeed */
-            sb->st_blksize = 1024;
-        }
-    }
+    sb->st_blksize = stat_blocksize(lock);
     if(fib->fib_Size64 > 0 && sb->st_blksize > 0)
         sb->st_blocks =
             (1 + ((QUAD) fib->fib_Size64 - 1) / sb->st_blksize) *

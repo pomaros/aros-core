@@ -701,9 +701,13 @@ LONG FillFIB(struct ExtFileLock *fl, struct FileInfoBlock *fib,
     fib->fib_NumBlocks64 = (((UQUAD)gl->size + (sb->clustersize - 1))
         >> sb->clustersize_bits) << sb->cluster_sectors_bits;
     fib->fib_NumBlocks = fib->fib_NumBlocks64;
-    fib->fib_ActExtFlags = 0;
     fib->fib_EntryType = fib->fib_DirEntryType;
+    /* FAT has no object numbers: an object is known by the place of its
+       directory entry, which it keeps until it is renamed or deleted. */
     fib->fib_DiskKey = 0xfffffffflu;    //fl->entry;
+    fib->fib_ObjectKey = gl == &sb->info->root_lock ? 1
+        : (((UQUAD)gl->dir_cluster << 32) | gl->dir_entry) + 2;
+    fib->fib_ActExtFlags = FIBEXTF_OBJECTKEY;
 
     if (fib->fib_DirEntryType == ST_ROOT)
         CopyMem(&sb->volume.create_time, &fib->fib_Date,
