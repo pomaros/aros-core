@@ -97,6 +97,20 @@
 #define ACTION_READ_AT64                2021
 #define ACTION_WRITE_AT64               2022
 
+/*
+ * AROS extension: examine an object by name, the packet behind stat().
+ *   dp_Arg1 lock the name is relative to (BPTR, 0 for the root),
+ *   dp_Arg2 BSTR name, dp_Arg3 BPTR to a struct FileInfoBlock
+ *   dp_Res1 DOSTRUE or DOSFALSE
+ * The answer is that of ACTION_LOCATE_OBJECT with a shared lock, then
+ * ACTION_EXAMINE_OBJECT64, then ACTION_FREE_LOCK, in one packet, with the
+ * errors of the first two: ERROR_IS_SOFT_LINK when a link is in the way,
+ * ERROR_OBJECT_IN_USE when the object is locked exclusively. The names in
+ * the FileInfoBlock are as the handler writes them, and the comment may be
+ * left empty: the packet is for callers that want the object's attributes.
+ */
+#define ACTION_EXAMINE_NAME64           2023
+
 #if (__WORDSIZE != 64)
 /*
  * AmigaOS 4 (tm) compatible 64-bit packet layout, used on 32-bit

@@ -8,6 +8,7 @@
 #include <proto/exec.h>
 #include <proto/arossupport.h>
 #include <dos/dosextens.h>
+#include <dos/dos64.h>
 
 #include <string.h>
 #include <errno.h>
@@ -32,45 +33,49 @@ static void __fill_statbuffer(
     char                 *buffer,
     struct FileInfoBlock *fib,
     int                  fallback_to_defaults,
-    BPTR                 lock);
+    BPTR                 lock,
+    struct MsgPort       *port);
 static void __fill_stat64buffer(
     struct stat64          *sb,
     char                 *buffer,
     struct FileInfoBlock *fib,
     int                  fallback_to_defaults,
-    BPTR                 lock);
+    BPTR                 lock,
+    struct MsgPort       *port);
 
-/* The block size of the volume a lock is on. It is a guideline for buffer
-   sizes and a volume keeps it while mounted, so one Info() per volume is
-   enough; stat() used to send one per call. */
-static ULONG stat_blocksize(BPTR lock)
+/* The block size of the volume a handler serves, 0 when it is not known
+   yet and no lock is given to ask with. It is a guideline for buffer sizes
+   and a volume keeps it while mounted, so one Info() per handler is enough;
+   stat() used to send one per call. */
+static ULONG stat_blocksize(struct MsgPort *port, BPTR lock)
 {
-    static struct { BPTR volume; struct MsgPort *task; ULONG size; } known[8];
+    static struct { struct MsgPort *port; ULONG size; } known[8];
     static unsigned int next;
-    struct FileLock *fl = BADDR(lock);
     struct InfoData info;
     ULONG size = 0;
     unsigned int i;
 
-    if (!fl)
-        return 1024;
-    Forbid();
-    for (i = 0; i < 8; i++)
-        if (known[i].size && known[i].volume == fl->fl_Volume
-            && known[i].task == fl->fl_Task)
-            size = known[i].size;
-    Permit();
-    if (size)
+    if (port)
+    {
+        Forbid();
+        for (i = 0; i < 8; i++)
+            if (known[i].size && known[i].port == port)
+                size = known[i].size;
+        Permit();
+    }
+    if (size || !lock)
         return size;
     /* 1024 when Info() does not succeed */
     if (!Info(lock, &info) || !info.id_BytesPerBlock)
         return 1024;
-    Forbid();
-    i = next++ % 8;
-    known[i].volume = fl->fl_Volume;
-    known[i].task = fl->fl_Task;
-    known[i].size = info.id_BytesPerBlock;
-    Permit();
+    if (port)
+    {
+        Forbid();
+        i = next++ % 8;
+        known[i].port = port;
+        known[i].size = info.id_BytesPerBlock;
+        Permit();
+    }
     return info.id_BytesPerBlock;
 }
 
@@ -221,13 +226,17 @@ int __stat(BPTR lock, struct stat *sb, BOOL filehandle)
     // FIXME: how can we get a lock on an exclusive file?
     if (filehandle)
     {
-        BPTR filelock = DupLockFromFH(lock);
-        __fill_statbuffer(sb, (char*) buffer, fib, fallback_to_defaults, filelock);
-        UnLock(filelock);
+        /* The block size needs a lock the first time only */
+        struct MsgPort *port = ((struct FileHandle *)BADDR(lock))->fh_Type;
+        BPTR filelock = stat_blocksize(port, BNULL) ? BNULL : DupLockFromFH(lock);
+        __fill_statbuffer(sb, (char*) buffer, fib, fallback_to_defaults, filelock, port);
+        if (filelock)
+            UnLock(filelock);
     }
     else
     {
-        __fill_statbuffer(sb, (char*) buffer, fib, fallback_to_defaults, lock);
+        __fill_statbuffer(sb, (char*) buffer, fib, fallback_to_defaults, lock,
+            lock ? ((struct FileLock *)BADDR(lock))->fl_Task : NULL);
     }
 
     FreeVec(buffer);
@@ -319,13 +328,17 @@ int __stat64(BPTR lock, struct stat64 *sb, BOOL filehandle)
     // FIXME: how can we get a lock on an exclusive file?
     if (filehandle)
     {
-        BPTR filelock = DupLockFromFH(lock);
-        __fill_stat64buffer(sb, (char*) buffer, fib, fallback_to_defaults, filelock);
-        UnLock(filelock);
+        /* The block size needs a lock the first time only */
+        struct MsgPort *port = ((struct FileHandle *)BADDR(lock))->fh_Type;
+        BPTR filelock = stat_blocksize(port, BNULL) ? BNULL : DupLockFromFH(lock);
+        __fill_stat64buffer(sb, (char*) buffer, fib, fallback_to_defaults, filelock, port);
+        if (filelock)
+            UnLock(filelock);
     }
     else
     {
-        __fill_stat64buffer(sb, (char*) buffer, fib, fallback_to_defaults, lock);
+        __fill_stat64buffer(sb, (char*) buffer, fib, fallback_to_defaults, lock,
+            lock ? ((struct FileLock *)BADDR(lock))->fl_Task : NULL);
     }
 
     FreeVec(buffer);
@@ -337,10 +350,89 @@ int __stat64(BPTR lock, struct stat64 *sb, BOOL filehandle)
 static void __fill_stat_pathbuffer(void *sb, char *path,
     struct FileInfoBlock *fib, int fallback, BPTR lock, BOOL wide)
 {
+    struct MsgPort *port = lock ? ((struct FileLock *)BADDR(lock))->fl_Task : NULL;
+
     if (wide)
-        __fill_stat64buffer(sb, path, fib, fallback, lock);
+        __fill_stat64buffer(sb, path, fib, fallback, lock, port);
     else
-        __fill_statbuffer(sb, path, fib, fallback, lock);
+        __fill_statbuffer(sb, path, fib, fallback, lock, port);
+}
+
+/* stat() of an absolute name in one packet: ACTION_EXAMINE_NAME64 has the
+   handler find the object and describe it, where Lock(), Examine() and
+   UnLock() were three packets. Returns 0 when done, -1 with errno set, and
+   1 when the caller must go the long way: the handler does not know the
+   packet or gives no object key, a soft link or an exclusive lock is in the
+   way, or the volume's block size has never been asked for. */
+int __stat_by_name(const char *path, void *sb, BOOL wide)
+{
+    static struct MsgPort *unknown[4];  /* handlers that refused the packet */
+    static unsigned int next_unknown;
+    const char *relative = strchr(path, ':');
+    struct DevProc *device = NULL;
+    struct FileInfoBlock *fib;
+    int result = 1;
+    unsigned int i;
+
+    if (!relative)
+        return 1;
+    relative++;
+    fib = AllocVec(sizeof(struct FileInfoBlock), MEMF_PUBLIC | MEMF_CLEAR);
+    if (!fib)
+        return 1;
+    while (result == 1 && (device = GetDeviceProc(path, device)) != NULL)
+    {
+        struct MsgPort *port = device->dvp_Port;
+        BSTR name;
+        LONG error;
+
+        for (i = 0; i < 4; i++)
+            if (unknown[i] == port)
+                break;
+        if (i < 4 || !stat_blocksize(port, BNULL))
+            break;
+        name = CreateBSTR((CONST_STRPTR)relative);
+        if (!name)
+            break;
+        fib->fib_ActExtFlags = 0;
+        fib->fib_ReqExtFlags = 0;
+        if (DoPkt(port, ACTION_EXAMINE_NAME64, (SIPTR)device->dvp_Lock,
+            (SIPTR)name, (SIPTR)MKBADDR(fib), 0, 0))
+        {
+            FreeVec(BADDR(name));
+            if (!(fib->fib_ActExtFlags & FIBEXTF_OBJECTKEY))
+                break;
+            if (wide)
+                __fill_stat64buffer(sb, NULL, fib, 0, BNULL, port);
+            else
+                __fill_statbuffer(sb, NULL, fib, 0, BNULL, port);
+            result = 0;
+            break;
+        }
+        error = IoErr();
+        FreeVec(BADDR(name));
+        if (error == ERROR_OBJECT_NOT_FOUND)
+        {
+            /* the next directory of a multi-directory assign, if any */
+            if (device->dvp_Flags & DVPF_ASSIGN)
+                continue;
+            errno = ENOENT;
+            result = -1;
+        }
+        else if (error == ERROR_ACTION_NOT_KNOWN || error == ERROR_NOT_IMPLEMENTED)
+            unknown[next_unknown++ % 4] = port;
+        break;
+    }
+    if (device)
+        FreeDeviceProc(device);
+    else if (result == 1 && IoErr() == ERROR_NO_MORE_ENTRIES)
+    {
+        /* every directory of the assign was asked */
+        errno = ENOENT;
+        result = -1;
+    }
+    FreeVec(fib);
+    return result;
 }
 
 static int __stat_from_path_common(const char *path, void *sb, BOOL wide,
@@ -799,7 +891,8 @@ static void __fill_statbuffer(
     char                 *buffer,
     struct FileInfoBlock *fib,
     int                  fallback_to_defaults,
-    BPTR                 lock)
+    BPTR                 lock,
+    struct MsgPort       *port)
 {
     uint64_t hash;
     uint32_t pc = 1, pb = 1; /* initial hash values */
@@ -827,7 +920,9 @@ static void __fill_statbuffer(
         fib->fib_DirEntryType = ST_PIPEFILE;
     }
 
-    sb->st_dev     = (dev_t) (lock ? ((struct FileLock *)BADDR(lock))->fl_Volume : BNULL);
+    /* The handler's port: a lock, a file handle and a name all lead to it,
+       so stat(), fstat() and lstat() agree without asking the handler. */
+    sb->st_dev     = (dev_t) port;
     sb->st_ino     = hash;    /* hash value will be truncated if st_ino size is
                                  smaller than uint64_t, but it's ok */
     sb->st_size    = (off_t)fib->fib_Size64;
@@ -845,7 +940,9 @@ static void __fill_statbuffer(
     sb->st_gid     = __id_a2u(fib->fib_OwnerGID);
     sb->st_mode    = __prot_a2u(fib->fib_Protection);
 
-    sb->st_blksize = stat_blocksize(lock);
+    sb->st_blksize = stat_blocksize(port, lock);
+    if (!sb->st_blksize)
+        sb->st_blksize = 1024;
     if(fib->fib_Size64 > 0 && sb->st_blksize > 0)
         sb->st_blocks =
             (1 + ((QUAD) fib->fib_Size64 - 1) / sb->st_blksize) *
@@ -885,7 +982,8 @@ static void __fill_stat64buffer(
     char                 *buffer,
     struct FileInfoBlock *fib,
     int                  fallback_to_defaults,
-    BPTR                 lock)
+    BPTR                 lock,
+    struct MsgPort       *port)
 {
     uint64_t hash;
     uint32_t pc = 1, pb = 1; /* initial hash values */
@@ -913,7 +1011,9 @@ static void __fill_stat64buffer(
         fib->fib_DirEntryType = ST_PIPEFILE;
     }
 
-    sb->st_dev     = (dev_t) (lock ? ((struct FileLock *)BADDR(lock))->fl_Volume : BNULL);
+    /* The handler's port: a lock, a file handle and a name all lead to it,
+       so stat(), fstat() and lstat() agree without asking the handler. */
+    sb->st_dev     = (dev_t) port;
     sb->st_ino     = hash;    /* hash value will be truncated if st_ino size is
                                  smaller than uint64_t, but it's ok */
     sb->st_size    = (__off64_t)fib->fib_Size64;
@@ -932,7 +1032,9 @@ static void __fill_stat64buffer(
     sb->st_gid     = __id_a2u(fib->fib_OwnerGID);
     sb->st_mode    = __prot_a2u(fib->fib_Protection);
 
-    sb->st_blksize = stat_blocksize(lock);
+    sb->st_blksize = stat_blocksize(port, lock);
+    if (!sb->st_blksize)
+        sb->st_blksize = 1024;
     if(fib->fib_Size64 > 0 && sb->st_blksize > 0)
         sb->st_blocks =
             (1 + ((QUAD) fib->fib_Size64 - 1) / sb->st_blksize) *

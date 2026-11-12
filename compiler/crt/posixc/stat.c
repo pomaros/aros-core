@@ -92,6 +92,11 @@
     if (path == NULL)
         return -1;
         
+    res = __stat_by_name(path, sb, FALSE);
+    if (res <= 0)
+        return res;
+    res = 0;
+
     lock = Lock(path, SHARED_LOCK);
     if (!lock)
     {

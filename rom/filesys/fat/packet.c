@@ -107,6 +107,30 @@ void ProcessPackets(struct Globals *glob)
                 break;
             }
 
+        case ACTION_EXAMINE_NAME64:
+            {
+                struct ExtFileLock *fl = BADDR(pkt->dp_Arg1), *lock;
+                struct FileInfoBlock *fib = BADDR(pkt->dp_Arg3);
+
+                if ((err = TestLock(fl, glob)))
+                    break;
+
+                if ((err = OpLockFile(fl, AROS_BSTR_ADDR(pkt->dp_Arg2),
+                    AROS_BSTR_strlen(pkt->dp_Arg2), SHARED_LOCK, &lock,
+                    glob)) == 0)
+                {
+                    if ((err = FillFIB(lock, fib, glob)) == 0)
+                    {
+                        if (fib->fib_Size64 > 0x7fffffff)
+                            fib->fib_Size = 0;
+                        res = DOSTRUE;
+                    }
+                    OpUnlockFile(lock, glob);
+                }
+
+                break;
+            }
+
         case ACTION_FREE_LOCK:
             {
                 struct ExtFileLock *fl = BADDR(pkt->dp_Arg1);

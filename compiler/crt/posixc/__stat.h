@@ -16,6 +16,7 @@
 #include <dos/dos.h>
 
 int __posixc_lstat_path(const char *path, void *sb, BOOL wide);
+int __stat_by_name(const char *path, void *sb, BOOL wide);
 int __stat(BPTR lock, struct stat *sb, BOOL filehandle);
 int __stat64(BPTR lock, struct stat64 *sb, BOOL filehandle);
 int __stat_from_path(const char *path, struct stat *sb);
