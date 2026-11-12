@@ -65,7 +65,9 @@ uint32_t AROSAppleSMPOnlineMask(void)
 uint64_t AROSAppleSMPTimeUS(void)
 {
  uint64_t ticks,hz;
- __asm__ volatile("isb; mrs %0,cntvct_el0; mrs %1,cntfrq_el0":"=r"(ticks),"=r"(hz));
+ /* No barrier: the scheduler and the deadlines that read this work in
+  * microseconds, and the barrier cost more than the rest of the read. */
+ __asm__ volatile("mrs %0,cntvct_el0; mrs %1,cntfrq_el0":"=r"(ticks),"=r"(hz));
  return hz ? (ticks/hz)*1000000U+(ticks%hz)*1000000U/hz : 0;
 }
 /* One owner holds PageMapLock across the rendezvous and mutation. A contender

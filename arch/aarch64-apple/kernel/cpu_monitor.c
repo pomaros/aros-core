@@ -30,7 +30,8 @@ const struct AROSAppleCPUStats *AROSAppleCPUMonitorStats(void)
 }
 static uint64_t counter(void)
 {
-    uint64_t v;__asm__ volatile("isb\n\tmrs %0, cntvct_el0":"=r"(v));return v;
+    /* No barrier: accounting reads this on every kernel entry and exit. */
+    uint64_t v;__asm__ volatile("mrs %0, cntvct_el0":"=r"(v));return v;
 }
 static uint64_t affinity(void)
 {
