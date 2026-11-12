@@ -47,7 +47,8 @@ int main(void)
     int a,b;
     assert(native_admits(&a,0x15,R_REAP_REFRESH));
     assert(native_admits(&a,0x15,R_COPY));
-    assert(!native_admits(&a,0x15,R_REAP_REFRESH+1));
+    assert(native_admits(&a,0x15,R_DEBUG));
+    assert(!native_admits(&a,0x15,R_DEBUG+1));
     assert(!native_admits(&a,0x24,R_REAP_REFRESH));
     assert(!r_refresh_reap_hint() && !orphan_reap_pending);
     struct Restricted other={.state=R_LIVE,.owner_context=&b,.owner=&b};
