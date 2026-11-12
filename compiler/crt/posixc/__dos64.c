@@ -10,6 +10,8 @@
 
 #include <proto/exec.h>
 #include <proto/dos.h>
+#include <dos/dosextens.h>
+#include <dos/dos64.h>
 
 #define __NOBLIBBASE__
 
@@ -313,6 +315,38 @@ QUAD __dos64_write(fcb *fcb, CONST_APTR buf, QUAD len)
         r = __dos64_rawwrite(DOS64Base, fcb->handle, buf, len);
     __fcb_unlock(fcb);
     return r;
+}
+
+QUAD __dos64_transfer_at(fcb *fcb, APTR buf, QUAD len, QUAD position, BOOL write)
+{
+    struct FileHandle *fh = BADDR(fcb->handle);
+    QUAD done = 0;
+
+    if ((fcb->privflags & (_FCB_NOAT | _FCB_ISDIR)) || fh == NULL
+        || fh->fh_Type == NULL)
+        return -2;
+    while (done < len)
+    {
+        LONG chunk = len - done > 0x7FFFF000LL ? 0x7FFFF000 : (LONG)(len - done);
+        QUAD at = position + done;
+        SIPTR ret = DoPkt(fh->fh_Type, write ? ACTION_WRITE_AT64 : ACTION_READ_AT64,
+            fh->fh_Arg1, (SIPTR)((UBYTE *)buf + done), chunk, (SIPTR)&at, 0);
+
+        if (ret < 0)
+        {
+            if (done == 0 && (IoErr() == ERROR_ACTION_NOT_KNOWN
+                || IoErr() == ERROR_NOT_IMPLEMENTED))
+            {
+                fcb->privflags |= _FCB_NOAT;
+                return -2;
+            }
+            return done ? done : -1;
+        }
+        done += ret;
+        if (ret < chunk)
+            break;
+    }
+    return done;
 }
 
 /* Derive the 64-bit fields of a FileInfoBlock filled by a 32-bit examine */

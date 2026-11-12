@@ -32,6 +32,15 @@ ssize_t pwrite64(int d, const void *buf, size_t nbytes, __off64_t offset)
         goto done;
     }
     FLUSHONREADCHECK
+    if (nbytes > ((size_t)-1 >> 1))
+        nbytes = (size_t)-1 >> 1;
+    /* One packet when the handler writes at a position itself */
+    if (nbytes && (count = __dos64_transfer_at(fdesc->fcb, (APTR)buf, nbytes, offset, TRUE)) != -2) {
+        if (count < 0)
+            error = __stdc_ioerr2errno(IoErr());
+        goto done;
+    }
+    count = -1;
     old = __dos64_getpos(fdesc->fcb);
     if (old < 0) {
         error = __stdc_ioerr2errno(IoErr());

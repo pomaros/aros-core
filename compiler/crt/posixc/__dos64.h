@@ -33,6 +33,16 @@ QUAD __dos64_setfilesize(fcb *fcb, QUAD size, LONG mode);
 QUAD __dos64_read(fcb *fcb, APTR buf, QUAD len);
 QUAD __dos64_write(fcb *fcb, CONST_APTR buf, QUAD len);
 
+/* fcb privflag (see __fdesc.h for the others): the handler does not know
+   the positional transfer packets */
+#define _FCB_NOAT         ((unsigned int)1<<13)
+
+/* pread()/pwrite() in one packet (ACTION_READ_AT64, ACTION_WRITE_AT64).
+   Returns the bytes transferred, -1 with IoErr() set, or -2 when the
+   handler does not know the packets: the caller then seeks, transfers and
+   seeks back. The caller holds the fcb lock. */
+QUAD __dos64_transfer_at(fcb *fcb, APTR buf, QUAD len, QUAD position, BOOL write);
+
 /* obj is a filehandle for __DOS64_EXAMINE_FH, otherwise a lock */
 #define __DOS64_EXAMINE      0
 #define __DOS64_EXAMINE_FH   1

@@ -454,6 +454,43 @@ void ProcessPackets(struct Globals *glob)
                 break;
             }
 
+        case ACTION_READ_AT64:
+        case ACTION_WRITE_AT64:
+            {
+                struct ExtFileLock *fl = BADDR(pkt->dp_Arg1);
+                APTR buffer = (APTR) pkt->dp_Arg2;
+                QUAD *at = (QUAD *) pkt->dp_Arg4;
+                ULONG want = pkt->dp_Arg3, done = 0, keep;
+
+                res = -1;
+                if ((err = TestLock(fl, glob)))
+                    break;
+                if (at == NULL || *at < 0 || pkt->dp_Arg3 < 0)
+                {
+                    err = ERROR_BAD_NUMBER;
+                    break;
+                }
+                /* A FAT file ends before 4 GiB */
+                if (*at > 0xffffffffLL)
+                {
+                    if (pkt->dp_Type == ACTION_READ_AT64)
+                        res = 0;
+                    else
+                        err = ERROR_OBJECT_TOO_LARGE;
+                    break;
+                }
+                /* The operations work at the handle's position: lend it */
+                keep = fl->pos;
+                fl->pos = (ULONG) *at;
+                err = pkt->dp_Type == ACTION_READ_AT64
+                    ? OpRead(fl, buffer, want, &done, glob)
+                    : OpWrite(fl, buffer, want, &done, glob);
+                fl->pos = keep;
+                if (err == 0)
+                    res = done;
+                break;
+            }
+
         case ACTION_SEEK:
             {
                 struct ExtFileLock *fl = BADDR(pkt->dp_Arg1);

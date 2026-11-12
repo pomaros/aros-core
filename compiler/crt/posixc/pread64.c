@@ -74,6 +74,15 @@
         goto done;
     }
     FLUSHONREADCHECK
+    if (nbytes > ((size_t)-1 >> 1))
+        nbytes = (size_t)-1 >> 1;
+    /* One packet when the handler reads at a position itself */
+    if (nbytes && (count = __dos64_transfer_at(fdesc->fcb, buf, nbytes, offset, FALSE)) != -2) {
+        if (count < 0)
+            error = __stdc_ioerr2errno(IoErr());
+        goto done;
+    }
+    count = -1;
     old = __dos64_getpos(fdesc->fcb);
     if (old < 0) {
         error = __stdc_ioerr2errno(IoErr());

@@ -82,6 +82,21 @@
  */
 #define ACTION_INFO64                   2020
 
+/*
+ * AROS extension: transfer at a position, the packets behind pread() and
+ * pwrite().
+ *   dp_Arg1 fh_Arg1, dp_Arg2 APTR buffer, dp_Arg3 LONG length,
+ *   dp_Arg4 QUAD *position
+ *   dp_Res1 bytes transferred, -1 on error
+ * The position of the file handle is neither used nor changed. A read at
+ * or beyond the end of the file transfers 0 bytes. A write beyond the end
+ * extends the file; the gap reads as zeros. A handler that does not know
+ * the packets answers ERROR_ACTION_NOT_KNOWN and the caller seeks, transfers
+ * and seeks back.
+ */
+#define ACTION_READ_AT64                2021
+#define ACTION_WRITE_AT64               2022
+
 #if (__WORDSIZE != 64)
 /*
  * AmigaOS 4 (tm) compatible 64-bit packet layout, used on 32-bit
