@@ -20,6 +20,10 @@ retained guards, exact-owner remap/unmap, existing block/restricted-table
 refusal, resident block/page offsets, invalid geometry/addresses/descriptors,
 root ASID/CnP versus misalignment, missing callbacks and allocation failures.
 
+The read-only data-policy query verifies exact backing, read/write/user bits,
+both execute-never bits and AF. Executable requests, guards, blocks, restricted
+parents and malformed descriptors are refused without table mutation.
+
 Every returned allocation stays in the fixture ledger. Failure after publishing
 an intermediate table retains that reachable table; a malformed/unresolvable
 allocation remains explicitly caller-owned and unpublished. All HOST allocations

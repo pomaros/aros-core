@@ -20,15 +20,23 @@ def main():
     wrapper=extract(source.read_text(),'static int r_jit_protection(')+extract(source.read_text(),'static int r_protect_memory(')
     wrapper=wrapper.replace('register uintptr_t argument __asm__("x0")=(uintptr_t)&op;','uintptr_t argument=(uintptr_t)&op;').replace('__asm__ volatile("svc #0xa567":"+r"(argument)::"x1","memory","cc");','argument=memory_svc((void *)argument);')
     actual+=bridge+wrapper
+    preflight=extract(source.read_text(),'int AROSAppleRestrictedDataAliasesMatch(')+extract(adapter.read_text(),'static uintptr_t protection_unchanged(')
+    preflight=preflight.replace('__asm__ volatile("mrs %0, ttbr0_el1" : "=r"(root));','root=123;').replace('__asm__ volatile("mrs %0, tcr_el1" : "=r"(tcr));','tcr=16;')
+    actual+=preflight
     variants=[('actual',actual),('missing-quiescence',actual.replace('uint64_t token=AROSApplePageMutationBegin();','uint64_t token=456;')),('retained-publication-context',actual.replace('publication_context=NULL;','')),('recursive-coordinator',actual.replace('return AROSAppleRestrictedProtectAliasesLocked(address,tcr,permissions);','return AROSAppleRestrictedProtectAliases(address,tcr,permissions);')),('skip-propagation',actual.replace('!AROSAppleRestrictedProtectAliases(protection_operation.address,tcr,\n                protection_operation.permissions)', '0')),('retired-root',actual.replace('d->state==R_REAPING || !d->root','!d->root')),('ignore-failure',actual.replace('{ ok=0;break; }','{ break; }')),('user-alias-flags',actual.replace('permissions & (AARCH64_PROTECT_READ|AARCH64_PROTECT_WRITE|AARCH64_PROTECT_EXEC)','permissions'))]
+    variants.extend([
+        ('skip-data-aliases',actual.replace('!AROSAppleRestrictedDataAliasesMatch(page,tcr,operation->permissions)','0')),
+        ('skip-native-data',actual.replace('!AArch64DataPageMatches(&ops,root,tcr,page,page,operation->permissions)','((void)ops,(void)root,0)'))])
     expected={
         'missing-quiescence':'map_lock && rendezvous && publication_context==&owner_context && !coordinator',
         'retained-publication-context':'token==456 && rendezvous && !publication_context',
-        'recursive-coordinator':'map_lock && rendezvous && !coordinator',
+        'recursive-coordinator':'map_lock && (rendezvous || preflight) && !coordinator',
         'skip-propagation':'protect_one_page() && native_permissions==flags[i] && calls==2',
         'retired-root':'protect_one_page() && native_permissions==flags[i] && calls==2',
         'ignore-failure':'!protect_one_page() && calls==2 && native_permissions==29 && !coordinator',
         'user-alias-flags':'roots[0]==1 && roots[1]==2 && policies[0]==expected[i] && policies[1]==expected[i]',
+        'skip-data-aliases':'protection_unchanged() && query_calls==6 && !coordinator',
+        'skip-native-data':'protection_unchanged() && query_calls==6 && !coordinator',
     }
     result={'result':'FAIL','scope':__doc__,'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),'dirty_inputs':bool(subprocess.check_output(['git','status','--porcelain'],cwd=ROOT)),'inputs':{str(x.relative_to(ROOT)):hashlib.sha256(x.read_bytes()).hexdigest() for x in [source,adapter,HERE/'test.c',HERE/'run.py']},'variants':[]}
     for name,code in variants:

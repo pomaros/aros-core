@@ -1842,6 +1842,21 @@ int AROSAppleRestrictedProtectAliases(uintptr_t address,uint64_t tcr,unsigned pe
     int ok=AROSAppleRestrictedProtectAliasesLocked(address,tcr,permissions);
     r_uncoordinate();return ok;
 }
+int AROSAppleRestrictedDataAliasesMatch(uintptr_t address,uint64_t tcr,unsigned permissions)
+{
+    if (!AROSApplePageArenaContains(address) || (permissions&~11U) ||
+        !(permissions&AARCH64_PROTECT_READ)) return 0;
+    const struct AArch64ProtectionOps ops={.resolve=r_resolve};
+    int ok=1;
+    r_coordinate();
+    for (struct RestrictedDomain *d=restricted_domains;d;d=d->next) {
+        if (d->state==R_REAPING || !d->root) continue;
+        if (!AArch64DataPageMatches(&ops,d->root,tcr,address,address,permissions&3U)) {
+            ok=0;break;
+        }
+    }
+    r_uncoordinate();return ok;
+}
 static void r_mark_retired_resources(void *retired)
 {
     if (!retired) return;

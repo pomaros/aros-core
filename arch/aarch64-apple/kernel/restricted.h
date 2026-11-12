@@ -22,5 +22,8 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *);
 int AROSAppleRestrictedProtectAliases(uintptr_t address,uint64_t tcr,unsigned permissions);
 /* Same contract, with the restricted coordinator already held. */
 int AROSAppleRestrictedProtectAliasesLocked(uintptr_t address,uint64_t tcr,unsigned permissions);
+/* Read-only NX data-policy preflight: PageMapLock held, trusted EL1 only.
+ * Takes the coordinator to retain roots, but needs no remote rendezvous. */
+int AROSAppleRestrictedDataAliasesMatch(uintptr_t address,uint64_t tcr,unsigned permissions);
 void AROSAppleRestrictedContextRetired(void *context);
 #endif

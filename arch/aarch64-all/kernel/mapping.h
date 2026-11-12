@@ -67,6 +67,14 @@ int AArch64RemapPrivilegedPage(const struct AArch64ProtectionOps *, uint64_t ttb
     uint64_t tcr, uint64_t virtual_address, uint64_t expected_physical,
     unsigned permissions);
 
+/* Read-only recognition of an unchanged readable NX data leaf. Requires exact
+ * backing, write/user policy and AF; rejects guards, blocks and executable
+ * requests. Caller serializes table mutation and retains all walked tables.
+ * Only resolve is used: this never publishes code or changes permissions. */
+int AArch64DataPageMatches(const struct AArch64ProtectionOps *, uint64_t ttbr0,
+    uint64_t tcr, uint64_t virtual_address, uint64_t expected_physical,
+    unsigned permissions);
+
 /* Permanent page owner lookup, also for an inaccessible guard. Does not
  * walk/split blocks or allocate; this is not a resident-user-pointer probe.
  * Only resolve is required; output is unchanged on failure. Restricted parent

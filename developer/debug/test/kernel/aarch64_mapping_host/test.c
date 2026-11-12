@@ -423,6 +423,37 @@ static void user_admission(unsigned page)
     assert(f.allocate_calls==allocations && f.clean_calls==cleans && f.invalidations==invalidations);
     finish(&f);
 }
+static void data_policy(unsigned page)
+{
+    struct Fixture f;init(&f,page,48);struct AArch64ProtectionOps o=ops(&f);
+    assert(AArch64MapPage(&o,f.root,f.tcr,f.va,DATA_PA,3,1));
+    struct AArch64ProtectionOps query={.context=&f,.resolve=resolve};
+    uint64_t *entry=slot_at(&f,f.va,3),original=*entry;
+    unsigned allocations=f.allocate_calls,cleans=f.clean_calls,invalidations=f.invalidations;
+    assert(AArch64DataPageMatches(&query,f.root,f.tcr,f.va,DATA_PA,3));
+    assert(!AArch64DataPageMatches(&query,f.root,f.tcr,f.va,DATA_PA,1));
+    assert(!AArch64DataPageMatches(&query,f.root,f.tcr,f.va,DATA_PA,11));
+    assert(!AArch64DataPageMatches(&query,f.root,f.tcr,f.va,DATA_PA+((uint64_t)1<<page),3));
+    const uint64_t toggles[]={AP_EL0,AP_RO,PXN,UXN,GUARD,CONTIG,1,UINT64_C(1)<<10};
+    for (unsigned i=0;i<sizeof(toggles)/sizeof(*toggles);++i) {
+        *entry=original^toggles[i];
+        assert(!AArch64DataPageMatches(&query,f.root,f.tcr,f.va,DATA_PA,3));
+    }
+    *entry=original|AP_EL0|AP_RO;
+    assert(AArch64DataPageMatches(&query,f.root,f.tcr,f.va,DATA_PA,9));
+    const unsigned bad[]={0,2,4,5,7,13,29,47};
+    for (unsigned i=0;i<sizeof(bad)/sizeof(*bad);++i)
+        assert(!AArch64DataPageMatches(&query,f.root,f.tcr,f.va,DATA_PA,bad[i]));
+    *entry=original;
+    uint64_t *parent=slot_at(&f,f.va,2),saved=*parent;
+    *parent=saved|(UINT64_C(1)<<61);
+    assert(!AArch64DataPageMatches(&query,f.root,f.tcr,f.va,DATA_PA,3));
+    *parent=DATA_PA|1|PXN|UXN;
+    assert(!AArch64DataPageMatches(&query,f.root,f.tcr,f.va,DATA_PA,3));
+    *parent=saved;
+    assert(*entry==original && allocations==f.allocate_calls && cleans==f.clean_calls && invalidations==f.invalidations);
+    finish(&f);
+}
 static void privileged_alias(unsigned page)
 {
     struct Fixture f;init(&f,page,48);struct AArch64ProtectionOps o=ops(&f);
@@ -556,6 +587,7 @@ int main(void)
     }
     /* Keep the original semantic mutation assertions ahead of extended cases. */
     low_block_eviction(12,1);low_block_eviction(12,2);low_block_eviction(14,2);
+    data_policy(12);data_policy(14);
     printf("[AARCH64-MAPPING-HOST] result=PASS cases=%u granules=4K,16K actual-production-walks=1 native=NOT_RUN\n",cases);
     return 0;
 }

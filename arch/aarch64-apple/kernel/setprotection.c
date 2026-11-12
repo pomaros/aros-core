@@ -20,6 +20,7 @@
 #include "jit_protect.h"
 #include "code_window.h"
 #include "../../aarch64-all/kernel/protection.h"
+#include "../../aarch64-all/kernel/mapping.h"
 
 
 struct AppleProtectionOperation {
@@ -31,6 +32,9 @@ struct AppleProtectionOperation {
     unsigned needs_tables;
 };
 static struct AppleProtectionOperation protection_operation;
+/* Debugger-readable counters, serialized by PageMapLock: data preflight
+ * batches attempted and unchanged batches that avoided a rendezvous. */
+uint64_t AROSAppleProtectionNoopStats[2];
 
 static uint64_t *resolve_table(void *context, uint64_t physical)
 {
@@ -117,6 +121,21 @@ static uintptr_t protect_one_page(void)
     } while (protection_operation.address < protection_operation.end);
     return 1;
 }
+static uintptr_t protection_unchanged(void)
+{
+    struct AppleProtectionOperation *operation=&protection_operation;
+    const struct AArch64ProtectionOps ops={.resolve=resolve_table};
+    uint64_t root,tcr;
+    __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(root));
+    __asm__ volatile("mrs %0, tcr_el1" : "=r"(tcr));
+    if ((operation->permissions&~11U) ||
+        !(operation->permissions&AARCH64_PROTECT_READ)) return 0;
+    for (uintptr_t page=operation->address;page<operation->end;page+=AROS_APPLE_PAGE_SIZE)
+        if (!AROSApplePageArenaContains(page) ||
+            !AArch64DataPageMatches(&ops,root,tcr,page,page,operation->permissions) ||
+            !AROSAppleRestrictedDataAliasesMatch(page,tcr,operation->permissions)) return 0;
+    return 1;
+}
 int AROSApplePageProtectArenaLocked(uintptr_t address,unsigned permissions)
 {
     if (!AROSApplePageArenaContains(address) || (address&(AROS_APPLE_PAGE_SIZE-1)) ||
@@ -186,10 +205,18 @@ int AROSApplePageProtect(void *address, uint32_t length, uint32_t flags)
              * contract). Without SMP the rendezvous is a no-op. Interrupt-
              * context callers are rejected above. */
             uint64_t saved = AROSApplePageMapAcquire();
-            uint64_t token = AROSApplePageMutationBegin();
             protection_operation.address = start;
             protection_operation.end = batch_end;
             protection_operation.permissions = permissions;
+            if (!(permissions&~11U) && (permissions&AARCH64_PROTECT_READ)) {
+                ++AROSAppleProtectionNoopStats[0];
+                if (AROSAppleRuntimeSupervisor(protection_unchanged)) {
+                    ++AROSAppleProtectionNoopStats[1];
+                    AROSAppleMemoryLockRelease(&AROSApplePageMapLock, saved);
+                    done=1;break;
+                }
+            }
+            uint64_t token = AROSApplePageMutationBegin();
             protection_operation.tables[0] = tables[0];
             protection_operation.tables[1] = tables[1];
             protection_operation.used = 0;

@@ -12,8 +12,9 @@ struct RestrictedDomain { struct RestrictedDomain *next; unsigned state; uint64_
 static struct RestrictedDomain *restricted_domains;
 static unsigned map_lock,rendezvous,coordinator,calls,failed_root,native_fail,native_permissions,native_expected_coordinator;
 static unsigned roots[4],policies[4];
+static unsigned preflight,query_calls,query_failed_root;
 static int AROSApplePageArenaContains(uintptr_t address) { return address>=0x8000 && address<0x10000; }
-static void r_coordinate(void) { assert(map_lock && rendezvous && !coordinator);coordinator=1; }
+static void r_coordinate(void) { assert(map_lock && (rendezvous || preflight) && !coordinator);coordinator=1; }
 static void r_uncoordinate(void) { assert(coordinator);coordinator=0; }
 static uint64_t *r_resolve(void *c,uint64_t p) { (void)c;(void)p;return NULL; }
 static void r_clean(void *c,const void *p,size_t n) { (void)c;(void)p;(void)n; }
@@ -29,6 +30,13 @@ static int AArch64RemapPrivilegedPage(const struct AArch64ProtectionOps *ops,uin
     assert(ops->invalidate==r_alias_invalidate);
     alias_invalidated=0;ops->invalidate(ops->context);assert(alias_invalidated==va);
     roots[calls]=root;policies[calls++]=policy;return root!=failed_root;
+}
+static int AArch64DataPageMatches(const struct AArch64ProtectionOps *ops,uint64_t root,uint64_t tcr,uint64_t va,uint64_t pa,unsigned policy)
+{
+    assert(preflight && map_lock && !rendezvous && ops->resolve && !ops->allocate);
+    assert(tcr==16 && va==pa && (policy==11 || policy==3));
+    assert(coordinator==(root!=123));
+    ++query_calls;return root!=query_failed_root;
 }
 struct AppleProtectionOperation { uintptr_t address,end;unsigned permissions; };
 static struct AppleProtectionOperation protection_operation;
@@ -101,5 +109,16 @@ int main(void)
     /* API 34: read+write+execute needs a kernel JIT mode and becomes the JIT class. */
     missing_context=0;assert(!r_protect_memory(7,0x200000000ULL,7) && svc_calls==2 && !forbidden);
     jit_mode=2;assert(r_protect_memory(7,0x200000000ULL,7) && svc_calls==3 && last_protection==KMAP_JIT_CLASS);
-    puts("PASS arena alias propagation, partial refusal, retry and retired-root exclusion");
+    preflight=map_lock=1;rendezvous=0;coordinator=0;query_calls=0;
+    protection_operation.address=0x8000;protection_operation.end=0xa000;protection_operation.permissions=11;
+    assert(protection_unchanged() && query_calls==6 && !coordinator);
+    query_failed_root=2;query_calls=0;
+    assert(!protection_unchanged() && query_calls==3 && !coordinator);
+    query_failed_root=123;query_calls=0;
+    assert(!protection_unchanged() && query_calls==1 && !coordinator);
+    query_failed_root=0;query_calls=0;protection_operation.permissions=29;
+    assert(!protection_unchanged() && !query_calls && !coordinator);
+    protection_operation.permissions=11;protection_operation.address=0x20000;protection_operation.end=0x21000;
+    assert(!protection_unchanged() && !query_calls && !coordinator);
+    puts("PASS arena alias propagation, partial refusal, retry, retired-root exclusion and unchanged-data preflight");
 }

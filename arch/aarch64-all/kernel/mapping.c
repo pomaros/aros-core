@@ -337,6 +337,25 @@ int AArch64RemapPrivilegedPage(const struct AArch64ProtectionOps *ops,uint64_t t
     return AArch64RemapPage(ops,ttbr0,tcr,va,expected_physical,permissions);
 }
 
+int AArch64DataPageMatches(const struct AArch64ProtectionOps *ops,uint64_t ttbr0,
+    uint64_t tcr,uint64_t va,uint64_t expected_physical,unsigned permissions)
+{
+    struct MappingWalk walk;
+    if (!ops || !ops->resolve || (permissions & ~11U) ||
+        !(permissions & AARCH64_PROTECT_READ) ||
+        !geometry(tcr,va,expected_physical,&walk)) return 0;
+    uint64_t *slot=leaf(ops,ttbr0,&walk,va,0);
+    if (!slot) return 0;
+    uint64_t desc=*slot;
+    const uint64_t policy=(UINT64_C(3)<<6)|M_PXN|M_UXN;
+    uint64_t expected=M_PXN|M_UXN;
+    if (permissions&AARCH64_PROTECT_USER) expected|=UINT64_C(1)<<6;
+    if (!(permissions&AARCH64_PROTECT_WRITE)) expected|=UINT64_C(1)<<7;
+    return (desc&M_TABLE)==M_TABLE && !(desc&(M_GUARDED|M_CONTIGUOUS)) &&
+        descriptor_address_valid(&walk,desc) && (desc&walk.mask)==expected_physical &&
+        (desc&(UINT64_C(1)<<10)) && (desc&policy)==expected;
+}
+
 int AArch64TranslateResident(const struct AArch64ProtectionOps *ops,
     uint64_t ttbr0, uint64_t tcr, uint64_t va, uint64_t *physical)
 {
