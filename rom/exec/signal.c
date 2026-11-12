@@ -331,6 +331,20 @@ void Exec_SignalSlow(struct Task *task, ULONG signalSet, struct ExecBase *SysBas
             __AROS_ATOMIC_OR_L(task->tc_SigRecvd, signalSet);
             if (task->tc_SigRecvd & task->tc_SigExcept)
                 __AROS_ATOMIC_OR_B(task->tc_Flags, TF_EXCEPT);
+            /* A running task without a pending exception needs the bits,
+             * not a remote callback. Wait() tests those bits and publishes
+             * TS_WAIT under this same lock, so it cannot go to sleep past
+             * this publication. tc_SigWait may retain an earlier wait mask;
+             * it is not a reason to interrupt a task which is already RUN.
+             * Keep the remote path for exception delivery and real wakes. */
+            if (task->tc_State == TS_RUN &&
+                !(task->tc_SigRecvd & task->tc_SigExcept))
+            {
+                EXEC_SPINLOCK_UNLOCK(&task->tc_SpinLock);
+                Enable();
+                core_AbortCallIPI(cie, targetcpu);
+                return;
+            }
             args[2] = 0;
             core_CommitCallIPI(cie, targetcpu, &h, 3, args);
             EXEC_SPINLOCK_UNLOCK(&task->tc_SpinLock);

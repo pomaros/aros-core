@@ -35,6 +35,8 @@ wrapping or reusing identifiers; callers use the API from task context.
 
 ## Generic diagnostics
 
+- [Remote signal delivery](developer/debug/test/exec/signal_delivery_host/README.md): actual Signal/callback HOST controls for immediate publication, unnecessary RUN interrupts, delayed wakes, bit reuse, exceptions and terminal tasks; guest scheduling has separate qualification.
+
 - [Composition presentation wake](developer/debug/test/intuition/COMPOSITION-WAKE.md): preallocated, coalesced neutral input admission with concurrent completion, allocation failures and behavioral negative controls; native presentation remains a separate check.
 
 - [FAT transfer cache borrows](developer/debug/test/filesys/fat/cache_pins_host/README.md): actual transfer-body HOST checks and a Native DOS many-open-files regression; guest execution requires its own receipt.

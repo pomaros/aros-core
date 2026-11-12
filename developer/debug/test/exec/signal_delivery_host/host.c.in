@@ -90,6 +90,19 @@ int main(void)
     const ULONG mask = 1UL << 7;
 
     Signal(&task, mask, &sys);
+    assert(!queued && disables == 0 && !task.tc_SpinLock);
+    assert(task.tc_SigRecvd == mask);
+    /* An earlier wait mask is not evidence that a RUN task needs waking. */
+    task.tc_SigWait = mask;
+    task.tc_SigRecvd = 0;
+    Signal(&task, mask, &sys);
+    assert(!queued && task.tc_SigRecvd == mask);
+
+    /* The actual remote WAIT path must still publish before returning and
+     * must never replay bits cleared/reused before its delayed callback. */
+    task.tc_State = TS_WAIT;
+    task.tc_SigRecvd = 0;
+    Signal(&task, mask, &sys);
     assert(queued == 1 && disables == 0 && !task.tc_SpinLock);
     /* Caller has joined the producer. The signal must already be delivered
      * before it clears and reuses its bit for an unrelated operation. */
@@ -109,6 +122,7 @@ int main(void)
     task.tc_SigRecvd = 0;
     task.tc_SigExcept = mask;
     Signal(&task, mask, &sys);
+    assert(queued == 1);
     drain();
     assert(task.tc_Flags & TF_EXCEPT);
 
@@ -116,6 +130,6 @@ int main(void)
     task.tc_SigRecvd = 0;
     Signal(&task, mask, &sys);
     assert(!queued && task.tc_SigRecvd == mask && !task.tc_SpinLock && !disables);
-    puts("signal-delivery PASS: immediate bits, delayed wakeup, reused bit, wait, exception, terminal task");
+    puts("signal-delivery PASS: running publication without IPI, stale wait mask, delayed wakeup, reused bit, wait, exception, terminal task");
     return 0;
 }

@@ -21,9 +21,11 @@ template = (here / 'host.c.in').read_text()
 publish = '__AROS_ATOMIC_OR_L(task->tc_SigRecvd, signalSet);\n            if'
 variants = {'production': body,
             'delayed-bits': body.replace(publish, 'if'),
+            'interrupt-running': body.replace('if (task->tc_State == TS_RUN &&\n                !(task->tc_SigRecvd & task->tc_SigExcept))', 'if (0)'),
             'redeliver-cleared-bits': body.replace('args[2] = 0;', 'args[2] = signalSet;')}
 assert variants['production'] != variants['delayed-bits']
 assert variants['production'] != variants['redeliver-cleared-bits']
+assert variants['production'] != variants['interrupt-running']
 rows = []
 for name, tested in variants.items():
     file = args.output / (name + '.c')
@@ -39,8 +41,9 @@ for name, tested in variants.items():
     if name == 'production':
         assert result.returncode == 0, result.stdout + result.stderr
     else:
-        expected = ('task.tc_SigRecvd == mask' if name == 'delayed-bits'
-                    else '!task.tc_SigRecvd && task.tc_State == TS_WAIT')
+        expected = ('task.tc_SigRecvd == mask' if name == 'delayed-bits' else
+                    '!queued && disables == 0 && !task.tc_SpinLock' if name == 'interrupt-running' else
+                    '!task.tc_SigRecvd && task.tc_State == TS_WAIT')
         assert result.returncode != 0 and expected in result.stderr, result.stderr
 record = {'result': 'PASS', 'checks': rows,
           'source_sha256': hashlib.sha256(source.encode()).hexdigest(),
