@@ -60,6 +60,9 @@ static int KrnGetCPUCount(void) { return 2; }
 static int KrnCPUInMask(int cpu, void *mask) { return !!((uintptr_t)mask & (1UL << cpu)); }
 static void KrnScheduleCPU(void *mask) { (void)mask; ++scheduled; }
 static void Reschedule(void) { ++scheduled; }
+/* Signal's own request to preempt for a higher priority (signal.c, above the
+ * extracted part); the harness counts it as a scheduling request. */
+static void signal_Preempt(void *base) { ++scheduled; }
 static void krnSysCallReschedTask(struct Task *task, int state) { task->tc_State = state; }
 static struct CallIPIEntry *core_ClaimCallIPI(int cpu) { assert(cpu == 1); return &entry; }
 static void core_AbortCallIPI(struct CallIPIEntry *e, int cpu) { assert(e == &entry && cpu == 1); }
