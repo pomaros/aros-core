@@ -97,8 +97,11 @@ struct RestrictedDomain {
     struct RestrictedTableChunk *tables;
     size_t table_pages,table_used,table_metadata_pages,table_shortage;
     unsigned threads, managed, closing, high_window, wide_window;
-    /* AROS_RESTRICTED_DEBUG_* chosen by the controller. */
+    /* AROS_RESTRICTED_DEBUG_* chosen by the controller, and its hardware
+     * breakpoints: read without the coordinator when a CPU loads them. */
     unsigned debug;
+    uint32_t breakpoint_count;
+    uint64_t breakpoints[AROS_RESTRICTED_DEBUG_BREAKPOINTS];
     void *owner_context, *releaser_context;
     uint64_t root;
     size_t code_bytes, memory_pages, memory_metadata_pages;
@@ -657,11 +660,80 @@ static int r_debug_stop(struct Restricted *r,struct AROSAppleTaskExecution *exec
     execution->domain=r;
     return 1;
 }
+/* Hardware debug state of each CPU. A hypervisor traps every write to the
+ * debug registers, so a CPU rewrites them only when what it returns to
+ * differs from what it holds: the single step of one thread (MDSCR_EL1.SS
+ * must be set while that thread runs at EL0 and clear for any other return
+ * to EL0, which would step at once) and the breakpoints of one domain.
+ * EL1 itself never steps or breaks: KDE stays clear and the breakpoints
+ * match EL0 only, so a return to EL1 leaves the registers as they are. */
+static uint32_t debug_generation;
+static struct {
+    unsigned char step,loaded;
+    uint32_t generation;
+    const struct RestrictedDomain *domain;
+} debug_cpu[AROS_APPLE_SMP_MAX_CPUS];
+static unsigned r_breakpoint_registers(void)
+{
+    uint64_t features;
+    __asm__ volatile("mrs %0, id_aa64dfr0_el1":"=r"(features));
+    unsigned count=(unsigned)((features>>12)&15)+1;
+    return count<AROS_RESTRICTED_DEBUG_BREAKPOINTS ? count : AROS_RESTRICTED_DEBUG_BREAKPOINTS;
+}
+#define R_BREAKPOINT(index) case index: \
+    __asm__ volatile("msr dbgbcr" #index "_el1, xzr; msr dbgbvr" #index "_el1, %0; msr dbgbcr" #index "_el1, %1" \
+        ::"r"(address),"r"(control));break;
+static void r_breakpoint_write(unsigned index,uint64_t address,uint64_t control)
+{
+    switch (index) {
+    R_BREAKPOINT(0) R_BREAKPOINT(1) R_BREAKPOINT(2) R_BREAKPOINT(3) R_BREAKPOINT(4) R_BREAKPOINT(5)
+    }
+}
+void AROSAppleRestrictedDebugArm(const struct AROSAppleRuntimeFrame *regs,void *slot)
+{
+#if defined(__AROSEXEC_SMP__)
+    unsigned cpu=AROSCPUCurrentIndex();
+#else
+    unsigned cpu=0;
+#endif
+    if (cpu>=AROS_APPLE_SMP_MAX_CPUS || (regs->spsr&31)) return;
+    const struct RestrictedDomain *d=slot ? ((const struct Restricted *)slot)->domain : NULL;
+    unsigned char step=(regs->spsr&UINT64_C(0x200000))!=0;
+    uint32_t count=d ? __atomic_load_n(&d->breakpoint_count,__ATOMIC_ACQUIRE) : 0;
+    uint32_t generation=__atomic_load_n(&debug_generation,__ATOMIC_ACQUIRE);
+    int same=count ? debug_cpu[cpu].loaded && debug_cpu[cpu].domain==d && debug_cpu[cpu].generation==generation :
+        !debug_cpu[cpu].loaded;
+    if (step==debug_cpu[cpu].step && same) return;
+    uint64_t control;
+    __asm__ volatile("mrs %0, mdscr_el1":"=r"(control));
+    control=step ? control|1 : control&~UINT64_C(1);
+    control=count ? control|UINT64_C(0x8000) : control&~UINT64_C(0x8000);
+    if (step || count) __asm__ volatile("msr oslar_el1, xzr");
+    if (!same) {
+        unsigned registers=r_breakpoint_registers();
+        /* Enabled, EL0 only, the four bytes of one A64 instruction. */
+        for (unsigned index=0;index<registers;++index)
+            r_breakpoint_write(index,index<count ? d->breakpoints[index]&~UINT64_C(3) : 0,index<count ? 0x1e5 : 0);
+        debug_cpu[cpu].loaded=count!=0;debug_cpu[cpu].domain=d;debug_cpu[cpu].generation=generation;
+    }
+    __asm__ volatile("msr mdscr_el1, %0; isb"::"r"(control));
+    debug_cpu[cpu].step=step;
+}
 /* Coordinator held; the caller owns the domain. */
 static int r_debug(struct RestrictedDomain *d,uint64_t channel,unsigned op,uint64_t argument)
 {
     if (d->closing) return 0;
     if (op==1) { d->debug=(unsigned)argument&(AROS_RESTRICTED_DEBUG_BREAK|AROS_RESTRICTED_DEBUG_FAULTS);return 1; }
+    if (op==5) {
+        /* channel carries the count here. */
+        const uint64_t *addresses=(const void *)(uintptr_t)argument;
+        if (channel>r_breakpoint_registers() || (channel && !addresses)) return 0;
+        __atomic_store_n(&d->breakpoint_count,0,__ATOMIC_RELEASE);
+        for (unsigned index=0;index<channel;++index) d->breakpoints[index]=addresses[index];
+        __atomic_store_n(&d->breakpoint_count,(uint32_t)channel,__ATOMIC_RELEASE);
+        __atomic_add_fetch(&debug_generation,1,__ATOMIC_RELEASE);
+        return 1;
+    }
     if (!channel || op>4) return 0;
     for (struct Restricted *r=restricted_slots;r;r=r->next) {
         if (r->domain!=d || r->state!=R_LIVE || r->service.channel!=channel ||
@@ -1995,7 +2067,10 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
     r_coordinate();
     int handled=r_trap_locked(frame);
     r_uncoordinate();
-    if (handled) AROSAppleDebugStepArm(frame);
+    if (handled) {
+        struct AROSAppleTaskExecution *execution=AROSAppleTaskExecution(context);
+        AROSAppleRestrictedDebugArm(frame,execution->root ? execution->domain : NULL);
+    }
     if (handled==2) {
         /* The scheduler saves the outgoing frame and can finish an invalid
          * restricted stack. It must never recursively acquire our lock or
@@ -2644,6 +2719,8 @@ static int r_debug_context(uint64_t handle,uint64_t channel,struct AROSRestricte
 { return r_debug_call(handle,channel,write ? 3 : 2,(uintptr_t)context); }
 static int r_debug_step(uint64_t handle,uint64_t channel,int on)
 { return r_debug_call(handle,channel,4,on!=0); }
+static int r_debug_breakpoints(uint64_t handle,const uint64_t *addresses,unsigned count)
+{ return r_debug_call(handle,count,5,(uintptr_t)addresses); }
 static int r_take_domain(uint64_t handle,struct AROSRestrictedWork *work)
 {
     r_reap();
@@ -2675,7 +2752,7 @@ static int r_privatize_memory(uint64_t handle,uintptr_t address)
     if (!ok && !AROSApplePageFree(page,R_PAGE)) for (;;) __asm__ volatile("wfe");
     Permit();return ok;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {40,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread,r_read_shared,r_write_shared,r_take_domain,r_map_shared,r_unmap_shared,r_read_domain,r_write_domain,r_attach_shared_at,r_protect_range,r_privatize_memory,r_run_served,r_cut_memory,r_debug_domain,r_debug_context,r_debug_step};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {40,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread,r_read_shared,r_write_shared,r_take_domain,r_map_shared,r_unmap_shared,r_read_domain,r_write_domain,r_attach_shared_at,r_protect_range,r_privatize_memory,r_run_served,r_cut_memory,r_debug_domain,r_debug_context,r_debug_step,r_debug_breakpoints};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

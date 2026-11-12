@@ -35,29 +35,6 @@ extern int AROSAppleKernelDebugPutDirect(int chr);
 
 #define TASK_SPSR_ALLOWED UINT64_C(0xf00003c0)
 #define TASK_SPSR_STEP UINT64_C(0x00200000)
-
-/* Software step of a debugged restricted thread. The step state machine
- * needs MDSCR_EL1.SS while the thread runs at EL0 and must not see it
- * otherwise: a return to EL0 with SS set here and clear in PSTATE steps at
- * once. The register is written only when the wanted value changes on this
- * CPU, because a hypervisor traps the write. EL1 never steps (KDE clear). */
-void AROSAppleDebugStepArm(const regs_t *regs)
-{
-    static unsigned char armed[AROS_APPLE_SMP_MAX_CPUS];
-#if defined(__AROSEXEC_SMP__)
-    unsigned cpu = AROSCPUCurrentIndex();
-#else
-    unsigned cpu = 0;
-#endif
-    unsigned char want = !(regs->spsr & 31) && (regs->spsr & TASK_SPSR_STEP);
-    uint64_t value;
-    if (cpu >= AROS_APPLE_SMP_MAX_CPUS || want == armed[cpu]) return;
-    __asm__ volatile("mrs %0, mdscr_el1" : "=r"(value));
-    value = want ? (value | 1) : (value & ~UINT64_C(1));
-    if (want) __asm__ volatile("msr oslar_el1, xzr");
-    __asm__ volatile("msr mdscr_el1, %0; isb" : : "r"(value));
-    armed[cpu] = want;
-}
 #define TASK_SPSR_IRQ_MASK UINT64_C(0x80)
 #define TASK_SPSR_FIQ_MASK UINT64_C(0x40)
 
@@ -613,7 +590,8 @@ dispatch_after_self_exit:
         regs->return_ttbr0 = AROSAppleTaskExecution(context)->root;
         regs->task_tls = AROSAppleTaskExecution(context)->user_tls;
     }
-    AROSAppleDebugStepArm(regs);
+    AROSAppleRestrictedDebugArm(regs,
+        AROSAppleTaskExecution(context)->root ? AROSAppleTaskExecution(context)->domain : NULL);
 #if defined(__AROSEXEC_SMP__)
     if (!AROSAppleSelfExitDetached(departing))
         dispatch_contract_halt();

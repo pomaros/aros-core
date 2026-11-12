@@ -12,8 +12,10 @@ struct ExceptionContext;
 int AROSAppleRestrictedSetWait(struct Task *,struct ExceptionContext *,int);
 int AROSAppleRestrictedSetSuspend(struct Task *,struct ExceptionContext *,int);
 int AROSAppleRestrictedParked(struct Task *,struct ExceptionContext *);
-/* MDSCR_EL1.SS follows the step bit of the frame about to return. */
-void AROSAppleDebugStepArm(const struct AROSAppleRuntimeFrame *);
+/* Before a return from the kernel: give this CPU the debug state of the
+ * frame it returns to. slot is the restricted thread's execution->domain,
+ * NULL for native code. */
+void AROSAppleRestrictedDebugArm(const struct AROSAppleRuntimeFrame *,void *slot);
 int AROSAppleRestrictedCancelPark(struct Task *,struct ExceptionContext *);
 unsigned AROSAppleRestrictedWaitState(struct Task *,struct ExceptionContext *);
 /* Timer handlers have returned, all their locks released, IRQ/FIQ masked. */

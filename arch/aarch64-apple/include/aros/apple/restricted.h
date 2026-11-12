@@ -111,7 +111,13 @@ struct AROSRestrictedContext {
  * or suspended with its context parked; other threads are refused: suspend
  * first and ask again. Writes take x, sp, pc, NZCV, SIMD, FPCR and FPSR.
  * debug_step arms (1) or disarms (0) a hardware single step for the thread's
- * next return to the domain; the step arrives as a DEBUG_BREAK stop. */
+ * next return to the domain; the step arrives as a DEBUG_BREAK stop.
+ * debug_breakpoints replaces the domain's hardware breakpoints: count
+ * instruction addresses, at most DEBUG_BREAKPOINTS and no more than the CPU
+ * has (the call fails otherwise). A thread meets them from its next entry
+ * into the domain, so change them while the threads are stopped. They
+ * modify no code and so hold in shared and read-only text alike. */
+#define AROS_RESTRICTED_DEBUG_BREAKPOINTS 6U
 #define AROS_RESTRICTED_DEBUG_EVENT UINT64_C(0x544e455645474244)
 #define AROS_RESTRICTED_DEBUG_BREAK 1U
 #define AROS_RESTRICTED_DEBUG_FAULTS 2U
@@ -319,6 +325,7 @@ struct AROSRestrictedAPI {
     int (*debug_domain)(uint64_t handle,unsigned flags);
     int (*debug_context)(uint64_t handle,uint64_t channel,struct AROSRestrictedDebugContext *,int write);
     int (*debug_step)(uint64_t handle,uint64_t channel,int on);
+    int (*debug_breakpoints)(uint64_t handle,const uint64_t *addresses,unsigned count);
 
 };
 #endif
