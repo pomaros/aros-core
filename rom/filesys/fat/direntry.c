@@ -697,8 +697,11 @@ LONG FillFIB(struct ExtFileLock *fl, struct FileInfoBlock *fib,
     D(bug("\t\tsize: %ld\n", gl->size));
 
     fib->fib_Size = gl->size;
-    fib->fib_NumBlocks = ((gl->size + (sb->clustersize - 1))
+    fib->fib_Size64 = gl->size;
+    fib->fib_NumBlocks64 = (((UQUAD)gl->size + (sb->clustersize - 1))
         >> sb->clustersize_bits) << sb->cluster_sectors_bits;
+    fib->fib_NumBlocks = fib->fib_NumBlocks64;
+    fib->fib_ActExtFlags = 0;
     fib->fib_EntryType = fib->fib_DirEntryType;
     fib->fib_DiskKey = 0xfffffffflu;    //fl->entry;
 

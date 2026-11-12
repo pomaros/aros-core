@@ -23,6 +23,7 @@
 
 #include "fat_fs.h"
 #include "fat_protos.h"
+#include "file-position.h"
 
 #define DEBUG DEBUG_OPS
 #include "debug.h"
@@ -1286,13 +1287,14 @@ LONG OpWrite(struct ExtFileLock *lock, UBYTE *data, ULONG want,
     return err;
 }
 
-LONG OpSetFileSize(struct ExtFileLock *lock, LONG offset, LONG whence,
-    LONG *newsize, struct Globals *glob)
+LONG OpSetFileSize(struct ExtFileLock *lock, QUAD offset, LONG whence,
+    ULONG *newsize, struct Globals *glob)
 {
     struct FSSuper *sb = glob->sb;
     struct DirHandle dh;
     struct DirEntry de;
     QUAD size;
+    ULONG target;
     LONG err;
     ULONG first, cl, next, count = 0, want, keep = 0, tail = 0;
     ULONG keep_next = 0;
@@ -1303,16 +1305,10 @@ LONG OpSetFileSize(struct ExtFileLock *lock, LONG offset, LONG whence,
         return ERROR_OBJECT_IN_USE;
     if (lock->gl->attr & ATTR_READ_ONLY)
         return ERROR_WRITE_PROTECTED;
-    if (whence == OFFSET_BEGINNING)
-        size = offset;
-    else if (whence == OFFSET_CURRENT)
-        size = (QUAD)lock->pos + offset;
-    else if (whence == OFFSET_END && offset <= 0)
-        size = (QUAD)lock->gl->size + offset;
-    else
-        return ERROR_SEEK_ERROR;
-    if (size < 0 || size > 0x7fffffff)
-        return ERROR_SEEK_ERROR;
+    err = FatFilePosition(lock->pos, lock->gl->size, offset, whence, &target);
+    if (err)
+        return err;
+    size = target;
     if (size == lock->gl->size)
     {
         *newsize = size;

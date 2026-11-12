@@ -119,8 +119,8 @@ LONG OpRead(struct ExtFileLock *lock, UBYTE *data, ULONG want, ULONG *read,
     struct Globals *glob);
 LONG OpWrite(struct ExtFileLock *lock, UBYTE *data, ULONG want,
     ULONG *written, struct Globals *glob);
-LONG OpSetFileSize(struct ExtFileLock *lock, LONG offset, LONG mode,
-    LONG *newsize, struct Globals *glob);
+LONG OpSetFileSize(struct ExtFileLock *lock, QUAD offset, LONG mode,
+    ULONG *newsize, struct Globals *glob);
 LONG OpSetProtect(struct ExtFileLock *lock, UBYTE *name, ULONG namelen,
     ULONG prot, struct Globals *glob);
 LONG OpSetDate(struct ExtFileLock *dirlock, UBYTE *name, ULONG namelen,

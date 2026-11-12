@@ -14,6 +14,7 @@
 #include <exec/types.h>
 #include <exec/execbase.h>
 #include <dos/dosextens.h>
+#include <dos/dos64.h>
 #include <dos/filehandler.h>
 #include <dos/notify.h>
 #include <devices/inputevent.h>
@@ -26,6 +27,7 @@
 
 #include "fat_fs.h"
 #include "fat_protos.h"
+#include "file-position.h"
 
 #define DEBUG DEBUG_PACKETS
 #include "debug.h"
@@ -53,6 +55,7 @@ void ProcessPackets(struct Globals *glob)
             case ACTION_FINDUPDATE:
             case ACTION_WRITE:
             case ACTION_SET_FILE_SIZE:
+            case ACTION_SET_FILE_SIZE64:
             case ACTION_FORMAT:
             case ACTION_DELETE_OBJECT:
             case ACTION_RENAME_OBJECT:
@@ -241,6 +244,8 @@ void ProcessPackets(struct Globals *glob)
 
         case ACTION_EXAMINE_OBJECT:
         case ACTION_EXAMINE_FH:
+        case ACTION_EXAMINE_OBJECT64:
+        case ACTION_EXAMINE_FH64:
             {
                 struct ExtFileLock *fl = BADDR(pkt->dp_Arg1);
                 struct FileInfoBlock *fib = BADDR(pkt->dp_Arg2);
@@ -254,12 +259,19 @@ void ProcessPackets(struct Globals *glob)
                     break;
 
                 if ((err = FillFIB(fl, fib, glob)) == 0)
+                {
+                    if ((pkt->dp_Type == ACTION_EXAMINE_OBJECT64 ||
+                         pkt->dp_Type == ACTION_EXAMINE_FH64) &&
+                        fib->fib_Size64 > 0x7fffffff)
+                        fib->fib_Size = 0;
                     res = DOSTRUE;
+                }
 
                 break;
             }
 
         case ACTION_EXAMINE_NEXT:
+        case ACTION_EXAMINE_NEXT64:
             {
                 struct ExtFileLock *fl = BADDR(pkt->dp_Arg1), *lock = NULL;
                 struct ExtFileLock metadata_lock = {0};
@@ -315,6 +327,9 @@ void ProcessPackets(struct Globals *glob)
                     fib, glob)))
                 {
                     fib->fib_DiskKey = dh.cur_index;
+                    if (pkt->dp_Type == ACTION_EXAMINE_NEXT64 &&
+                        fib->fib_Size64 > 0x7fffffff)
+                        fib->fib_Size = 0;
                     res = DOSTRUE;
                 }
 
@@ -485,12 +500,74 @@ void ProcessPackets(struct Globals *glob)
                 break;
             }
 
+        case ACTION_SEEK64:
+            {
+                struct ExtFileLock *fl = BADDR(pkt->dp_Arg1);
+                QUAD *offset = (QUAD *)pkt->dp_Arg2;
+                QUAD *previous = (QUAD *)pkt->dp_Arg4;
+                ULONG position;
+                if ((err = TestLock(fl, glob)))
+                    break;
+                if (!offset || !previous)
+                {
+                    err = ERROR_BAD_NUMBER;
+                    break;
+                }
+                err = FatFilePosition(fl->pos, fl->gl->size, *offset,
+                    pkt->dp_Arg3, &position);
+                if (!err)
+                {
+                    *previous = fl->pos;
+                    fl->pos = position;
+                    res = DOSTRUE;
+                }
+                break;
+            }
+
+#if (__WORDSIZE == 64)
+        case ACTION_GET_FILE_POSITION64:
+        case ACTION_GET_FILE_SIZE64:
+            {
+                struct ExtFileLock *fl = BADDR(pkt->dp_Arg1);
+                if ((err = TestLock(fl, glob)))
+                {
+                    res = -1;
+                    break;
+                }
+                res = pkt->dp_Type == ACTION_GET_FILE_POSITION64 ?
+                    fl->pos : fl->gl->size;
+                break;
+            }
+#endif
+
+        case ACTION_SET_FILE_SIZE64:
+            {
+                struct ExtFileLock *fl = BADDR(pkt->dp_Arg1);
+                QUAD *offset = (QUAD *)pkt->dp_Arg2;
+                QUAD *actual = (QUAD *)pkt->dp_Arg4;
+                ULONG size;
+                if ((err = TestLock(fl, glob)))
+                    break;
+                if (!offset || !actual)
+                {
+                    err = ERROR_BAD_NUMBER;
+                    break;
+                }
+                err = OpSetFileSize(fl, *offset, pkt->dp_Arg3, &size, glob);
+                if (!err)
+                {
+                    *actual = size;
+                    res = DOSTRUE;
+                }
+                break;
+            }
+
         case ACTION_SET_FILE_SIZE:
             {
                 struct ExtFileLock *fl = BADDR(pkt->dp_Arg1);
                 LONG offset = pkt->dp_Arg2;
                 LONG whence = pkt->dp_Arg3;
-                LONG newsize;
+                ULONG newsize;
 
                 D(bug("[fat] SET_FILE_SIZE: lock 0x%08x"
                     " (dir %ld/%ld pos %ld) offset %ld whence %s\n",
