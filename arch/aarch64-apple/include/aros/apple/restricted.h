@@ -95,6 +95,34 @@ struct AROSRestrictedContext {
  * this call, and its COLLECT succeeds at once, so programs built for the
  * queue run served without being rebuilt. */
 #define AROS_RESTRICTED_CALL 0xa553
+/* Version 40: debugging by the controller, for threads started with
+ * run_served. debug_domain selects which synchronous exceptions of the
+ * domain's threads stop for the controller instead of entering the thread's
+ * exception handler or ending it: DEBUG_BREAK takes BRK, software step and
+ * hardware break/watchpoints; DEBUG_FAULTS takes every other exception the
+ * repair handler does not take. The thread leaves the domain as for CALL and
+ * its native task's handler receives a request whose first four words are
+ * DEBUG_EVENT, ESR, FAR and PC. The handler keeps the thread stopped for as
+ * long as it does not return. On return, word 0 of the request chooses:
+ * 0 resumes the thread with its (possibly rewritten) context, 1 delivers the
+ * exception to the thread as if no debugger were present. No reply is copied
+ * to the domain. debug_context reads (write=0) or writes (write=1) the
+ * registers of a thread that is inside its handler (a call or a debug stop)
+ * or suspended with its context parked; other threads are refused: suspend
+ * first and ask again. Writes take x, sp, pc, NZCV, SIMD, FPCR and FPSR.
+ * debug_step arms (1) or disarms (0) a hardware single step for the thread's
+ * next return to the domain; the step arrives as a DEBUG_BREAK stop. */
+#define AROS_RESTRICTED_DEBUG_EVENT UINT64_C(0x544e455645474244)
+#define AROS_RESTRICTED_DEBUG_BREAK 1U
+#define AROS_RESTRICTED_DEBUG_FAULTS 2U
+#define AROS_RESTRICTED_DEBUG_IN_HANDLER 1U
+#define AROS_RESTRICTED_DEBUG_STOPPED 2U
+struct AROSRestrictedDebugContext {
+    struct AROSRestrictedContext context;
+    /* Read only: saved PSTATE, user thread pointer, the stop's ESR and FAR,
+     * and DEBUG_IN_HANDLER / DEBUG_STOPPED. */
+    uint64_t pstate,tls,esr,far,state;
+};
 struct AROSRestrictedException {
     struct AROSRestrictedContext context;
     uint64_t esr,far,generation,reserved;
@@ -286,6 +314,11 @@ struct AROSRestrictedAPI {
      * live backing in the hole, shared views, publication and request leases.
      * Allocation/refusal changes nothing. Returns1 on success,0 on refusal. */
     int (*cut_memory)(uint64_t domain,uintptr_t address,size_t length);
+    /* Version 40, see AROS_RESTRICTED_DEBUG_EVENT. Each returns 1, or 0 when
+     * refused (foreign handle, unknown channel, thread running). */
+    int (*debug_domain)(uint64_t handle,unsigned flags);
+    int (*debug_context)(uint64_t handle,uint64_t channel,struct AROSRestrictedDebugContext *,int write);
+    int (*debug_step)(uint64_t handle,uint64_t channel,int on);
 
 };
 #endif

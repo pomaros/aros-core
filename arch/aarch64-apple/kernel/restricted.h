@@ -11,6 +11,9 @@ struct ExceptionContext;
  * context retirement. No allocation or coordinator acquisition inside. */
 int AROSAppleRestrictedSetWait(struct Task *,struct ExceptionContext *,int);
 int AROSAppleRestrictedSetSuspend(struct Task *,struct ExceptionContext *,int);
+int AROSAppleRestrictedParked(struct Task *,struct ExceptionContext *);
+/* MDSCR_EL1.SS follows the step bit of the frame about to return. */
+void AROSAppleDebugStepArm(const struct AROSAppleRuntimeFrame *);
 int AROSAppleRestrictedCancelPark(struct Task *,struct ExceptionContext *);
 unsigned AROSAppleRestrictedWaitState(struct Task *,struct ExceptionContext *);
 /* Timer handlers have returned, all their locks released, IRQ/FIQ masked. */

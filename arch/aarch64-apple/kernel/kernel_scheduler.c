@@ -181,6 +181,20 @@ int AROSAppleRestrictedSetSuspend(struct Task *task,struct ExceptionContext *con
     return restricted_park_control(task,context,suspend ? AROS_TASK_PARK_SUSPEND : 0,
         suspend ? 0 : AROS_TASK_PARK_SUSPEND);
 }
+/* A suspended member whose context save has completed: its saved registers
+ * stay as they are until its controller resumes it. */
+int AROSAppleRestrictedParked(struct Task *task,struct ExceptionContext *context)
+{
+    if (!task || !context) return 0;
+#if defined(__AROSEXEC_SMP__)
+    KrnSpinLock(&task->tc_SpinLock,NULL,SPINLOCK_MODE_WRITE);
+#endif
+    uint64_t flags=restricted_context(task)==context ? AROSAppleTaskExecution(context)->park_flags : 0;
+#if defined(__AROSEXEC_SMP__)
+    KrnSpinUnLock(&task->tc_SpinLock);
+#endif
+    return (flags&(AROS_TASK_PARKED|AROS_TASK_PARK_SUSPEND))==(AROS_TASK_PARKED|AROS_TASK_PARK_SUSPEND);
+}
 int AROSAppleRestrictedCancelPark(struct Task *task,struct ExceptionContext *context)
 {
     return restricted_park_control(task,context,0,AROS_TASK_PARK_REASONS);

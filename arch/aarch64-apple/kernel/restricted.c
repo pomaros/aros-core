@@ -52,6 +52,7 @@
 #define R_DOMAIN_WORK 0xa56e
 #define R_COPY 0xa56f
 #define R_REAP_REFRESH 0xa570
+#define R_DEBUG 0xa571
 #define R_COOKIE UINT64_C(0x7265737472696374)
 enum RestrictedState { R_FREE, R_ALLOCATING, R_LIVE, R_REAPING };
 /* Address-space allocation lifetime is separate from an execution context.
@@ -96,6 +97,8 @@ struct RestrictedDomain {
     struct RestrictedTableChunk *tables;
     size_t table_pages,table_used,table_metadata_pages,table_shortage;
     unsigned threads, managed, closing, high_window, wide_window;
+    /* AROS_RESTRICTED_DEBUG_* chosen by the controller. */
+    unsigned debug;
     void *owner_context, *releaser_context;
     uint64_t root;
     size_t code_bytes, memory_pages, memory_metadata_pages;
@@ -166,6 +169,8 @@ struct Restricted {
      * the request's address in the domain. */
     unsigned char *serve_buffer;
     unsigned call_active;
+    /* The call in progress is a debug stop: no request in the domain. */
+    unsigned debug_stop;
     uint64_t call_address;
     struct AROSAppleRuntimeFrame call;
     struct AROSRestrictedResult result;
@@ -626,6 +631,87 @@ static int r_deliver_exception(struct Restricted *r,struct AROSAppleRuntimeFrame
     frame->x[1]=record->esr;frame->x[2]=record->far;frame->x[3]=record->generation;
     frame->x[30]=0;frame->sp=frame->x[0];r_stack_bounds(r,1);
     return 1;
+}
+/* Coordinator held. A debugged domain's exception stops its thread for the
+ * controller: the thread leaves the domain as for CALL, with the event in
+ * its served buffer and its frame kept in the slot for R_SERVE. Returns 0
+ * when the exception takes its ordinary course. */
+static int r_debug_stop(struct Restricted *r,struct AROSAppleTaskExecution *execution,
+    struct AROSAppleRuntimeFrame *frame)
+{
+    unsigned ec=(unsigned)(frame->esr>>26)&63;
+    unsigned wanted=(ec==0x3c || ec==0x30 || ec==0x32 || ec==0x34) ?
+        AROS_RESTRICTED_DEBUG_BREAK : AROS_RESTRICTED_DEBUG_FAULTS;
+    uint64_t event[4]={AROS_RESTRICTED_DEBUG_EVENT,frame->esr,frame->far,frame->elr};
+    if (!(r->domain->debug&wanted) || !r->serve_buffer || r->call_active || r->callback_active ||
+        r->callback_pc || r->service.request.queue || r->wait_pending) return 0;
+    memset(r->serve_buffer,0,256);memcpy(r->serve_buffer,event,sizeof(event));
+    r->call=*frame;r->call_address=0;r->call_active=1;r->debug_stop=1;
+    r->call.spsr&=~UINT64_C(0x200000);
+    r->owner->tc_SPLower=r->native_lower;
+    r->owner->tc_SPUpper=r->native_upper;
+    r->owner->tc_SPReg=(void *)(uintptr_t)r->native.sp;
+    *frame=r->native;
+    frame->x[0]=4;
+    *execution=(struct AROSAppleTaskExecution){0};
+    execution->domain=r;
+    return 1;
+}
+/* Coordinator held; the caller owns the domain. */
+static int r_debug(struct RestrictedDomain *d,uint64_t channel,unsigned op,uint64_t argument)
+{
+    if (d->closing) return 0;
+    if (op==1) { d->debug=(unsigned)argument&(AROS_RESTRICTED_DEBUG_BREAK|AROS_RESTRICTED_DEBUG_FAULTS);return 1; }
+    if (!channel || op>4) return 0;
+    for (struct Restricted *r=restricted_slots;r;r=r->next) {
+        if (r->domain!=d || r->state!=R_LIVE || r->service.channel!=channel ||
+            !r->owner || !r->owner_context) continue;
+        struct AROSRestrictedDebugContext *c=(void *)(uintptr_t)argument;
+        struct ExceptionContext *saved=r->owner_context;
+        struct AROSAppleRuntimeFrame *f=r->call_active ? &r->call : NULL;
+        if (!f && !(r->suspend_count && AROSAppleRestrictedParked(r->owner,saved))) return 0;
+        if (op==4) {
+            if (f) f->spsr=argument ? f->spsr|UINT64_C(0x200000) : f->spsr&~UINT64_C(0x200000);
+            else saved->cpsr=argument ? saved->cpsr|0x200000U : saved->cpsr&~0x200000U;
+            return 1;
+        }
+        if (!c) return 0;
+        uint64_t *simd=f ? f->simd : (uint64_t *)saved->fpuContext;
+        if (!simd) return 0;
+        if (op==2) {
+            memset(c,0,sizeof(*c));
+            if (f) {
+                memcpy(c->context.x,f->x,sizeof(c->context.x));
+                c->context.sp=f->sp;c->context.pc=f->elr;c->pstate=f->spsr;
+                c->tls=f->task_tls;
+                if (r->debug_stop) { c->esr=f->esr;c->far=f->far; }
+            } else {
+                memcpy(c->context.x,saved->x,sizeof(saved->x));
+                c->context.x[29]=saved->fp;c->context.x[30]=saved->lr;
+                c->context.sp=saved->sp;c->context.pc=saved->pc;c->pstate=saved->cpsr;
+                c->tls=AROSAppleTaskExecution(saved)->user_tls;
+            }
+            c->context.nzcv=c->pstate&UINT64_C(0xf0000000);
+            memcpy(c->context.simd,simd,sizeof(c->context.simd));
+            c->context.fpcr=simd[64];c->context.fpsr=simd[65];
+            c->state=(f ? AROS_RESTRICTED_DEBUG_IN_HANDLER : 0)|(r->debug_stop ? AROS_RESTRICTED_DEBUG_STOPPED : 0);
+            return 1;
+        }
+        if (f) {
+            memcpy(f->x,c->context.x,sizeof(c->context.x));
+            f->sp=c->context.sp;f->elr=c->context.pc;
+            f->spsr=(f->spsr&~UINT64_C(0xf0000000))|(c->context.nzcv&UINT64_C(0xf0000000));
+        } else {
+            memcpy(saved->x,c->context.x,sizeof(saved->x));
+            saved->fp=c->context.x[29];saved->lr=c->context.x[30];
+            saved->sp=c->context.sp;saved->pc=c->context.pc;
+            saved->cpsr=(saved->cpsr&~0xf0000000U)|((uint32_t)c->context.nzcv&0xf0000000U);
+        }
+        memcpy(simd,c->context.simd,sizeof(c->context.simd));
+        simd[64]=c->context.fpcr;simd[65]=c->context.fpsr;
+        return 1;
+    }
+    return 0;
 }
 /* A JIT-class page: owned, current, writable and executable in the ledger. */
 static int r_jit_page(const struct Restricted *r,uint64_t address)
@@ -1400,6 +1486,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
                 frame->sp=r->fault_address+r->fault_bytes;r_stack_bounds(r,1);
                 return 1;
             }
+            if (r_debug_stop(r,execution,frame)) return 1;
             if (r_deliver_exception(r,frame)) return 1;
             r_finish(r,execution,frame,-2);
             return 1;
@@ -1556,6 +1643,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
                 ++r->result.denied;frame->x[0]=UINT64_MAX;return 1;
             }
             *frame=r->fault;r->fault_active=0;r_track_stack(r,frame->sp);
+            if (r_debug_stop(r,execution,frame)) return 1;
             if (!r_deliver_exception(r,frame)) r_finish(r,execution,frame,-2);
             return 1;
         case AROS_RESTRICTED_CANCEL: {
@@ -1644,6 +1732,13 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
         }
         return 1;
     }
+    if (ec==0x15 && svc==R_DEBUG) {
+        struct RestrictedDomain *d=r_domain_lookup(frame->x[0]);
+        uint64_t channel=frame->x[1],op=frame->x[2],argument=frame->x[3];
+        frame->x[0]=0;
+        if (d && d->owner_context==principal) frame->x[0]=(uint64_t)r_debug(d,channel,(unsigned)op,argument);
+        return 1;
+    }
     if (ec==0x15 && svc==0xa56e) {
         struct RestrictedDomain *d=r_domain_lookup(frame->x[0]);
         struct AROSRestrictedWork *work=(void *)(uintptr_t)frame->x[1];
@@ -1689,7 +1784,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
         if (serve_mode == 2 || r->domain->closing || !r->domain->root) {
             /* The handler ends the thread, or its domain is going away. */
             r->callback_active=0;r->fault_active=0;r->exception_active=0;r->suspend_count=0;
-            r->call_active=0;
+            r->call_active=0;r->debug_stop=0;
             r_clear_wait(r);
             r->result.status=serve_mode == 2 ? (int64_t)serve_status : -5;
             r->result.value=*(uint64_t *)r->domain->data;
@@ -1710,7 +1805,8 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
 #else
         if (SysBase->IDNestCnt>=0 || SysBase->TDNestCnt>=0 || AROSAppleRuntimeLocal()->irq_mask_depth) return 1;
 #endif
-        if (!AROSRestrictedSpaceCopy(&r->domain->space,r->call_address,r->serve_buffer,256,KMAP_WRITE)) {
+        if (!r->debug_stop &&
+            !AROSRestrictedSpaceCopy(&r->domain->space,r->call_address,r->serve_buffer,256,KMAP_WRITE)) {
             /* The thread unmapped its own request: it cannot be continued. */
             r->call_active=0;r_clear_wait(r);
             r->result.status=-6;
@@ -1727,11 +1823,17 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
         task->tc_SPReg=(void *)(uintptr_t)r->call.sp;
         AROSAppleRuntimeLocal()->kernel_tls=frame->task_tls;
         *frame=r->call;
-        frame->x[0]=1;
+        if (!r->debug_stop) frame->x[0]=1;
         execution->root=r->domain->root;
         execution->user_tls=frame->task_tls;
         execution->domain=r;
         frame->return_ttbr0=r->domain->root;
+        if (r->debug_stop) {
+            /* The debugger resumes the thread where it stopped (mode 3) or
+             * hands the exception to the thread's own handler (mode 4). */
+            r->debug_stop=0;
+            if (serve_mode==4 && !r_deliver_exception(r,frame)) r_finish(r,execution,frame,-2);
+        }
         return 1;
     }
     if (svc == 0xa534) {
@@ -1889,10 +1991,11 @@ int AROSAppleRestrictedTrap(struct AROSAppleRuntimeFrame *frame)
     unsigned ec=(unsigned)(frame->esr>>26)&63,svc=(unsigned)frame->esr&65535;
     if (!AROSAppleTaskExecution(context)->root &&
         (ec!=0x15 || ((svc<AROS_RESTRICTED_ENTER || svc>R_SERVE) &&
-         (svc<R_DOMAIN_CLAIM || svc>R_REAP_REFRESH)))) return 0;
+         (svc<R_DOMAIN_CLAIM || svc>R_DEBUG)))) return 0;
     r_coordinate();
     int handled=r_trap_locked(frame);
     r_uncoordinate();
+    if (handled) AROSAppleDebugStepArm(frame);
     if (handled==2) {
         /* The scheduler saves the outgoing frame and can finish an invalid
          * restricted stack. It must never recursively acquire our lock or
@@ -2140,13 +2243,16 @@ static int r_run_internal(uint64_t handle,const void *code, size_t bytes, uint64
             register uintptr_t how __asm__("x2")=mode;
             register uintptr_t why __asm__("x3")=status;
             __asm__ volatile("svc #0xa53c":"+r"(slot),"+r"(buffer),"+r"(how),"+r"(why)::"memory","cc");
-            if (slot==2) {
+            if (slot==2 || slot==4) {
+                /* 4: a debug stop. The handler holds the thread, then word
+                 * 0 of the request says resume (0) or deliver (1). */
+                int debug_stop=slot==4;
 #if defined(__AROSEXEC_SMP__)
                 int before_td=TLS_GET(TDNestCnt);
                 uint64_t request_head[4];
                 memcpy(request_head,request,sizeof(request_head));
 #endif
-                if (handler(handler_context,request)) mode=1;
+                if (handler(handler_context,request)) mode=debug_stop ? 3+(request[0]&1) : 1;
                 else { mode=2;memcpy(&status,request,sizeof(status)); }
 #if defined(__AROSEXEC_SMP__)
                 int after_td=TLS_GET(TDNestCnt);
@@ -2523,6 +2629,21 @@ static int64_t r_resume_thread(uint64_t handle,uint64_t channel)
     __asm__ volatile("svc #0xa56d":"+r"(domain),"+r"(thread)::"memory","cc");
     return (int64_t)domain;
 }
+static int r_debug_call(uint64_t handle,uint64_t channel,uint64_t op,uint64_t argument)
+{
+    register uint64_t domain __asm__("x0")=handle;
+    register uint64_t thread __asm__("x1")=channel;
+    register uint64_t what __asm__("x2")=op;
+    register uint64_t value __asm__("x3")=argument;
+    __asm__ volatile("svc #0xa571":"+r"(domain),"+r"(thread),"+r"(what),"+r"(value)::"memory","cc");
+    return domain!=0;
+}
+static int r_debug_domain(uint64_t handle,unsigned flags)
+{ return r_debug_call(handle,0,1,flags); }
+static int r_debug_context(uint64_t handle,uint64_t channel,struct AROSRestrictedDebugContext *context,int write)
+{ return r_debug_call(handle,channel,write ? 3 : 2,(uintptr_t)context); }
+static int r_debug_step(uint64_t handle,uint64_t channel,int on)
+{ return r_debug_call(handle,channel,4,on!=0); }
 static int r_take_domain(uint64_t handle,struct AROSRestrictedWork *work)
 {
     r_reap();
@@ -2554,7 +2675,7 @@ static int r_privatize_memory(uint64_t handle,uintptr_t address)
     if (!ok && !AROSApplePageFree(page,R_PAGE)) for (;;) __asm__ volatile("wfe");
     Permit();return ok;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {39,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread,r_read_shared,r_write_shared,r_take_domain,r_map_shared,r_unmap_shared,r_read_domain,r_write_domain,r_attach_shared_at,r_protect_range,r_privatize_memory,r_run_served,r_cut_memory};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {40,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread,r_read_shared,r_write_shared,r_take_domain,r_map_shared,r_unmap_shared,r_read_domain,r_write_domain,r_attach_shared_at,r_protect_range,r_privatize_memory,r_run_served,r_cut_memory,r_debug_domain,r_debug_context,r_debug_step};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"
