@@ -18,9 +18,8 @@
 /*
  * Lock word (<aros/types/spinlock_s.h>): 0 free, SPINLOCKF_WRITE (bit 27)
  * write-held, otherwise the reader count in bits 0-23.
- * Waiters arm their exclusive monitor with ldaxr before parking in wfe.
- * The unlock store clears that monitor and generates a local event on
- * Armv8-A. The sevl primes the first iteration to examine a free lock.
+ * Waiters park in wfe and are woken by the sev in KrnSpinUnLock; the sevl
+ * primes the event register so a free lock is never waited on.
  */
 AROS_LH3(spinlock_t *, KrnSpinLock,
         AROS_LHA(spinlock_t *, lock, A1),
