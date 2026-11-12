@@ -24,6 +24,33 @@
 #include <exec/processmessage.h>
 #include <dos/dosextens.h>
 #include "exec_util.h"
+#include <hardware/intbits.h>
+#include "chipset.h"
+
+/*
+ * A task of higher priority than the running one became ready: have the
+ * scheduler look again. Unlike Reschedule(), which is a task giving up the
+ * CPU, this leaves the running task its quantum, and the scheduler puts it
+ * back at the head of its priority when it switches it out: it resumes as
+ * soon as the higher task waits again.
+ */
+static void signal_Preempt(struct ExecBase *SysBase)
+{
+#if defined(__AROSEXEC_SMP__)
+    struct KernelBase *KernelBase = __kernelBase;
+#endif
+    BOOL switchpending = FLAG_SCHEDSWITCH_ISSET;
+
+    (void)SysBase;
+    FLAG_SCHEDSWITCH_SET;
+    if (TDNESTCOUNT_GET < 0)
+    {
+        if (IDNESTCOUNT_GET < 0)
+            KrnSchedule();
+        else if (!switchpending)
+            CUSTOM_CAUSE(INTF_SOFTINT);
+    }
+}
 
 AROS_UFH3(IPTR, signal_hook,
     AROS_UFHA(struct IPIHook *, hook, A0),
@@ -498,7 +525,7 @@ void Exec_SignalSlow(struct Task *task, ULONG signalSet, struct ExecBase *SysBas
                              (thisTask->tc_State == TS_RUN))
                     {
                         D(bug("[Exec] %s: Task has higher priority ...\n", __func__);)
-                        Reschedule();
+                        signal_Preempt(SysBase);
                     }
                     else if (thisTask != NULL &&
                              (targetPri == thisTask->tc_Node.ln_Pri) &&
@@ -543,7 +570,7 @@ void Exec_SignalSlow(struct Task *task, ULONG signalSet, struct ExecBase *SysBas
 #if defined(__AROSEXEC_SMP__)
                         /* Do not re-lock: another core may have freed it. */
                         EXEC_SPINLOCK_UNLOCK(&task->tc_SpinLock);
-                        Reschedule();
+                        signal_Preempt(SysBase);
                         Enable();
                         return;
 #else
