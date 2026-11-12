@@ -32,6 +32,9 @@
 #define SPSR_IRQ_MASK UINT64_C(0x80)
 #define SPSR_FIQ_MASK UINT64_C(0x40)
 #define SPSR_INTERRUPT_MASK (SPSR_IRQ_MASK | SPSR_FIQ_MASK)
+#define SPSR_DEBUG_MASK UINT64_C(0x200)
+#define SPSR_MODE_MASK UINT64_C(0xf)
+#define SCTLR_UMA (UINT64_C(1) << 9)
 #define SPSR_EL1H_MASKED UINT64_C(0x3c5)
 #define RUNTIME_PROBE_MAGIC UINT64_C(0xa55aa55aa55aa55a)
 
@@ -46,14 +49,6 @@ static void clear_proof(struct AROSAppleRuntimeProof *proof)
 
     for (index = 0; index < sizeof(*proof) / sizeof(*word); ++index)
         word[index] = 0;
-}
-
-static uint64_t runtime_svc_is_super(void)
-{
-    register uint64_t value __asm__("x0") = 0;
-
-    __asm__ volatile("svc #0xa500" : "+r"(value) :: "memory", "cc");
-    return value;
 }
 
 static uint64_t runtime_svc_supervisor(uintptr_t (*callback)(void))
@@ -89,96 +84,97 @@ _Noreturn void AROSAppleRuntimeReturnEL1(uint64_t status)
         __asm__ volatile("wfe");
 }
 
+/*
+ * Privilege and interrupt masks without a trap.
+ *
+ * Trusted tasks run at EL0 with SCTLR_EL1.UMA set, so DAIF is theirs to read
+ * and write as it is the kernel's: these functions are the same instructions
+ * at both exception levels. Three rules make that sound.
+ *
+ * UMA follows the translation root. Every return from a vector passes
+ * runtime_exit_policy, which sets UMA when the frame returns under this
+ * CPU's trusted root and clears it for any other root: a restricted
+ * domain's code never runs with DAIF access, whatever was running before.
+ *
+ * D tells the exception level. An exception entry sets D and the kernel
+ * never clears it at EL1; the exit policy clears D in every frame that
+ * returns to EL0 and sets it in every frame that returns to EL1. D masks
+ * debug exceptions only when they would be taken to the current level, so
+ * it has no effect at EL0, where debug exceptions go to EL1. A trusted task
+ * that set D itself would only misreport its own level to itself.
+ *
+ * The masks a caller may clear are those cpu_RequiredCurrentTaskMasks does
+ * not require. It is evaluated with IRQ and FIQ masked, so the task cannot
+ * be preempted or moved to another CPU between reading this CPU's state and
+ * acting on it.
+ */
 int AROSAppleRuntimeIsSuper(void)
 {
-    uint64_t current_el;
+    uint64_t value;
 
-    if (AROSAppleRuntimeLocal()->active != 0)
-        return (int)runtime_svc_is_super();
-    __asm__ volatile("mrs %0, CurrentEL" : "=r"(current_el));
-    return (int)(current_el >> 2);
+    if (AROSAppleRuntimeLocal()->active != 0) {
+        __asm__ volatile("mrs %0, daif" : "=r"(value));
+        return (value & SPSR_DEBUG_MASK) != 0;
+    }
+    __asm__ volatile("mrs %0, CurrentEL" : "=r"(value));
+    return (int)(value >> 2);
 }
 
 void AROSAppleRuntimeCli(void)
 {
-    if (AROSAppleRuntimeLocal()->active != 0) {
-        __asm__ volatile("svc #0xa503" ::: "memory", "cc");
-        return;
-    }
     __asm__ volatile("msr DAIFSet, #3" ::: "memory");
+}
+
+/* Entered with IRQ and FIQ masked: unmask what the required masks allow. */
+static inline void runtime_unmask(uint64_t required)
+{
+    if (!(required & SPSR_INTERRUPT_MASK))
+        __asm__ volatile("msr DAIFClr, #3" ::: "memory");
+    else if (!(required & SPSR_IRQ_MASK))
+        __asm__ volatile("msr DAIFClr, #2" ::: "memory");
+    else if (!(required & SPSR_FIQ_MASK))
+        __asm__ volatile("msr DAIFClr, #1" ::: "memory");
 }
 
 void AROSAppleRuntimeSti(void)
 {
-    if (AROSAppleRuntimeLocal()->active != 0) {
-        __asm__ volatile("svc #0xa504" ::: "memory", "cc");
-        return;
-    }
-    uint64_t required=cpu_RequiredCurrentTaskMasks();
-    if (!(required & SPSR_IRQ_MASK))
-        __asm__ volatile("msr DAIFClr, #2" ::: "memory");
-    if (!(required & SPSR_FIQ_MASK))
-        __asm__ volatile("msr DAIFClr, #1" ::: "memory");
+    __asm__ volatile("msr DAIFSet, #3" ::: "memory");
+    runtime_unmask(cpu_RequiredCurrentTaskMasks());
 }
 
-static uint64_t irq_mask_clock(void)
-{
-    uint64_t ticks;
-    __asm__ volatile("isb\n\tmrs %0,cntvct_el0":"=r"(ticks));
-    return ticks;
-}
-
-/* Called only with local I/F masked. Counters are CPU-owned diagnostics. */
-static int irq_mask_enter(void)
-{
-    struct AROSAppleRuntimeLocal *local=AROSAppleRuntimeLocal();
-    if (local->irq_mask_depth==UINT32_MAX) return 0;
-    if (!local->irq_mask_depth) local->irq_mask_started=irq_mask_clock();
-    ++local->irq_mask_depth;
-    ++local->irq_mask_entries;
-    return 1;
-}
-
-static int irq_mask_leave(void)
-{
-    struct AROSAppleRuntimeLocal *local=AROSAppleRuntimeLocal();
-    if (!local->irq_mask_depth) return 0;
-    if (!--local->irq_mask_depth) {
-        uint64_t ticks=irq_mask_clock()-local->irq_mask_started;
-        if (ticks>local->irq_mask_max_ticks) local->irq_mask_max_ticks=ticks;
-    }
-    return 1;
-}
-
-/* Exec SMP critical sections cannot read/write DAIF directly from EL0.
- * Save only IRQ/FIQ bits: callers cannot change privilege, debug or abort masks. */
+/* CPU-local IRQ/FIQ exclusion. The depth is this CPU's and changes only with
+ * both lines masked; the scheduler, the restricted services and the crash
+ * policy refuse to act on a CPU that holds one. Callers cannot change the
+ * debug or SError masks: only the I and F bits are returned and restored. */
 uint64_t AROSAppleRuntimeIRQSave(void)
 {
-    register uint64_t mask __asm__("x0");
-    if (AROSAppleRuntimeLocal()->active) {
-        __asm__ volatile("svc #0xa508" : "=r"(mask) :: "memory", "cc");
-    } else {
-        uint64_t saved;
-        __asm__ volatile("mrs %0,daif\n\tmsr daifset,#3" : "=r"(saved) :: "memory");
-        if (!irq_mask_enter()) for (;;) __asm__ volatile("wfe");
-        return saved & SPSR_INTERRUPT_MASK;
-    }
-    return mask & SPSR_INTERRUPT_MASK;
+    struct AROSAppleRuntimeLocal *local;
+    uint64_t saved;
+
+    __asm__ volatile("mrs %0, daif\n\tmsr DAIFSet, #3" : "=r"(saved) :: "memory");
+    local = AROSAppleRuntimeLocal();
+    if (local->irq_mask_depth == UINT32_MAX)
+        for (;;) __asm__ volatile("wfe");
+    ++local->irq_mask_depth;
+    ++local->irq_mask_entries;
+    return saved & SPSR_INTERRUPT_MASK;
 }
 
 void AROSAppleRuntimeIRQRestore(uint64_t saved)
 {
-    if (AROSAppleRuntimeLocal()->active) {
-        register uint64_t mask __asm__("x0")=saved & SPSR_INTERRUPT_MASK;
-        __asm__ volatile("svc #0xa509" : "+r"(mask) :: "memory", "cc");
-    } else {
-        if (!irq_mask_leave()) return;
-        uint64_t daif;
-        __asm__ volatile("mrs %0,daif":"=r"(daif));
-        daif=(daif & ~SPSR_INTERRUPT_MASK) | (saved & SPSR_INTERRUPT_MASK) |
-            cpu_RequiredCurrentTaskMasks();
-        __asm__ volatile("msr daif,%0"::"r"(daif):"memory");
+    struct AROSAppleRuntimeLocal *local;
+    uint64_t entered;
+
+    __asm__ volatile("mrs %0, daif\n\tmsr DAIFSet, #3" : "=r"(entered) :: "memory");
+    local = AROSAppleRuntimeLocal();
+    if (local->irq_mask_depth == 0) {
+        /* A restore without a save changes nothing. */
+        runtime_unmask(entered & SPSR_INTERRUPT_MASK);
+        return;
     }
+    --local->irq_mask_depth;
+    /* An outer exclusion, Disable and controller readiness still decide. */
+    runtime_unmask((saved & SPSR_INTERRUPT_MASK) | cpu_RequiredCurrentTaskMasks());
 }
 
 int AROSAppleRuntimeDebugPutChar(int chr)
@@ -368,12 +364,11 @@ static void irq_mask_abort(void)
     if (!local->irq_mask_depth) return;
     halt_puts("[KI] FAIL: abandoning IRQ exclusion depth=");
     halt_put_hex(local->irq_mask_depth);halt_puts("\n");
-    local->irq_mask_depth=1;
-    (void)irq_mask_leave();
+    local->irq_mask_depth=0;
     ++local->irq_mask_abandoned;
 }
 
-int AROSAppleRuntimeHandleException(struct AROSAppleRuntimeFrame *frame)
+static int runtime_handle_exception(struct AROSAppleRuntimeFrame *frame)
 {
     uintptr_t (*callback)(void);
     uint64_t service;
@@ -470,9 +465,6 @@ int AROSAppleRuntimeHandleException(struct AROSAppleRuntimeFrame *frame)
     }
 
     switch (service) {
-    case AROS_APPLE_RUNTIME_SVC_IS_SUPER:
-        frame->x[0] = from_el0 ? 0 : 1;
-        return 1;
     case AROS_APPLE_RUNTIME_SVC_SUPERVISOR:
         callback = (uintptr_t (*)(void))(uintptr_t)frame->x[0];
         if (callback == NULL)
@@ -489,23 +481,6 @@ int AROSAppleRuntimeHandleException(struct AROSAppleRuntimeFrame *frame)
         AROSAppleRuntimeLocal()->transition_active = 0;
         frame->elr = AROSAppleRuntimeLocal()->return_pc;
         frame->spsr = SPSR_EL1H_MASKED;
-        return 1;
-    case AROS_APPLE_RUNTIME_SVC_IRQ_SAVE:
-        if (!irq_mask_enter()) goto rejected;
-        frame->x[0] = frame->spsr & SPSR_INTERRUPT_MASK;
-        frame->spsr |= SPSR_INTERRUPT_MASK;
-        return 1;
-    case AROS_APPLE_RUNTIME_SVC_IRQ_RESTORE:
-        if (!irq_mask_leave()) goto rejected;
-        frame->spsr = (frame->spsr & ~SPSR_INTERRUPT_MASK) |
-            (frame->x[0] & SPSR_INTERRUPT_MASK) | cpu_RequiredCurrentTaskMasks();
-        return 1;
-    case AROS_APPLE_RUNTIME_SVC_CLI:
-        frame->spsr |= SPSR_INTERRUPT_MASK;
-        return 1;
-    case AROS_APPLE_RUNTIME_SVC_STI:
-        frame->spsr = (frame->spsr & ~SPSR_INTERRUPT_MASK) |
-            cpu_RequiredCurrentTaskMasks();
         return 1;
     case AROS_APPLE_RUNTIME_SVC_JIT_WRITE:
         frame->x[0] = AROSAppleJitSetWritable(
@@ -554,6 +529,44 @@ unhandled:
     if (frame != NULL)
         AROSAppleRuntimeHaltReport(frame);
     return 0;
+}
+
+/*
+ * What every return from a vector establishes, whatever the handler did to
+ * the frame: the D bit names the level returned to, and EL0 may touch DAIF
+ * only under this CPU's trusted root (see AROSAppleRuntimeIsSuper). Nothing
+ * runs between this and the eret but the register restore, with every
+ * exception masked; the eret synchronizes the SCTLR write.
+ */
+static void runtime_exit_policy(struct AROSAppleRuntimeFrame *frame)
+{
+    uint64_t trusted = AROSAppleRuntimeLocal()->trusted_ttbr0;
+    uint64_t sctlr, wanted;
+
+    if ((frame->spsr & SPSR_MODE_MASK) == 0)
+        frame->spsr &= ~SPSR_DEBUG_MASK;
+    else
+        frame->spsr |= SPSR_DEBUG_MASK;
+    if (trusted != 0)
+        wanted = frame->return_ttbr0 == trusted ? SCTLR_UMA : 0;
+    else if (frame->return_ttbr0 == frame->entry_ttbr0)
+        return;     /* Bootstrap: one root, no domain can exist yet. */
+    else
+        wanted = 0;
+    __asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
+    if ((sctlr & SCTLR_UMA) != wanted) {
+        sctlr ^= SCTLR_UMA;
+        __asm__ volatile("msr sctlr_el1, %0" :: "r"(sctlr) : "memory");
+    }
+}
+
+int AROSAppleRuntimeHandleException(struct AROSAppleRuntimeFrame *frame)
+{
+    int handled = runtime_handle_exception(frame);
+
+    if (handled && frame != NULL)
+        runtime_exit_policy(frame);
+    return handled;
 }
 
 static uintptr_t runtime_supervisor_probe(void)
@@ -644,15 +657,19 @@ int AROSAppleKernelProveRuntime(
     __asm__ volatile("mrs %0, VBAR_EL1" : "=r"(installed_vectors));
     if (installed_vectors != vectors)
         return 0;
+    /* From here D names the exception level; the boot path is at EL1. */
+    __asm__ volatile("msr DAIFSet, #8" ::: "memory");
     AROSAppleRuntimeLocal()->active = 1;
     /* EL0 tasks may read CTR_EL0 (UCT) and clean/invalidate caches by VA
      * (UCI): code generators such as JIT compilers and compiler-rt's
-     * __clear_cache rely on both. APs inherit this SCTLR. */
+     * __clear_cache rely on both. APs inherit this SCTLR. Trusted tasks
+     * also own DAIF (UMA); runtime_exit_policy withdraws it from every
+     * other translation root. */
     {
         uint64_t sctlr, mmfr2;
         __asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
         __asm__ volatile("mrs %0, id_aa64mmfr2_el1" : "=r"(mmfr2));
-        sctlr |= (UINT64_C(1) << 15) | (UINT64_C(1) << 26);
+        sctlr |= (UINT64_C(1) << 15) | (UINT64_C(1) << 26) | SCTLR_UMA;
         /* FEAT_LSE2 permits non-aligned acquire/release accesses.  Without
          * nAA, accesses crossing a 16-byte boundary still take alignment
          * exceptions despite the CPU exposing that feature to EL0. */

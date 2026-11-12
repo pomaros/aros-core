@@ -26,8 +26,7 @@ struct AROSAppleRuntimeLocal {
     uint64_t irq_mask_abandoned;
     uint64_t irq_mask_entries;
     uint64_t irq_mask_rejected;
-    uint64_t irq_mask_started;
-    uint64_t irq_mask_max_ticks;
+    uint64_t reserved[2];
     const void *exec_smp_api;
     /* EL1-owned transition state. The entry island, exception stack and this
      * record must be mapped privileged in every admitted root. Zero root

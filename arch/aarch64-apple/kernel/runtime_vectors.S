@@ -232,7 +232,9 @@ AROSAppleRuntimeEnterEL0:
     msr     SP_EL0, x2
     msr     ELR_EL1, x0
     mov     x0, x1
-    mov     x3, #0x3c0
+    /* EL0t, SError, IRQ and FIQ masked; D clear, as in every frame that
+     * returns to EL0 (runtime.c, runtime_exit_policy). */
+    mov     x3, #0x1c0
     msr     SPSR_EL1, x3
     isb
     eret
