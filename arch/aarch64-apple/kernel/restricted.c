@@ -213,11 +213,76 @@ static int r_domain_link(struct RestrictedDomain *d)
         r_domain_slot((uintptr_t)d)) return 0;
     d->next=restricted_domains;restricted_domains=d;return 1;
 }
+/*
+ * Translation identifiers. Each domain root carries an ASID in bits 55:48
+ * of its TTBR0 value (d->root, and every frame and execution record that
+ * copies it); the native root keeps ASID 0, so the per-CPU trusted root and
+ * every comparison with it are unchanged. The table walkers mask the ASID
+ * off. runtime_vectors.S has the switching rules; the allocation rules are:
+ *
+ *  - TCR_EL1.AS is 0: 8-bit ASIDs, which every implementation has. ASIDs 1
+ *    to 255 go to domains, one live domain each, under the coordinator.
+ *  - A released ASID is stale: a CPU may still hold translations of the
+ *    domain that used it, through tables that are already free. It is not
+ *    given again until a broadcast TLBI VMALLE1IS has removed them, which
+ *    happens once for all the stale ASIDs when no fresh one is left. The
+ *    release comes after the domain's tables and backing are freed, when no
+ *    CPU runs or will again run under its root.
+ *  - With every ASID live, a domain gets ASID 0: its root switches empty the
+ *    local TLB both ways, as they all did before ASIDs. Nothing is refused.
+ *  - A domain is cloned from the native root only when every leaf of that
+ *    root is not global (stage two builds it so, and every native writer
+ *    keeps it so). A global leaf found there means a writer broke the rule:
+ *    AROSAppleRestrictedSharedRoots is set for good, every root switch
+ *    empties the local TLB again, and new domains get ASID 0.
+ */
+#define R_ASID_LIMIT 256U
+static uint32_t asid_live[R_ASID_LIMIT/32], asid_stale[R_ASID_LIMIT/32];
+static unsigned asid_next=1;
+volatile uint32_t AROSAppleRestrictedSharedRoots;
+volatile uint64_t AROSAppleRestrictedAsidRecycles, AROSAppleRestrictedAsidExhausted,
+    AROSAppleRestrictedGlobalLeaves;
+#define R_ASID_SHIFT 48
+#define R_ASID_MASK (UINT64_C(0xff)<<R_ASID_SHIFT)
+static int r_asid_free(unsigned asid)
+{ return !((asid_live[asid/32]|asid_stale[asid/32])&(UINT32_C(1)<<(asid%32))); }
+static unsigned r_asid_allocate(void)
+{
+    if (AROSAppleRestrictedSharedRoots) return 0;
+    for (unsigned pass=0;pass<2;++pass) {
+        for (unsigned i=0;i<R_ASID_LIMIT-1;++i) {
+            unsigned asid=1+(asid_next-1+i)%(R_ASID_LIMIT-1);
+            if (!r_asid_free(asid)) continue;
+            asid_live[asid/32]|=UINT32_C(1)<<(asid%32);
+            asid_next=asid%(R_ASID_LIMIT-1)+1;
+            return asid;
+        }
+        unsigned stale=0;
+        for (unsigned i=0;i<R_ASID_LIMIT/32;++i) stale|=asid_stale[i]!=0;
+        if (!stale) break;
+        /* Every CPU drops the translations of every stale ASID, a parked
+         * one included: the invalidation is broadcast in hardware. */
+        __asm__ volatile("dsb ish; tlbi vmalle1is; dsb ish; isb":::"memory");
+        for (unsigned i=0;i<R_ASID_LIMIT/32;++i) asid_stale[i]=0;
+        ++AROSAppleRestrictedAsidRecycles;
+    }
+    ++AROSAppleRestrictedAsidExhausted;
+    return 0;
+}
+static void r_asid_release(uint64_t root)
+{
+    unsigned asid=(unsigned)((root&R_ASID_MASK)>>R_ASID_SHIFT);
+    if (!asid || !(asid_live[asid/32]&(UINT32_C(1)<<(asid%32)))) return;
+    asid_live[asid/32]&=~(UINT32_C(1)<<(asid%32));
+    asid_stale[asid/32]|=UINT32_C(1)<<(asid%32);
+}
 static void r_domain_forget(struct RestrictedDomain *d)
 {
     struct RestrictedDomain **link=&restricted_domains;
     while (*link && *link!=d) link=&(*link)->next;
     if (*link) *link=d->next;
+    /* Its tables and backing are already free: no CPU uses its root. */
+    if (d->root) r_asid_release(d->root);
     memset(d,0,sizeof(*d));
 }
 
@@ -1060,14 +1125,24 @@ static int r_prepare_domain(struct RestrictedDomain *d,uint64_t source)
     uint64_t tcr,root=0;
     struct AArch64ProtectionOps ops={d,r_resolve,r_allocate,r_clean,r_invalidate,r_sync,0};
     __asm__ volatile("mrs %0,tcr_el1":"=r"(tcr));
-    size_t count,storage=r_code_storage(d->code_bytes);
+    size_t count,globals=0,storage=r_code_storage(d->code_bytes);
     size_t additional=storage ? r_range_tables(AROS_RESTRICTED_CODE,storage)+3 : 0;
     d->table_shortage=0;
     if (d->root || !d->code || !d->data || !storage || ((tcr>>14)&3) ||
-        !AArch64CountPrivilegedRoot(&ops,source,tcr,SIZE_MAX,&count) || count>SIZE_MAX-additional ||
+        !AArch64CountPrivilegedRootGlobals(&ops,source,tcr,SIZE_MAX,&count,&globals) ||
+        count>SIZE_MAX-additional ||
         !r_tables_need(d,count+additional) ||
         !AArch64ClonePrivilegedRoot(&ops,source,tcr,count,&root)) return 0;
-    d->root=root;
+    if (globals && !AROSAppleRestrictedSharedRoots) {
+        /* Before any root switch of this domain: from now on every switch
+         * empties the local TLB, as for ASID 0 (runtime_vectors.S). */
+        AROSAppleRestrictedGlobalLeaves=globals;
+        __atomic_store_n(&AROSAppleRestrictedSharedRoots,1,__ATOMIC_SEQ_CST);
+        bug("[RESTRICTED] native root has %lu global leaves: root switches empty the TLB\n",
+            (unsigned long)globals);
+    }
+    d->root=root|((uint64_t)r_asid_allocate()<<R_ASID_SHIFT);
+    root=d->root;
     for (size_t offset=0;offset<storage;offset+=R_PAGE)
         if (!AArch64MapPage(&ops,root,tcr,AROS_RESTRICTED_CODE+offset,(uintptr_t)d->code+offset,
             AARCH64_PROTECT_READ|AARCH64_PROTECT_EXEC|AARCH64_PROTECT_USER,1)) return 0;
