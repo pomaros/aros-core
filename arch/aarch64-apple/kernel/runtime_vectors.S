@@ -25,6 +25,44 @@
 #define FRAME_SIMD 320
 #define FRAME_FPCR 832
 #define FRAME_FPSR 840
+/* The ASID field of a TTBR0 value: 8-bit ASIDs (TCR_EL1.AS clear). */
+#define TTBR_ASID_MASK 0x00ff000000000000
+
+/*
+ * Translation roots and ASIDs.
+ *
+ * Native tasks and restricted domains both run at EL0. A CPU's trusted root
+ * (AROSAppleRuntimeLocal()->trusted_ttbr0) is the native identity map, with
+ * ASID 0. A restricted domain's root is a private clone of it with EL0
+ * access withdrawn from native pages, plus the domain's own pages; its TTBR0
+ * value carries the domain's ASID in bits 55:48 (restricted.c). An exception
+ * taken under a domain root switches to the trusted root before any C runs;
+ * the return switches to the frame's root.
+ *
+ * The switches need no TLB invalidation, because:
+ *  1. Every leaf of every root is not global. Stage two builds the native
+ *     map so (stage2_mmu.c); KrnMapGlobal, the code window, AArch64MapPage
+ *     and the root clone write nG leaves; protection changes and block
+ *     splits keep the bit. A TLB entry thus belongs to one ASID only.
+ *  2. ASID 0 is the native root's. A nonzero ASID belongs to one live
+ *     domain root (restricted.c, under the coordinator). An entry tagged
+ *     with an ASID therefore comes from that one root and is used again only
+ *     under it: switching between roots of different ASIDs leaves nothing
+ *     usable that the new root does not map the same way, and no two entries
+ *     for one address and ASID can coexist.
+ *  3. A released ASID is given again only after a broadcast TLBI VMALLE1IS
+ *     issued after the release, when no CPU can use the old root any more.
+ *  4. Every change of a root's tables invalidates by address for all ASIDs
+ *     (TLBI VAAE1IS) or everything (TLBI VMALLE1IS), broadcast to every CPU,
+ *     a parked one included. None relies on these switches.
+ *  5. A domain root of ASID 0 (all 255 others live) shares the native ASID:
+ *     switching to or from it empties the local TLB, as every switch did
+ *     before ASIDs. So does every switch while AROSAppleRestrictedSharedRoots
+ *     is set: a global native leaf was found, rule 1 does not hold.
+ *
+ * TTBR0 holds the ASID and the table address in one register, so a single
+ * MSR changes both, and the ISB after it makes later translations use them.
+ */
 
     .macro RUNTIME_VECTOR number
     .balign 128
@@ -127,15 +165,22 @@ AROSAppleRuntimeVectors:
     cbz     x3, .Lruntime_trusted_ready
     cmp     x1, x3
     b.eq    .Lruntime_trusted_ready
-    /* ASID zero first implementation: invalidate local translations after
-     * each root switch, including global entries inherited from native RAM.
-     * Other CPUs independently select their roots; reclamation is separate. */
     dsb     ish
     msr     ttbr0_el1, x3
     isb
+    /* Under the trusted root now. Rule 5: a root of ASID 0 left, or shared
+     * roots, empty the local TLB; otherwise nothing (see above). */
+    tst     x1, #TTBR_ASID_MASK
+    b.eq    .Lruntime_entry_flush
+    adrp    x4, AROSAppleRestrictedSharedRoots
+    add     x4, x4, :lo12:AROSAppleRestrictedSharedRoots
+    ldr     w4, [x4]
+    cbz     w4, .Lruntime_entry_switched
+.Lruntime_entry_flush:
     tlbi    vmalle1
     dsb     ish
     isb
+.Lruntime_entry_switched:
     ldr     x1, [x2, #AROS_CPU_KERNEL_TLS_OFFSET]
     msr     tpidr_el0, x1
     isb
@@ -179,9 +224,17 @@ AROSAppleRuntimeVectors:
     mrs     x2, ttbr0_el1
     cmp     x1, x2
     b.eq    .Lruntime_return_root_ready
+    /* Decide under the trusted root, which maps the flag (rule 5). */
+    tst     x1, #TTBR_ASID_MASK
+    cset    w3, eq
+    adrp    x2, AROSAppleRestrictedSharedRoots
+    add     x2, x2, :lo12:AROSAppleRestrictedSharedRoots
+    ldr     w2, [x2]
+    orr     w3, w3, w2
     dsb     ish
     msr     ttbr0_el1, x1
     isb
+    cbz     w3, .Lruntime_return_root_ready
     tlbi    vmalle1
     dsb     ish
     isb
