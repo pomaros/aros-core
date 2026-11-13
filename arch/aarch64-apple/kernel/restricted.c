@@ -1982,13 +1982,27 @@ static void r_alias_sync(void *context,uint64_t address,size_t bytes)
     r_clean(context,(const void *)(uintptr_t)address,bytes);
     __asm__ volatile("ic ialluis; dsb ish; isb":::"memory");
 }
-static void r_alias_invalidate(void *context)
+/* The page whose alias changes in every domain. `address` stays first: the
+ * resolve and sync callbacks take the context as a pointer to it. */
+struct r_alias_change { uintptr_t address; int defer, pending; };
+static void r_alias_invalidate_now(uintptr_t address)
 {
     /* RemapPrivilegedPage requires an existing leaf and cannot split a block.
      * Every snapshot changes the same native VA under the memory rendezvous.
      * Invalidate that VA on all PEs/ASIDs, retaining unrelated translations. */
-    uint64_t argument=(*(const uintptr_t *)context>>12)&UINT64_C(0xfffffffffff);
+    uint64_t argument=(address>>12)&UINT64_C(0xfffffffffff);
     __asm__ volatile("dsb ishst; tlbi vaae1is,%0; dsb ish; isb"::"r"(argument):"memory");
+}
+static void r_alias_invalidate(void *context)
+{
+    struct r_alias_change *change=context;
+    /* The invalidation names the address for every ASID, so one covers the
+     * same page in every domain: a change that needs no intermediate state
+     * (no execute permission to grant) does it once, after the last domain,
+     * instead of once per domain. The other CPUs are held in the memory
+     * rendezvous meanwhile. */
+    if (change->defer) { change->pending=1; return; }
+    r_alias_invalidate_now(change->address);
 }
 int AROSAppleRestrictedProtectAliasesLocked(uintptr_t address,uint64_t tcr,unsigned permissions)
 {
@@ -1998,7 +2012,8 @@ int AROSAppleRestrictedProtectAliasesLocked(uintptr_t address,uint64_t tcr,unsig
     unsigned policy=permissions & (AARCH64_PROTECT_READ|AARCH64_PROTECT_WRITE|AARCH64_PROTECT_EXEC);
     /* A writable user/JIT source is implicitly EL1-XN, as in root cloning. */
     if (policy & AARCH64_PROTECT_WRITE) policy&=~AARCH64_PROTECT_EXEC;
-    const struct AArch64ProtectionOps ops={&address,r_resolve,r_alias_no_allocate,r_clean,r_alias_invalidate,r_alias_sync,NULL};
+    struct r_alias_change change={address,!(policy & AARCH64_PROTECT_EXEC),0};
+    const struct AArch64ProtectionOps ops={&change,r_resolve,r_alias_no_allocate,r_clean,r_alias_invalidate,r_alias_sync,NULL};
     int ok=1;
     for (struct RestrictedDomain *d=restricted_domains;d;d=d->next) {
         /* REAPING roots have no executing contexts, and native teardown can
@@ -2006,6 +2021,7 @@ int AROSAppleRestrictedProtectAliasesLocked(uintptr_t address,uint64_t tcr,unsig
         if (d->state==R_REAPING || !d->root) continue;
         if (!AArch64RemapPrivilegedPage(&ops,d->root,tcr,address,address,policy)) { ok=0;break; }
     }
+    if (change.pending) r_alias_invalidate_now(address);
     return ok;
 }
 int AROSAppleRestrictedProtectAliases(uintptr_t address,uint64_t tcr,unsigned permissions)
