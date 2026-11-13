@@ -6,6 +6,13 @@
 
 #include "protection.h"
 
+/* Every leaf that AArch64MapPage and AArch64ClonePrivilegedRoot write is not
+ * global (nG, bit 11), and the protection and remapping functions keep the
+ * bit of the leaf they change. A platform that gives each root its own ASID
+ * may then switch roots without invalidating the TLB, provided every leaf of
+ * every root it switches between is not global, its own included
+ * (AArch64CountPrivilegedRootGlobals counts the global leaves of a root). */
+
 /* Same mutation/quiescence contract as protection.h. This interface creates
  * mappings in holes only: existing RAM blocks must never be replaced to make
  * a virtual reservation. Intermediate tables are retained after unmapping.
@@ -119,7 +126,7 @@ int AArch64UserPagePhysical(const struct AArch64ProtectionOps *, uint64_t ttbr0,
 
 /* Build an unpublished private table tree from an immutable trusted template.
  * Preserves physical mappings/cache attributes and EL1 read/write restrictions,
- * removes EL0 data access and forces UXN on all leaves. Implicit EL1 execute
+ * removes EL0 data access and forces UXN and nG on all leaves. Implicit EL1 execute
  * denial on writable user pages becomes explicit PXN. Privileged RWX leaves,
  * guarded/contiguous descriptors and non-address table attributes are refused.
  * Uses the same 4K/16K <=48-bit geometry as the leaf helpers. Full root pages
@@ -147,5 +154,10 @@ int AArch64ClonePrivilegedRoot(const struct AArch64ProtectionOps *, uint64_t ttb
  */
 int AArch64CountPrivilegedRoot(const struct AArch64ProtectionOps *, uint64_t ttbr0,
     uint64_t tcr, size_t table_budget, size_t *table_count);
+/* The same preflight, also counting the leaves and blocks of the template
+ * that are global (nG clear). The clone itself is never global. */
+int AArch64CountPrivilegedRootGlobals(const struct AArch64ProtectionOps *,
+    uint64_t ttbr0, uint64_t tcr, size_t table_budget, size_t *table_count,
+    size_t *global_leaves);
 
 #endif

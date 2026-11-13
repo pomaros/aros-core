@@ -137,6 +137,7 @@ static void basic(unsigned page,unsigned bits)
     uint64_t d=*slot_at(&f,f.va,3),pa=SENTINEL;
     assert((d&3)==3 && (d&((uint64_t)7<<2))==(UINT64_C(1)<<2));
     assert((d&(PXN|UXN))==(PXN|UXN) && !(d&(UINT64_C(1)<<7)));
+    assert(d&(UINT64_C(1)<<11)); /* not global: the root's ASID owns it */
     assert(AArch64MappingPhysical(&o,f.root,f.tcr,f.va,&pa) && pa==DATA_PA);
     assert(AArch64MappingPhysical(&o,f.root|UINT64_C(1)|(UINT64_C(0xa5)<<48),f.tcr,f.va,&pa) && pa==DATA_PA);
     assert(AArch64TranslateResident(&o,f.root,f.tcr,f.va+123,&pa) && pa==DATA_PA+123);

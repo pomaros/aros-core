@@ -33,10 +33,12 @@
 #define WINDOW_TABLE UINT64_C(3)
 #define WINDOW_PAGE UINT64_C(3)
 /* Normal write-back memory (MAIR index 1), inner shareable, accessed,
- * EL0 read-write, never executable: what the arena's free pages are. */
+ * not global like every native leaf (runtime_vectors.S), EL0 read-write,
+ * never executable: what the arena's free pages are. */
 #define WINDOW_LEAF_ATTRIBUTES \
     ((UINT64_C(1) << 2) | (UINT64_C(1) << 6) | (UINT64_C(3) << 8) | \
-    (UINT64_C(1) << 10) | (UINT64_C(1) << 53) | (UINT64_C(1) << 54))
+    (UINT64_C(1) << 10) | (UINT64_C(1) << 11) | (UINT64_C(1) << 53) | \
+    (UINT64_C(1) << 54))
 #define WINDOW_NEEDS_TABLES 2U
 #define WINDOW_BLOCK_DESCRIPTOR UINT64_C(1)
 #define WINDOW_PXN (UINT64_C(1) << 53)

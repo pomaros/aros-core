@@ -11,6 +11,10 @@
 #define M_TABLE_RESTRICTIONS (UINT64_C(0x1f) << 59)
 #define M_PXN (UINT64_C(1) << 53)
 #define M_UXN (UINT64_C(1) << 54)
+/* nG: a leaf belongs to the ASID of the root it is reached from. Every leaf
+ * this file writes is not global, so that roots with distinct ASIDs never
+ * share a TLB entry (mapping.h). */
+#define M_NOT_GLOBAL (UINT64_C(1) << 11)
 
 struct MappingWalk {
     unsigned page_bits, stride, va_bits, first, physical_bits;
@@ -135,7 +139,7 @@ int AArch64MapPage(const struct AArch64ProtectionOps *ops, uint64_t ttbr0,
     if (!slot || *slot)
         return 0;
     uint64_t desc = pa | M_TABLE | ((uint64_t)normal_index << 2) |
-        (UINT64_C(3) << 8) | (UINT64_C(1) << 10) | M_PXN | M_UXN;
+        (UINT64_C(3) << 8) | (UINT64_C(1) << 10) | M_NOT_GLOBAL | M_PXN | M_UXN;
     if (permissions & AARCH64_PROTECT_USER)
         desc |= UINT64_C(1) << 6;
     if (!(permissions & AARCH64_PROTECT_WRITE))
@@ -394,7 +398,8 @@ int AArch64TranslateResident(const struct AArch64ProtectionOps *ops,
  * changed here. The allocator's ledger owns every page even on failure. */
 static int clone_privileged(const struct AArch64ProtectionOps *ops,
     const struct MappingWalk *walk, uint64_t source, unsigned level,
-    uint64_t entries, size_t *budget, uint64_t *destination, int count_only)
+    uint64_t entries, size_t *budget, uint64_t *destination, int count_only,
+    size_t *globals)
 {
     if (!*budget) return 0;
     uint64_t *input = ops->resolve(ops->context, source);
@@ -419,7 +424,7 @@ static int clone_privileged(const struct AArch64ProtectionOps *ops,
             uint64_t child;
             if ((desc & ~(walk->mask | M_TABLE)) ||
                 !clone_privileged(ops, walk, desc & walk->mask, level + 1,
-                    walk->count, budget, &child, count_only)) return 0;
+                    walk->count, budget, &child, count_only, globals)) return 0;
             if (output) output[i] = child | M_TABLE;
         } else {
             unsigned shift = walk->page_bits + walk->stride * (3 - level);
@@ -434,7 +439,9 @@ static int clone_privileged(const struct AArch64ProtectionOps *ops,
                 if (!(desc & (UINT64_C(1) << 6)) && !(desc & M_PXN)) return 0;
                 desc |= M_PXN;
             }
-            if (output) output[i] = (desc & ~(UINT64_C(1) << 6)) | M_UXN;
+            if (!(desc & M_NOT_GLOBAL) && globals) ++*globals;
+            /* The clone's own ASID tags every translation it makes. */
+            if (output) output[i] = (desc & ~(UINT64_C(1) << 6)) | M_UXN | M_NOT_GLOBAL;
         }
     }
     if (output) ops->clean(ops->context, output, (size_t)walk->size);
@@ -451,22 +458,31 @@ int AArch64ClonePrivilegedRoot(const struct AArch64ProtectionOps *ops,
     unsigned shift = walk.page_bits + walk.stride * (3 - walk.first);
     uint64_t entries = UINT64_C(1) << (walk.va_bits - shift), root;
     if (!clone_privileged(ops, &walk, ttbr0 & walk.mask, walk.first,
-        entries, &table_budget, &root, 0)) return 0;
+        entries, &table_budget, &root, 0, NULL)) return 0;
     *output_root = root;
     return 1;
 }
 
-int AArch64CountPrivilegedRoot(const struct AArch64ProtectionOps *ops,
-    uint64_t ttbr0, uint64_t tcr, size_t table_budget, size_t *table_count)
+int AArch64CountPrivilegedRootGlobals(const struct AArch64ProtectionOps *ops,
+    uint64_t ttbr0, uint64_t tcr, size_t table_budget, size_t *table_count,
+    size_t *global_leaves)
 {
     struct MappingWalk walk;
     if (!ops || !ops->resolve || !table_count || !table_budget ||
         !geometry(tcr, 0, 0, &walk) || !root_valid(&walk, ttbr0)) return 0;
     unsigned shift = walk.page_bits + walk.stride * (3 - walk.first);
     uint64_t entries = UINT64_C(1) << (walk.va_bits - shift), unused;
-    size_t remaining = table_budget;
+    size_t remaining = table_budget, globals = 0;
     if (!clone_privileged(ops, &walk, ttbr0 & walk.mask, walk.first,
-        entries, &remaining, &unused, 1)) return 0;
+        entries, &remaining, &unused, 1, &globals)) return 0;
     *table_count = table_budget - remaining;
+    if (global_leaves) *global_leaves = globals;
     return 1;
+}
+
+int AArch64CountPrivilegedRoot(const struct AArch64ProtectionOps *ops,
+    uint64_t ttbr0, uint64_t tcr, size_t table_budget, size_t *table_count)
+{
+    return AArch64CountPrivilegedRootGlobals(ops, ttbr0, tcr, table_budget,
+        table_count, NULL);
 }

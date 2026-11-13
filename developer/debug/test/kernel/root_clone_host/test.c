@@ -28,6 +28,11 @@ static void valid(unsigned b)
  size_t count=99;struct AArch64ProtectionOps query={.resolve=resolve};
  CHECK(AArch64CountPrivilegedRoot(&query,(uintptr_t)pages[0],tcr(va),3,&count) && count==3,"count-exact");
  CHECK(used==4 && !cleaned && !memcmp(original,pages[2],sizeof(original)),"count-readonly");
+ size_t globals=99;count=99;
+ CHECK(AArch64CountPrivilegedRootGlobals(&query,(uintptr_t)pages[0],tcr(va),3,&count,&globals) && count==3 && globals==2,"count-globals");
+ pages[2][1]|=UINT64_C(1)<<11;
+ CHECK(AArch64CountPrivilegedRootGlobals(&query,(uintptr_t)pages[0],tcr(va),3,&count,&globals) && globals==1,"count-not-global");
+ pages[2][1]&=~(UINT64_C(1)<<11);
  count=99;
  CHECK(!AArch64CountPrivilegedRoot(&query,(uintptr_t)pages[0],tcr(va),2,&count) && count==99,"count-budget");
  uint64_t result=99;
@@ -37,6 +42,7 @@ static void valid(unsigned b)
  uint64_t *l3=resolve(0,l2[0]&mask);
  CHECK(!(l3[0]&(UINT64_C(1)<<6)) && !(l3[1]&(UINT64_C(1)<<6)),"deny-el0");
  CHECK((l3[0]&(UINT64_C(1)<<54)) && (l3[1]&(UINT64_C(1)<<54)),"force-uxn");
+ CHECK((l3[0]&(UINT64_C(1)<<11)) && (l3[1]&(UINT64_C(1)<<11)),"force-not-global");
  CHECK(!(l3[0]&(UINT64_C(1)<<53)) && (l3[1]&(UINT64_C(1)<<53)),"preserve-el1-execute");
  CHECK((l3[0]&(UINT64_C(1)<<7)) && !(l3[1]&(UINT64_C(1)<<7)),"preserve-readonly");
  CHECK(!memcmp(original,pages[2],sizeof(original)),"source-unchanged");

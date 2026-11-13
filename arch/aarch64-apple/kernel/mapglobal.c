@@ -40,6 +40,9 @@
 #define MAP_AP_RO (UINT64_C(1) << 7)
 #define MAP_OUTER_SHAREABLE (UINT64_C(2) << 8)
 #define MAP_ACCESS_FLAG (UINT64_C(1) << 10)
+/* Every native leaf is not global, as stage two builds them: restricted
+ * domain roots switch without emptying the TLB (runtime_vectors.S). */
+#define MAP_NOT_GLOBAL (UINT64_C(1) << 11)
 #define MAP_PXN (UINT64_C(1) << 53)
 #define MAP_UXN (UINT64_C(1) << 54)
 /* MAIR indices of the stage2 map: 0 Device-nGnRnE, 2 normal non-cacheable. */
@@ -160,7 +163,7 @@ AROS_LH4I(int, KrnMapGlobal,
         (flags & (MAP_CacheInhibit | MAP_Guarded)) == 0 ||
         (flags & MAP_Executable) != 0)
         return 0;
-    attributes = MAP_ACCESS_FLAG | MAP_PXN | MAP_UXN;
+    attributes = MAP_ACCESS_FLAG | MAP_NOT_GLOBAL | MAP_PXN | MAP_UXN;
     if ((flags & MAP_Guarded) != 0)
         attributes |= MAP_ATTR_INDEX(MAP_DEVICE_INDEX);
     else

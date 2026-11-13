@@ -25,6 +25,14 @@
 #define STAGE2_MMU_AP_READ_ONLY    (UINT64_C(1) << 7)
 #define STAGE2_MMU_INNER_SHAREABLE (UINT64_C(3) << 8)
 #define STAGE2_MMU_ACCESS_FLAG     (UINT64_C(1) << 10)
+/* nG: every translation of the map belongs to the ASID of the root that made
+ * it (zero for the native root), never to all roots. The kernel gives each
+ * restricted domain root its own ASID and switches roots without emptying the
+ * TLB; a global entry from this map would then be usable under a domain's
+ * root, where the same address is private to the domain or has no EL0
+ * access. Set here, before translation is enabled, so that no live entry
+ * ever changes from global to not global. */
+#define STAGE2_MMU_NOT_GLOBAL      (UINT64_C(1) << 11)
 #define STAGE2_MMU_PXN             (UINT64_C(1) << 53)
 #define STAGE2_MMU_UXN             (UINT64_C(1) << 54)
 #define STAGE2_MMU_NORMAL          \
@@ -250,7 +258,7 @@ static int map_range(
             }
         }
         level1[index1] = (start & STAGE2_MMU_ADDRESS_MASK) | descriptor |
-            attributes;
+            attributes | STAGE2_MMU_NOT_GLOBAL;
         if (builder->mapped_bytes > UINT64_MAX - size)
             return 0;
         builder->mapped_bytes += size;
