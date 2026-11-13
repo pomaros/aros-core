@@ -196,24 +196,9 @@ static BOOL core_HigherPriorityReady(struct Task *task)
 
 /* CORE_SCHEDULER_OFFER(task): a port's way to tell an idle CPU that a ready
  * task it may run is waiting. Without it a task made ready on a busy CPU
- * waited for that CPU while another one stayed idle until its next tick.
- *
- * Only when the task that has this CPU computes: it has had it for
- * CORE_SCHEDULER_WAKE_PREEMPT_US or more. A caller and the handler that
- * answers it hand the CPU to each other every few microseconds; offering
- * one of them to another CPU at each turn made every round trip cross
- * CPUs (a positional read went from 2 to 8.6 us). */
+ * waited for that CPU while another one stayed idle until its next tick. */
 #ifndef CORE_SCHEDULER_OFFER
 #define CORE_SCHEDULER_OFFER(task) do { } while (0)
-#endif
-#if defined(__AROSEXEC_SMP__) && defined(CORE_SCHEDULER_TIME_US)
-static inline BOOL core_RunningLong(int cpunum)
-{
-    return cpunum >= 0 && cpunum < 32 && CORE_SCHEDULER_TIME_AVAILABLE() &&
-        CORE_SCHEDULER_TIME_US() - core_dispatched_us[cpunum] >= CORE_SCHEDULER_WAKE_PREEMPT_US;
-}
-#else
-#define core_RunningLong(cpunum) FALSE
 #endif
 
 /* Check if the currently running task on this cpu should be rescheduled */
@@ -275,10 +260,8 @@ BOOL core_Schedule(void)
                         if (!FLAG_SCHEDQUANTUM_ISSET && !core_WakePreempts(nexttask, task, cpunum))
                         {
                             corereschedule = FALSE;
-                            /* It waits for a CPU that computes: another
-                             * may be idle. */
-                            if (core_RunningLong(cpunum))
-                                CORE_SCHEDULER_OFFER(nexttask);
+                            /* It waits for this CPU: another may be idle. */
+                            CORE_SCHEDULER_OFFER(nexttask);
                         }
                     }
                     break;
@@ -405,10 +388,8 @@ void core_Switch(void)
                 core_Trace(CORE_TRACE_SWITCH, task, TS_READY, FLAG_SCHEDQUANTUM_ISSET ? 1 : 0);
                 exec_TaskEnqueueReady(task);
             }
-            /* A task that computes, ready and without a CPU: an idle
-             * one can take it at once. */
-            if (core_RunningLong(GetCPUNumber()))
-                CORE_SCHEDULER_OFFER(task);
+            /* Ready and without a CPU: an idle one can take it at once. */
+            CORE_SCHEDULER_OFFER(task);
 #else
             Enqueue(&SysBase->TaskReady, &task->tc_Node);
 #endif
