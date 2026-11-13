@@ -88,6 +88,75 @@ void AROSAppleDispatchTransition(unsigned busy)
  if(cpu>=AROS_APPLE_SMP_MAX_CPUS) for(;;) __asm__ volatile("yield");
  __atomic_store_n(&dispatch_transition[cpu],busy,__ATOMIC_RELEASE);
 }
+/*
+ * A CPU that has nothing to run does not take part in a rendezvous. Stopping
+ * it meant an interrupt and, under a hypervisor, waking a virtual CPU that
+ * had been descheduled: tens of microseconds for every change of a mapping,
+ * and a program that starts changes mappings a hundred thousand times while
+ * the other CPU is idle half of the time.
+ *
+ * An idle CPU executes kernel text on its own stack and reads its own
+ * records, none of which a mutation changes, and the mutation's TLB and
+ * cache maintenance is broadcast, so it reaches a parked CPU as well. What
+ * the CPU must not do is leave the idle loop while the mutation is under
+ * way. Its word says so: 0 running, 1 parked, 2 parked and held by the owner
+ * of a rendezvous. The owner claims a parked CPU instead of interrupting it
+ * (1 to 2) and gives it back at the end (2 to 1). Every exception a parked
+ * CPU takes starts with Unpark, which waits while the word is 2 and then
+ * takes it from 1 to 0; a CPU that Unpark has made running again is
+ * interrupted like any other.
+ */
+enum { MEMORY_RUNNING, MEMORY_PARKED, MEMORY_HELD };
+static struct { volatile uint32_t state, missed; } __attribute__((aligned(64)))
+    memory_park[AROS_APPLE_SMP_MAX_CPUS];
+static uint32_t memory_claimed;     /* the rendezvous owner's, under PageMapLock */
+void AROSAppleMemoryPark(void)
+{
+ unsigned cpu=AROSCPUCurrentIndex();
+ if(cpu<AROS_APPLE_SMP_MAX_CPUS)
+  __atomic_store_n(&memory_park[cpu].state,MEMORY_PARKED,__ATOMIC_RELEASE);
+}
+void AROSAppleMemoryUnpark(void)
+{
+ unsigned cpu=AROSCPUCurrentIndex();
+ if(cpu>=AROS_APPLE_SMP_MAX_CPUS ||
+    __atomic_load_n(&memory_park[cpu].state,__ATOMIC_ACQUIRE)==MEMORY_RUNNING) return;
+ for(;;) {
+  uint32_t parked=MEMORY_PARKED;
+  if(__atomic_compare_exchange_n(&memory_park[cpu].state,&parked,MEMORY_RUNNING,0,
+      __ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE)) break;
+  if(parked==MEMORY_RUNNING) return;
+  __asm__ volatile("yield" ::: "memory");
+ }
+ /* What a participant does when it is released. */
+ if(__atomic_exchange_n(&memory_park[cpu].missed,0,__ATOMIC_ACQ_REL))
+  __asm__ volatile("dsb ish; isb" ::: "memory");
+}
+/* Owner: take the parked CPUs out of the set to interrupt. */
+static uint32_t memory_claim_parked(uint32_t mask)
+{
+ uint32_t claimed=0;
+ for(unsigned cpu=0;cpu<AROS_APPLE_SMP_MAX_CPUS;++cpu) {
+  uint32_t parked=MEMORY_PARKED;
+  if((mask&(UINT32_C(1)<<cpu)) &&
+     __atomic_compare_exchange_n(&memory_park[cpu].state,&parked,MEMORY_HELD,0,
+      __ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE)) {
+   __atomic_store_n(&memory_park[cpu].missed,1,__ATOMIC_RELEASE);
+   /* It runs no task and is not dispatching one. */
+   memory_dispatch_snapshot[cpu]=0;
+   memory_task_snapshot[cpu]=NULL;
+   claimed|=UINT32_C(1)<<cpu;
+  }
+ }
+ return claimed;
+}
+static void memory_release_parked(void)
+{
+ for(unsigned cpu=0;cpu<AROS_APPLE_SMP_MAX_CPUS;++cpu)
+  if(memory_claimed&(UINT32_C(1)<<cpu))
+   __atomic_store_n(&memory_park[cpu].state,MEMORY_PARKED,__ATOMIC_RELEASE);
+ memory_claimed=0;
+}
 static uintptr_t memory_participate(void)
 {
  unsigned cpu=AROSCPUCurrentIndex();
@@ -126,8 +195,11 @@ uint64_t AROSApplePageMutationBegin(void)
  unsigned cpu=AROSCPUCurrentIndex();
  if(cpu>=32) return 0;
  uint32_t mask=AROSAppleSMPOnlineMask() & ~(UINT32_C(1)<<cpu);
+ if(__atomic_load_n(&memory_rendezvous.owned,__ATOMIC_ACQUIRE)) return 0;
+ memory_claimed=memory_claim_parked(mask);
+ mask&=~memory_claimed;
  uint64_t token=AROSAppleMemoryRendezvousBegin(&memory_rendezvous,mask);
- if(!token) return 0;
+ if(!token) { memory_release_parked(); return 0; }
  if(mask) AROSAppleSMPSendIPI(AROS_APPLE_MEMORY_IPI,0,mask);
  uint64_t start=AROSAppleSMPTimeUS(),window=start;
  unsigned resent=0;
@@ -135,6 +207,7 @@ uint64_t AROSApplePageMutationBegin(void)
   uint64_t now=AROSAppleSMPTimeUS();
   if(now-start>=MEMORY_RENDEZVOUS_ARRIVAL_US) {
    AROSAppleMemoryRendezvousEnd(&memory_rendezvous);
+   memory_release_parked();
    bug("[SMP-MMU] rendezvous arrival timeout after %u resends; no mutation\n",resent);
    return 0;
   }
@@ -171,6 +244,7 @@ void AROSApplePageMutationEnd(uint64_t token)
  }
  if(delayed) bug("[SMP-MMU] rendezvous departure acknowledged token=%llx\n",(unsigned long long)token);
  AROSAppleMemoryRendezvousEnd(&memory_rendezvous);
+ memory_release_parked();
 }
 /* PageMapLock serializes the rendezvous and this target. Terminal freeze
  * prevents redispatch; no task storage is released until all peers detach. */

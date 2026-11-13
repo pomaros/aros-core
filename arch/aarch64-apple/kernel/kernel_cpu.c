@@ -382,6 +382,8 @@ static void enter_idle(regs_t *regs)
     TLS_SET(ThisTask, NULL);
     TLS_SET(IDNestCnt, -1);
     TLS_SET(TDNestCnt, -1);
+    /* Nothing to run: no rendezvous needs this CPU until it wakes. */
+    AROSAppleMemoryPark();
 #endif
     AROSCPUCurrentState(AROS_CPU_IDLE);
     if (idle_trace_owner() && AROSAppleKernelIdleTraceEnable != 0 && enter_idle_trace < 12) {
@@ -534,6 +536,10 @@ dispatch_after_self_exit:
         return;
     }
     AROSAppleRuntimeLocal()->idle_active = 0;
+#if defined(__AROSEXEC_SMP__)
+    /* A task after all, in the same pass that had parked the CPU. */
+    AROSAppleMemoryUnpark();
+#endif
 #if defined(IDLE_POLLING_AVAILABLE)
     idle_poll_disarm();
 #endif

@@ -562,6 +562,11 @@ static void runtime_exit_policy(struct AROSAppleRuntimeFrame *frame)
 
 int AROSAppleRuntimeHandleException(struct AROSAppleRuntimeFrame *frame)
 {
+#if defined(__AROSEXEC_SMP__)
+    /* An idle CPU stood aside from the memory rendezvous: it rejoins, and
+     * waits for a mutation under way, before it handles anything. */
+    AROSAppleMemoryUnpark();
+#endif
     int handled = runtime_handle_exception(frame);
 
     if (handled && frame != NULL)

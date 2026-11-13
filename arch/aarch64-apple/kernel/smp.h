@@ -18,6 +18,10 @@ uint64_t AROSAppleSMPTimeUS(void);
 /* Cooperate with mapping rendezvous while waiting with local IRQs masked. */
 void AROSAppleMemoryRendezvousPoll(void);
 void AROSAppleDispatchTransition(unsigned busy);
+/* A CPU with nothing to run stands aside from the memory rendezvous
+ * (smp.c): Park when it turns idle, Unpark before it does anything else. */
+void AROSAppleMemoryPark(void);
+void AROSAppleMemoryUnpark(void);
 int AROSAppleSMPHandleIPI(uint32_t id);
 int AROSAppleSMPTick(void);
 uint64_t AROSAppleSMPTimerTicks(void);
