@@ -14,6 +14,8 @@ static int resume_cpu(struct Task *);
 #define CORE_SCHEDULER_RESUME_CPU(task) resume_cpu(task)
 #define CORE_SCHEDULER_TIME_US() AROSAppleSMPTimeUS()
 #define CORE_SCHEDULER_TIME_AVAILABLE() 1
+static void schedule_offer(struct Task *);
+#define CORE_SCHEDULER_OFFER(task) schedule_offer(task)
 #else
 /* Per-task CPU accounting needs the SMP timer. */
 #define CORE_SCHEDULER_TIME_US() 0
@@ -72,6 +74,20 @@ static int restricted_park(struct Task *task)
  * may run it. With every such CPU busy the task waits its turn on the ready
  * list like any other of its priority; this CPU looks at the list on its
  * way out. */
+/* A ready task this CPU is not going to run now: an idle CPU that may run
+ * it is told, by its idle watch when it is polling, by an interrupt when it
+ * is halted. A busy CPU is left alone. */
+static void schedule_offer(struct Task *task)
+{
+    uint32_t online=AROSAppleSMPOnlineMask();
+    unsigned self=AROSCPUCurrentIndex();
+    for (unsigned cpu=0;cpu<AROS_APPLE_SMP_MAX_CPUS;++cpu)
+        if (cpu!=self && (online&(1U<<cpu)) && AROSCPUIdle(cpu) &&
+            core_AffinityMatch(task,1U<<cpu)) {
+            if (!cpu_IdleKick(cpu)) AROSAppleSMPSendIPI(IPI_SCHEDULE,0,1U<<cpu);
+            return;
+        }
+}
 static void schedule_ready(struct Task *task)
 {
     uint32_t online=AROSAppleSMPOnlineMask();

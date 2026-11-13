@@ -528,12 +528,13 @@ void Exec_SignalSlow(struct Task *task, ULONG signalSet, struct ExecBase *SysBas
                         signal_Preempt(SysBase);
                     }
                     else if (thisTask != NULL &&
-                             (targetPri == thisTask->tc_Node.ln_Pri) &&
                              (thisTask->tc_State == TS_RUN))
                     {
                         /* An equal: the scheduler decides, by how long
                          * this task has had the CPU, whether the woken
-                         * one runs now (Enable() asks it). */
+                         * one runs now (Enable() asks it). An equal or a
+                         * lower one that does not run here is offered to
+                         * an idle CPU by the scheduler. */
                         FLAG_SCHEDSWITCH_SET;
                     }
                     Enable();

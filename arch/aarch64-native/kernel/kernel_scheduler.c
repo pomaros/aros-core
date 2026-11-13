@@ -194,6 +194,13 @@ static BOOL core_HigherPriorityReady(struct Task *task)
 }
 #endif
 
+/* CORE_SCHEDULER_OFFER(task): a port's way to tell an idle CPU that a ready
+ * task it may run is waiting. Without it a task made ready on a busy CPU
+ * waited for that CPU while another one stayed idle until its next tick. */
+#ifndef CORE_SCHEDULER_OFFER
+#define CORE_SCHEDULER_OFFER(task) do { } while (0)
+#endif
+
 /* Check if the currently running task on this cpu should be rescheduled */
 BOOL core_Schedule(void)
 {
@@ -251,7 +258,11 @@ BOOL core_Schedule(void)
                         /* If the running task did not used it's whole quantum yet, let it work,
                          * unless a task that just woke has waited long enough for it */
                         if (!FLAG_SCHEDQUANTUM_ISSET && !core_WakePreempts(nexttask, task, cpunum))
+                        {
                             corereschedule = FALSE;
+                            /* It waits for this CPU: another may be idle. */
+                            CORE_SCHEDULER_OFFER(nexttask);
+                        }
                     }
                     break;
 #if defined(__AROSEXEC_SMP__)
@@ -377,6 +388,8 @@ void core_Switch(void)
                 core_Trace(CORE_TRACE_SWITCH, task, TS_READY, FLAG_SCHEDQUANTUM_ISSET ? 1 : 0);
                 exec_TaskEnqueueReady(task);
             }
+            /* Ready and without a CPU: an idle one can take it at once. */
+            CORE_SCHEDULER_OFFER(task);
 #else
             Enqueue(&SysBase->TaskReady, &task->tc_Node);
 #endif
