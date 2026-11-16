@@ -88,23 +88,46 @@ struct Stage2Rel {
 _Static_assert(sizeof(struct Stage2Rela) == 24, "ELF64 rela size");
 _Static_assert(sizeof(struct Stage2Rel) == 16, "ELF64 rel size");
 
+/*
+ * The loader runs before its own MMU and caches are on, where every store
+ * costs a memory access: clear and copy by words. A kernel with tens of
+ * megabytes of zeroed data otherwise holds the boot for minutes.
+ */
+typedef uint64_t __attribute__((may_alias)) stage2_word;
+
 static void bytes_zero(void *destination, size_t size)
 {
     uint8_t *out = (uint8_t *)destination;
-    size_t index;
 
-    for (index = 0; index < size; ++index)
-        out[index] = 0;
+    while (size != 0 && ((uintptr_t)out & 7U) != 0) {
+        *out++ = 0;
+        --size;
+    }
+    for (; size >= 8U; size -= 8U, out += 8)
+        *(stage2_word *)(void *)out = 0;
+    while (size != 0) {
+        *out++ = 0;
+        --size;
+    }
 }
 
 static void bytes_copy(void *destination, const void *source, size_t size)
 {
     uint8_t *out = (uint8_t *)destination;
     const uint8_t *in = (const uint8_t *)source;
-    size_t index;
 
-    for (index = 0; index < size; ++index)
-        out[index] = in[index];
+    if ((((uintptr_t)out ^ (uintptr_t)in) & 7U) == 0) {
+        while (size != 0 && ((uintptr_t)out & 7U) != 0) {
+            *out++ = *in++;
+            --size;
+        }
+        for (; size >= 8U; size -= 8U, out += 8, in += 8)
+            *(stage2_word *)(void *)out = *(const stage2_word *)(const void *)in;
+    }
+    while (size != 0) {
+        *out++ = *in++;
+        --size;
+    }
 }
 
 static int name_equal(const char *value, size_t size, const char *expected)
