@@ -137,14 +137,17 @@ $(workbench-c-eval_DEPS) : $(OBJDIR)/evalParser.tab.c
 #     is deleted or badly Assign(ed).
 USER_LDFLAGS     := -static
 
-# This command uses the stdio interface while the C: tools otherwise build
-# without posixc. Keep its static stdcio dependency local to this command.
+# stdcio is a shared library; unlike the recovery commands below, this
+# command uses that interface and its matching shared stdc base.
+USER_LDFLAGS     :=
 #MM workbench-c : workbench-c-sha256sum
 #MM workbench-c-quick : workbench-c-sha256sum-quick
 #MM workbench-c-tools : workbench-c-sha256sum
 #MM workbench-c-tools-quick : workbench-c-sha256sum-quick
 %build_prog mmake=workbench-c-sha256sum progname=SHA256Sum \
     files=SHA256Sum targetdir=$(AROS_C) uselibs="stdcio" coverageinstr=no
+
+USER_LDFLAGS     := -static
 
 %build_prog mmake=workbench-c-requeststring progname=RequestString \
     files=RequestString targetdir=$(AROS_C) coverageinstr=no
