@@ -430,7 +430,7 @@ struct __attribute__((aligned(16))) AROSAppleColdStartProof {
     uint64_t small_pages_before_unload;
 };
 
-_Static_assert(sizeof(struct AROSAppleColdStartProof) == 1112,
+_Static_assert(sizeof(struct AROSAppleColdStartProof) == 1104,
     "Apple cold-start proof size");
 
 struct AROSAppleRuntimeFrame;
