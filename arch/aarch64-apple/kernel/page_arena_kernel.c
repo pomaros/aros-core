@@ -89,32 +89,33 @@ static int plain_leaf(uint64_t leaf, uintptr_t page)
         (leaf & READ_ONLY) == 0 && (leaf & PXN) != 0;
 }
 
+/* saved and the leaf tables live inside the chunk being remapped. Complete
+ * one block's break-before-make before reading that metadata again. Both the
+ * replacement descriptor and its slot must be obtained while it is mapped. */
+static void native_replace(uint64_t *slot, uint64_t descriptor)
+{
+    *slot = 0;
+    clean_range(slot, sizeof(*slot));
+    __asm__ volatile("dsb ishst; tlbi vmalle1is; dsb ish; isb" ::: "memory");
+    *slot = descriptor;
+    clean_range(slot, sizeof(*slot));
+    __asm__ volatile("dsb ish; isb" ::: "memory");
+}
+
 static void native_restore(struct AROSApplePageArenaGrowth *growth, uint32_t blocks)
 {
     uint32_t block;
 
     for (block = 0; block < blocks; ++block) {
+        uint64_t descriptor = growth->saved[block];
         uint64_t *slot;
 
-        if (growth->saved[block] == 0)
+        if (descriptor == 0)
             continue;
         slot = native_block_slot(growth->start +
             (uintptr_t)block * AROS_APPLE_PAGE_ARENA_BLOCK);
-        *slot = 0;
-        clean_range(slot, sizeof(*slot));
+        native_replace(slot, descriptor);
     }
-    __asm__ volatile("dsb ishst; tlbi vmalle1is; dsb ish; isb" ::: "memory");
-    for (block = 0; block < blocks; ++block) {
-        uint64_t *slot;
-
-        if (growth->saved[block] == 0)
-            continue;
-        slot = native_block_slot(growth->start +
-            (uintptr_t)block * AROS_APPLE_PAGE_ARENA_BLOCK);
-        *slot = growth->saved[block];
-        clean_range(slot, sizeof(*slot));
-    }
-    __asm__ volatile("dsb ish; isb" ::: "memory");
 }
 
 static uintptr_t attach_one(void)
@@ -156,29 +157,17 @@ static uintptr_t attach_one(void)
             return ATTACH_FAILED;
     }
     for (block = 0; block < growth->blocks; ++block) {
-        uint64_t *slot;
+        uint64_t *slot, descriptor;
 
         if (growth->saved[block] == 0)
             continue;
         slot = native_block_slot(growth->start +
             (uintptr_t)block * AROS_APPLE_PAGE_ARENA_BLOCK);
-        *slot = 0;
-        clean_range(slot, sizeof(*slot));
-    }
-    __asm__ volatile("dsb ishst; tlbi vmalle1is; dsb ish; isb" ::: "memory");
-    for (block = 0; block < growth->blocks; ++block) {
-        uint64_t *slot;
-
-        if (growth->saved[block] == 0)
-            continue;
-        slot = native_block_slot(growth->start +
-            (uintptr_t)block * AROS_APPLE_PAGE_ARENA_BLOCK);
-        *slot = ((uintptr_t)(growth->tables +
+        descriptor = ((uintptr_t)(growth->tables +
             (uint64_t)block * ARENA_BLOCK_PAGES) & ARENA_ADDRESS_MASK) |
             TABLE_DESCRIPTOR;
-        clean_range(slot, sizeof(*slot));
+        native_replace(slot, descriptor);
     }
-    __asm__ volatile("dsb ish; isb" ::: "memory");
 
     /* The native root stays as it was unless every root is done */
     status = AROSAppleRestrictedArenaAttachLocked(growth);

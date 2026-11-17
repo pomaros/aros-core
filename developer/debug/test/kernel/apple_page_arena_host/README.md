@@ -32,3 +32,12 @@ unchanged against stub exec headers and runs `test.c` under ASan and UBSan:
 
 With `--compare REV` the session also runs against the allocator at that git
 revision; the current one must satisfy more of the 2 MiB requests.
+
+`mapping.py --out DIR --reject REV` separately compiles the actual native
+attach, restore and detach bodies from `page_arena_kernel.c`. Architecture
+operations are substituted: invalidating a block applies host `mprotect` with
+no access, and publishing its replacement restores access. Metadata resides
+inside the first or last block; another block already has page leaves. Attach,
+retry, failed attachment rollback and detach must preserve metadata and restore
+the original descriptors. The old revision must fault on inaccessible metadata.
+This is HOST mapping-lifetime evidence, not hardware cache/TLB qualification.
