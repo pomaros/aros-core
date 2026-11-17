@@ -532,7 +532,8 @@ int AROSAppleStage2Main(
         AROSAppleStage2ColdStartProof.abi_probe_return != 73 ||
         AROSAppleStage2ColdStartProof.abi_pages_loaded <=
             AROSAppleStage2ColdStartProof.abi_pages_before ||
-        AROSAppleStage2ColdStartProof.abi_pages_unloaded !=
+        /* At least what the load took comes back (coldstart_proof.c) */
+        AROSAppleStage2ColdStartProof.abi_pages_unloaded >
             AROSAppleStage2ColdStartProof.abi_pages_before ||
         AROSAppleStage2ColdStartProof.abi_load_allocations == 0 ||
         AROSAppleStage2ColdStartProof.abi_unload_frees == 0 ||

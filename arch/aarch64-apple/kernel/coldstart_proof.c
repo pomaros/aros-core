@@ -2639,8 +2639,11 @@ AROS_UFH3S(APTR, dos_takeover_observer,
         abi_probe_bad_return != 30 || abi_probe_return != 73 ||
         proof->abi_probe_entry == 0)
         final_detail = UINT32_C(0x525);
+    /* Unloading gives back at least what loading took. Not exactly: a
+     * process that started before the probe (its CreateNewProc entry
+     * segment is a page) may end while the probe runs. */
     else if (abi_loaded.pages_in_use <= abi_before.pages_in_use ||
-        abi_unloaded.pages_in_use != abi_before.pages_in_use ||
+        abi_unloaded.pages_in_use > abi_before.pages_in_use ||
         proof->abi_load_allocations == 0 || proof->abi_unload_frees == 0 ||
         proof->abi_load_rx_protections == 0 ||
         proof->abi_unload_rw_protections == 0)
