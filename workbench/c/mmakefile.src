@@ -50,6 +50,7 @@ FILES := \
     Sort \
     StackSnoop \
     SymbolDump \
+    Sync \
     TaskList \
     Touch \
     Type \
