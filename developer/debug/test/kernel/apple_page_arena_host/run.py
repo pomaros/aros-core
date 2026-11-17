@@ -29,6 +29,12 @@ def main():
  def run(name,cmd):
   r=subprocess.run([str(v) for v in cmd],capture_output=True,text=True,timeout=300);(a.out/(name+'.log')).write_text(r.stdout+r.stderr);records.append(dict(name=name,command=[str(v) for v in cmd],rc=r.returncode));r.check_returncode();return r.stdout
  flags=['-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-Wno-unused-parameter','-fsanitize=address,undefined','-I',inc]
+ source=(KERNEL/'page_arena_kernel.c').read_text()
+ body=source[source.index('static int arena_can_grow(void)'):source.index('static uintptr_t arena_take')]
+ body=re.sub(r'__asm__ volatile\("mrs %0, daif".*?;', 'daif = mask;', body)
+ (a.out/'arena-eligibility.inc').write_text(body)
+ run('compile-eligibility',[a.cc,*flags,'-I',a.out,HERE/'eligibility.c','-o',a.out/'eligibility'])
+ run('eligibility',[a.out/'eligibility'])
  run('compile',[a.cc,*flags,'-DARENA_GROWTH','-I',KERNEL,KERNEL/'page_allocator.c',HERE/'test.c','-o',a.out/'arena-test'])
  out=run('run',[a.out/'arena-test'])
  assert 'ARENA: random and placement PASS' in out

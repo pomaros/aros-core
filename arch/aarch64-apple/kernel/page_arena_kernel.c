@@ -30,6 +30,7 @@
 #include <proto/exec.h>
 
 #include "kernel_base.h"
+#include "kernel_cpu.h"
 #include "page_allocator.h"
 #include "restricted.h"
 
@@ -206,13 +207,27 @@ static uintptr_t detach_one(void)
 
 static int arena_can_grow(void)
 {
+    const uint64_t interrupt_masks = UINT64_C(3) << 6;
     uint64_t daif;
+    uint64_t required;
 
     if (SysBase == NULL || AROSAppleRuntimeIsSuper())
         return 0;
-    /* Not under a lock that masks interrupts, nor in Disable() */
     __asm__ volatile("mrs %0, daif" : "=r"(daif));
-    return (daif & (UINT64_C(3) << 6)) == 0;
+    if (!(daif & interrupt_masks))
+        return 1;
+    if ((daif & interrupt_masks) == interrupt_masks)
+        return 0;
+
+    /* Dispatch may leave an unavailable interrupt line masked in ordinary
+     * task context. Sample the current CPU's policy and live mask together.
+     * Forbid pins the running task through these reads and nests with an
+     * existing Forbid. Restore scheduling before entering the Exec allocator. */
+    Forbid();
+    required = cpu_RequiredCurrentTaskMasks();
+    __asm__ volatile("mrs %0, daif" : "=r"(daif) :: "memory");
+    Permit();
+    return required != interrupt_masks && (daif & interrupt_masks) == required;
 }
 
 static uintptr_t arena_take(uint64_t bytes)
