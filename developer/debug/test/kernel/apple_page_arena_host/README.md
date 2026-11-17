@@ -41,3 +41,11 @@ inside the first or last block; another block already has page leaves. Attach,
 retry, failed attachment rollback and detach must preserve metadata and restore
 the original descriptors. The old revision must fault on inaccessible metadata.
 This is HOST mapping-lifetime evidence, not hardware cache/TLB qualification.
+
+`native_probe.c` is an AROS command for the compiled kernel. Each of three
+cycles allocates 128 MiB from the physical page arena (larger than its initial
+64 MiB maximum), checks cleared bytes, writes and verifies both ends of every
+page, then frees the allocation. Require its final PASS and kernel growth/trim
+records to distinguish successful page access from actual chunk restitution.
+Compile against the selected product SDK; retain binary, kernel and source
+identities with the run. A HOST pass does not substitute for this execution.
