@@ -114,6 +114,7 @@ static void sana_ip6_read(struct sana_softc *ssc, struct IOIPReq *req);
 #endif
 static void sana_online(struct sana_softc *ssc, struct IOIPReq *req);
 static void sana_connect(struct sana_softc *ssc, struct IOIPReq *req);
+static void sana_arm_connect(struct sana_softc *ssc);
 static void free_written_packet(struct sana_softc *ssc, struct IOIPReq *req);
 static void sana_start(struct sana_softc *ssc);
 
@@ -711,27 +712,42 @@ sana_run(struct sana_softc *ssc, int requests, struct ifaddr *ifa)
         }
         ssc->ss_reqs = next;
 
-        /* Order a notify when driver connects to a (wireless) network.
-         * Register for all interfaces — DHCP and IPv4LL both need reconnect handling. */
-        {
-            if((req = CreateIORequest(SanaPort, sizeof(*req))) != NULL) {
-                ssc->ss_eventsent++;
-                req->ioip_s2.ios2_Req.io_Device    = ssc->ss_dev;
-                req->ioip_s2.ios2_Req.io_Unit      = ssc->ss_unit;
-                req->ioip_s2.ios2_BufferManagement = ssc->ss_bufmgnt;
-                req->ioip_s2.ios2_Req.io_Message.mn_Node.ln_Type = NT_REPLYMSG;
-                req->ioip_if = ssc;
-                req->ioip_next = NULL;
-                req->ioip_s2.ios2_Req.io_Command = S2_ONEVENT;
-                req->ioip_s2.ios2_WireError = S2EVENT_OFFLINE | S2EVENT_CONNECT
-                                              | S2EVENT_DISCONNECT;
-                req->ioip_dispatch = sana_connect;
-                BeginIO((struct IORequest *)req);
-                ssc->ss_connectreq = req;
-            }
-        }
+        sana_arm_connect(ssc);
     }
     splx(s);
+}
+
+/*
+ * Order a notify when the driver connects to a (wireless) network, unless one
+ * is already outstanding. Every interface gets one: DHCP and IPv4LL both need
+ * reconnect handling. sana_connect() drops the request when the driver reports
+ * OFFLINE, so going online again must order a new one, or a stack that started
+ * before the link (a Wi-Fi network joined later) never learns of the CONNECT
+ * and never asks for an address.
+ * Note: called under splimp().
+ */
+static void
+sana_arm_connect(struct sana_softc *ssc)
+{
+    struct IOIPReq *req;
+
+    if(ssc->ss_connectreq != NULL)
+        return;
+    if((req = CreateIORequest(SanaPort, sizeof(*req))) == NULL)
+        return;
+    ssc->ss_eventsent++;
+    req->ioip_s2.ios2_Req.io_Device    = ssc->ss_dev;
+    req->ioip_s2.ios2_Req.io_Unit      = ssc->ss_unit;
+    req->ioip_s2.ios2_BufferManagement = ssc->ss_bufmgnt;
+    req->ioip_s2.ios2_Req.io_Message.mn_Node.ln_Type = NT_REPLYMSG;
+    req->ioip_if = ssc;
+    req->ioip_next = NULL;
+    req->ioip_s2.ios2_Req.io_Command = S2_ONEVENT;
+    req->ioip_s2.ios2_WireError = S2EVENT_OFFLINE | S2EVENT_CONNECT
+                                  | S2EVENT_DISCONNECT;
+    req->ioip_dispatch = sana_connect;
+    ssc->ss_connectreq = req;
+    BeginIO((struct IORequest *)req);
 }
 
 #if __SASC
@@ -1007,6 +1023,9 @@ sana_restore(struct sana_softc *ssc)
                        ssc->ss_if.if_mtu, sana_raw_read,
                        S2_READORPHAN, SANA2_IOF_RAW);
 #endif
+    /* the link-event request, if an OFFLINE report ended the previous one */
+    if(ssc->ss_if.if_flags & IFF_DRV_RUNNING)
+        sana_arm_connect(ssc);
     splx(s);
 
 #if INET6
