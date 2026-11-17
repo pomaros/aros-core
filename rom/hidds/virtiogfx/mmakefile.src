@@ -2,9 +2,10 @@ include $(SRCDIR)/config/aros.cfg
 
 #MM kernel-hidd-virtiogfx : kernel-hidd-gfx-includes kernel-hidd-storage-includes kernel-hidd-pci-includes kernel-virtio-includes kernel-timer-includes
 
-FILES := init hiddclass displayclass bitmapclass support transport
+FILES := init hiddclass displayclass bitmapclass support transport serviceclass
 USER_LDFLAGS := -static
 USER_CPPFLAGS := -D__OOP_NOATTRBASES__
+USER_CFLAGS += -Werror=implicit-function-declaration
 
 %build_module mmake=kernel-hidd-virtiogfx \
   modname=virtiogfx modtype=hidd files=$(FILES) uselibs="hiddstubs"
@@ -13,3 +14,5 @@ USER_CPPFLAGS := -D__OOP_NOATTRBASES__
 FB_SHARED_INPUTS := $(wildcard $(SRCDIR)/rom/hidds/efifbgfx/*.h $(SRCDIR)/rom/hidds/efifbgfx/*.c)
 VIRTIO_SHARED_INPUTS := $(SRCDIR)/rom/devs/virtio/virtio_hw.c $(SRCDIR)/rom/devs/virtio/virtio_queue.c $(wildcard $(SRCDIR)/rom/devs/virtio/*.h)
 $(kernel-hidd-virtiogfx_OBJS) $(kernel-hidd-virtiogfx_STARTOBJS) $(kernel-hidd-virtiogfx_ENDOBJS): $(FB_SHARED_INPUTS) $(VIRTIO_SHARED_INPUTS) $(wildcard $(SRCDIR)/$(CURDIR)/*.h)
+
+%copy_includes includes=virtiogpu.h path=hidd dir=include

@@ -119,7 +119,9 @@ __asm__(
     "1:  b __aros_dlmodule_start\n"
     "    .size __aros_dlmodule_entry, .-__aros_dlmodule_entry\n"
     "    .previous\n");
-#elif defined(__x86_64__)
+#elif defined(__x86_64__) || defined(__i386__)
+/* Both x86 ABIs use a short jump over the mark followed by a tail jump.
+ * AROS_PROCH supplies the CPU-specific process calling convention. */
 __asm__(
     "    .section .aros.startup,\"ax\",@progbits\n"
     "    .globl __aros_dlmodule_entry\n"

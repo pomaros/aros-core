@@ -29,9 +29,9 @@
 #include <exec/execbase.h>
 #include <exec/tasks.h>
 #include <proto/exec.h>
-#include <proto/kernel.h>
 
 #include "exec_intern.h"
+#include <proto/kernel.h>
 #include "etask.h"
 #include "freeze_smp.h"
 

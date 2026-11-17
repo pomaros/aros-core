@@ -124,6 +124,7 @@ static int EFIFBGfx_Init(LIBBASETYPEPTR LIBBASE)
     struct GfxBase *GfxBase;
     ULONG err;
     int res = FALSE;
+    InitSemaphore(&LIBBASE->loader_lock);
 
     /*
      * Open graphics.library ourselves because we will close it

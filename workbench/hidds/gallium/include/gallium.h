@@ -60,11 +60,15 @@ enum
                                        their memory directly); FALSE when it can present tiled ones.
                                        A driver that does not answer is taken to need them. */
 
+    aoHidd_Gallium_ScreenFactory,
+    aoHidd_Gallium_Transport,
     num_Hidd_Gallium_Attrs
 };
 
 #define aHidd_Gallium_InterfaceVersion  (HiddGalliumAttrBase + aoHidd_Gallium_InterfaceVersion)
 #define aHidd_Gallium_CoreAPI  (HiddGalliumAttrBase + aoHidd_Gallium_CoreAPI)
+#define aHidd_Gallium_ScreenFactory (HiddGalliumAttrBase + aoHidd_Gallium_ScreenFactory)
+#define aHidd_Gallium_Transport (HiddGalliumAttrBase + aoHidd_Gallium_Transport)
 #define aHidd_Gallium_VulkanObject  (HiddGalliumAttrBase + aoHidd_Gallium_VulkanObject)
 #define aHidd_Gallium_LinearDisplay  (HiddGalliumAttrBase + aoHidd_Gallium_LinearDisplay)
 #define aHidd_Gallium_WinSys  (HiddGalliumAttrBase + aoHidd_Gallium_WinSys)

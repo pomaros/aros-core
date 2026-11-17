@@ -586,6 +586,9 @@ VOID MESA3DGLFreeStManager(APTR pipe, struct pipe_frontend_screen * stmanager)
         st_screen_destroy(stmanager);
         if (stmanager->screen)
             DestroyPipeScreen(pipe, stmanager->screen);
+        /* The last context/drawable owns the provider object as well as
+         * the core screen. Drop its module and transport references too. */
+        DestroyPipe(pipe);
         FreeVec(stmanager);
     }
 }

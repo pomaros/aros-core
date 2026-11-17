@@ -1,3 +1,12 @@
+/* Keep the uninitialised paging tables out of the code's file segment.
+ * A single -N load segment pads .text past 2 MiB with LLD, hiding the
+ * Multiboot headers from the bootloader's first-32-KiB search. */
+PHDRS
+{
+    tables PT_LOAD FLAGS(6);
+    code PT_LOAD FLAGS(7);
+}
+
 SECTIONS
 {
     . = 0x00100000;
@@ -5,14 +14,14 @@ SECTIONS
     .tables :
     {
 	*(.aros.tables)
-    }
+    } :tables
     
     _prot_lo = . ;
     
     .bsstables :
     {
 	*(.bss.aros.tables)
-    }
+    } :tables
     
     _prot_hi = . ;
     
@@ -24,7 +33,7 @@ SECTIONS
         *(.stub)
         *(.gnu.warning)
         *(.gnu.linkonce.t.*)
-    } = 0x90909090
+    } :code = 0x90909090
 
     .rodata ALIGN(0x10) :
     {
