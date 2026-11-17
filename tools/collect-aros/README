@@ -42,3 +42,33 @@ following:
  allocated data, symbols and relocations. An unstripped control retains debug
  information; an incremental link also exercises debug stripping. This is a
  host cross-link test, not target runtime qualification.
+
+ Incremental link dependencies:
+
+ When the raw linker supports --dependency-file, the build rules set
+ COLLECT_AROS_DEPENDENCIES to the output's .ld.d sidecar. collect-aros merges
+ the real inputs from both link stages, including compiler-driver defaults,
+ resolved archives and extra objects selected during symbol processing. It
+ excludes its generated script and intermediate object. A successful link
+ atomically publishes the sidecar; a failed link removes its incomplete output
+ and leaves the previous sidecar intact. COLLECT_AROS_DEPENDENCY_TARGET can
+ name the installed destination when the build links to a temporary output.
+
+ Program, module and kernel-object rules include these dependencies. Existing
+ outputs without sidecars relink once. Updating a compiler-default library
+ therefore relinks its consumers, while an unrelated library does not. Raw
+ linkers without dependency-file support retain the existing explicit-library
+ prerequisites; that fallback does not cover implicit compiler libraries.
+
+ python3 tools/collect-aros/tests/link-dependencies.py \
+   --env-header /path/to/configured/collect-aros/env.h \
+   --clang /path/to/cross/clang --make /path/to/gnu/make \
+   --output /path/to/new/test-directory
+
+ The test builds the production collector and expands the production make
+ rules. Real AArch64 ELF data proves that the previous explicit-only rules
+ leave consumers stale, and that implicit, archlibs and ldflags archive changes
+ update all three output forms. It also checks no-change and unrelated-archive
+ stability, initial sidecar migration, final-stage inputs, failed publication,
+ partial links and make escaping. This is host cross-link evidence; it does
+ not qualify a boot image or the runtime behavior of the linked code.

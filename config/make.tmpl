@@ -91,7 +91,7 @@ endif
 	$(Q)$(eval LINKTMPFILE=%(objdir)/$(notdir $(LINKTARGET)))
 	$(Q)$(eval LINKRSPFILE=$(LINKTMPFILE).rsp)
 	$(file >$(LINKRSPFILE),%(from))
-	$(Q)$(IF) %(cmd) %(ldopts) -Wl,@$(LINKRSPFILE) -o $(LINKTMPFILE) %(ldflags) $(strip %(libs) %(archlibs)) 2>&1 > $(GENDIR)/cerrors 2>&1 ; then \
+	$(Q)$(IF) $(AROS_LINK_DEP_ENV) %(cmd) %(ldopts) -Wl,@$(LINKRSPFILE) -o $(LINKTMPFILE) %(ldflags) $(strip %(libs) %(archlibs)) 2>&1 > $(GENDIR)/cerrors 2>&1 ; then \
 		$(IF) $(TEST) -s $(GENDIR)/cerrors ; then \
 				$(ECHO) "$(LINKTARGET): %(cmd) %(ldopts) -Wl,@$(LINKRSPFILE) -o $(LINKTARGET) %(ldflags) $(strip %(libs) %(archlibs))" >> $(GENDIR)/errors ; \
 				$(CAT) $(GENDIR)/cerrors >> $(GENDIR)/errors ; \
@@ -104,6 +104,7 @@ endif
 		tee < $(GENDIR)/cerrors -a $(GENDIR)/errors 1>&2 ; \
 		exit 1 ; \
 	fi
+	$(Q)$(if $(filter yes,$(AROS_LINK_DEPS)),$(TEST) -s '$@.ld.d',$(NOP))
 	%strip_q stripdebug="%(stripdebug)" strip="%(strip)" file="$(LINKTARGET)"
 	$(Q)$(IF) $(TEST) "%(coverageinstr)" = "yes"; then \
 		LINKBASEFILES="$(strip $(notdir $(basename %(from))))" ; \
@@ -128,7 +129,7 @@ endif
 	$(Q)$(ECHO) "Building Module  $(subst $(TARGETDIR)/,,$@) ..."
 	$(Q)$(eval LINKRSPFILE=%(objdir)/%(module).link.rsp)
 	$(file >$(LINKRSPFILE),%(objs))
-	$(Q)$(IF) %(cmd) %(ldopts) $(NOSTARTUP_OBJECTS) \
+	$(Q)$(IF) $(AROS_LINK_DEP_ENV) %(cmd) %(ldopts) $(NOSTARTUP_OBJECTS) \
 		$(GENMAP) %(objdir)/%(module).map \
 		-Wl,@$(LINKRSPFILE) %(endtag) -o $@ %(ldflags) -Wl,--start-group $(strip %(libs) %(archlibs)) -Wl,--end-group 2>&1 > %(objdir)/%(err) 2>&1 ; \
 	then \
@@ -139,6 +140,7 @@ endif
 		exit 1; \
 	fi
 	$(Q)$(IF) $(TEST) ! -s %(objdir)/%(err) ; then $(RM) %(objdir)/%(err) ; fi
+	$(Q)$(if $(filter yes,$(AROS_LINK_DEPS)),$(TEST) -s '$@.ld.d',$(NOP))
         %strip_q strip=%(strip) stripdebug="%(stripdebug)" file=$@
 %end
 #------------------------------------------------------------------------------
@@ -1074,6 +1076,17 @@ $(%(mmake)-MA_TARGETS) : $(%(mmake)-MA_WILDCARD).o : %%(suffix)
 
 #------------------------------------------------------------------------------
 # Link %(objs) to %(prog) using the libraries in %(uselibs)
+%define rule_link_dependencies targets=/A
+ifeq ($(AROS_LINK_DEPS),yes)
+-include $(wildcard $(addsuffix .ld.d,%(targets)))
+# Existing outputs predate dependency tracking; relink them once. An absent
+# sidecar must never silently leave an old binary eligible for packaging.
+.PHONY: aros-missing-link-dependencies
+$(foreach target,%(targets),$(if $(wildcard $(target).ld.d),,$(target))) : aros-missing-link-dependencies
+%(targets) : $(COLLECT-AROS)
+endif
+%end
+
 %define rule_link_prog mmake=TMP prog=/A objs=/A ldflags="$(LDFLAGS)" \
     uselibs= usehostlibs= archlibs= usestartup=yes detach=no nix=no  \
     cmd="$(strip $(AROS_CC) $(TARGET_SYSROOT))" ldopts="$(TARGET_ISA_LDFLAGS)" \
@@ -1121,6 +1134,7 @@ endif
 %(prog) : ARCHLIBS := $(strip $(addprefix -l,%(usehostlibs)) %(archlibs))
 %(prog) : %(objs) $(%(mmake)-link_DEPLIBS)
 	%link_q cmd="%(cmd)" ldopts="$(strip %(ldopts) $(%(mmake)-link_LD_OPTS))" strip="%(strip)" stripdebug="%(stripdebug)" from="$(OBJS)" ldflags="$(LDFLAGS)" libs="$(LIBS)" archlibs="$(ARCHLIBS)" objdir="$(OBJDIR)" coverageinstr="%(coverageinstr)"
+%rule_link_dependencies targets="%(prog)"
 %end
 #------------------------------------------------------------------------------
 
@@ -1175,6 +1189,7 @@ $(%(mmake)-link_PROGS) : LIBS := $(strip $(addprefix -l,%(uselibs) $(%(mmake)-li
 $(%(mmake)-link_PROGS) : ARCHLIBS := $(strip $(addprefix -l,%(usehostlibs)) %(archlibs))
 $(%(mmake)-link_PROGS) : %(targetdir)/% : %(objdir)/%.o $(%(mmake)-link_DEPLIBS)
 	%link_q cmd="%(cmd)" ldopts="$(strip %(ldopts) $(%(mmake)-link_LD_OPTS))" strip="%(strip)" stripdebug="%(stripdebug)" from="$<" ldflags="$(LDFLAGS)" libs="$(LIBS)" archlibs="$(ARCHLIBS)" objdir="$(OBJDIR)" coverageinstr="%(coverageinstr)"
+%rule_link_dependencies targets="$(%(mmake)-link_PROGS)"
 %end
 #------------------------------------------------------------------------------
 
@@ -1242,6 +1257,7 @@ else
 endif 
 %(module) : %(objs) %(endobj) $(%(mmake)_DEPLIBS) $(USER_DEPLIBS)
 	%link_module_q cmd="%(cmd)" ldopts="%(ldopts)" err="$(ERR)" endtag="$(ENDTAG)" objs="$(OBJS)" libs="$(LIBS)" archlibs="%(archlibs)" objdir="$(OBJDIR)" ldflags="$(LDFLAGS)" stripdebug="%(stripdebug)"
+%rule_link_dependencies targets="%(module)"
 
 %end
 #------------------------------------------------------------------------------
@@ -2177,11 +2193,14 @@ endif
 $(%(mmake)_KOBJ) : LINKLIBS:=$(%(mmake)_KOBJ_LIBS)
 $(%(mmake)_KOBJ) : FILTBASES:=$(addprefix -L ,$(%(mmake)_SYMBOLS))
 $(%(mmake)_KOBJ) : USER_LDFLAGS := $(USER_LDFLAGS)
+$(%(mmake)_KOBJ) : LINKOBJS := $(%(mmake)_OBJS) $(%(mmake)_ENDOBJS)
 $(%(mmake)_KOBJ) : $(%(mmake)_OBJS) $(%(mmake)_ENDOBJS)
 	$(Q)$(ECHO) "Linking    $(subst $(TARGETDIR)/,,$@)"
-	$(file >$@.rsp,$^)
-	$(Q)$(AROS_LD) -Ur $(KOBJ_LDFLAGS) $(KERNEL_KOBJ_LDSCRIPT) -o $@ @$@.rsp $(USER_LDFLAGS) -L$(AROS_LIB) $(addprefix -l,$(LINKLIBS)) && $(RM) $@.rsp
+	$(file >$@.rsp,$(LINKOBJS))
+	$(Q)$(AROS_LINK_DEP_ENV) $(AROS_LD) -Ur $(KOBJ_LDFLAGS) $(KERNEL_KOBJ_LDSCRIPT) -o $@ @$@.rsp $(USER_LDFLAGS) -L$(AROS_LIB) $(addprefix -l,$(LINKLIBS)) && $(RM) $@.rsp
+	$(Q)$(if $(filter yes,$(AROS_LINK_DEPS)),$(TEST) -s '$@.ld.d',$(NOP))
 	$(Q)$(OBJCOPY) $@ $(FILTBASES) `$(NM_PLAIN) $@ | $(AWK) '($$3 ~ /^__.*_(LIST|END)__\r?$$/) || ($$3 ~ /^__aros_lib.*\r?$$/) {print "-L " $$3;}'`
+%rule_link_dependencies targets="$(%(mmake)_KOBJ)"
 
 ## Dependency fine-tuning
 ##
@@ -2768,11 +2787,14 @@ ifeq (%(build_library),M)
 $(%(mmake)%(flavour)_KOBJ) : LINKLIBS:=$(%(mmake)%(flavour)_KOBJ_LIBS) $($(%(mmake)%(flavour)_DEFNAME)_LIBS)
 $(%(mmake)%(flavour)_KOBJ) : FILTBASES:=$(addprefix -L ,$(%(mmake)%(flavour)_SYMBOLS))
 $(%(mmake)%(flavour)_KOBJ) : USER_LDFLAGS:=$(USER_LDFLAGS)
+$(%(mmake)%(flavour)_KOBJ) : LINKOBJS := $(%(mmake)%(flavour)_OBJS) $(USER_OBJS) $(%(mmake)%(flavour)_ENDOBJS)
 $(%(mmake)%(flavour)_KOBJ) : $(%(mmake)%(flavour)_OBJS) $(USER_OBJS) $(%(mmake)%(flavour)_ENDOBJS)
 	$(Q)$(ECHO) "Linking    $(subst $(TARGETDIR)/,,$@)"
-	$(file >$@.rsp,$^)
-	$(Q)$(AROS_LD) -Ur $(KOBJ_LDFLAGS) $(KERNEL_KOBJ_LDSCRIPT) -o $@ @$@.rsp $(USER_LDFLAGS) -L$(AROS_LIB) $(addprefix -l,$(LINKLIBS)) && $(RM) $@.rsp
+	$(file >$@.rsp,$(LINKOBJS))
+	$(Q)$(AROS_LINK_DEP_ENV) $(AROS_LD) -Ur $(KOBJ_LDFLAGS) $(KERNEL_KOBJ_LDSCRIPT) -o $@ @$@.rsp $(USER_LDFLAGS) -L$(AROS_LIB) $(addprefix -l,$(LINKLIBS)) && $(RM) $@.rsp
+	$(Q)$(if $(filter yes,$(AROS_LINK_DEPS)),$(TEST) -s '$@.ld.d',$(NOP))
 	$(Q)$(OBJCOPY) $@ $(FILTBASES) `$(NM_PLAIN) $@ | $(AWK) '($$3 ~ /^__.*_(LIST|END)__\r?$$/) || ($$3 ~ /^__aros_lib.*\r?$$/) {print "-L " $$3;}'`
+%rule_link_dependencies targets="$(%(mmake)%(flavour)_KOBJ)"
 endif
 
 ## Dependency fine-tuning

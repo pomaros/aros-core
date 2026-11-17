@@ -46,7 +46,7 @@ all : $(COLLECTAROSBIN)
 
 COLLECT-AROS-FILES := collect-aros.c gensets.c misc.c $(COLLECT-AROS-BACKEND) \
                       $(COLLECT-AROS-DOCOMMAND)
-$(COLLECTAROSBIN) : misc.h ldscript.h gensets.h docommand.h backend.h $(CAGENDIR)/env.h
+$(COLLECTAROSBIN) : misc.h ldscript.h gensets.h docommand.h backend.h linkdeps.h $(CAGENDIR)/env.h
 $(COLLECTAROSBIN) : $(COLLECT-AROS-FILES)
 	$(Q)$(MECHO) "Compiling $(notdir $@)..."
 	$(Q)$(HOST_CC) -o $@ $(COLLECT_CFLAGS) $(COLLECT-AROS-FILES) $(HOST_LDFLAGS) 

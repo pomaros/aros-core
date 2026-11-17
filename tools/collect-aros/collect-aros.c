@@ -28,10 +28,18 @@
 static char *ldscriptname, *tempoutput, *ldresponse, *ld_name, *strip_name;
 static FILE *ldscriptfile;
 
+#include "linkdeps.h"
+
 int have_gnunm = 0;
 
 static void exitfunc(void)
 {
+    if (depstage)
+        remove(depstage);
+    if (deppending)
+        remove(deppending);
+    if (depoutput && !depcomplete)
+        remove(depoutput);
     if (ldscriptfile != NULL)
         fclose(ldscriptfile);
 
@@ -195,6 +203,14 @@ static void docommand_ld(char *command, char *argv[])
     for (i = 1; argv[i] != NULL; i++)
         write_response_argument(response, argv[i]);
 
+    if (depfile)
+    {
+        if (!depstage && !(depstage = make_temp_file(NULL)))
+            fatal("make_temp_file()", strerror(errno));
+        write_response_argument(response, "--dependency-file");
+        write_response_argument(response, depstage);
+    }
+
     if (fclose(response) != 0)
         fatal(ldresponse, strerror(errno));
 
@@ -211,6 +227,8 @@ static void docommand_ld(char *command, char *argv[])
         fprintf(stderr, "[collect-aros] linker response file: %s\n", ldresponse);
 
     docommandvp(command, responseargv);
+    if (depfile)
+        dependency_read();
     free(responsearg);
 }
 
@@ -339,6 +357,17 @@ int main(int argc, char *argv[])
         }
     }
 
+    depfile = getenv("COLLECT_AROS_DEPENDENCIES");
+    if (depfile && *depfile)
+    {
+        deptarget = getenv("COLLECT_AROS_DEPENDENCY_TARGET");
+        if (!deptarget || !*deptarget)
+            deptarget = output;
+        depoutput = output;
+    }
+    else
+        depfile = NULL;
+
     ldargs = xmalloc(sizeof(char *) * (argc + EXTRA_ARG_CNT
         + ((incremental == 1) ? 0 : 2) + 1));
 
@@ -397,7 +426,10 @@ int main(int argc, char *argv[])
     {
         if (strip_debug)
             docommandlp(strip_name, strip_name, "--strip-debug", output, NULL);
-        return set_os_and_abi(output) ? EXIT_SUCCESS : EXIT_FAILURE;
+        if (!set_os_and_abi(output))
+            return EXIT_FAILURE;
+        dependency_finish();
+        return EXIT_SUCCESS;
     }
 
     /*
@@ -777,7 +809,10 @@ int main(int argc, char *argv[])
     {
         if (strip_debug)
             docommandlp(strip_name, strip_name, "--strip-debug", output, NULL);
-        return set_os_and_abi(output) ? EXIT_SUCCESS : EXIT_FAILURE;
+        if (!set_os_and_abi(output))
+            return EXIT_FAILURE;
+        dependency_finish();
+        return EXIT_SUCCESS;
     }
         
     if (!ignore_undefined_symbols && check_and_print_undefined_symbols(output))
@@ -803,5 +838,6 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+    dependency_finish();
     return 0;
 }

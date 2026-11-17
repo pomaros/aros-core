@@ -228,6 +228,12 @@ AROS_CXXEXTS                  := cpp cxx cc c++
 AROS_AS                       := $(TARGET_AS)
 AROS_LD                       := $(TARGET_LD)
 
+# Track the actual archives selected by the compiler driver and linker,
+# including implicit runtime libraries. Older linkers without depfile support
+# keep the explicit prerequisites below. Probe the raw linker, not its wrapper.
+AROS_LINK_DEPS                 := $(if $(findstring --dependency-file,$(shell @orig_target_ld@ --help 2>/dev/null)),yes,no)
+AROS_LINK_DEP_ENV              = $(if $(filter yes,$(AROS_LINK_DEPS)),COLLECT_AROS_DEPENDENCIES='$@.ld.d' COLLECT_AROS_DEPENDENCY_TARGET='$@')
+
 # Optional -T linker script for the kernel-module partial link (AROS_LD -Ur), used
 # to order each module's sections so its Resident romtag lands at the module head
 # (see arch/m68k-amiga/boot/kobj-romtag.ld). Empty for every target except
