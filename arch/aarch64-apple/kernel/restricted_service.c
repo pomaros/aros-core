@@ -26,13 +26,45 @@ static struct AROSRestrictedService *channel_lookup(uint64_t handle)
  * refusal. Shared views borrow an object's entry instead of entering again.
  * Open addressing with linear probing and backward-shift deletion lets a
  * lookup end at the first empty slot. The arena bounds the combined load. */
-#define INDEX_MASK (AROS_RESTRICTED_INDEX_SLOTS-1)
-_Static_assert((AROS_RESTRICTED_INDEX_SLOTS&INDEX_MASK)==0,"index slots are a power of two");
-static uintptr_t backing_index[AROS_RESTRICTED_INDEX_SLOTS];
+/* The index is sized by the page arena that actually backs restricted pages
+ * and taken from it the first time a space or shared backing is created, so
+ * a system that never runs a restricted domain carries none of it. Twice the
+ * arena's page count keeps the load at most one half. */
+static uintptr_t *backing_index;
+static size_t index_mask;
+#if defined(__AROS__)
+#include "page_allocator.h"
+static uintptr_t *index_storage(size_t *slots)
+{
+    size_t want=(size_t)AROSApplePageArenaPages()*2U,n=1024;
+    while (n<want) n<<=1;
+    if (n>AROS_RESTRICTED_INDEX_SLOTS) n=AROS_RESTRICTED_INDEX_SLOTS;
+    *slots=n;
+    return (uintptr_t *)AROSApplePageTableAllocate(n*sizeof(uintptr_t));
+}
+#else
+#include <stdlib.h>
+static uintptr_t *index_storage(size_t *slots)
+{
+    *slots=AROS_RESTRICTED_INDEX_SLOTS;
+    return (uintptr_t *)calloc(AROS_RESTRICTED_INDEX_SLOTS,sizeof(uintptr_t));
+}
+#endif
+static int index_ready(void)
+{
+    size_t slots;
+    uintptr_t *storage;
+    if (backing_index) return 1;
+    if (!(storage=index_storage(&slots)) || !slots || (slots&(slots-1))) return 0;
+    index_mask=slots-1;backing_index=storage;
+    return 1;
+}
+#define INDEX_MASK index_mask
 static size_t index_home(uintptr_t pa)
 { return (size_t)(((uint64_t)(pa>>12)*UINT64_C(0x9e3779b97f4a7c15))>>32)&INDEX_MASK; }
 static int index_contains(uintptr_t pa)
 {
+    if (!backing_index) return 0;
     for (size_t i=index_home(pa);backing_index[i];i=(i+1)&INDEX_MASK)
         if (backing_index[i]==pa) return 1;
     return 0;
@@ -45,6 +77,7 @@ static void index_insert(uintptr_t pa)
 }
 static void index_remove(uintptr_t pa)
 {
+    if (!backing_index) return;
     size_t i=index_home(pa);
     while (backing_index[i]!=pa) { if (!backing_index[i]) return;i=(i+1)&INDEX_MASK; }
     for (size_t j=(i+1)&INDEX_MASK;backing_index[j];j=(j+1)&INDEX_MASK) {
@@ -107,7 +140,7 @@ static int shared_publication_policy(struct AROSRestrictedRegion *r,size_t page,
 }
 int AROSRestrictedSharedInitialize(struct AROSRestrictedSharedBacking *b,uintptr_t *pages,size_t count)
 {
-    if (!b || !pages || !count || b->pages || b->next || shared_registered(b)) return 0;
+    if (!b || !pages || !count || b->pages || b->next || shared_registered(b) || !index_ready()) return 0;
     size_t i;
     for (i=0;i<count;++i) {
         if (!pages[i] || (pages[i]&(PAGE-1)) || physical_in_use(pages[i])) break;
@@ -305,7 +338,8 @@ static int remove_page(void *opaque,uintptr_t va,uintptr_t pa)
 int AROSRestrictedSpaceInit(struct AROSRestrictedSpace *s,uint64_t principal,
     uint64_t root,uint64_t tcr,uintptr_t backing,const struct AArch64ProtectionOps *hardware)
 {
-    if (!s || !principal || !root || !backing || !hardware || s->root || physical_in_use(backing)) return 0;
+    if (!s || !principal || !root || !backing || !hardware || !index_ready() ||
+        s->root || physical_in_use(backing)) return 0;
     s->root=root;s->tcr=tcr;s->principal=principal;s->backing=backing;s->hardware=*hardware;
     s->mapops=(struct KrnMappingOps){s,install,remove_page};
     s->bufferops=(struct KrnBufferOps){s,admit};

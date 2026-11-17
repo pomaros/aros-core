@@ -40,6 +40,7 @@ struct AROSApplePageAllocatorStats {
 
 /* Immutable arena bounds after initialization; no allocator lock required. */
 int AROSApplePageArenaContains(uintptr_t address);
+uint32_t AROSApplePageArenaPages(void);
 int AROSApplePageAllocatorInitialize(uintptr_t start, uint64_t size);
 void *AROSApplePageAllocate(void *requested, uintptr_t length, uint32_t flags);
 void *AROSApplePageTableAllocate(uintptr_t length);
