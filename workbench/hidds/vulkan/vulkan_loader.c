@@ -6,10 +6,10 @@
 
     This is the AROS equivalent of the Khronos Vulkan Loader (libvulkan.so
     on Linux).  Any AROS application that uses Vulkan should link -lvulkan.
-    At first use the loader asks the display driver of the default public
-    screen for its Vulkan object (CreateObject with the hidd.vulkan class),
-    or makes the software driver's, and routes every call to that object's
-    methods.
+    At first use the loader makes the driver named by ENV:SYS/Vulkan.default,
+    or asks the display driver of the default public screen for its Vulkan
+    object (CreateObject with the hidd.vulkan class), or makes the software
+    driver's, and routes every call to that object's methods.
 
     Copyright 2025-2026, The AROS Development Team. All rights reserved.
 */
@@ -18,6 +18,7 @@
 #include <proto/exec.h>
 #include <oop/oop.h>
 #include <proto/intuition.h>
+#include <proto/dos.h>
 #include <intuition/screens.h>
 #include <hidd/gfx.h>
 #include <hidd/vulkan_hidd.h>
@@ -78,6 +79,7 @@ static OOP_MethodID  vk_mbase     = 0;      /* IID_Hidd_Vulkan base */
 static BOOL          vk_init_done = FALSE;
 static struct Library *vk_hiddbase = NULL; /* vulkan.hidd, for its class */
 static struct Library *vk_swbase = NULL;   /* lavapipe.hidd, the software fallback */
+static struct Library *vk_namedbase = NULL; /* the driver ENV:SYS/Vulkan.default names */
 
 /* The display's CreateObject, asked for an object of class cl */
 static OOP_Object *vk_display_createobject(OOP_Object *display, OOP_Class *cl, struct TagItem *tags)
@@ -206,6 +208,47 @@ static void *vk_loader_local_proc(const char *pName)
 
 /* ---- One-time initialisation -------------------------------------- */
 
+/*
+ * The driver named by ENV:SYS/Vulkan.default, if any: "NAME" or
+ * "NAME.hidd" opens NAME.hidd and makes an object of hidd.vulkan.NAME.
+ * A driver that refuses (its hardware is absent) leaves the choice to
+ * the display and the software driver.
+ */
+static OOP_Object *vk_named_driver(struct TagItem *tags)
+{
+    struct Library *DOSBase;
+    char name[64], lib[80], cls[96];
+    LONG len;
+    OOP_Object *obj = NULL;
+
+    if (!(DOSBase = OpenLibrary("dos.library", 36)))
+        return NULL;
+    len = GetVar("SYS/Vulkan.default", name, sizeof(name), GVF_GLOBAL_ONLY);
+    CloseLibrary(DOSBase);
+    if (len <= 0)
+        return NULL;
+    while (len > 0 && (name[len - 1] == '\n' || name[len - 1] == ' '))
+        name[--len] = '\0';
+    if (len > 5 && strcmp(name + len - 5, ".hidd") == 0)
+        name[len -= 5] = '\0';
+    if (len == 0 || strcmp(name, "lavapipe") == 0)
+        return NULL;
+
+    strcpy(lib, name);
+    strcat(lib, ".hidd");
+    strcpy(cls, "hidd.vulkan.");
+    strcat(cls, name);
+    if (!vk_namedbase && !(vk_namedbase = OpenLibrary(lib, 0)))
+        return NULL;
+    obj = OOP_NewObject(NULL, cls, tags);
+    if (!obj)
+    {
+        CloseLibrary(vk_namedbase);
+        vk_namedbase = NULL;
+    }
+    return obj;
+}
+
 static void vk_loader_init(void)
 {
     struct Library *IntuitionBase;
@@ -234,7 +277,11 @@ static void vk_loader_init(void)
     IntuitionBase = OpenLibrary("intuition.library", 0);
     tags[0].ti_Tag = attrBase + aoHidd_Vulkan_InterfaceVersion;
 
-    if (vkclass && attrBase && bmAttrBase && IntuitionBase &&
+    /* a driver chosen by name comes first, as with SYS/Gallium.default */
+    if (vkclass && attrBase)
+        vk_obj = vk_named_driver(tags);
+
+    if (!vk_obj && vkclass && attrBase && bmAttrBase && IntuitionBase &&
         (scr = LockPubScreen(NULL)))
     {
         struct BitMap *bm = scr->RastPort.BitMap;
