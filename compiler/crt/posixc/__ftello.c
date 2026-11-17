@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER
 */
 
 #include <errno.h>
@@ -17,7 +18,6 @@
 off64_t __ftello64(FILE *stream)
 {
     QUAD cnt;
-    BPTR fh;
     fdesc *fdesc = __getfdesc(stream->fd);
 
     if (!fdesc)
@@ -32,9 +32,8 @@ off64_t __ftello64(FILE *stream)
         return -1;
     }
 
-    fh = fdesc->fcb->handle;
-
-    Flush (fh);
+    /* GetFilePosition64 includes buffered bytes without flushing or changing
+       the stream. Flush would use a 32-bit seek for unread input. */
     cnt = __dos64_getpos (fdesc->fcb);
 
     if (cnt == -1)

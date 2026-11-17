@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER
 
     Change the position in a stream.
 */
@@ -51,13 +52,14 @@ int __fseeko64 (
             return -1;
     }
 
-    /* Flush and seek share the handle with descriptor I/O. The filesystem
+    /* The buffered seek shares the handle with descriptor I/O. The filesystem
        owns logical positions and zero-filling on writes; seeking itself
        must never change file contents or size. Pass relative offsets to
        the handler rather than adding signed positions in the CRT. */
     __fcb_lock(fdesc->fcb);
-    if (!Flush(fdesc->fcb->handle) ||
-        __dos64_seek(fdesc->fcb, offset, mode) == -1)
+    /* Seek64 accounts for unread bytes itself. A preliminary DOS Flush
+       would rewind that buffer through the legacy 32-bit seek packet. */
+    if (__dos64_seek(fdesc->fcb, offset, mode) == -1)
     {
         LONG ioerr = IoErr();
         __fcb_unlock(fdesc->fcb);

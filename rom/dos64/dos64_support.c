@@ -1,5 +1,6 @@
 /*
     Copyright (C) 2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER
 
     Desc: dos64.library internal support - 64-bit operations with
           32-bit delegation when the filesystem lacks 64-bit support.
@@ -93,7 +94,8 @@ QUAD dos64_SeekBuffered(struct Dos64Base *DOS64Base, BPTR file,
     if (fh->fh_Flags & FHF_WRITE)
     {
         /* Write mode: flush pending buffered data first. */
-        Flush(file);
+        if (!Flush(file))
+            return -1;
     }
     else
     {

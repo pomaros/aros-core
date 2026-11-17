@@ -1,5 +1,6 @@
 /*
     Copyright (C) 2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER
 
     Internal 64-bit file access helpers for posixc.library: use
     dos64.library when available, otherwise delegate to the 32-bit
@@ -90,6 +91,10 @@ static QUAD __dos64_rawseek(struct Library *DOS64Base, BPTR fh, QUAD position, L
         SetIoErr(ERROR_OBJECT_TOO_LARGE);
         return -1;
     }
+    /* Legacy Seek ignores output-flush failure. Preserve the CRT error
+       contract here; the wide buffered path handles its own flushing. */
+    if (!Flush(fh))
+        return -1;
     return Seek(fh, (LONG)position, mode);
 }
 
@@ -97,6 +102,8 @@ static QUAD __dos64_rawgetpos(struct Library *DOS64Base, BPTR fh)
 {
     if (DOS64Base != NULL)
         return GetFilePosition64(fh);
+    if (!Flush(fh))
+        return -1;
     return Seek(fh, 0, OFFSET_CURRENT);
 }
 
