@@ -1,5 +1,6 @@
 /*
     Copyright (C) 1995-2026, The AROS Development Team. All rights reserved.
+    Copyright (C) 2026 John KNIPPER.
 */
 
 /* TODO:
@@ -506,6 +507,10 @@ static LONG executeLine(ShellState *ss, STRPTR commandArgs)
     ULONG cmdSize = (commandArgs ? strlen(commandArgs) : 0)
         + FILE_MAX + 4;
 
+    /* Loading or preparing a command may fail before RunCommand sets RC.
+     * Never leave the previous command's success in that case. */
+    cli->cli_ReturnCode = RETURN_FAIL;
+
     D(bug("[Shell] executeLine: %s %s\n", command, commandArgs));
 
     /* Reserve only what can be written below: an optional quoted path
@@ -639,6 +644,7 @@ static LONG executeLine(ShellState *ss, STRPTR commandArgs)
                         {
                             setPath(ss, lock);
                             lock = CurrentDir(lock);
+                            cli->cli_ReturnCode = RETURN_OK;
                         }
                         else
                             SetIoErr(ERROR_OBJECT_WRONG_TYPE);
