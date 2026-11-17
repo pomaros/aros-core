@@ -3575,3 +3575,26 @@ AROS_LH3(int, BWFMScanIE,
 
     AROS_LIBFUNC_EXIT
 }
+
+/* This resource's legacy join does not yet prove completion of the firmware
+ * key exchange. Keep host authentication selected, even on firmware that
+ * accepts sup_wpa. Capability is a complete contract, not an iovar guess. */
+AROS_LH0(uint32_t, BWFMGetCapabilities,
+    struct BWFMBase *, BWFMBase, 22, Bwfm)
+{
+    AROS_LIBFUNC_INIT
+    return 0;
+    AROS_LIBFUNC_EXIT
+}
+
+AROS_LH6(int, BWFMJoinPSK,
+    AROS_LHA(uint8_t *, ssid, A0), AROS_LHA(uint32_t, ssidlen, D0),
+    AROS_LHA(uint8_t *, psk, A1), AROS_LHA(uint8_t *, ie, A2),
+    AROS_LHA(uint32_t, ielen, D1), AROS_LHA(uint8_t *, bssid, A3),
+    struct BWFMBase *, BWFMBase, 23, Bwfm)
+{
+    AROS_LIBFUNC_INIT
+    (void)ssid; (void)ssidlen; (void)psk; (void)ie; (void)ielen; (void)bssid;
+    return -1;
+    AROS_LIBFUNC_EXIT
+}

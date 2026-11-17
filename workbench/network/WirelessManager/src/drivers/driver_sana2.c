@@ -402,8 +402,14 @@ static int wpa_driver_sana2_associate(
 		 * run the handshake ourselves wpa_supplicant leaves these NULL. */
 		{(params->passphrase != NULL) ? S2INFO_Passphrase : TAG_IGNORE,
 			(UPINT)params->passphrase},
+		{(params->psk != NULL) ? S2INFO_PSK : TAG_IGNORE,
+			(UPINT)params->psk},
 		{TAG_END, 0}};
 
+	if (params->ssid_len > MAX_SSID_LEN) {
+		os_free(ssid);
+		return -1;
+	}
 	if (ssid == NULL) {
 		err = 1;
 	}
@@ -442,7 +448,8 @@ static int wpa_driver_sana2_associate(
 		strcpy(drv->ssid, ssid);
 	}
 
-	return 0;
+	os_free(ssid);
+	return err ? -1 : 0;
 }
 
 
@@ -495,10 +502,18 @@ static int wpa_driver_sana2_get_capa(void *priv, struct wpa_driver_capa *capa)
 	if (!drv->hard_mac)
 		capa->flags = WPA_DRIVER_FLAGS_USER_SPACE_MLME;
 
-	/* No 4-way offload: the newer FullMAC firmware (CYW43456) has no
-	 * internal supplicant - sup_wpa comes back BCME_UNSUPPORTED - so we run
-	 * the handshake here and hand the driver the keys with S2_SETKEY, the
-	 * way brcmfmac and OpenBSD's bwfm do it. */
+	/* Unsupported queries leave the software handshake selected. Capability
+	 * belongs to the opened device, not to the SANA-II backend as a whole. */
+	if (drv->hard_mac) {
+		struct Sana2WirelessCaps wireless = { sizeof(wireless), 0, 0 };
+		request->ios2_Req.io_Command = S2_GETWIRELESSCAPS;
+		request->ios2_StatData = &wireless;
+		if (DoIO((APTR)request) == 0 &&
+		    wireless.SizeSupplied >= sizeof(wireless) &&
+		    (wireless.Flags & S2WCAP_4WAY_PSK))
+			capa->flags |= WPA_DRIVER_FLAGS_4WAY_HANDSHAKE;
+		request->ios2_StatData = NULL;
+	}
 
 	return 0;
 }

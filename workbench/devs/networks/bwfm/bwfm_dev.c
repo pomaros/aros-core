@@ -30,6 +30,7 @@
 #include <devices/sana2wireless.h>
 #include <devices/newstyle.h>
 #include <devices/timer.h>
+#include <resources/bwfm.h>
 #include <utility/hooks.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
@@ -104,7 +105,7 @@ static const UWORD supported_commands[] =
      * Listing S2_GETNETWORKS makes wpa_supplicant treat us as a hard-MAC
      * (FullMAC) device, which matches the chip. */
     S2_GETNETWORKS, S2_GETCRYPTTYPES, S2_ONEVENT, S2_SETOPTIONS, S2_SETKEY,
-    S2_GETNETWORKINFO, S2_GETSIGNALQUALITY,
+    S2_GETNETWORKINFO, S2_GETSIGNALQUALITY, S2_GETWIRELESSCAPS,
     NSCMD_DEVICEQUERY,
     0
 };
@@ -1034,6 +1035,8 @@ static int load_firmware(LIBBASETYPEPTR LIBBASE)
             D(bug("[bwfm.device] BWFM_C_UP failed\n"));
 
         /* Start the async RX pump now that the chip can deliver frames. */
+        LIBBASE->unit[0].wireless_caps =
+            (BWFMGetCapabilities() & BWFM_CAP_4WAY_PSK) ? S2WCAP_4WAY_PSK : 0;
         start_pump(LIBBASE);
     }
 
@@ -1702,7 +1705,7 @@ static void report_events_to(struct bwfm_unit *unit, ULONG events,
 static void queue_associate(struct bwfm_unit *unit, struct IOSana2Req *req)
 {
     struct TagItem *tags = (struct TagItem *)req->ios2_Data;
-    UBYTE *ssid, *pass, *ie, *bssid;
+    UBYTE *ssid, *pass, *ie, *bssid, *psk;
     ULONG ssidlen = 0, passlen = 0, ielen = 0;
 
     if (tags == NULL)
@@ -1719,6 +1722,10 @@ static void queue_associate(struct bwfm_unit *unit, struct IOSana2Req *req)
         unit->assoc_ssidlen = 0;
         unit->assoc_ssid[0] = '\0';
         unit->assoc_pending = FALSE;
+        wifi_secret_wipe(unit->assoc_pass, sizeof(unit->assoc_pass));
+        wifi_secret_wipe(unit->assoc_psk, sizeof(unit->assoc_psk));
+        unit->assoc_passlen = 0;
+        unit->assoc_haspsk = 0;
         ReleaseSemaphore(&unit->lock);
 
         link_down(unit);
@@ -1729,12 +1736,19 @@ static void queue_associate(struct bwfm_unit *unit, struct IOSana2Req *req)
     if (ssid == NULL || ssid[0] == '\0')
         return;                         /* not an associate request - just ack */
 
-    while (ssid[ssidlen] && ssidlen < sizeof(unit->assoc_ssid) - 1)
+    while (ssidlen < sizeof(unit->assoc_ssid) && ssid[ssidlen])
         ssidlen++;
+    if (ssidlen >= sizeof(unit->assoc_ssid)) goto bad_options;
     pass = (UBYTE *)GetTagData(S2INFO_Passphrase, (IPTR)NULL, tags);
+    psk = (UBYTE *)GetTagData(S2INFO_PSK, (IPTR)NULL, tags);
     if (pass)
-        while (pass[passlen] && passlen < sizeof(unit->assoc_pass) - 1)
+    {
+        while (passlen < sizeof(unit->assoc_pass) && pass[passlen])
             passlen++;
+        if (passlen < 8 || passlen >= sizeof(unit->assoc_pass)) goto bad_options;
+    }
+    if ((pass || psk) && !(unit->wireless_caps & S2WCAP_4WAY_PSK))
+        goto bad_options;
     /* The WPA/RSN IE the caller wants in the assoc request. It is self
      * describing (id, length, body), which is also how we know its size. */
     bssid = (UBYTE *)GetTagData(S2INFO_BSSID, (IPTR)NULL, tags);
@@ -1744,9 +1758,7 @@ static void queue_associate(struct bwfm_unit *unit, struct IOSana2Req *req)
         ielen = (ULONG)ie[1] + 2;
         if (ielen > sizeof(unit->assoc_ie))
         {
-            D(bug("[bwfm.device] WPA IE too long (%u) - ignored\n",
-                  (unsigned)ielen));
-            ielen = 0;
+            goto bad_options;
         }
     }
 
@@ -1760,6 +1772,9 @@ static void queue_associate(struct bwfm_unit *unit, struct IOSana2Req *req)
         CopyMem(pass, unit->assoc_pass, passlen);
     unit->assoc_pass[passlen] = '\0';
     unit->assoc_passlen = passlen;
+    unit->assoc_haspsk = (psk != NULL);
+    if (psk) CopyMem(psk, unit->assoc_psk, BWFM_PSK_BYTES);
+    else wifi_secret_wipe(unit->assoc_psk, sizeof(unit->assoc_psk));
     if (ielen)
         CopyMem(ie, unit->assoc_ie, ielen);
     unit->assoc_ielen = ielen;
@@ -1768,14 +1783,21 @@ static void queue_associate(struct bwfm_unit *unit, struct IOSana2Req *req)
         CopyMem(bssid, unit->assoc_bssid, ETH_ALEN);
     unit->assoc_opener = (struct bwfm_opener *)req->ios2_BufferManagement;
     unit->assoc_pending = TRUE;
+    unit->joined = 0;
+    unit->keys_pending = 0;
     ReleaseSemaphore(&unit->lock);
 
     D(bug("[bwfm.device] queued associate \"%s\" (%s) for ctrl worker\n",
-          unit->assoc_ssid, ielen ? "host handshake"
-                                  : (passlen ? "firmware supplicant" : "open")));
+          unit->assoc_ssid, (passlen || psk) ? "firmware supplicant"
+                                  : (ielen ? "host handshake" : "open")));
 
     if (PumpBase != NULL && PumpBase->ctrl_task != NULL)
         Signal(PumpBase->ctrl_task, PumpBase->ctrl_sig);
+    return;
+
+bad_options:
+    req->ios2_Req.io_Error = S2ERR_BAD_ARGUMENT;
+    req->ios2_WireError = S2WERR_GENERIC_ERROR;
 }
 
 /*
@@ -1787,9 +1809,9 @@ static void queue_associate(struct bwfm_unit *unit, struct IOSana2Req *req)
  */
 static void do_associate(struct bwfm_unit *unit)
 {
-    UBYTE ssid[33], pass[64], ie[64], bssid[ETH_ALEN];
+    UBYTE ssid[33], pass[64], psk[BWFM_PSK_BYTES], ie[64], bssid[ETH_ALEN];
     ULONG ssidlen, passlen, ielen;
-    int hasbssid;
+    int hasbssid, haspsk, result;
 
     ObtainSemaphore(&unit->lock);
     if (!unit->assoc_pending)
@@ -1804,22 +1826,35 @@ static void do_associate(struct bwfm_unit *unit)
     unit->held_eapol_len = 0;
     ssidlen = unit->assoc_ssidlen;
     passlen = unit->assoc_passlen;
+    haspsk = unit->assoc_haspsk;
     ielen = unit->assoc_ielen;
     hasbssid = unit->assoc_hasbssid;
     CopyMem(unit->assoc_bssid, bssid, ETH_ALEN);
     CopyMem(unit->assoc_ssid, ssid, ssidlen + 1);
     CopyMem(unit->assoc_pass, pass, passlen + 1);
+    CopyMem(unit->assoc_psk, psk, sizeof(psk));
+    wifi_secret_wipe(unit->assoc_pass, sizeof(unit->assoc_pass));
+    wifi_secret_wipe(unit->assoc_psk, sizeof(unit->assoc_psk));
+    unit->assoc_passlen = 0;
+    unit->assoc_haspsk = 0;
     if (ielen)
         CopyMem(unit->assoc_ie, ie, ielen);
     ReleaseSemaphore(&unit->lock);
 
     D(bug("[bwfm.device] ctrl worker: associate \"%s\" (%s)\n",
-          ssid, ielen ? "host handshake" : (passlen ? "WPA2-PSK" : "open")));
+          ssid, (haspsk || passlen) ? "firmware supplicant" : (ielen ? "host handshake" : "open")));
 
-    if (BWFMJoin(ssid, ssidlen, passlen ? pass : NULL, passlen,
-                 ielen ? ie : NULL, ielen, hasbssid ? bssid : NULL) == 0)
+    if (haspsk)
+        result = BWFMJoinPSK(ssid, ssidlen, psk, ielen ? ie : NULL, ielen,
+                             hasbssid ? bssid : NULL);
+    else
+        result = BWFMJoin(ssid, ssidlen, passlen ? pass : NULL, passlen,
+                          ielen ? ie : NULL, ielen, hasbssid ? bssid : NULL);
+    wifi_secret_wipe(pass, sizeof(pass));
+    wifi_secret_wipe(psk, sizeof(psk));
+    if (result == 0)
     {
-        link_up(unit, ielen != 0);
+        link_up(unit, ielen != 0 && !haspsk && !passlen);
     }
     else
         D(bug("[bwfm.device] ctrl worker: associate failed\n"));
@@ -2080,6 +2115,19 @@ static void handle_request(struct IOSana2Req *req)
     case S2_GETCRYPTTYPES:
         get_crypttypes(req);
         break;
+
+    case S2_GETWIRELESSCAPS:
+    {
+        struct Sana2WirelessCaps *caps = req->ios2_StatData;
+        if (!caps || caps->SizeAvailable < sizeof(*caps))
+            req->ios2_Req.io_Error = S2ERR_BAD_ARGUMENT;
+        else
+        {
+            caps->Flags = unit->wireless_caps;
+            caps->SizeSupplied = sizeof(*caps);
+        }
+        break;
+    }
 
     case S2_SETOPTIONS:
         queue_associate(unit, req);     /* hands the join to bwfm.ctrl; the

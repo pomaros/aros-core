@@ -35,6 +35,7 @@
 #define S2INFO_DefaultKeyNo   (TAG_USER + 14)
 #define S2INFO_Passphrase     (TAG_USER + 15)  /* PSK passphrase (driver-side 4-way) */
 #define S2INFO_Disassociate   (TAG_USER + 16)  /* S2_SETOPTIONS: leave the network */
+#define S2INFO_PSK            (TAG_USER + 17)  /* pointer to 32-byte binary PSK */
 
 /* Wireless Commands */
 
@@ -50,6 +51,11 @@
 #define S2_WRITEMGMT        0xc016
 #define S2_GETRADIOBANDS    0xc017
 #define S2_GETCRYPTTYPES    0xc018
+#define S2_GETWIRELESSCAPS  0xc019 /* ios2_StatData = Sana2WirelessCaps */
+
+/* Both passphrases and binary PSKs are accepted. CONNECT means that key
+ * negotiation completed, not merely that association succeeded. */
+#define S2WCAP_4WAY_PSK 1u
 
 /* Encryption types */
 
@@ -75,6 +81,13 @@
 /* ========== */
 
 /* Structure for returning signal quality */
+
+struct Sana2WirelessCaps
+{
+   ULONG SizeAvailable;
+   ULONG SizeSupplied;
+   ULONG Flags;
+};
 
 struct Sana2SignalQuality
 {

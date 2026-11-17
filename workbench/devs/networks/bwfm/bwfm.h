@@ -89,6 +89,7 @@ struct bwfm_unit
     ULONG               state;              /* SANA2 unit flags (online etc.) */
     int                 online;             /* S2_ONLINE: deliver received frames */
     int                 joined;             /* associated to the configured AP */
+    ULONG               wireless_caps;
     int                 autojoin_retry;     /* the boot-time auto-join failed: retry it */
     int                 autojoin_active;    /* the session in force is the auto-join's */
     UBYTE               hwaddr[ETHER_ADDR_LEN];
@@ -112,6 +113,8 @@ struct bwfm_unit
     ULONG               assoc_ielen;
     UBYTE               assoc_ssid[33];
     UBYTE               assoc_pass[64];
+    UBYTE               assoc_psk[32];
+    int                 assoc_haspsk;
     UBYTE               assoc_ie[64];       /* WPA/RSN IE for the assoc request */
     UBYTE               assoc_bssid[ETHER_ADDR_LEN];
     int                 assoc_hasbssid;     /* the supplicant named the node */
