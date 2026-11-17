@@ -90,3 +90,13 @@ keeps the virtual reservation, and renews only pending write-fault tickets that
 match the replaced identity. Shared peers retain the original object. The
 space/channel and context-restore HOST diagnostics cover the backing transaction
 and ticket selection; Native execution has a separate acceptance scope.
+
+## Boot probe page accounting
+
+The AArch64 boot observer records allocator usage around loading and unloading
+each ABI, TLS and small-code-model probe. Execution can open libraries that
+remain resident, so its allocations do not participate in the release balance.
+Both the observer and stage-two validator use the same overflow-safe predicate
+from `page_release_proof.h`; the diagnostic records the pre-unload count.
+This is aggregate accounting, not per-allocation leak tracing: concurrent frees
+can increase the observed release.

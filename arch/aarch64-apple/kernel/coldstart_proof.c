@@ -41,6 +41,7 @@
 #include <aros/apple/platformtimer.h>
 #include "cpu_monitor.h"
 #include "guard_proof.h"
+#include "page_release_proof.h"
 #include <aros/apple/crashlog.h>
 #include <proto/kernel.h>
 #include <aros/kernel.h>
@@ -2100,9 +2101,11 @@ AROS_UFH3S(APTR, dos_takeover_observer,
     struct AROSApplePageAllocatorStats abi_before = {0};
     struct AROSApplePageAllocatorStats abi_loaded = {0};
     struct AROSApplePageAllocatorStats abi_unloaded = {0};
+    struct AROSApplePageAllocatorStats abi_before_unload = {0};
     struct AROSApplePageAllocatorStats tls_before = {0};
     struct AROSApplePageAllocatorStats tls_loaded = {0};
     struct AROSApplePageAllocatorStats tls_unloaded = {0};
+    struct AROSApplePageAllocatorStats tls_before_unload = {0};
     LONG tls_probe_return = -1;
     BPTR tls_probe = BNULL;
     BPTR tls_output = BNULL;
@@ -2123,6 +2126,7 @@ AROS_UFH3S(APTR, dos_takeover_observer,
     struct AROSApplePageAllocatorStats small_before = {0};
     struct AROSApplePageAllocatorStats small_loaded = {0};
     struct AROSApplePageAllocatorStats small_unloaded = {0};
+    struct AROSApplePageAllocatorStats small_before_unload = {0};
     int settings_required = 0;
     int settings_valid = 1;
     LONG settings_probe_return = -1;
@@ -2352,6 +2356,7 @@ AROS_UFH3S(APTR, dos_takeover_observer,
             SelectOutput(previous_output);
             Close(abi_output);
         }
+        AROSAppleCodeMemoryGetStats(&abi_before_unload);
         UnLoadSeg(abi_probe);
         AROSAppleCodeMemoryGetStats(&abi_unloaded);
         proof->abi_probe_argument_size = (uint64_t)abi_arguments_size;
@@ -2361,14 +2366,15 @@ AROS_UFH3S(APTR, dos_takeover_observer,
     proof->abi_pages_before = abi_before.pages_in_use;
     proof->abi_pages_loaded = abi_loaded.pages_in_use;
     proof->abi_pages_unloaded = abi_unloaded.pages_in_use;
+    proof->abi_pages_before_unload = abi_before_unload.pages_in_use;
     proof->abi_load_allocations =
         abi_loaded.allocation_count - abi_before.allocation_count;
     proof->abi_unload_frees =
-        abi_unloaded.free_count - abi_loaded.free_count;
+        abi_unloaded.free_count - abi_before_unload.free_count;
     proof->abi_load_rx_protections =
         abi_loaded.rx_protection_count - abi_before.rx_protection_count;
     proof->abi_unload_rw_protections =
-        abi_unloaded.rw_protection_count - abi_loaded.rw_protection_count;
+        abi_unloaded.rw_protection_count - abi_before_unload.rw_protection_count;
     proof->detail = UINT32_C(0x506);
 #if defined(AROS_VM_GUEST) && AROS_VM_GUEST
     /* Optional driver qualification runs outside the transient ABI arena
@@ -2423,6 +2429,7 @@ AROS_UFH3S(APTR, dos_takeover_observer,
                 SelectOutput(previous_output);
                 Close(tls_output);
             }
+            AROSAppleCodeMemoryGetStats(&tls_before_unload);
             UnLoadSeg(tls_probe);
         }
         AROSAppleCodeMemoryGetStats(&tls_unloaded);
@@ -2431,18 +2438,20 @@ AROS_UFH3S(APTR, dos_takeover_observer,
         proof->tls_pages_before = tls_before.pages_in_use;
         proof->tls_pages_loaded = tls_loaded.pages_in_use;
         proof->tls_pages_unloaded = tls_unloaded.pages_in_use;
+        proof->tls_pages_before_unload = tls_before_unload.pages_in_use;
         proof->tls_load_allocations =
             tls_loaded.allocation_count - tls_before.allocation_count;
         proof->tls_unload_frees =
-            tls_unloaded.free_count - tls_loaded.free_count;
+            tls_unloaded.free_count - tls_before_unload.free_count;
         proof->tls_load_rx_protections =
             tls_loaded.rx_protection_count - tls_before.rx_protection_count;
         proof->tls_unload_rw_protections =
-            tls_unloaded.rw_protection_count - tls_loaded.rw_protection_count;
+            tls_unloaded.rw_protection_count - tls_before_unload.rw_protection_count;
         tls_valid = tls_required == 1 && tls_probe != BNULL &&
             tls_output != BNULL && tls_probe_return == 74 &&
-            tls_loaded.pages_in_use > tls_before.pages_in_use &&
-            tls_unloaded.pages_in_use == tls_before.pages_in_use &&
+            AROSCodePagesRecovered(tls_before.pages_in_use,
+                tls_loaded.pages_in_use, tls_before_unload.pages_in_use,
+                tls_unloaded.pages_in_use) &&
             proof->tls_load_allocations != 0 &&
             proof->tls_unload_frees != 0 &&
             proof->tls_load_rx_protections != 0 &&
@@ -2484,6 +2493,7 @@ AROS_UFH3S(APTR, dos_takeover_observer,
                 SelectOutput(previous_output);
                 Close(small_output);
             }
+            AROSAppleCodeMemoryGetStats(&small_before_unload);
             UnLoadSeg(small_probe);
         }
         AROSAppleCodeMemoryGetStats(&small_unloaded);
@@ -2493,21 +2503,23 @@ AROS_UFH3S(APTR, dos_takeover_observer,
         proof->small_pages_before = small_before.pages_in_use;
         proof->small_pages_loaded = small_loaded.pages_in_use;
         proof->small_pages_unloaded = small_unloaded.pages_in_use;
+        proof->small_pages_before_unload = small_before_unload.pages_in_use;
         proof->small_load_allocations =
             small_loaded.allocation_count - small_before.allocation_count;
         proof->small_unload_frees =
-            small_unloaded.free_count - small_loaded.free_count;
+            small_unloaded.free_count - small_before_unload.free_count;
         proof->small_load_rx_protections =
             small_loaded.rx_protection_count -
             small_before.rx_protection_count;
         proof->small_unload_rw_protections =
             small_unloaded.rw_protection_count -
-            small_loaded.rw_protection_count;
+            small_before_unload.rw_protection_count;
         small_valid = small_required == 1 && small_probe != BNULL &&
             small_output != BNULL && small_probe_bad_return == 30 &&
             small_probe_return == 73 &&
-            small_loaded.pages_in_use > small_before.pages_in_use &&
-            small_unloaded.pages_in_use == small_before.pages_in_use &&
+            AROSCodePagesRecovered(small_before.pages_in_use,
+                small_loaded.pages_in_use, small_before_unload.pages_in_use,
+                small_unloaded.pages_in_use) &&
             proof->small_load_allocations != 0 &&
             proof->small_unload_frees != 0 &&
             proof->small_load_rx_protections != 0 &&
@@ -2639,11 +2651,11 @@ AROS_UFH3S(APTR, dos_takeover_observer,
         abi_probe_bad_return != 30 || abi_probe_return != 73 ||
         proof->abi_probe_entry == 0)
         final_detail = UINT32_C(0x525);
-    /* Unloading gives back at least what loading took. Not exactly: a
-     * process that started before the probe (its CreateNewProc entry
-     * segment is a page) may end while the probe runs. */
-    else if (abi_loaded.pages_in_use <= abi_before.pages_in_use ||
-        abi_unloaded.pages_in_use > abi_before.pages_in_use ||
+    /* Libraries first opened by the command can remain resident. Only the
+     * load and unload intervals participate in this accounting. */
+    else if (!AROSCodePagesRecovered(abi_before.pages_in_use,
+        abi_loaded.pages_in_use, abi_before_unload.pages_in_use,
+        abi_unloaded.pages_in_use) ||
         proof->abi_load_allocations == 0 || proof->abi_unload_frees == 0 ||
         proof->abi_load_rx_protections == 0 ||
         proof->abi_unload_rw_protections == 0)

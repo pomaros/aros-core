@@ -8,6 +8,7 @@
 
 #include "stage2_exception.h"
 #include "../kernel/desktop_storage.h"
+#include "../kernel/page_release_proof.h"
 
 #include "stage2_loader.h"
 #include "stage2_prepare.h"
@@ -536,11 +537,10 @@ int AROSAppleStage2Main(
         (AROSAppleStage2ColdStartProof.abi_probe_argument_size != 33 &&
          AROSAppleStage2ColdStartProof.abi_probe_argument_size != 34) ||
         AROSAppleStage2ColdStartProof.abi_probe_return != 73 ||
-        AROSAppleStage2ColdStartProof.abi_pages_loaded <=
-            AROSAppleStage2ColdStartProof.abi_pages_before ||
-        /* At least what the load took comes back (coldstart_proof.c) */
-        AROSAppleStage2ColdStartProof.abi_pages_unloaded >
-            AROSAppleStage2ColdStartProof.abi_pages_before ||
+        !AROSCodePagesRecovered(AROSAppleStage2ColdStartProof.abi_pages_before,
+            AROSAppleStage2ColdStartProof.abi_pages_loaded,
+            AROSAppleStage2ColdStartProof.abi_pages_before_unload,
+            AROSAppleStage2ColdStartProof.abi_pages_unloaded) ||
         AROSAppleStage2ColdStartProof.abi_load_allocations == 0 ||
         AROSAppleStage2ColdStartProof.abi_unload_frees == 0 ||
         AROSAppleStage2ColdStartProof.abi_load_rx_protections == 0 ||
@@ -564,6 +564,7 @@ int AROSAppleStage2Main(
            AROSAppleStage2ColdStartProof.tls_pages_before == 0 &&
            AROSAppleStage2ColdStartProof.tls_pages_loaded == 0 &&
            AROSAppleStage2ColdStartProof.tls_pages_unloaded == 0 &&
+           AROSAppleStage2ColdStartProof.tls_pages_before_unload == 0 &&
            AROSAppleStage2ColdStartProof.tls_load_allocations == 0 &&
            AROSAppleStage2ColdStartProof.tls_unload_frees == 0 &&
            AROSAppleStage2ColdStartProof.tls_load_rx_protections == 0 &&
@@ -572,10 +573,10 @@ int AROSAppleStage2Main(
            AROSAppleStage2ColdStartProof.tls_probe_seglist != 0 &&
            AROSAppleStage2ColdStartProof.tls_probe_return == 74 &&
            AROSAppleStage2ColdStartProof.tls_probe_argument_size == 0 &&
-           AROSAppleStage2ColdStartProof.tls_pages_loaded >
-               AROSAppleStage2ColdStartProof.tls_pages_before &&
-           AROSAppleStage2ColdStartProof.tls_pages_unloaded ==
-               AROSAppleStage2ColdStartProof.tls_pages_before &&
+           AROSCodePagesRecovered(AROSAppleStage2ColdStartProof.tls_pages_before,
+               AROSAppleStage2ColdStartProof.tls_pages_loaded,
+               AROSAppleStage2ColdStartProof.tls_pages_before_unload,
+               AROSAppleStage2ColdStartProof.tls_pages_unloaded) &&
            AROSAppleStage2ColdStartProof.tls_load_allocations != 0 &&
            AROSAppleStage2ColdStartProof.tls_unload_frees != 0 &&
            AROSAppleStage2ColdStartProof.tls_load_rx_protections != 0 &&
@@ -587,6 +588,7 @@ int AROSAppleStage2Main(
            AROSAppleStage2ColdStartProof.small_pages_before == 0 &&
            AROSAppleStage2ColdStartProof.small_pages_loaded == 0 &&
            AROSAppleStage2ColdStartProof.small_pages_unloaded == 0 &&
+           AROSAppleStage2ColdStartProof.small_pages_before_unload == 0 &&
            AROSAppleStage2ColdStartProof.small_load_allocations == 0 &&
            AROSAppleStage2ColdStartProof.small_unload_frees == 0 &&
            AROSAppleStage2ColdStartProof.small_load_rx_protections == 0 &&
@@ -595,10 +597,10 @@ int AROSAppleStage2Main(
            AROSAppleStage2ColdStartProof.small_probe_seglist != 0 &&
            AROSAppleStage2ColdStartProof.small_probe_return == 73 &&
            AROSAppleStage2ColdStartProof.small_probe_bad_return == 30 &&
-           AROSAppleStage2ColdStartProof.small_pages_loaded >
-               AROSAppleStage2ColdStartProof.small_pages_before &&
-           AROSAppleStage2ColdStartProof.small_pages_unloaded ==
-               AROSAppleStage2ColdStartProof.small_pages_before &&
+           AROSCodePagesRecovered(AROSAppleStage2ColdStartProof.small_pages_before,
+               AROSAppleStage2ColdStartProof.small_pages_loaded,
+               AROSAppleStage2ColdStartProof.small_pages_before_unload,
+               AROSAppleStage2ColdStartProof.small_pages_unloaded) &&
            AROSAppleStage2ColdStartProof.small_load_allocations != 0 &&
            AROSAppleStage2ColdStartProof.small_unload_frees != 0 &&
            AROSAppleStage2ColdStartProof.small_load_rx_protections != 0 &&

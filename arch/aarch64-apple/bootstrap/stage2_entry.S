@@ -433,6 +433,11 @@ AROSAppleStage2Entry:
     adr     x8, AROSAppleStage2ColdStartProof
     ldr     x0, [x8, #STAGE2_COLDSTART_ABI_PAGES_LOADED]
     bl      .Lstage2_write_hex
+    adr     x1, .Lstage2_coldstart_abi_pages_before_unload_label
+    bl      .Lstage2_write0
+    adr     x8, AROSAppleStage2ColdStartProof
+    ldr     x0, [x8, #STAGE2_COLDSTART_ABI_PAGES_BEFORE_UNLOAD]
+    bl      .Lstage2_write_hex
     adr     x1, .Lstage2_coldstart_abi_pages_unloaded_label
     bl      .Lstage2_write0
     adr     x8, AROSAppleStage2ColdStartProof
@@ -840,6 +845,8 @@ AROSAppleStage2Entry:
     .asciz  "C_ABI_PAGES_BEFORE="
 .Lstage2_coldstart_abi_pages_loaded_label:
     .asciz  "C_ABI_PAGES_LOADED="
+.Lstage2_coldstart_abi_pages_before_unload_label:
+    .asciz  "C_ABI_PAGES_BEFORE_UNLOAD="
 .Lstage2_coldstart_abi_pages_unloaded_label:
     .asciz  "C_ABI_PAGES_UNLOADED="
 .Lstage2_coldstart_abi_load_allocations_label:

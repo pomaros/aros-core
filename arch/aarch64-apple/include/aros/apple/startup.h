@@ -116,7 +116,7 @@ struct AROSAppleSystemTimeInfo {
 #define AROS_APPLE_MEMORY_PLAN_VERSION UINT32_C(1)
 #define AROS_APPLE_MEMORY_PLAN_MAX_RANGES UINT32_C(2592)
 #define AROS_APPLE_MEMORY_PLAN_PAGE_SIZE UINT64_C(4096)
-#define AROS_APPLE_COLDSTART_PROOF_VERSION UINT32_C(17)
+#define AROS_APPLE_COLDSTART_PROOF_VERSION UINT32_C(18)
 #define AROS_APPLE_COLDSTART_STATUS_PASS UINT64_C(0xc01d57a27c01d57a)
 
 #define AROS_APPLE_MEMORY_RANGE_CONVENTIONAL UINT32_C(1)
@@ -424,9 +424,13 @@ struct __attribute__((aligned(16))) AROSAppleColdStartProof {
     uint64_t settings_unload_frees;
     uint64_t settings_load_rx_protections;
     uint64_t settings_unload_rw_protections;
+    /* Separate command execution from the segment-release measurement. */
+    uint64_t abi_pages_before_unload;
+    uint64_t tls_pages_before_unload;
+    uint64_t small_pages_before_unload;
 };
 
-_Static_assert(sizeof(struct AROSAppleColdStartProof) == 1088,
+_Static_assert(sizeof(struct AROSAppleColdStartProof) == 1112,
     "Apple cold-start proof size");
 
 struct AROSAppleRuntimeFrame;
