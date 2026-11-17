@@ -27,6 +27,7 @@
 #include "cpu_monitor.h"
 #endif
 #include "../../aarch64-all/kernel/mapping.h"
+#include "../../aarch64-all/kernel/release_store.h"
 
 #define R_PAGE 4096U
 #define R_PREPARE 0xa531
@@ -863,7 +864,7 @@ static int r_jit_page(const struct Restricted *r,uint64_t address)
  * Windows translators never toggle, so the switch follows the faulting
  * access: a write to a JIT page switches the thread to writing, a fetch
  * from one switches it back. An instruction in a JIT page that writes a JIT
- * page cannot be satisfied either way; it is delivered as a fault. */
+ * page cannot be satisfied by switching; the store path below handles it. */
 static int r_jit_switch(struct Restricted *r,struct Task *task,
     struct ExceptionContext *context,struct AROSAppleRuntimeFrame *frame,
     unsigned ec,unsigned fault)
@@ -877,6 +878,41 @@ static int r_jit_switch(struct Restricted *r,struct Task *task,
     if (ec==0x20 && writing && r_jit_page(r,frame->elr))
         return AROSAppleJitSetWritable(task,0)!=UINT64_MAX;
     return 0;
+}
+/* Both pages already have logical write/execute permission. A pager cannot
+ * repair this access by recommitting them: changing the per-task JIT class
+ * would make the instruction itself non-executable. Unsupported stores must
+ * therefore reach the exception handler, never the lazy repair handler. */
+static int r_jit_store_fault(const struct Restricted *r,
+    const struct ExceptionContext *context,const struct AROSAppleRuntimeFrame *frame,
+    unsigned ec,unsigned fault)
+{
+    return AROSAppleJitMode()==AROS_APPLE_JIT_SPRR && !(context->Flags&ECF_JITWRITE) &&
+        ec==0x24 && (fault&0x3c)==0x0c && (frame->esr&(UINT64_C(1)<<6)) &&
+        !(frame->esr&(UINT64_C(0xf)<<7)) &&
+        r_jit_page(r,frame->elr) && r_jit_page(r,frame->far);
+}
+/* Coordinator held; called only for r_jit_store_fault. Read the instruction
+ * and write its operand through owned current normal-RAM aliases. EL0 never
+ * receives simultaneous write/execute permission. No page-table or task-mode
+ * change is needed, and a refusal leaves memory and the saved frame intact. */
+static int r_emulate_jit_store(struct Restricted *r,struct AROSAppleRuntimeFrame *frame)
+{
+    uintptr_t code,physical;uint64_t generation,reservation;
+    struct AArch64ReleaseStore store;
+    if ((frame->elr&3) || frame->elr>UINT64_MAX-4 ||
+        !AROSRestrictedSpacePageIdentity(&r->domain->space,frame->elr,KMAP_EXEC,
+            &code,&generation,&reservation)) return 0;
+    uint32_t instruction;
+    memcpy(&instruction,(const void *)(code+(frame->elr&(R_PAGE-1))),sizeof(instruction));
+    if (!AArch64DecodeReleaseStore(instruction,frame->x,frame->sp,&store) ||
+        store.address!=frame->far ||
+        (store.address&(R_PAGE-1))>R_PAGE-store.bytes ||
+        !AROSRestrictedSpacePageIdentity(&r->domain->space,store.address,KMAP_WRITE,
+            &physical,&generation,&reservation)) return 0;
+    AArch64PerformReleaseStore(&store,(void *)(physical+(store.address&(R_PAGE-1))));
+    frame->elr+=4;
+    return 1;
 }
 /* A translation or permission fault the page tables no longer explain: the
  * leaf grants the access by the time the fault is examined. Another CPU has
@@ -1609,6 +1645,8 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
             uintptr_t physical;uint64_t generation,reservation;
             unsigned fault=(unsigned)frame->esr&63;
             if (r_jit_switch(r,task,context,frame,ec,fault)) return 1;
+            int jit_store=r_jit_store_fault(r,context,frame,ec,fault);
+            if (jit_store && r_emulate_jit_store(r,frame)) return 1;
             if (r_spurious_fault(r,frame,ec,fault)) return 1;
             if (ec==0x18 && r_emulate_id_read(frame)) return 1;
             /* Owned resident or reserved data pages can enter a repair handler.
@@ -1619,7 +1657,7 @@ static int r_trap_locked(struct AROSAppleRuntimeFrame *frame)
              * commitment, real alignment faults still reach the exception
              * handler. No external or unowned-address abort is repairable.
              * Bind the continuation to the retained page generation. */
-            if (ec==0x24 && ((fault>=4 && fault<=7) || (fault>=12 && fault<=15) || fault==0x21) && !(frame->esr&(UINT64_C(1)<<10)) &&
+            if (!jit_store && ec==0x24 && ((fault>=4 && fault<=7) || (fault>=12 && fault<=15) || fault==0x21) && !(frame->esr&(UINT64_C(1)<<10)) &&
                 r_capture_code(r,frame->elr,&r->fault_code) && r_stack_sp(r,frame->sp) &&
                 r->fault_handler && r_match_code(r,&r->handler_code) &&
                 !r->fault_active && !r->exception_active && r->fault_generation!=UINT64_MAX &&

@@ -60,6 +60,7 @@ wrapping or reusing identifiers; callers use the API from task context.
 - [Restricted space/channel ownership](developer/debug/test/kernel/restricted_space_host/README.md): actual adapter with synthetic PTE memory and semantic close/generation controls.
 
 - [Synchronous exception delivery](developer/debug/test/kernel/restricted_exception_host/README.md): actual record writer, handler registration and continuation admission with a modeled fault stack; the restricted VM workload takes a real data abort and BRK through the handler on QEMU.
+- [Restricted JIT release stores](developer/debug/test/kernel/restricted_jit_store/README.md): differential AArch64 instructions on HOST/QEMU, release ordering, owned-alias admission and refusal without lazy-repair loops.
 
 - [Native metadata allocation](developer/debug/test/kernel/restricted_allocation_host/README.md): extracted allocation wrappers with injected failures and ownership rollback.
 
