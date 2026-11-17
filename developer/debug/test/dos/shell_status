@@ -1,0 +1,26 @@
+; Copyright (C) 2026 John KNIPPER.
+; AROS Public License 1.1
+; Execute this script, then Type RAM:ShellStatus.log from the test controller.
+; Require all three PASS lines, DONE, rc 0 and no BAD line.
+FailAt 21
+Echo >RAM:ShellStatus.log "[shell-check] successful command"
+If WARN
+    Echo >>RAM:ShellStatus.log "[shell-check] BAD success became warning"
+    Quit 20
+EndIf
+Echo >>RAM:ShellStatus.log "[shell-check] PASS success condition"
+C:ShellStatusMissingCommand
+If FAIL
+    Echo >>RAM:ShellStatus.log "[shell-check] PASS missing command condition"
+Else
+    Echo >>RAM:ShellStatus.log "[shell-check] BAD missing command reported success"
+    Quit 20
+EndIf
+C:ShellStatusMissingCommand
+RAM:
+If WARN
+    Echo >>RAM:ShellStatus.log "[shell-check] BAD directory shortcut failed"
+    Quit 20
+EndIf
+Echo >>RAM:ShellStatus.log "[shell-check] PASS directory shortcut"
+Echo >>RAM:ShellStatus.log "[shell-check] DONE"
