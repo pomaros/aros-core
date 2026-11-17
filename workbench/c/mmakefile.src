@@ -45,6 +45,7 @@ FILES := \
     SetLocale \
     SettingsBoot \
     SetPSM \
+    SHA256Sum \
     Shutdown \
     Sleep \
     Sort \

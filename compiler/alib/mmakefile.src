@@ -116,6 +116,7 @@ FILES	:= \
     setrpattrs \
     setsuperattrs \
     setwindowpointer \
+    sha256 \
     snprintf \
     sprintf \
     strdup \
