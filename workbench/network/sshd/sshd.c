@@ -160,6 +160,8 @@ struct SessionCtx {
     int authenticated;
     ssh_channel channel;
     BOOL started;
+    BOOL peer_closed;
+    struct ssh_channel_callbacks_struct callbacks;
     char *command;
 };
 
@@ -426,6 +428,14 @@ close_shell:
     ssh_channel_request_send_exit_status(channel, exit.status);
 }
 
+static void peer_closed_channel(ssh_session session, ssh_channel channel, void *userdata)
+{
+    struct SessionCtx *ctx = userdata;
+    (void)session;
+    (void)channel;
+    ctx->peer_closed = TRUE;
+}
+
 /* With server callbacks installed, libssh dispatches unhandled requests
  * here and never places them on the synchronous ssh_message_get queue. */
 static int channel_request(ssh_session session, ssh_message msg, void *userdata)
@@ -438,6 +448,7 @@ static int channel_request(ssh_session session, ssh_message msg, void *userdata)
         ssh_message_subtype(msg) == SSH_CHANNEL_SESSION)
     {
         ctx->channel = ssh_message_channel_request_open_reply_accept(msg);
+        if (ctx->channel) ssh_set_channel_callbacks(ctx->channel, &ctx->callbacks);
         return 0;
     }
     if (!ctx->channel || ssh_message_type(msg) != SSH_REQUEST_CHANNEL ||
@@ -513,10 +524,14 @@ static void handle_session(ssh_session session)
     struct ssh_server_callbacks_struct cb = {0};
     struct SessionCtx ctx = {0};
     ssh_channel channel = NULL;
+    ssh_event event = NULL;
 
     cb.auth_pubkey_function = auth_pubkey_cb;
     cb.auth_password_function = auth_password_cb;
     cb.userdata = &ctx;
+    ctx.callbacks.userdata = &ctx;
+    ctx.callbacks.channel_close_function = peer_closed_channel;
+    ssh_callbacks_init(&ctx.callbacks);
 
     ssh_callbacks_init(&cb);
     ssh_set_server_callbacks(session, &cb);
@@ -530,9 +545,9 @@ static void handle_session(ssh_session session)
     }
 
     /* Authentication loop */
-    ssh_event event = ssh_event_new();
+    event = ssh_event_new();
     if (!event) goto done;
-    if (ssh_event_add_session(event, session) != SSH_OK) { ssh_event_free(event); goto done; }
+    if (ssh_event_add_session(event, session) != SSH_OK) goto done;
 
     int n_auth = 0;
     while (!ctx.authenticated && n_auth < 20)
@@ -545,7 +560,6 @@ static void handle_session(ssh_session session)
     for (int i = 0; ctx.authenticated && !ctx.started && i < 30; ++i)
         if (!ssh_is_connected(session) || ssh_event_dopoll(event, 1000) == SSH_ERROR) break;
 
-    ssh_event_free(event);
     channel = ctx.channel;
     if (!ctx.started) goto cleanup_channel;
 
@@ -564,11 +578,18 @@ cleanup_channel:
     if (channel)
     {
         ssh_channel_send_eof(channel);
-        ssh_channel_close(channel);
+        if (ssh_channel_close(channel) == SSH_OK)
+        {
+            /* Give the peer time to acknowledge the exit status and channel
+             * close before tearing down the underlying socket. */
+            for (int i = 0; i < 10 && !ctx.peer_closed && ssh_is_connected(session); ++i)
+                if (ssh_event_dopoll(event, 100) == SSH_ERROR) break;
+        }
         ssh_channel_free(channel);
     }
 
 done:
+    if (event) ssh_event_free(event);
     ssh_disconnect(session);
     ssh_free(session);
 }
