@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2026, The AROS Development Team. All rights reserved.
+ * Copyright (C) 2026 John KNIPPER.
  * Author: Fabian Schmieder (@metaneutrons)
  *
  * AROS SSH Server (sshd) using libssh 0.12.0 + mbedTLS 3.6.6
@@ -28,6 +29,7 @@ struct Library *__libssh_SocketBase(void);
 #include <exec/types.h>
 #include <dos/dostags.h>
 #include <dos/dos.h>
+#include <dos/pipe.h>
 #include <libraries/netservice.h>
 #include <utility/tagitem.h>
 
@@ -58,18 +60,12 @@ static const char __attribute__((used)) verstag[] = "\0$VER: sshd 0.1 (19.8.2026
 #define MAX_LINE            1024
 #define BUF_SIZE            4096
 
-/* The main task's base; a session task keeps its own in tc_UserData
- * (CreateNewProc's NP_UserData slot, unused by anything else here). */
-static struct Task *DaemonTask;
+/* Each listener or session is a separate DOS program with its own runtime. */
 static struct Library *DaemonSocketBase;
 
 struct Library *__libssh_SocketBase(void)
 {
-    struct Task *me = FindTask(NULL);
-
-    if (me == DaemonTask)
-        return DaemonSocketBase;
-    return (struct Library *)me->tc_UserData;
+    return DaemonSocketBase;
 }
 struct Library *NetServicesBase;        /* optional: set when run as a managed service */
 static volatile BOOL g_shutdown = FALSE;
@@ -161,6 +157,9 @@ static BOOL ensure_host_key(void)
  * no server-side "is authenticated" query. */
 struct SessionCtx {
     int authenticated;
+    ssh_channel channel;
+    BOOL started;
+    char *command;
 };
 
 /* --- Public key authentication callback --- */
@@ -275,12 +274,21 @@ static int auth_password_cb(ssh_session session, const char *user,
 }
 
 /* --- Shell session context --- */
+struct CommandExit {
+    struct Message message;
+    LONG status;
+};
+
+static void command_exited(IPTR rc, IPTR userdata)
+{
+    struct CommandExit *exit = (struct CommandExit *)userdata;
+    exit->status = (LONG)rc;
+    PutMsg(exit->message.mn_ReplyPort, &exit->message);
+}
+
 struct ShellBridge {
-    ssh_channel channel;
     BPTR        shell_in;   /* our write end -> shell reads from this pipe */
     BPTR        shell_out;  /* our read end  <- shell writes to this pipe */
-    int         cols;
-    int         rows;
 };
 
 /* --- Unique pipe name generator --- */
@@ -288,11 +296,11 @@ static ULONG g_pipe_seq = 0;
 
 static void make_pipe_name(char *buf, size_t len, const char *tag)
 {
-    snprintf(buf, len, "PIPE:sshd_%s_%p_%lx/32768/rw", tag, (void *)FindTask(NULL), (unsigned long)++g_pipe_seq);
+    snprintf(buf, len, "PIPE:sshd_%s_%p_%lx/32768", tag, (void *)FindTask(NULL), (unsigned long)++g_pipe_seq);
 }
 
 /* --- Launch shell with pipe I/O --- */
-static BOOL launch_shell(struct ShellBridge *sb)
+static BOOL launch_shell(struct ShellBridge *sb, struct CommandExit *exit)
 {
     char in_name[64], out_name[64];
 
@@ -304,9 +312,9 @@ static BOOL launch_shell(struct ShellBridge *sb)
     if (!sb->shell_in)
         return FALSE;
 
-    /* Open read end of stdout pipe (shell writes, we read) */
-    sb->shell_out = Open(out_name, MODE_NEWFILE);
-    if (!sb->shell_out)
+    /* Create the shell's stdout writer before opening our reader. */
+    BPTR shell_stdout = Open(out_name, MODE_NEWFILE);
+    if (!shell_stdout)
     {
         Close(sb->shell_in);
         sb->shell_in = BNULL;
@@ -315,27 +323,36 @@ static BOOL launch_shell(struct ShellBridge *sb)
 
     /* Open the other ends for the shell process */
     BPTR shell_stdin = Open(in_name, MODE_OLDFILE);
-    BPTR shell_stdout = Open(out_name, MODE_OLDFILE);
+    sb->shell_out = Open(out_name, MODE_OLDFILE);
 
-    if (!shell_stdin || !shell_stdout)
+    if (!shell_stdin || !sb->shell_out)
     {
         if (shell_stdin) Close(shell_stdin);
-        if (shell_stdout) Close(shell_stdout);
+        Close(shell_stdout);
         Close(sb->shell_in);
-        Close(sb->shell_out);
+        if (sb->shell_out) Close(sb->shell_out);
         sb->shell_in = BNULL;
         sb->shell_out = BNULL;
         return FALSE;
     }
 
     /* Launch C:Shell asynchronously */
-    LONG rc = SystemTags("C:Shell",
+    struct FileHandle *reader = BADDR(sb->shell_out);
+    if (!DoPkt(reader->fh_Type, ACTION_PIPE_SET_NONBLOCK, reader->fh_Arg1, TRUE, 0, 0, 0))
+    {
+        Close(shell_stdin);
+        Close(shell_stdout);
+        Close(sb->shell_in);
+        Close(sb->shell_out);
+        return FALSE;
+    }
+    LONG rc = SystemTags("",
         SYS_Input,      (IPTR)shell_stdin,
         SYS_Output,     (IPTR)shell_stdout,
         SYS_Asynch,     TRUE,
         SYS_UserShell,  TRUE,
-        NP_CloseInput,  TRUE,
-        NP_CloseOutput, TRUE,
+        SYS_Background, FALSE,
+        NP_ExitCode, (IPTR)command_exited, NP_ExitData, (IPTR)exit,
         TAG_DONE);
 
     if (rc == -1)
@@ -343,7 +360,7 @@ static BOOL launch_shell(struct ShellBridge *sb)
         Close(shell_stdin);
         Close(shell_stdout);
         Close(sb->shell_in);
-        Close(sb->shell_out);
+        if (sb->shell_out) Close(sb->shell_out);
         sb->shell_in = BNULL;
         sb->shell_out = BNULL;
         return FALSE;
@@ -352,77 +369,141 @@ static BOOL launch_shell(struct ShellBridge *sb)
     return TRUE;
 }
 
-/* --- Process window-change requests from channel messages --- */
-static void check_window_change(ssh_session session, struct ShellBridge *sb)
-{
-    ssh_message msg;
-
-    while ((msg = ssh_message_get(session)) != NULL)
-    {
-        if (ssh_message_type(msg) == SSH_REQUEST_CHANNEL &&
-            ssh_message_subtype(msg) == SSH_CHANNEL_REQUEST_WINDOW_CHANGE)
-        {
-            sb->cols = ssh_message_channel_request_pty_width(msg);
-            sb->rows = ssh_message_channel_request_pty_height(msg);
-            ssh_message_channel_request_reply_success(msg);
-        }
-        else
-        {
-            ssh_message_reply_default(msg);
-        }
-        ssh_message_free(msg);
-    }
-}
-
 /* --- Bidirectional shell bridge with PTY emulation --- */
-static void handle_shell(ssh_session session, ssh_channel channel, int cols, int rows)
+static void handle_shell(ssh_channel channel)
 {
     struct ShellBridge sb = {0};
-    sb.channel = channel;
-    sb.cols = cols;
-    sb.rows = rows;
+    struct CommandExit exit = {0};
+    exit.message.mn_ReplyPort = CreateMsgPort();
 
-    if (!launch_shell(&sb))
+    if (!exit.message.mn_ReplyPort || !launch_shell(&sb, &exit))
     {
+        if (exit.message.mn_ReplyPort) DeleteMsgPort(exit.message.mn_ReplyPort);
         ssh_channel_write(channel, "Error: cannot start shell\r\n", 27);
+        ssh_channel_request_send_exit_status(channel, RETURN_FAIL);
         return;
     }
 
     char buf[BUF_SIZE];
 
-    /* Main poll loop: bridge SSH channel <-> shell pipes */
-    while (ssh_channel_is_open(channel) && !ssh_channel_is_eof(channel))
+    while (ssh_channel_is_open(channel))
     {
-        /* Shell stdout -> SSH channel (ANSI passthrough, no filtering) */
-        if (WaitForChar(sb.shell_out, 20000)) /* 20ms poll */
+        LONG n = Read(sb.shell_out, buf, sizeof(buf));
+        if (n == 0 || (n < 0 && IoErr() != ERROR_PIPE_WOULD_BLOCK)) break;
+        for (LONG pos = 0; pos < n;)
         {
-            LONG n = Read(sb.shell_out, buf, sizeof(buf));
-            if (n > 0)
-                ssh_channel_write(channel, buf, n);
-            else if (n < 0)
-                break; /* Shell closed its output */
+            int written = ssh_channel_write(channel, buf + pos, n - pos);
+            if (written <= 0) goto close_shell;
+            pos += written;
         }
 
-        /* SSH channel -> shell stdin */
-        int nbytes = ssh_channel_read_nonblocking(channel, buf, sizeof(buf), 0);
-        if (nbytes > 0)
+        if (sb.shell_in)
         {
-            Write(sb.shell_in, buf, nbytes);
+            int count = ssh_channel_read_nonblocking(channel, buf, sizeof(buf), 0);
+            if (count > 0)
+            {
+                if (Write(sb.shell_in, buf, count) != count) break;
+            }
+            else if (count == SSH_ERROR) break;
+            else if (ssh_channel_is_eof(channel))
+            {
+                Close(sb.shell_in);
+                sb.shell_in = BNULL;
+            }
+            if (n < 0 && count <= 0) Delay(1);
         }
-        else if (nbytes == SSH_ERROR)
-            break;
-
-        /* Handle out-of-band channel requests (window-change) */
-        check_window_change(session, &sb);
-
-        /* Check for server CTRL-C shutdown */
-        if (SetSignal(0L, SIGBREAKF_CTRL_C) & SIGBREAKF_CTRL_C)
-            break;
+        else if (n < 0) Delay(1);
+        if (SetSignal(0L, SIGBREAKF_CTRL_C) & SIGBREAKF_CTRL_C) break;
     }
 
-    /* Graceful shutdown: close our pipe ends, which signals EOF to shell */
-    Close(sb.shell_in);
+close_shell:
+    if (sb.shell_in) Close(sb.shell_in);
     Close(sb.shell_out);
+    WaitPort(exit.message.mn_ReplyPort);
+    GetMsg(exit.message.mn_ReplyPort);
+    DeleteMsgPort(exit.message.mn_ReplyPort);
+    ssh_channel_request_send_exit_status(channel, exit.status);
+}
+
+/* With server callbacks installed, libssh dispatches unhandled requests
+ * here and never places them on the synchronous ssh_message_get queue. */
+static int channel_request(ssh_session session, ssh_message msg, void *userdata)
+{
+    struct SessionCtx *ctx = userdata;
+    (void)session;
+    if (!ctx->authenticated)
+        return 1;
+    if (ssh_message_type(msg) == SSH_REQUEST_CHANNEL_OPEN && !ctx->channel &&
+        ssh_message_subtype(msg) == SSH_CHANNEL_SESSION)
+    {
+        ctx->channel = ssh_message_channel_request_open_reply_accept(msg);
+        return 0;
+    }
+    if (!ctx->channel || ssh_message_type(msg) != SSH_REQUEST_CHANNEL ||
+        ssh_message_channel_request_channel(msg) != ctx->channel)
+        return 1;
+    switch (ssh_message_subtype(msg))
+    {
+        case SSH_CHANNEL_REQUEST_WINDOW_CHANGE:
+            break;
+        case SSH_CHANNEL_REQUEST_PTY:
+            if (ctx->started) return 1;
+            break;
+        case SSH_CHANNEL_REQUEST_EXEC:
+        {
+            const char *command = ssh_message_channel_request_command(msg);
+            if (ctx->started || !command || !(ctx->command = strdup(command))) return 1;
+            ctx->started = TRUE;
+            break;
+        }
+        case SSH_CHANNEL_REQUEST_SHELL:
+            if (ctx->started) return 1;
+            ctx->started = TRUE;
+            break;
+        default:
+            return 1;
+    }
+    ssh_message_channel_request_reply_success(msg);
+    return 0;
+}
+
+static void execute_request(ssh_channel channel, const char *command)
+{
+    struct CommandExit exit = {0};
+    char name[64], buf[BUF_SIZE];
+    LONG size, rc = RETURN_FAIL;
+    make_pipe_name(name, sizeof(name), "exec");
+    BPTR writer = Open(name, MODE_NEWFILE);
+    BPTR reader = writer ? Open(name, MODE_OLDFILE) : BNULL;
+    BPTR input = Open("NIL:", MODE_OLDFILE);
+    exit.message.mn_ReplyPort = CreateMsgPort();
+    if (reader && input && exit.message.mn_ReplyPort &&
+        SystemTags(command, SYS_Asynch, TRUE, SYS_Input, (IPTR)input,
+            SYS_Output, (IPTR)writer, NP_ExitCode, (IPTR)command_exited,
+            NP_ExitData, (IPTR)&exit, TAG_DONE) != -1)
+    {
+        /* The asynchronous shell owns input and writer. Drain as it runs
+         * so large output can never fill the pipe and block the child. */
+        input = writer = BNULL;
+        BOOL connected = TRUE;
+        while ((size = Read(reader, buf, sizeof(buf))) > 0)
+        {
+            for (LONG pos = 0; connected && pos < size;)
+            {
+                int n = ssh_channel_write(channel, buf + pos, size - pos);
+                if (n <= 0) connected = FALSE;
+                else pos += n;
+            }
+        }
+        WaitPort(exit.message.mn_ReplyPort);
+        GetMsg(exit.message.mn_ReplyPort);
+        if (size == 0) rc = exit.status;
+    }
+    if (writer) Close(writer);
+    if (reader) Close(reader);
+    if (input) Close(input);
+    if (exit.message.mn_ReplyPort) DeleteMsgPort(exit.message.mn_ReplyPort);
+    ssh_channel_request_send_exit_status(channel, rc);
 }
 
 /* --- Per-connection session handler --- */
@@ -430,6 +511,7 @@ static void handle_session(ssh_session session)
 {
     struct ssh_server_callbacks_struct cb = {0};
     struct SessionCtx ctx = {0};
+    ssh_channel channel = NULL;
 
     cb.auth_pubkey_function = auth_pubkey_cb;
     cb.auth_password_function = auth_password_cb;
@@ -437,6 +519,7 @@ static void handle_session(ssh_session session)
 
     ssh_callbacks_init(&cb);
     ssh_set_server_callbacks(session, &cb);
+    ssh_set_message_callback(session, channel_request, &ctx);
     ssh_set_auth_methods(session, SSH_AUTH_METHOD_PUBLICKEY | SSH_AUTH_METHOD_PASSWORD);
 
     if (ssh_handle_key_exchange(session) != SSH_OK)
@@ -447,7 +530,8 @@ static void handle_session(ssh_session session)
 
     /* Authentication loop */
     ssh_event event = ssh_event_new();
-    ssh_event_add_session(event, session);
+    if (!event) goto done;
+    if (ssh_event_add_session(event, session) != SSH_OK) { ssh_event_free(event); goto done; }
 
     int n_auth = 0;
     while (!ctx.authenticated && n_auth < 20)
@@ -457,121 +541,22 @@ static void handle_session(ssh_session session)
         n_auth++;
     }
 
+    for (int i = 0; ctx.authenticated && !ctx.started && i < 30; ++i)
+        if (!ssh_is_connected(session) || ssh_event_dopoll(event, 1000) == SSH_ERROR) break;
+
     ssh_event_free(event);
+    channel = ctx.channel;
+    if (!ctx.started) goto cleanup_channel;
 
-    if (!ctx.authenticated)
+    if (ctx.command)
     {
-        Printf("sshd: authentication failed\n");
-        goto done;
-    }
-
-    /* Wait for channel open request */
-    ssh_channel channel = NULL;
-    ssh_message msg;
-    int timeout = 30;
-
-    while (timeout-- > 0)
-    {
-        msg = ssh_message_get(session);
-        if (!msg) { Delay(25); continue; }
-
-        if (ssh_message_type(msg) == SSH_REQUEST_CHANNEL_OPEN &&
-            ssh_message_subtype(msg) == SSH_CHANNEL_SESSION)
-        {
-            channel = ssh_message_channel_request_open_reply_accept(msg);
-            ssh_message_free(msg);
-            break;
-        }
-        ssh_message_reply_default(msg);
-        ssh_message_free(msg);
-    }
-
-    if (!channel) goto done;
-
-    /* Wait for shell/exec/pty request, track terminal dimensions */
-    BOOL got_shell = FALSE;
-    const char *exec_cmd = NULL;
-    int pty_cols = 80, pty_rows = 24;
-    timeout = 30;
-
-    while (timeout-- > 0 && !got_shell)
-    {
-        msg = ssh_message_get(session);
-        if (!msg) { Delay(25); continue; }
-
-        if (ssh_message_type(msg) == SSH_REQUEST_CHANNEL)
-        {
-            int subtype = ssh_message_subtype(msg);
-            switch (subtype)
-            {
-                case SSH_CHANNEL_REQUEST_PTY:
-                    pty_cols = ssh_message_channel_request_pty_width(msg);
-                    pty_rows = ssh_message_channel_request_pty_height(msg);
-                    ssh_message_channel_request_reply_success(msg);
-                    break;
-                case SSH_CHANNEL_REQUEST_SHELL:
-                    ssh_message_channel_request_reply_success(msg);
-                    got_shell = TRUE;
-                    break;
-                case SSH_CHANNEL_REQUEST_EXEC:
-                    exec_cmd = ssh_message_channel_request_command(msg);
-                    if (exec_cmd) exec_cmd = strdup(exec_cmd);
-                    ssh_message_channel_request_reply_success(msg);
-                    got_shell = TRUE;
-                    break;
-                default:
-                    ssh_message_reply_default(msg);
-                    break;
-            }
-        }
-        else
-        {
-            ssh_message_reply_default(msg);
-        }
-        ssh_message_free(msg);
-    }
-
-    if (!got_shell) goto cleanup_channel;
-
-    if (exec_cmd)
-    {
-        /* Single command execution */
-        char out_name[64];
-        make_pipe_name(out_name, sizeof(out_name), "exec");
-
-        BPTR out_w = Open(out_name, MODE_NEWFILE);
-        BPTR out_r = Open(out_name, MODE_OLDFILE);
-
-        if (out_w && out_r)
-        {
-            BPTR nil_in = Open("NIL:", MODE_OLDFILE);
-            LONG rc = SystemTags(exec_cmd,
-                SYS_Input,      (IPTR)nil_in,
-                SYS_Output,     (IPTR)out_w,
-                NP_CloseInput,  TRUE,
-                NP_CloseOutput, TRUE,
-                TAG_DONE);
-
-            char buf[BUF_SIZE];
-            LONG n;
-            while ((n = Read(out_r, buf, sizeof(buf))) > 0)
-                ssh_channel_write(channel, buf, n);
-
-            Close(out_r);
-            ssh_channel_request_send_exit_status(channel, rc);
-        }
-        else
-        {
-            if (out_w) Close(out_w);
-            if (out_r) Close(out_r);
-            ssh_channel_write(channel, "Error: cannot execute command\r\n", 30);
-        }
-        free((void *)exec_cmd);
+        execute_request(channel, ctx.command);
+        free(ctx.command);
     }
     else
     {
         /* Interactive shell with PTY bridge */
-        handle_shell(session, channel, pty_cols, pty_rows);
+        handle_shell(channel);
     }
 
 cleanup_channel:
@@ -586,18 +571,6 @@ done:
     ssh_disconnect(session);
     ssh_free(session);
 }
-
-/* --- Session tasks ---
- * Every session runs in its own process with its own bsdsocket base. The
- * main task accepts the connection and parks the socket in the stack with
- * ReleaseSocket(); the session task adopts it with ObtainSocket() on its
- * own base and wraps it with ssh_bind_accept_fd(), which only reads the
- * bind object (listening, host keys already imported). */
-struct SessionMsg {
-    struct Message msg;
-    ssh_bind       sshbind;
-    LONG           socket_id;   /* ReleaseSocket() unique id */
-};
 
 /* Serve an accepted socket owned by the calling task's base. */
 static void serve_socket(ssh_bind sshbind, LONG fd)
@@ -621,87 +594,51 @@ static void serve_socket(ssh_bind sshbind, LONG fd)
     handle_session(session);
 }
 
-static void session_proc_entry(void)
-{
-    struct Process *me = (struct Process *)FindTask(NULL);
-    struct MsgPort *port = &me->pr_MsgPort;
-    struct SessionMsg *sm;
-    ssh_bind sshbind;
-    LONG socket_id, fd;
-
-    WaitPort(port);
-    sm = (struct SessionMsg *)GetMsg(port);
-    sshbind = sm->sshbind;
-    socket_id = sm->socket_id;
-    ReplyMsg(&sm->msg);
-
-    /* our own base; __libssh_SocketBase() finds it here from now on */
-    me->pr_Task.tc_UserData = OpenLibrary("bsdsocket.library", 4);
-    if (me->pr_Task.tc_UserData == NULL)
-    {
-        Printf("sshd: session cannot open bsdsocket.library\n");
-        return;
-    }
-
-    fd = ObtainSocket(socket_id, 0, 0, 0);
-    if (fd >= 0)
-        serve_socket(sshbind, fd);
-    else
-        Printf("sshd: ObtainSocket failed (%ld)\n", (long)Errno());
-
-    CloseLibrary((struct Library *)me->pr_Task.tc_UserData);
-    me->pr_Task.tc_UserData = NULL;
-}
-
+/* Load the session as a DOS program. A raw NP_Entry task has no C runtime
+ * startup, including the per-task errno cell used by libssh. The new image
+ * owns its library bases and host keys even if the listener is stopped. */
 static void spawn_session(ssh_bind sshbind, LONG fd)
 {
-    struct MsgPort *reply_port;
-    struct Process *proc = NULL;
-    struct SessionMsg sm = {0};
+    char program[512], executable[512] = "PROGDIR:", args[48];
+    BPTR seg = BNULL, input = BNULL;
     LONG socket_id;
 
+    if (GetProgramDir() && GetProgramName(program, sizeof(program)) && program[0] &&
+        AddPart(executable, FilePart(program), sizeof(executable)))
+        seg = LoadSeg(executable);
+    if (!seg)
+        seg = LoadSeg("SYS:System/Network/Services/sshd");
+    if (seg)
+        input = Open("NIL:", MODE_OLDFILE);
+    if (!input)
+    {
+        if (seg) UnLoadSeg(seg);
+        serve_socket(sshbind, fd);
+        return;
+    }
     socket_id = ReleaseSocket(fd, UNIQUE_ID);
-    if (socket_id < 0)
+    if (socket_id >= 0)
     {
-        CloseSocket(fd);
-        return;
-    }
-
-    reply_port = CreateMsgPort();
-    if (reply_port != NULL)
-        proc = CreateNewProcTags(
-            NP_Entry,   (IPTR)session_proc_entry,
-            NP_Name,    (IPTR)"sshd_session",
-            NP_Priority, 0,
-            NP_StackSize, 65536,
-            TAG_DONE);
-
-    if (proc == NULL)
-    {
-        /* no session task: take the socket back and serve it here */
-        if (reply_port != NULL)
-            DeleteMsgPort(reply_port);
+        snprintf(args, sizeof(args), "--session %ld\n", (long)socket_id);
+        if (CreateNewProcTags(NP_Seglist, (IPTR)seg, NP_Cli, TRUE,
+                NP_Name, (IPTR)"sshd_session", NP_Arguments, (IPTR)args,
+                NP_Input, (IPTR)input, NP_CloseInput, TRUE,
+                NP_StackSize, 131072, TAG_DONE))
+            return;
         fd = ObtainSocket(socket_id, 0, 0, 0);
-        if (fd >= 0)
-            serve_socket(sshbind, fd);
-        return;
+        if (fd >= 0) serve_socket(sshbind, fd);
     }
-
-    sm.msg.mn_ReplyPort = reply_port;
-    sm.msg.mn_Length = sizeof(sm);
-    sm.sshbind = sshbind;
-    sm.socket_id = socket_id;
-
-    PutMsg(&proc->pr_MsgPort, &sm.msg);
-    WaitPort(reply_port);
-    GetMsg(reply_port);
-    DeleteMsgPort(reply_port);
+    else
+        CloseSocket(fd);
+    Close(input);
+    UnLoadSeg(seg);
 }
 
 /* --- Main --- */
 int main(int argc, char **argv)
 {
     int port = SSHD_PORT;
+    LONG session_id = -1, session_fd = -1;
     int i;
 
     /* Parse arguments */
@@ -709,6 +646,14 @@ int main(int argc, char **argv)
     {
         if (strcmp(argv[i], "-p") == 0 && i + 1 < argc)
             port = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--session") == 0 && i + 1 < argc)
+        {
+            char *end;
+            long id = strtol(argv[++i], &end, 10);
+            if (!*argv[i] || *end || id < 0 || id > 2147483647L)
+                return RETURN_FAIL;
+            session_id = id;
+        }
         else if (strcmp(argv[i], "-V") == 0 || strcmp(argv[i], "--version") == 0)
         {
             Printf("AROS SSH Server 0.1 (libssh 0.12.0, mbedTLS 3.6.7)\n");
@@ -722,7 +667,6 @@ int main(int argc, char **argv)
         }
     }
 
-    DaemonTask = FindTask(NULL);
     DaemonSocketBase = OpenLibrary("bsdsocket.library", 4);
     if (!DaemonSocketBase)
     {
@@ -730,8 +674,16 @@ int main(int argc, char **argv)
         return RETURN_FAIL;
     }
 
-    /* Ensure host key exists */
-    if (!ensure_host_key())
+    if (session_id >= 0)
+    {
+        session_fd = ObtainSocket(session_id, 0, 0, 0);
+        if (session_fd < 0)
+        {
+            CloseLibrary(DaemonSocketBase);
+            return RETURN_FAIL;
+        }
+    }
+    if (session_fd < 0 && !ensure_host_key())
     {
         CloseLibrary(DaemonSocketBase);
         return RETURN_FAIL;
@@ -742,6 +694,7 @@ int main(int argc, char **argv)
     ssh_bind sshbind = ssh_bind_new();
     if (!sshbind)
     {
+        if (session_fd >= 0) CloseSocket(session_fd);
         Printf("sshd: Cannot create SSH bind\n");
         ssh_finalize();
         CloseLibrary(DaemonSocketBase);
@@ -754,6 +707,15 @@ int main(int argc, char **argv)
     ssh_bind_options_set(sshbind, SSH_BIND_OPTIONS_BINDPORT_STR, port_str);
     ssh_bind_options_set(sshbind, SSH_BIND_OPTIONS_HOSTKEY, SSHD_HOST_KEY);
     ssh_bind_options_set(sshbind, SSH_BIND_OPTIONS_BANNER, SSHD_BANNER);
+
+    if (session_fd >= 0)
+    {
+        serve_socket(sshbind, session_fd);
+        ssh_bind_free(sshbind);
+        ssh_finalize();
+        CloseLibrary(DaemonSocketBase);
+        return RETURN_OK;
+    }
 
     if (ssh_bind_listen(sshbind) < 0)
     {

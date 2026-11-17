@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2026, The AROS Development Team. All rights reserved.
+ * Copyright (C) 2026 John KNIPPER.
  * Author: Fabian Schmieder (@metaneutrons)
  *
  * AROS SSH Key Generator
@@ -22,7 +23,6 @@
 #include <mbedtls/rsa.h>
 #include <mbedtls/entropy.h>
 #include <mbedtls/ctr_drbg.h>
-#include <mbedtls/base64.h>
 #include <mbedtls/error.h>
 
 #include <libssh/libssh.h>
@@ -43,41 +43,22 @@ enum key_type {
     KEY_ED25519
 };
 
-/* --- Write OpenSSH public key format (RSA only, via mbedTLS) --- */
-static BOOL write_pubkey_openssh(mbedtls_pk_context *pk, const char *pubkey_path)
+/* An OpenSSH public key is an SSH wire blob. Writing the two required
+ * fields directly also lets key generation run without a network stack. */
+static BOOL write_pubkey_openssh(ssh_key key, const char *path)
 {
-    unsigned char der_buf[4096];
-    int der_len;
-    unsigned char b64_buf[8192];
-    size_t b64_len = 0;
-    BPTR fh;
-
-    der_len = mbedtls_pk_write_pubkey_der(pk, der_buf, sizeof(der_buf));
-    if (der_len < 0)
+    char *blob = NULL;
+    BOOL ok = FALSE;
+    if (ssh_pki_export_pubkey_base64(key, &blob) != SSH_OK) return FALSE;
+    BPTR file = Open(path, MODE_NEWFILE);
+    if (file)
     {
-        Printf("ssh-keygen: Failed to export public key (error %ld)\n", (long)der_len);
-        return FALSE;
+        ok = FPrintf(file, "%s %s\n", (IPTR)ssh_key_type_to_char(ssh_key_type(key)),
+                     (IPTR)blob) >= 0;
+        if (!Close(file)) ok = FALSE;
     }
-
-    unsigned char *der_start = der_buf + sizeof(der_buf) - der_len;
-
-    if (mbedtls_base64_encode(b64_buf, sizeof(b64_buf), &b64_len, der_start, der_len) != 0)
-    {
-        Printf("ssh-keygen: Base64 encoding failed\n");
-        return FALSE;
-    }
-
-    fh = Open(pubkey_path, MODE_NEWFILE);
-    if (!fh)
-    {
-        Printf("ssh-keygen: Cannot create '%s'\n", (IPTR)pubkey_path);
-        return FALSE;
-    }
-
-    FPrintf(fh, "ssh-rsa %s aros@aros\n", (IPTR)b64_buf);
-    Close(fh);
-
-    return TRUE;
+    ssh_string_free_char(blob);
+    return ok;
 }
 
 /* --- Generate RSA key pair via mbedTLS --- */
@@ -147,8 +128,12 @@ static int generate_rsa(const char *keyfile)
     /* Write public key (OpenSSH format) */
     snprintf(pubkey_path, sizeof(pubkey_path), "%s.pub", keyfile);
 
-    if (!write_pubkey_openssh(&pk, pubkey_path))
+    ssh_key key = NULL;
+    if (ssh_pki_import_privkey_file(keyfile, NULL, NULL, NULL, &key) != SSH_OK)
         goto fail;
+    BOOL written = write_pubkey_openssh(key, pubkey_path);
+    ssh_key_free(key);
+    if (!written) goto fail;
 
     Printf("Public key saved to:  %s\n", (IPTR)pubkey_path);
 
@@ -198,8 +183,7 @@ static int generate_ed25519(const char *keyfile)
     /* Export public key */
     snprintf(pubkey_path, sizeof(pubkey_path), "%s.pub", keyfile);
 
-    rc = ssh_pki_export_pubkey_file(key, pubkey_path);
-    if (rc != SSH_OK)
+    if (!write_pubkey_openssh(key, pubkey_path))
     {
         Printf("ssh-keygen: Cannot write public key to '%s'\n", (IPTR)pubkey_path);
         ssh_key_free(key);
