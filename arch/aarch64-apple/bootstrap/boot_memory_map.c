@@ -11,6 +11,9 @@
 
 #include <stddef.h>
 
+#define EFI_LOADER_CODE UINT32_C(1)
+#define EFI_BOOT_SERVICES_CODE UINT32_C(3)
+#define EFI_BOOT_SERVICES_DATA UINT32_C(4)
 #define EFI_LOADER_DATA UINT32_C(2)
 #define EFI_CONVENTIONAL_MEMORY UINT32_C(7)
 #define EFI_MEMORY_RUNTIME (UINT64_C(1) << 63)
@@ -81,7 +84,16 @@ int AROSAppleBootMemoryMapRangeAt(
         view->start = efi->physical_start;
         if ((efi->attribute & EFI_MEMORY_RUNTIME) != 0)
             view->kind = AROS_APPLE_BOOT_MEMORY_RESERVED;
-        else if (efi->type == EFI_CONVENTIONAL_MEMORY)
+        else if (efi->type == EFI_CONVENTIONAL_MEMORY ||
+            efi->type == EFI_LOADER_CODE ||
+            efi->type == EFI_BOOT_SERVICES_CODE ||
+            efi->type == EFI_BOOT_SERVICES_DATA)
+            /* The loader has left boot services and owns everything it
+             * still needs in tracked loader-data allocations (FDT, memory
+             * map, handoff stack, bundle). Firmware boot-services memory and
+             * the loader image itself are then free RAM (UEFI 2.10, 7.4),
+             * as every operating system treats them; only runtime ranges
+             * stay reserved. */
             view->kind = AROS_APPLE_BOOT_MEMORY_AVAILABLE;
         else if (efi->type == EFI_LOADER_DATA)
             view->kind = AROS_APPLE_BOOT_MEMORY_LOADER_DATA;
