@@ -507,10 +507,6 @@ static LONG executeLine(ShellState *ss, STRPTR commandArgs)
     ULONG cmdSize = (commandArgs ? strlen(commandArgs) : 0)
         + FILE_MAX + 4;
 
-    /* Loading or preparing a command may fail before RunCommand sets RC.
-     * Never leave the previous command's success in that case. */
-    cli->cli_ReturnCode = RETURN_FAIL;
-
     D(bug("[Shell] executeLine: %s %s\n", command, commandArgs));
 
     /* Reserve only what can be written below: an optional quoted path
@@ -519,6 +515,7 @@ static LONG executeLine(ShellState *ss, STRPTR commandArgs)
      */
     cmd = AllocVec(cmdSize, MEMF_ANY);
     if (!cmd) {
+        cli->cli_ReturnCode = RETURN_FAIL;
         PrintFault(ERROR_NO_FREE_STORE, NULL);
         return ERROR_NO_FREE_STORE;
     }
@@ -550,6 +547,7 @@ static LONG executeLine(ShellState *ss, STRPTR commandArgs)
         {
             *dst++ = '"';
             if (NameFromLock(scriptLock, dst, FILE_MAX) == 0) {
+                cli->cli_ReturnCode = RETURN_FAIL;
                 error = IoErr(); /* bad FS handler ? */
                 goto errexit;
             }
@@ -623,6 +621,9 @@ static LONG executeLine(ShellState *ss, STRPTR commandArgs)
     }
     else
     {
+        /* Set RC only after loading fails. Commands such as If WARN read
+         * the previous command's code while RunCommand is executing. */
+        cli->cli_ReturnCode = RETURN_FAIL;
         /* SFS returns ERROR_INVALID_COMPONENT_NAME if you try to open "" */
         error = IoErr();
 

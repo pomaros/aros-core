@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[4]
 SOURCE = 'workbench/c/Shell/Shell.c'
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--reject')
+parser.add_argument('--reject-interference')
 args = parser.parse_args()
 
 PRELUDE = r'''
@@ -56,7 +57,7 @@ struct FileInfoBlock {LONG fib_DirEntryType;};
 static struct CommandLineInterface cli;
 static struct Process process;
 static int oom, loaded, directory, unloads, runs, changed_dir;
-static LONG dos_error, command_rc, command_error;
+static LONG dos_error, command_rc, command_error, entry_rc;
 static struct CommandLineInterface *Cli(void) {return &cli;}
 static void *AllocVec(size_t n, int flags) {(void)flags; return oom ? NULL : calloc(1,n);}
 static void FreeVec(void *p) {free(p);}
@@ -76,7 +77,7 @@ static void SetSignal(ULONG v, ULONG m) {(void)v;(void)m;}
 static void *FindVar(const char *s, int t) {(void)s;(void)t;return NULL;}
 static ULONG AvailMem(int f) {(void)f;return 0;}
 static LONG RunCommand(BPTR b, ULONG stack, char *cmd, LONG len) {
- (void)b;(void)stack;(void)cmd;(void)len;runs++;dos_error=command_error;return command_rc;
+ (void)b;(void)stack;(void)cmd;(void)len;runs++;entry_rc=cli.cli_ReturnCode;dos_error=command_error;return command_rc;
 }
 static void setInteractive(struct CommandLineInterface *c, ShellState *s) {(void)c;(void)s;}
 static void Printf(const char *f, ...) {(void)f;}
@@ -94,7 +95,7 @@ TESTS = r'''
 static void reset(LONG previous) {
  memset(&cli,0,sizeof cli);cli.cli_ReturnCode=previous;
  oom=loaded=directory=unloads=runs=changed_dir=0;
- dos_error=command_rc=command_error=0;
+ dos_error=command_rc=command_error=0;entry_rc=-1;
 }
 int main(void) {
  ShellState s={"C:missing"}; LONG error;
@@ -110,7 +111,13 @@ int main(void) {
  assert(error==212 && cli.cli_ReturnCode==10 && runs==1 && unloads==1);
  reset(RETURN_FAIL);directory=1;error=executeLine(&s,"");
  assert(error==0 && cli.cli_ReturnCode==RETURN_OK && runs==0 && changed_dir==1);
- puts("PASS loader refusal, allocation failure, success, warning, command error, directory shortcut");
+ /* If WARN/ERROR/FAIL inspect Cli()->cli_ReturnCode on entry. */
+ const LONG previous_codes[]={0,5,10,20};
+ for(unsigned i=0;i<sizeof previous_codes/sizeof previous_codes[0];i++) {
+   reset(previous_codes[i]);loaded=1;error=executeLine(&s,"");
+   assert(error==0 && entry_rc==previous_codes[i]);
+ }
+ puts("PASS loader refusal, allocation failure, success, warning, command error, directory shortcut, previous RC visible to conditions");
  return 0;
 }
 '''
@@ -125,6 +132,9 @@ with tempfile.TemporaryDirectory(prefix='shell-status-') as temporary:
     if args.reject:
         old = subprocess.check_output(['git', '-C', str(ROOT), 'show', f'{args.reject}:{SOURCE}'], text=True)
         versions.append(('negative', old))
+    if args.reject_interference:
+        old = subprocess.check_output(['git', '-C', str(ROOT), 'show', f'{args.reject_interference}:{SOURCE}'], text=True)
+        versions.append(('interference', old))
     for name, source in versions:
         cfile, binary = directory / f'{name}.c', directory / name
         cfile.write_text(PRELUDE + body(source) + TESTS)
@@ -136,7 +146,11 @@ with tempfile.TemporaryDirectory(prefix='shell-status-') as temporary:
             print(result.stdout, end='')
             if result.returncode:
                 raise SystemExit(result.stderr)
-        else:
+        elif name == 'negative':
             assert result.returncode != 0, 'negative control unexpectedly passed'
             assert 'cli.cli_ReturnCode==RETURN_FAIL' in result.stderr, result.stderr
             print(f'PASS negative control {args.reject}: rejected stale successful return code')
+        else:
+            assert result.returncode != 0, 'interference control unexpectedly passed'
+            assert 'entry_rc==previous_codes[i]' in result.stderr, result.stderr
+            print(f'PASS negative control {args.reject_interference}: rejected overwritten condition status')
