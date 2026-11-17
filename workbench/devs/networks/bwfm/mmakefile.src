@@ -18,4 +18,13 @@ include $(SRCDIR)/config/aros.cfg
     files="bwfm_dev" \
     moduledir=Devs/Networks
 
+# Explicit diagnostic build, kept out of the normal device installation.
+# Preserve the resident name so it can replace the normal device for a test.
+#MM- workbench-devs-networks-bwfm-debug : workbench-devs-networks-bwfm-includes
+BWFM_DEBUG_CFLAGS = $(CFLAGS) -DDEBUG=1
+%build_module_library mmake=workbench-devs-networks-bwfm-debug \
+    modname=bwfm modtype=device conffile=bwfm.conf \
+    files="bwfm_dev" cflags=$(BWFM_DEBUG_CFLAGS) \
+    objdir=$(OBJDIR)/debug moduledir=Storage/Networks
+
 %common

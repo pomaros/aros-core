@@ -12,7 +12,9 @@
     Genmodule device structure modelled on the AROS tap.device (APL).
 */
 
+#ifndef DEBUG
 #define DEBUG 0
+#endif
 
 #include <aros/debug.h>
 #include <aros/macros.h>
