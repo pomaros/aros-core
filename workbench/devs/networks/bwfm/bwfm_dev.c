@@ -801,6 +801,7 @@ static void tx_request(struct bwfm_unit *unit, struct IOSana2Req *req)
     struct bwfm_ethhdr *eth = (struct bwfm_ethhdr *)txbuf;
     UBYTE *packet;
     ULONG framelen;
+    BOOL associated, keys_pending;
 
     if (!unit->online)
     {
@@ -811,11 +812,16 @@ static void tx_request(struct bwfm_unit *unit, struct IOSana2Req *req)
 
     if (req->ios2_Req.io_Flags & SANA2IOF_RAW)
     {
+        if (req->ios2_DataLength < ETH_HLEN ||
+            req->ios2_DataLength > sizeof(txbuf))
+            goto bad_buffer;
         packet = txbuf;
         framelen = req->ios2_DataLength;
     }
     else
     {
+        if (req->ios2_DataLength > sizeof(txbuf) - ETH_HLEN)
+            goto bad_buffer;
         CopyMem(unit->hwaddr, eth->h_source, ETH_ALEN);
         CopyMem(req->ios2_DstAddr, eth->h_dest, ETH_ALEN);
         eth->h_proto = AROS_WORD2BE(req->ios2_PacketType);
@@ -827,10 +833,27 @@ static void tx_request(struct bwfm_unit *unit, struct IOSana2Req *req)
         opener->tx == NULL ||
         !opener->tx(packet, req->ios2_Data, req->ios2_DataLength))
     {
+bad_buffer:
         req->ios2_Req.io_Error = S2ERR_NO_RESOURCES;
         req->ios2_WireError = S2WERR_BUFF_ERROR;
         report_events(unit, S2EVENT_ERROR | S2EVENT_SOFTWARE | S2EVENT_BUFF |
                             S2EVENT_TX);
+        return;
+    }
+
+    /* Administrative ONLINE precedes association so the supplicant can open
+     * its requests. It is not permission to submit data to an unassociated
+     * radio. During the host handshake, only EAPOL may cross the port.
+     * Inspect the actual header for RAW callers too. */
+    ObtainSemaphore(&unit->lock);
+    associated = unit->joined;
+    keys_pending = unit->keys_pending;
+    ReleaseSemaphore(&unit->lock);
+    if (!associated || (keys_pending &&
+            eth->h_proto != AROS_WORD2BE(0x888e)))
+    {
+        req->ios2_Req.io_Error = S2ERR_OUTOFSERVICE;
+        req->ios2_WireError = S2WERR_UNIT_OFFLINE;
         return;
     }
 
