@@ -57,21 +57,33 @@ def corpus(out):
     (out/'corpus.inc').write_text('\n'.join(header)+'\nstatic const struct StoreCase cases[]={'+','.join(rows)+'};\n')
 
 def main():
+    global ROOT,HERE,KERNEL,SOURCE
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--out',type=Path,required=True)
     p.add_argument('--cc',default='/opt/homebrew/opt/llvm/bin/clang')
     p.add_argument('--qemu',default='qemu-system-aarch64')
+    p.add_argument('--source',type=Path,default=ROOT,help='selected common or composed source tree')
     a=p.parse_args();out=a.out.resolve()
+    ROOT=a.source.resolve();HERE=ROOT/'developer/debug/test/kernel/restricted_jit_store'
+    KERNEL=ROOT/'arch/aarch64-all/kernel';SOURCE=ROOT/'arch/aarch64-apple/kernel/restricted.c'
     if out.exists() or ROOT in out.parents:p.error('fresh output outside source required')
     out.mkdir(parents=True)
     inputs=[SOURCE,KERNEL/'release_store.h',*sorted(HERE.glob('*.[cS]')),Path(__file__).resolve(),
             ROOT/'arch/aarch64-apple/include/aros/apple/runtime.h',
             ROOT/'arch/aarch64-apple/include/aros/apple/runtime_local.h',
             HERE.parent/'restricted_domain_qemu/link.ld',HERE.parent/'restricted_domain_qemu/run.py']
-    hashes=lambda:{str(f.relative_to(ROOT)):hashlib.sha256(f.read_bytes()).hexdigest() for f in inputs}
+    composition=ROOT/'COMPOSED-SOURCE.json'
+    if composition.is_file():
+        identity=json.loads(composition.read_text());inputs.append(composition)
+        source_commit=identity['core_revision'];dirty=None
+    else:
+        identity=None
+        source_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
+        dirty=bool(subprocess.check_output(['git','status','--porcelain'],cwd=ROOT))
+    hashes=lambda:{str(f):hashlib.sha256(f.read_bytes()).hexdigest() for f in inputs}
     before=hashes()
-    result={'result':'FAIL','scope':__doc__,'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
-            'dirty_inputs':bool(subprocess.check_output(['git','status','--porcelain'],cwd=ROOT)),
+    result={'result':'FAIL','scope':__doc__,'source_commit':source_commit,
+            'dirty_inputs':dirty,'composition':identity,
             'input_hashes':before,'records':[]}
     text=SOURCE.read_text()
     actual=''.join(function(text,n) for n in ['r_jit_page(const','r_jit_store_fault(const','r_emulate_jit_store(struct'])
@@ -147,7 +159,7 @@ def main():
                 result['records'][-1].update(qemu_command=command,qemu_build=cmd,qemu_exit=proc.returncode,
                                             elf_sha256=hashlib.sha256(elf.read_bytes()).hexdigest())
         if hashes()!=before:raise RuntimeError('inputs changed')
-        result['result']='DIAGNOSTIC_PASS' if result['dirty_inputs'] else 'PASS'
+        result['result']='PASS' if result['dirty_inputs'] is False else 'DIAGNOSTIC_PASS'
     except Exception as e:result['error']=str(e)
     (out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
     print(json.dumps({k:result[k] for k in ('result','error') if k in result}))

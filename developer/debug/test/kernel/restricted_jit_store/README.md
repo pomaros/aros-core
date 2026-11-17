@@ -33,6 +33,10 @@ preflight, bounded completion and exact output/exit requirements. It does
 not exercise SPRR, an actual data abort, production scheduling, concurrent
 JIT modification or installed product behavior. `result.json` records source
 hashes, commands and ELF identity; dirty sources report `DIAGNOSTIC_PASS`.
+`--source` selects a separate common/composed source tree without editing it.
+Composed sources retain their manifest and actual input hashes and report
+`DIAGNOSTIC_PASS`, since they have no Git working-tree cleanliness evidence.
+The runner's own file hash is retained separately from the selected inputs.
 
 `RestrictedJitStore.c` plus `guest.S` builds with the matching AROS SDK and
 standard runtime libraries. It runs four release-store widths from a JIT
