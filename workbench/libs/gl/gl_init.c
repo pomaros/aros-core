@@ -244,6 +244,11 @@ static AROS_LH1(struct Library *, GM_UNIQUENAME(LibOpen),
     // delete the late expunge flag
     GLB(base)->glb_Lib.lib_Flags &= ~LIBF_DELEXP;
 
+    /* The default can change while the library is resident (a system update
+     * names a new implementation): read it at every open. */
+    if (!GLB(base)->glb_GLImpl)
+        GetGLVar(base, "SYS/GL.default", &GLB(base)->glb_GLDef);
+
     if (GLB(base)->glb_GLImpl)
         glImplementation = GLB(base)->glb_GLImpl;
     else
@@ -259,6 +264,35 @@ static AROS_LH1(struct Library *, GM_UNIQUENAME(LibOpen),
     D(bug("[GL] %s: Attempting to use '%s' version %d\n", __func__, glImplementation, version));
 
     res = OpenLibrary(glImplementation, version);
+
+    /* ENV:SYS/GL.default is restored from a user's ENVARC: and can outlive
+     * the implementation it names. The system's own default, shipped with
+     * the implementation in SYS:Prefs/Env-Archive, is the fallback. */
+    if (res == NULL && glImplementation == GLB(base)->glb_GLDef)
+    {
+        char name[BUFFER_SIZE];
+        BPTR fh = Open("SYS:Prefs/Env-Archive/SYS/GL.default", MODE_OLDFILE);
+
+        if (fh != BNULL)
+        {
+            LONG len = Read(fh, name, sizeof(name) - sizeof(".library"));
+
+            Close(fh);
+            while (len > 0 && (name[len - 1] == '\n' || name[len - 1] == '\r' ||
+                    name[len - 1] == ' '))
+                --len;
+            if (len > 0)
+            {
+                strcpy(&name[len], ".library");
+                if (strcmp(name, glImplementation) != 0)
+                {
+                    bug("[GL] '%s' did not open; using the system default '%s'\n",
+                        glImplementation, name);
+                    res = OpenLibrary(name, version);
+                }
+            }
+        }
+    }
 
     return res;
 
