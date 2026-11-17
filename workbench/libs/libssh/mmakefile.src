@@ -44,7 +44,8 @@ LIBSSH_PUBLIC_HEADERS := callbacks.h libssh.h ssh2.h legacy.h libsshpp.hpp \
 
 %fetch mmake=libssh-fetch archive=$(LIBSSH_ARCHBASE) \
     destination=$(PORTSDIR)/libssh suffixes=$(LIBSSH_SUFFIXES) \
-    location=$(PORTSSOURCEDIR) archive_origins=$(LIBSSH_REPOSITORIES)
+    location=$(PORTSSOURCEDIR) archive_origins=$(LIBSSH_REPOSITORIES) \
+    patches_specs=$(LIBSSH_ARCHBASE)-aros.diff:$(LIBSSH_ARCHBASE):-f,-p1
 
 # libssh.h includes <libssh/libssh_version.h>, which cmake generates from
 # the template in the archive; substitute the version numbers ourselves.

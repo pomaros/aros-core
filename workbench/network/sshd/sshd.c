@@ -44,6 +44,7 @@ struct Library *__libssh_SocketBase(void);
 #include <mbedtls/sha256.h>
 #include <mbedtls/error.h>
 
+#include <errno.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -764,8 +765,18 @@ int main(int argc, char **argv)
     else
         Printf("sshd: Press CTRL-C to shutdown\n");
 
+    int bind_fd = ssh_bind_get_fd(sshbind);
+    size_t nfwords = (size_t)bind_fd / NFDBITS + 1;
+    fd_mask *read_words = calloc(nfwords, sizeof(*read_words));
+    int listener_rc = RETURN_OK;
+    if (!read_words)
+    {
+        Printf("sshd: Cannot allocate the listener descriptor set\n");
+        listener_rc = RETURN_FAIL;
+    }
+
     /* Accept loop.  Existing sessions run in their own processes, unaffected. */
-    while (!g_shutdown)
+    while (read_words && !g_shutdown)
     {
         ULONG sigs;
 
@@ -776,23 +787,31 @@ int main(int argc, char **argv)
         }
         else
         {
-            int bind_fd = ssh_bind_get_fd(sshbind);
-            fd_set rfds;
             struct timeval tv;
             ULONG sigmask = mStop | mBegin | mEnd | SIGBREAKF_CTRL_C;
             int sel;
 
-            FD_ZERO(&rfds);
-            FD_SET(bind_fd, &rfds);
+            memset(read_words, 0, nfwords * sizeof(*read_words));
+            read_words[bind_fd / NFDBITS] = 1U << (bind_fd % NFDBITS);
             tv.tv_sec = 1;
             tv.tv_usec = 0;
 
             /* WaitSelect also returns when one of the requested signals fires;
              * sigmask comes back holding the signals that were received. */
-            sel = WaitSelect(bind_fd + 1, &rfds, NULL, NULL, &tv, &sigmask);
-            sigs = sigmask;
+            sel = WaitSelect(bind_fd + 1, (fd_set *)read_words, NULL, NULL, &tv, &sigmask);
+            if (sel < 0)
+            {
+                if (Errno() != EINTR)
+                {
+                    Printf("sshd: WaitSelect failed (%ld)\n", (IPTR)Errno());
+                    listener_rc = RETURN_FAIL;
+                    break;
+                }
+                sigs = SetSignal(0, sigmask) & sigmask;
+            }
+            else sigs = sigmask;
 
-            if (sel > 0 && FD_ISSET(bind_fd, &rfds))
+            if (sel > 0)
             {
                 LONG fd = accept(bind_fd, NULL, NULL);
 
@@ -812,6 +831,7 @@ int main(int argc, char **argv)
             paused = FALSE;     /* reconfigure done - resume accepting */
     }
 
+    free(read_words);
     if (nshandle)
         UnregisterNetService(nshandle);
     if (NetServicesBase)
@@ -825,5 +845,5 @@ int main(int argc, char **argv)
     CloseLibrary(DaemonSocketBase);
 
     Printf("sshd: Stopped\n");
-    return RETURN_OK;
+    return listener_rc;
 }

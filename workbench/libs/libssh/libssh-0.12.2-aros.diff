@@ -1,0 +1,167 @@
+--- a/src/poll.c
++++ b/src/poll.c
+@@ -219,56 +219,43 @@
+  */
+ static int bsd_poll(ssh_pollfd_t *fds, nfds_t nfds, int timeout)
+ {
+-    fd_set readfds, writefds, exceptfds;
++    fd_mask local[3 * howmany(FD_SETSIZE, NFDBITS)] = {0};
++    fd_mask *masks = local, *reads, *writes, *excepts;
+     struct timeval tv, *ptv = NULL;
+-    socket_t max_fd;
+-    int rc;
++    int max_fd = -1, rc;
++    size_t words;
+     nfds_t i;
+ 
+     if (fds == NULL) {
+         errno = EFAULT;
+         return -1;
+     }
+-
+-    ZERO_STRUCT(readfds);
+-    FD_ZERO(&readfds);
+-    ZERO_STRUCT(writefds);
+-    FD_ZERO(&writefds);
+-    ZERO_STRUCT(exceptfds);
+-    FD_ZERO(&exceptfds);
+-
+-    /* compute fd_sets and find largest descriptor */
+-    for (rc = -1, max_fd = 0, i = 0; i < nfds; i++) {
+-        if (fds[i].fd == SSH_INVALID_SOCKET) {
+-            continue;
+-        }
+-#ifndef _WIN32
+-        if (fds[i].fd >= FD_SETSIZE) {
+-            rc = -1;
+-            break;
+-        }
+-#endif
+-
+-        // we use the readfds to get POLLHUP and POLLERR, which are provided
+-        // even when not requested
+-        FD_SET(fds[i].fd, &readfds);
+-
+-        if (fds[i].events & (POLLOUT | POLLWRNORM | POLLWRBAND)) {
+-            FD_SET(fds[i].fd, &writefds);
+-        }
+-        if (fds[i].events & (POLLPRI | POLLRDBAND)) {
+-            FD_SET(fds[i].fd, &exceptfds);
+-        }
+-
+-        if (fds[i].fd > max_fd) {
+-            max_fd = fds[i].fd;
+-            rc = 0;
+-        }
+-    }
+-
+-    if (max_fd == SSH_INVALID_SOCKET || rc == -1) {
++    for (i = 0; i < nfds; i++) {
++        if (fds[i].fd > max_fd) max_fd = fds[i].fd;
++    }
++    if (max_fd < 0) {
+         errno = EINVAL;
+         return -1;
++    }
++
++    /* AROS WaitSelect sizes its bit sets from nfds. Descriptor numbers
++     * come from a system-wide table shared with other processes. */
++    words = (size_t)max_fd / NFDBITS + 1;
++    if (words > howmany(FD_SETSIZE, NFDBITS)) {
++        masks = calloc(3 * words, sizeof(*masks));
++        if (!masks) return -1;
++    }
++    reads = masks;
++    writes = reads + words;
++    excepts = writes + words;
++    for (i = 0; i < nfds; i++) {
++        int fd = fds[i].fd;
++        if (fd < 0) continue;
++        size_t word = fd / NFDBITS;
++        unsigned int bit = 1U << (fd % NFDBITS);
++        reads[word] |= bit;
++        if (fds[i].events & (POLLOUT | POLLWRNORM | POLLWRBAND)) writes[word] |= bit;
++        if (fds[i].events & (POLLPRI | POLLRDBAND)) excepts[word] |= bit;
+     }
+ 
+     if (timeout < 0) {
+@@ -284,29 +271,25 @@
+         }
+     }
+ 
+-    rc = select(max_fd + 1, &readfds, &writefds, &exceptfds, ptv);
+-    if (rc < 0) {
+-        return -1;
+-    }
+-    /* A timeout occurred */
+-    if (rc == 0) {
+-        return 0;
+-    }
++    rc = select(max_fd + 1, (fd_set *)reads, (fd_set *)writes, (fd_set *)excepts, ptv);
++    if (rc <= 0) goto done;
+ 
+     for (rc = 0, i = 0; i < nfds; i++) {
+         if (fds[i].fd >= 0) {
++            size_t word = fds[i].fd / NFDBITS;
++            unsigned int bit = 1U << (fds[i].fd % NFDBITS);
+             fds[i].revents = 0;
+ 
+-            if (FD_ISSET(fds[i].fd, &readfds)) {
++            if (reads[word] & bit) {
+                 fds[i].revents =
+                     bsd_socket_compute_revents(fds[i].fd, fds[i].events);
+             }
+-            if (FD_ISSET(fds[i].fd, &writefds)) {
++            if (writes[word] & bit) {
+                 fds[i].revents |=
+                     fds[i].events & (POLLOUT | POLLWRNORM | POLLWRBAND);
+             }
+ 
+-            if (FD_ISSET(fds[i].fd, &exceptfds)) {
++            if (excepts[word] & bit) {
+                 fds[i].revents |= fds[i].events & (POLLPRI | POLLRDBAND);
+             }
+ 
+@@ -318,6 +301,8 @@
+         }
+     }
+ 
++done:
++    if (masks != local) free(masks);
+     return rc;
+ }
+ 
+--- a/include/libssh/priv.h
++++ b/include/libssh/priv.h
+@@ -188,7 +188,12 @@
+ 
+ #include <unistd.h>
+ 
++#ifdef __AROS__
++#include <proto/bsdsocket.h>
++#define _XCLOSESOCKET CloseSocket
++#else
+ #define _XCLOSESOCKET close
++#endif
+ 
+ #endif /* _WIN32 */
+ 
+--- a/src/socket.c
++++ b/src/socket.c
+@@ -545,7 +545,15 @@
+         CLOSE_SOCKET(s->fd);
+         s->last_errno = WSAGetLastError();
+ #else
+-        CLOSE_SOCKET(s->fd);
++#ifdef __AROS__
++        if (!s->fd_is_socket) {
++            close(s->fd);
++            s->fd = SSH_INVALID_SOCKET;
++        } else
++#endif
++        {
++            CLOSE_SOCKET(s->fd);
++        }
+         s->last_errno = errno;
+ #endif
+     }
