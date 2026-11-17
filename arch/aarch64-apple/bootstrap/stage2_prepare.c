@@ -10,6 +10,7 @@
 #include "stage2_prepare.h"
 
 #include "stage2_fdt_map.h"
+#include "stage2_memory_plan.h"
 #include "stage2_mmu.h"
 #include "stage2_tags.h"
 
@@ -59,5 +60,6 @@ enum AROSAppleStage2Status AROSAppleStage2PrepareMemory(
     if (observer != NULL && !observer(AROS_APPLE_STAGE2_OBSERVE_AFTER_MMU,
             boot_info, result, observer_context))
         return AROS_APPLE_STAGE2_OBSERVER;
-    return AROS_APPLE_STAGE2_OK;
+    /* Nothing more is placed in the stage-two allocation */
+    return AROSAppleStage2ReleaseArenaTail(boot_info, result);
 }

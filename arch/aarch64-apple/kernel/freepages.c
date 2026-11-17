@@ -27,8 +27,12 @@ int AROSApplePageFree(void *address, uintptr_t length)
         /* Preserve ownership if any page failed to become writable. The
          * void public protection API cannot communicate that failure. */
         if (AROSApplePageProtect(address, (uint32_t)length,
-                MAP_Readable | MAP_Writable))
-            return AROSApplePageFreeRaw(address, length);
+                MAP_Readable | MAP_Writable) &&
+            AROSApplePageFreeRaw(address, length)) {
+            /* A chunk the arena borrowed may now go back to Exec */
+            AROSApplePageArenaTrim();
+            return 1;
+        }
     }
 
     return 0;

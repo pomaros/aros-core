@@ -2122,6 +2122,128 @@ int AROSAppleRestrictedDataAliasesMatch(uintptr_t address,uint64_t tcr,unsigned 
     }
     r_uncoordinate();return ok;
 }
+/* The page arena grows. A domain root cloned before the chunk became arena
+ * maps its blocks as the native root then did: 2 MiB blocks, or nothing where
+ * the code window held them. Every root must map arena pages with leaves,
+ * the alias changes above rely on it, so each such domain gets one table per
+ * block, with the leaves its clone would have had. */
+#define R_TABLE_ADDRESS UINT64_C(0x0000fffffffff000)
+#define R_ARENA_BLOCK_PAGES ((size_t)(AROS_APPLE_PAGE_ARENA_BLOCK/R_PAGE))
+static uint64_t *r_block_slot(uint64_t root,uintptr_t address)
+{
+    uint64_t *table=(uint64_t *)(uintptr_t)(root&R_TABLE_ADDRESS);
+    for (unsigned shift=39;shift>21;shift-=9) {
+        uint64_t descriptor=table[(address>>shift)&511U];
+        if ((descriptor&3U)!=3U) return NULL;
+        table=(uint64_t *)(uintptr_t)(descriptor&R_TABLE_ADDRESS);
+    }
+    return &table[(address>>21)&511U];
+}
+/* Leaves of a clone for block: from its own block descriptor, else from the
+ * native leaves with what clone_privileged (mapping.c) does to a leaf. */
+static void r_clone_leaves(uint64_t *leaves,uint64_t clone,const uint64_t *native,uintptr_t block)
+{
+    for (size_t i=0;i<R_ARENA_BLOCK_PAGES;++i) {
+        if ((clone&3U)==1U) {
+            leaves[i]=(clone&~(R_TABLE_ADDRESS|3U))|(block+i*R_PAGE)|3U;
+            continue;
+        }
+        uint64_t leaf=native[i];
+        if (!(leaf&(UINT64_C(1)<<7))) leaf|=UINT64_C(1)<<53;
+        leaves[i]=(leaf&~(UINT64_C(1)<<6))|(UINT64_C(1)<<54)|(UINT64_C(1)<<11);
+    }
+}
+size_t AROSAppleRestrictedIndexSlotsFor(size_t pages)
+{ return AROSRestrictedServiceIndexSlotsFor(pages); }
+size_t AROSAppleRestrictedIndexSlots(void)
+{ return AROSRestrictedServiceIndexSlots(); }
+int AROSAppleRestrictedArenaAttachLocked(struct AROSApplePageArenaGrowth *g)
+{
+    uint64_t native;
+    size_t domains=0,index_need,index_have,k;
+    __asm__ volatile("mrs %0,ttbr0_el1":"=r"(native));
+    r_coordinate();
+    index_need=AROSRestrictedServiceIndexSlotsFor(g->member_pages);
+    index_have=AROSRestrictedServiceIndexSlots();
+    if (index_have && index_have<index_need && (!g->index || g->index_slots<index_need)) {
+        r_uncoordinate();return -1;
+    }
+    /* REAPING roots have no executing contexts and may be freeing their
+     * tables outside the coordinator: they never run again, leave them. */
+    for (struct RestrictedDomain *d=restricted_domains;d;d=d->next) {
+        int needed=0;
+        if (d->state==R_REAPING || !d->root) continue;
+        for (uint32_t b=0;b<g->blocks;++b) {
+            uintptr_t block=g->start+(uintptr_t)b*AROS_APPLE_PAGE_ARENA_BLOCK;
+            uint64_t *slot=r_block_slot(d->root,block),*native_slot=r_block_slot(native,block);
+            if (!slot || (*slot&3U)==3U) continue;
+            if (!native_slot || (*native_slot&3U)!=3U) { r_uncoordinate();return 0; }
+            needed=1;
+        }
+        domains+=needed;
+    }
+    struct RestrictedTableChunk *records=NULL;
+    uint64_t *tables=NULL;
+    if (domains) {
+        records=AROSApplePageArenaCarve(g,(uint32_t)domains,0);
+        tables=records ? AROSApplePageArenaCarve(g,(uint32_t)(domains*g->blocks),1) : NULL;
+        if (!tables) { r_uncoordinate();return 0; }
+    }
+    /* Fill every table first, then break each block once, invalidate once
+     * for every ASID, and install the tables: nothing uses the chunk yet. */
+    k=0;
+    for (struct RestrictedDomain *d=restricted_domains;d && k<domains;d=d->next) {
+        int needed=0;
+        if (d->state==R_REAPING || !d->root) continue;
+        for (uint32_t b=0;b<g->blocks;++b) {
+            uintptr_t block=g->start+(uintptr_t)b*AROS_APPLE_PAGE_ARENA_BLOCK;
+            uint64_t *slot=r_block_slot(d->root,block),*native_slot=r_block_slot(native,block);
+            uint64_t *leaves=(uint64_t *)((uintptr_t)tables+(k*g->blocks+b)*R_PAGE);
+            leaves[0]=0;
+            if (!slot || (*slot&3U)==3U) continue;
+            r_clone_leaves(leaves,*slot,(const uint64_t *)(uintptr_t)(*native_slot&R_TABLE_ADDRESS),block);
+            r_clean(NULL,leaves,R_PAGE);
+            /* Marks the slot for the second pass, which installs leaves */
+            leaves[0]|=UINT64_C(1)<<63;
+            *slot=0;r_clean(NULL,slot,sizeof(*slot));
+            needed=1;
+        }
+        k+=needed;
+    }
+    __asm__ volatile("dsb ishst; tlbi vmalle1is; dsb ish; isb":::"memory");
+    k=0;
+    for (struct RestrictedDomain *d=restricted_domains;d && k<domains;d=d->next) {
+        int needed=0;
+        if (d->state==R_REAPING || !d->root) continue;
+        uint64_t *first=(uint64_t *)((uintptr_t)tables+k*g->blocks*R_PAGE);
+        for (uint32_t b=0;b<g->blocks;++b) {
+            uint64_t *leaves=(uint64_t *)((uintptr_t)first+b*R_PAGE);
+            uint64_t *slot;
+            if (!(leaves[0]&(UINT64_C(1)<<63))) continue;
+            leaves[0]&=~(UINT64_C(1)<<63);r_clean(NULL,leaves,sizeof(*leaves));
+            slot=r_block_slot(d->root,g->start+(uintptr_t)b*AROS_APPLE_PAGE_ARENA_BLOCK);
+            __asm__ volatile("dsb ishst":::"memory");
+            *slot=(uintptr_t)leaves|3U;r_clean(NULL,slot,sizeof(*slot));
+            needed=1;
+        }
+        if (!needed) continue;
+        /* The domain owns its tables, freed with its other chunks (a page
+         * for a block that needed none stays unused until then). */
+        struct RestrictedTableChunk *c=(struct RestrictedTableChunk *)((uintptr_t)records+k*R_PAGE);
+        c->pages=first;c->count=g->blocks;c->used=g->blocks;
+        c->next=d->tables;d->tables=c;
+        d->table_pages+=c->count;d->table_used+=c->used;++d->table_metadata_pages;
+        ++k;
+    }
+    __asm__ volatile("dsb ish; isb":::"memory");
+    if (index_have && index_have<index_need) {
+        AROSRestrictedServiceIndexGrow(g->index,g->index_slots,&g->old_index,&g->old_index_slots);
+        g->index=NULL;
+    }
+    AROSApplePageArenaPublish(g);
+    r_uncoordinate();
+    return 1;
+}
 static void r_mark_retired_resources(void *retired)
 {
     if (!retired) return;

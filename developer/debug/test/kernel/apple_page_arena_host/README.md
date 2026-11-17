@@ -1,13 +1,14 @@
 <!-- Copyright (C) 2026 John KNIPPER <code@jkn.me>. -->
 <!-- Licensed under the AROS Public License (APL), Version 1.1. -->
 
-# Apple code arena allocator on the host
+# Apple page arena allocator on the host
 
 `run.py --out DIR [--compare REV]` compiles `arch/aarch64-apple/kernel/page_allocator.c`
 unchanged against stub exec headers and runs `test.c` under ASan and UBSan:
 
-- metadata-only allocations beyond4GiB and at the8GiB capacity boundary,
-  with over-boundary allocation and initialization refusals;
+- metadata-only allocations above 4 GiB and at the capacity boundary of
+  stage two's part (64 MiB), with over-boundary allocation and
+  initialization refusals;
 - 200,000 random allocations and frees, page tables among them: every block
   handed out is free, ordinary allocations match an independent first-fit
   model, and a request fails only when no free run is long enough;
@@ -19,7 +20,15 @@ unchanged against stub exec headers and runs `test.c` under ASan and UBSan:
   larger request fails and after a fixed-address allocation fills the last hole;
 - a session that fills the arena with a large program's hunks, page tables
   and small long-lived blocks, then frees most hunks, and asks for forty
-  2 MiB blocks (V8's JIT regions).
+  2 MiB blocks (V8's JIT regions);
+- growth through fake operations: a full arena grows ahead of need after a
+  retry the attach asked for, a chunk is arena only once attach publishes it,
+  its own records are never handed out, a page table goes to a chunk's top,
+  a large request takes a larger chunk with the records attach carved for
+  restricted domains counted as allocations and freeable, a failed attach
+  gives its chunk back, and a chunk goes back to Exec only when nothing in it
+  is used and enough stays free without it, or stays arena when its blocks
+  cannot be restored.
 
 With `--compare REV` the session also runs against the allocator at that git
 revision; the current one must satisfy more of the 2 MiB requests.

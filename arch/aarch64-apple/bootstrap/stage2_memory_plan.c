@@ -152,12 +152,14 @@ enum AROSAppleStage2Status AROSAppleStage2BuildMemoryPlan(
             boot_info->allocation_count)
         return AROS_APPLE_STAGE2_NO_USABLE_MEMORY;
 
+    /* One range more than now: AROSAppleStage2ReleaseArenaTail splits the
+     * stage-two allocation in two once nothing more is placed in it. */
     if (!align_up(*cursor, 16U, &plan_start) ||
         !add_u64(sizeof(*plan),
             (uint64_t)(conventional_count + boot_info->allocation_count) *
                 sizeof(*ranges), &descriptor_bytes) ||
-        !add_u64(plan_start, descriptor_bytes, &plan_end) ||
-        plan_end > arena_end || descriptor_bytes > UINT32_MAX)
+        !add_u64(plan_start, descriptor_bytes + sizeof(*ranges), &plan_end) ||
+        plan_end > arena_end || descriptor_bytes > UINT32_MAX - sizeof(*ranges))
         return AROS_APPLE_STAGE2_ARENA_EXHAUSTED;
     plan = (struct AROSAppleMemoryPlan *)(uintptr_t)plan_start;
     ranges = (struct AROSAppleMemoryPlanRange *)(plan + 1);
@@ -228,5 +230,66 @@ enum AROSAppleStage2Status AROSAppleStage2BuildMemoryPlan(
     result->memory_plan_size = plan->size;
     result->arena_used_end = (uintptr_t)plan_end;
     *cursor = plan_end;
+    return AROS_APPLE_STAGE2_OK;
+}
+
+/*
+ * Stage two places everything it keeps at the start of its allocation: the
+ * kernel, the page arena's first part, the module map, this plan, the boot
+ * tags and the translation tables. The rest of the allocation, which the
+ * bundle sizes for the largest boot, would stay unused; it becomes a release
+ * range, Exec memory like the loader's other released pages. The identity
+ * map already maps it, as every plan range, read-write and not executable.
+ */
+#define STAGE2_TAIL_MINIMUM (UINT64_C(64) * 1024U)
+
+enum AROSAppleStage2Status AROSAppleStage2ReleaseArenaTail(
+    const struct AROSBootInfo *boot_info,
+    struct AROSAppleStage2Result *result)
+{
+    struct AROSAppleMemoryPlanRange *ranges;
+    struct AROSAppleMemoryPlan *plan;
+    uint64_t keep_end;
+    uint64_t tail;
+    uint32_t index;
+    uint32_t found = UINT32_MAX;
+
+    if (boot_info == NULL || result == NULL || result->memory_plan == 0)
+        return AROS_APPLE_STAGE2_INVALID_ARGUMENT;
+    plan = (struct AROSAppleMemoryPlan *)result->memory_plan;
+    ranges = (struct AROSAppleMemoryPlanRange *)(plan + 1);
+    if (!AROSAppleMemoryPlanValidate(plan) ||
+        plan->entry_count != plan->conventional_count +
+            boot_info->allocation_count ||
+        !align_up(result->arena_used_end, AROS_APPLE_MEMORY_PLAN_PAGE_SIZE,
+            &keep_end))
+        return AROS_APPLE_STAGE2_INVALID_MEMORY_PLAN;
+    for (index = 0; index < plan->entry_count; ++index) {
+        if (ranges[index].kind == AROS_APPLE_MEMORY_RANGE_RETAIN &&
+            ranges[index].start <= result->arena_start &&
+            result->arena_start < ranges[index].end)
+            found = index;
+    }
+    if (found == UINT32_MAX || keep_end <= ranges[found].start ||
+        keep_end > ranges[found].end || result->arena_end > ranges[found].end)
+        return AROS_APPLE_STAGE2_INVALID_MEMORY_PLAN;
+    tail = ranges[found].end - keep_end;
+    if (tail < STAGE2_TAIL_MINIMUM)
+        return AROS_APPLE_STAGE2_OK;
+
+    for (index = plan->entry_count; index > found + 1U; --index)
+        ranges[index] = ranges[index - 1U];
+    ranges[found + 1U] = ranges[found];
+    ranges[found + 1U].start = keep_end;
+    ranges[found + 1U].kind = AROS_APPLE_MEMORY_RANGE_RELEASE;
+    ranges[found].end = keep_end;
+    ++plan->entry_count;
+    plan->size += sizeof(*ranges);
+    ++plan->release_count;
+    plan->release_bytes += tail;
+    plan->retained_bytes -= tail;
+    result->memory_plan_size = plan->size;
+    if (!AROSAppleMemoryPlanValidate(plan))
+        return AROS_APPLE_STAGE2_INVALID_MEMORY_PLAN;
     return AROS_APPLE_STAGE2_OK;
 }

@@ -2,6 +2,7 @@
  * Licensed under the AROS Public License (APL) Version 1.1. */
 #ifndef AROS_KERNEL_RESTRICTED_H
 #define AROS_KERNEL_RESTRICTED_H
+#include <stddef.h>
 #include <aros/apple/restricted.h>
 #include <aros/apple/runtime.h>
 extern const struct AROSRestrictedAPI AROSRestrictedAPI;
@@ -31,4 +32,17 @@ int AROSAppleRestrictedProtectAliasesLocked(uintptr_t address,uint64_t tcr,unsig
  * Takes the coordinator to retain roots, but needs no remote rendezvous. */
 int AROSAppleRestrictedDataAliasesMatch(uintptr_t address,uint64_t tcr,unsigned permissions);
 void AROSAppleRestrictedContextRetired(void *context);
+/* The page arena grows (page_allocator.h): trusted EL1, PageMapLock held,
+ * the chunk's blocks already page-granular in the native root. Gives every
+ * domain root the same page leaves for them, with table pages carved from
+ * the chunk, grows the backing index with growth->index when it would be
+ * more than half full, and publishes the chunk, all under the coordinator.
+ * 1 done; 0 nothing changed (too few pages to carve); -1 the index needs
+ * storage of AROSAppleRestrictedIndexSlotsFor(growth->member_pages). */
+struct AROSApplePageArenaGrowth;
+int AROSAppleRestrictedArenaAttachLocked(struct AROSApplePageArenaGrowth *growth);
+/* Index slots for an arena of pages; the slots of the live index, 0 while
+ * no domain has needed one (a racy read: the attach decides). */
+size_t AROSAppleRestrictedIndexSlotsFor(size_t pages);
+size_t AROSAppleRestrictedIndexSlots(void);
 #endif

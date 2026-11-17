@@ -349,9 +349,15 @@ int AROSAppleStage2Main(
             AROS_APPLE_KERNEL_PHASE_MEMORY_READY ||
         AROSAppleStage2KernelState.memory_plan !=
             AROSAppleStage2LastResult.memory_plan ||
+        /* The released loader allocations, and the end of stage two's own
+         * (AROSAppleStage2ReleaseArenaTail) */
         AROSAppleStage2KernelState.reclaimed_bytes !=
+            memory_plan->release_bytes ||
+        memory_plan->release_bytes <
             AROSAppleStage2LastResult.ownership.release_after_stage2_bytes ||
         AROSAppleStage2KernelState.release_range_count !=
+            memory_plan->release_count ||
+        memory_plan->release_count <
             AROSAppleStage2LastResult.ownership.release_after_stage2_count ||
         AROSAppleStage2KernelState.retained_range_count !=
             AROSAppleStage2LastResult.ownership.retained_count ||

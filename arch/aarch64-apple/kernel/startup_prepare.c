@@ -387,6 +387,8 @@ enum AROSAppleKernelStartupStatus AROSAppleKernelPrepareMemory(
     if (!AROSApplePageAllocatorInitialize(
             (uintptr_t)page_arena_start, page_arena_size))
         return fail(state, AROS_APPLE_KERNEL_STARTUP_MEMORY_RANGE, 1);
+    /* Grows from Exec memory once there are tasks to ask for it */
+    AROSApplePageArenaSetOps(&AROSApplePageArenaKernelOps);
 
     memory_size = proven_upper - proven_lower;
     state->memory_lower = proven_lower;

@@ -29,16 +29,21 @@ static struct AROSRestrictedService *channel_lookup(uint64_t handle)
 /* The index is sized by the page arena that actually backs restricted pages
  * and taken from it the first time a space or shared backing is created, so
  * a system that never runs a restricted domain carries none of it. Twice the
- * arena's page count keeps the load at most one half. */
+ * arena's page count keeps the load at most one half; the arena grows the
+ * index when it grows itself (AROSRestrictedServiceIndexGrow). */
 static uintptr_t *backing_index;
 static size_t index_mask;
+size_t AROSRestrictedServiceIndexSlotsFor(size_t pages)
+{
+    size_t n=1024;
+    while (n<pages*2U && n<=SIZE_MAX/2U) n<<=1;
+    return n;
+}
 #if defined(__AROS__)
 #include "page_allocator.h"
 static uintptr_t *index_storage(size_t *slots)
 {
-    size_t want=(size_t)AROSApplePageArenaPages()*2U,n=1024;
-    while (n<want) n<<=1;
-    if (n>AROS_RESTRICTED_INDEX_SLOTS) n=AROS_RESTRICTED_INDEX_SLOTS;
+    size_t n=AROSRestrictedServiceIndexSlotsFor(AROSApplePageArenaPages());
     *slots=n;
     return (uintptr_t *)AROSApplePageTableAllocate(n*sizeof(uintptr_t));
 }
@@ -62,6 +67,22 @@ static int index_ready(void)
 #define INDEX_MASK index_mask
 static size_t index_home(uintptr_t pa)
 { return (size_t)(((uint64_t)(pa>>12)*UINT64_C(0x9e3779b97f4a7c15))>>32)&INDEX_MASK; }
+size_t AROSRestrictedServiceIndexSlots(void)
+{ return backing_index ? index_mask+1 : 0; }
+void AROSRestrictedServiceIndexGrow(uintptr_t *storage,size_t slots,
+    uintptr_t **old,size_t *old_slots)
+{
+    uintptr_t *previous=backing_index;
+    size_t count=previous ? index_mask+1 : 0;
+    *old=previous;*old_slots=count;
+    backing_index=storage;index_mask=slots-1;
+    for (size_t i=0;i<count;++i)
+        if (previous[i]) {
+            size_t j=index_home(previous[i]);
+            while (backing_index[j]) j=(j+1)&INDEX_MASK;
+            backing_index[j]=previous[i];
+        }
+}
 static int index_contains(uintptr_t pa)
 {
     if (!backing_index) return 0;

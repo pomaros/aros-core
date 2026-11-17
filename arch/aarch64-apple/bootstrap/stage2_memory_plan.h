@@ -15,4 +15,10 @@ enum AROSAppleStage2Status AROSAppleStage2BuildMemoryPlan(
     uint64_t arena_end,
     uint64_t *cursor);
 
+/* After the last placement in the stage-two allocation (arena_used_end is
+ * final): the allocation's unused end becomes a release range. */
+enum AROSAppleStage2Status AROSAppleStage2ReleaseArenaTail(
+    const struct AROSBootInfo *boot_info,
+    struct AROSAppleStage2Result *result);
+
 #endif /* AROS_AARCH64_APPLE_STAGE2_MEMORY_PLAN_H */
