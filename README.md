@@ -35,6 +35,8 @@ wrapping or reusing identifiers; callers use the API from task context.
 
 ## Generic diagnostics
 
+- [Executable segment ownership](developer/debug/test/dos/seglist_owner_host/README.md): generated segments across initial and borrowed pages, protected release, bootstrap and allocation-failure controls.
+
 - [Buffered stdio positions](developer/debug/test/crt/stdio_seek_host/README.md): large-file seek/tell, preserved buffers and output-flush error propagation with compiling negative controls.
 
 - [Streaming SHA-256](developer/debug/test/dos/sha256sum_host/README.md): bounded-memory file and manifest verification, incremental hashing and bootstrap adapter controls.

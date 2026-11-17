@@ -65,14 +65,19 @@ struct phony_segment
      * R/W, build the vector, then switch it to R/X. KrnAllocPages returns
      * page-granular memory, which keeps the protection change from affecting
      * other allocations. AllocMem is used only before kernel.resource exists;
-     * once W^X is active, a failed page allocation must fail closed. UnLoadSeg
-     * tells the two allocation kinds apart via TypeOfMem().
+     * once W^X is active, a failed page allocation must fail closed. Request
+     * executable memory explicitly, as LoadSeg does: the kernel may serve
+     * MEMF_ANY from physical pages borrowed from an Exec MemHeader. Those
+     * addresses would make UnLoadSeg choose FreeMem instead of KrnFreePages.
+     * Executable mappings must stay outside Exec's pool for that ownership
+     * test; MEMF_EXECUTABLE selects the code mapping without requiring an
+     * initially writable-and-executable page on a W^X platform.
      */
     struct KernelBase *KernelBase = OpenResource("kernel.resource");
 
     segtmp = NULL;
     if (KernelBase)
-        segtmp = KrnAllocPages(NULL, segsize, MEMF_ANY);
+        segtmp = KrnAllocPages(NULL, segsize, MEMF_EXECUTABLE);
     else
     {
         segtmp = AllocMem(segsize, MEMF_ANY);
