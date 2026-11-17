@@ -5,7 +5,7 @@ firmware replies under AddressSanitizer and UndefinedBehaviorSanitizer. They
 prove control flow and ownership, not radio operation.
 
 - `tx-security.py`: association/key gates and actual Ethernet headers, including
-  RAW callers, overflow and frame-size boundaries.
+  RAW callers, overflow, empty-payload/null-data requests and frame-size boundaries.
 - `offload-contract.py`: WirelessManager capability negotiation, unknown or
   truncated replies, binary PSK/passphrase tags and association error reporting.
 - `association-job.py`: queued option copies, pending-secret cancellation,

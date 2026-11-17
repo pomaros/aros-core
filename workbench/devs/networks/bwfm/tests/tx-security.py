@@ -66,7 +66,7 @@ static int copy_ok;
 static BOOL copy_tx(void *d,void *s,ULONG n) {
  copies++; if(!copy_ok)return 0; assert(n<=ETH_FRAME_LEN);memcpy(d,s,n);return 1;
 }
-static int BWFMTxData(void *p,ULONG n) {(void)p;assert(n>=14&&n<=1518);sends++;return 0;}
+static int BWFMTxData(void *p,ULONG n) {(void)p;assert(n>14&&n<=1518);sends++;return 0;}
 static void ObtainSemaphore(int *p) {assert(!*p);*p=1;}
 static void ReleaseSemaphore(int *p) {assert(*p);*p=0;}
 static void report_events(struct bwfm_unit *u,unsigned e) {(void)u;(void)e;}
@@ -81,7 +81,7 @@ static void check(int online,int joined,int pending,int raw,unsigned type,
  struct bwfm_unit unit={.online=online,.joined=joined,.keys_pending=pending};
  struct IOSana2Req req={0};
  data[12]=(UBYTE)(type>>8);data[13]=(UBYTE)type;
- req.ios2_BufferManagement=&opener;req.ios2_Data=data;
+ req.ios2_BufferManagement=&opener;req.ios2_Data=length?data:NULL;
  req.ios2_DataLength=length;req.ios2_PacketType=raw?0x888e:type;
  req.ios2_Req.io_Flags=raw?SANA2IOF_RAW:0;
  copies=sends=0;copy_ok=hook_ok;
@@ -107,6 +107,13 @@ int main(void) {
  check(1,1,0,1,0x0800,13,1,S2ERR_NO_RESOURCES,0);
  check(1,1,0,1,0x0800,1519,1,S2ERR_NO_RESOURCES,0);
  check(1,1,0,0,0x0800,40,0,S2ERR_NO_RESOURCES,1);
+ /* Null-data management requests are not Ethernet payloads. */
+ check(1,1,0,0,0,0,1,S2ERR_NO_RESOURCES,0);
+ check(1,1,0,0,0x0800,0,1,S2ERR_NO_RESOURCES,0);
+ check(1,1,0,1,0,14,1,S2ERR_NO_RESOURCES,0);
+ check(1,1,0,1,0x0800,14,1,S2ERR_NO_RESOURCES,0);
+ check(1,1,0,0,0x0800,1,1,0,1);
+ check(1,1,0,1,0x0800,15,1,0,1);
  puts("PASS TX association, EAPOL-only handshake, RAW header, lengths and copy refusal");
 }
 '''
@@ -131,4 +138,4 @@ with tempfile.TemporaryDirectory(prefix='bwfm-tx-') as tmp:
             print(result.stdout.strip())
         else:
             assert result.returncode < 0 and 'Assertion' in result.stderr, result
-            print('PASS negative control rejects pre-association TX')
+            print('PASS negative control rejects unsafe TX')

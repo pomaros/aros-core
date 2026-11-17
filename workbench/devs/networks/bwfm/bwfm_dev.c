@@ -813,7 +813,7 @@ static void tx_request(struct bwfm_unit *unit, struct IOSana2Req *req)
 
     if (req->ios2_Req.io_Flags & SANA2IOF_RAW)
     {
-        if (req->ios2_DataLength < ETH_HLEN ||
+        if (req->ios2_DataLength <= ETH_HLEN ||
             req->ios2_DataLength > sizeof(txbuf))
             goto bad_buffer;
         packet = txbuf;
@@ -821,7 +821,12 @@ static void tx_request(struct bwfm_unit *unit, struct IOSana2Req *req)
     }
     else
     {
-        if (req->ios2_DataLength > sizeof(txbuf) - ETH_HLEN)
+        /* WirelessManager uses a zero-body write to request an 802.11
+         * null-data frame. FullMAC owns those management frames; forwarding
+         * the request as an empty Ethernet payload is not that operation.
+         * Reject it before invoking a hook with a possibly NULL source. */
+        if (req->ios2_DataLength == 0 ||
+            req->ios2_DataLength > sizeof(txbuf) - ETH_HLEN)
             goto bad_buffer;
         CopyMem(unit->hwaddr, eth->h_source, ETH_ALEN);
         CopyMem(req->ios2_DstAddr, eth->h_dest, ETH_ALEN);
