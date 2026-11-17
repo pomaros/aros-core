@@ -121,6 +121,27 @@ enum AROSAppleStage2Status AROSAppleStage2BuildMemoryPlan(
         if (map_ranges[index].start < map_ranges[index - 1U].end)
             return AROS_APPLE_STAGE2_INVALID_MEMORY_MAP;
     }
+    /* Adjacent available descriptors are one range, as in the memory tags
+     * (stage2_tags.c): the kernel proves and adopts its first region from
+     * those tags and must find it as exactly one plan range. Firmware splits
+     * contiguous RAM by type, so boot-services and conventional memory
+     * often touch. */
+    {
+        uint32_t merged = 0;
+
+        for (index = 0; index < descriptor_count; ++index) {
+            if (merged != 0 &&
+                map_ranges[index].kind == AROS_APPLE_BOOT_MEMORY_AVAILABLE &&
+                map_ranges[merged - 1U].kind ==
+                    AROS_APPLE_BOOT_MEMORY_AVAILABLE &&
+                map_ranges[index].start == map_ranges[merged - 1U].end) {
+                map_ranges[merged - 1U].end = map_ranges[index].end;
+                continue;
+            }
+            map_ranges[merged++] = map_ranges[index];
+        }
+        descriptor_count = merged;
+    }
     for (index = 0; index < descriptor_count; ++index) {
         if (map_ranges[index].kind == AROS_APPLE_BOOT_MEMORY_AVAILABLE &&
             map_ranges[index].end > AROS_APPLE_MEMORY_PLAN_PAGE_SIZE)
