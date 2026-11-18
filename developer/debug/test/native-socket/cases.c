@@ -66,6 +66,11 @@ int main(void){
  assert(__fdhook(fd,__FDH_WRITE,(IPTR)buffer,16,0,&error)==16&&error==0);
  assert(__fdhook(fd,__FDH_FCNTL,F_SETFD,FD_CLOEXEC,0,&error)==0);
  assert(__fdhook(fd,__FDH_FCNTL,F_GETFD,0,0,&error)==FD_CLOEXEC);
+ LONG cloexec=__fdhook(fd,__FDH_FCNTL,F_DUPFD_CLOEXEC,35,0,&error);
+ assert(cloexec>=35 && !error);
+ assert(__fdhook(cloexec,__FDH_FCNTL,F_GETFD,0,0,&error)==FD_CLOEXEC);
+ assert(__fdhook(cloexec,__FDH_CLOSE,0,0,0,&error)==0);
+ assert(__fdhook(fd,__FDH_FCNTL,F_DUPFD_CLOEXEC,(IPTR)-1,0,&error)==-1 && error==EINVAL);
  LONG clone=__fdhook(fd,__FDH_FCNTL,F_DUPFD,20,0,&error);
  assert(clone>=20&&error==0&&native_objects==1);
  assert(__fdhook(clone,__FDH_FCNTL,F_GETFD,0,0,&error)==0);

@@ -168,16 +168,36 @@ static LONG native_dup(APTR data,LONG fd,LONG newfd,LONG *error)
     }
     FD_Release(&lease); return *error ? -1 : 0;
 }
+/* The caller holds an operation lease. Publish the descriptor flags together
+ * with the binding, before another task can acquire the new descriptor. */
+static LONG native_clone(struct native_socket *object, LONG minimum, LONG flags, LONG *fd)
+{
+    struct native_binding *binding;
+    LONG error;
+
+    if (minimum < 0) return EINVAL;
+    binding = AllocVec(sizeof(*binding), MEMF_PUBLIC | MEMF_CLEAR);
+    if (!binding) return ENOMEM;
+
+    ObtainSemaphore(&syscall_semaphore);
+    binding->object = object;
+    binding->flags = flags;
+    if (object->descriptors == (ULONG)~0U)
+        error = EOVERFLOW;
+    else {
+        error = FD_Alloc(minimum < 3 ? 3 : minimum, FD_OWNER_NATIVE_SOCKET, binding, fd);
+        if (!error) object->descriptors++;
+    }
+    ReleaseSemaphore(&syscall_semaphore);
+    if (error) FreeVec(binding);
+    return error;
+}
 static LONG native_fcntl(APTR data,LONG fd,LONG cmd,IPTR arg,LONG *error)
 {
     struct aros_socket_request r={0};
     struct fd_lease lease={0};
     struct native_binding *binding;
     LONG result=-1;
-    if (cmd==F_DUPFD) {
-        r.version=AROS_SOCKET_ABI;r.operation=AROS_SOCKET_CLONE;r.fd=fd;r.arg0=arg;
-        *error=native_call(&r,data);return *error?-1:r.result;
-    }
     if (cmd==F_SETFL) {
         r.version=AROS_SOCKET_ABI;r.operation=AROS_SOCKET_NONBLOCK;
         r.fd=fd;r.arg0=(arg & O_NONBLOCK)!=0;
@@ -188,6 +208,12 @@ static LONG native_fcntl(APTR data,LONG fd,LONG cmd,IPTR arg,LONG *error)
     if (lease.owner!=FD_OWNER_NATIVE_SOCKET || lease.data!=data) *error=EBADF;
     else {
         binding=lease.data;
+        if (cmd == F_DUPFD || cmd == F_DUPFD_CLOEXEC) {
+            *error = native_clone(binding->object, (LONG)arg,
+                cmd == F_DUPFD_CLOEXEC ? FD_CLOEXEC : 0, &result);
+            FD_Release(&lease);
+            return *error ? -1 : result;
+        }
         ObtainSemaphore(&syscall_semaphore);
         switch (cmd) {
         case F_GETFD:result=binding->flags;break;
@@ -338,7 +364,6 @@ static LONG native_call(struct aros_socket_request *r, APTR expected)
 {
     struct fd_lease lease={0};
     struct native_socket *object;
-    struct native_binding *binding;
     struct SocketBase *context;
     struct socket *table[1], *created=NULL;
     LONG error=0, ret=0, fd=-1;
@@ -365,20 +390,8 @@ static LONG native_call(struct aros_socket_request *r, APTR expected)
         return error;
     }
     if (r->operation==AROS_SOCKET_CLONE) {
-        if (r->arg0<0) error=EINVAL;
-        else {
-            ObtainSemaphore(&syscall_semaphore);
-            binding=AllocVec(sizeof(*binding),MEMF_PUBLIC|MEMF_CLEAR);
-            if (!binding) error=ENOMEM;
-            else if (object->descriptors==(ULONG)~0U) error=EOVERFLOW;
-            else {
-                binding->object=object;
-                error=FD_Alloc(r->arg0<3?3:r->arg0,FD_OWNER_NATIVE_SOCKET,binding,&fd);
-                if (!error) {object->descriptors++;r->result=fd;}
-            }
-            if (error && binding) FreeVec(binding);
-            ReleaseSemaphore(&syscall_semaphore);
-        }
+        error = native_clone(object, r->arg0, 0, &fd);
+        if (!error) r->result = fd;
         FD_Release(&lease); return error;
     }
     context=api_hookbase_open();

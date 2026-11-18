@@ -104,7 +104,7 @@
         LONG err=0;
         int arg=0;
         SIPTR result;
-        if (cmd==F_SETFD || cmd==F_SETFL || cmd==F_DUPFD) {
+        if (cmd == F_SETFD || cmd == F_SETFL || cmd == F_DUPFD || cmd == F_DUPFD_CLOEXEC) {
             va_list ap;va_start(ap,cmd);arg=va_arg(ap,int);va_end(ap);
         }
         result=__fdhook(fd,__FDH_FCNTL,cmd,arg,0,&err);
