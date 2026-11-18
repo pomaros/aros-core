@@ -193,15 +193,15 @@ diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_c
 --- virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_context.c	2026-10-22 04:11:08
 +++ virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_context.c	2026-11-03 14:06:36
 @@ -5,7 +5,9 @@
- 
+
  #include "vkr_context.h"
- 
+
 +#ifndef __AROS__
  #include <sys/mman.h>
 +#endif
  #include <sys/types.h>
  #include <unistd.h>
- 
+
 @@ -189,8 +191,13 @@
  vkr_context_free_resource(struct hash_entry *entry)
  {
@@ -219,7 +219,7 @@ diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_c
 @@ -261,6 +268,20 @@
  {
     assert(!vkr_context_get_resource(ctx, res_id));
- 
+
 +#ifdef __AROS__
 +   void *mmap_ptr = vkr_aros_shm->import(fd, blob_size);
 +   if (!mmap_ptr)
@@ -238,17 +238,17 @@ diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_c
     if (mmap_ptr == MAP_FAILED)
        return false;
 @@ -273,6 +294,7 @@
- 
+
     close(fd);
     return true;
 +#endif
  }
- 
+
  static bool
 @@ -289,6 +311,19 @@
     const size_t page_size = getpagesize();
     const uint64_t alloc_size = (blob_size + page_size - 1) & ~(page_size - 1);
- 
+
 +#ifdef __AROS__
 +   int fd = -1;
 +   void *mmap_ptr = vkr_aros_shm->create(alloc_size, page_size, &fd);
@@ -270,7 +270,7 @@ diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_c
        return false;
     }
 +#endif
- 
+
     *out_blob = (struct virgl_context_blob){
        .type = VIRGL_RESOURCE_FD_SHM,
 @@ -332,6 +368,23 @@
@@ -297,6 +297,53 @@ diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_c
 
     /* If memory might get exported, store a dup'ed fd in vkr_resource for:
      * - vkAllocateMemory for dma_buf import
+@@ -525,6 +578,22 @@
+
+    return a;
+ }
++
++#ifdef __AROS__
++static int
++vkr_ring_monitor_cond_init(cnd_t *cond)
++{
++   pthread_condattr_t attr;
++   int ret = pthread_condattr_init(&attr);
++   if (ret)
++      return thrd_error;
++   ret = pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
++   if (!ret)
++      ret = pthread_cond_init(cond, &attr);
++   pthread_condattr_destroy(&attr);
++   return ret ? thrd_error : thrd_success;
++}
++#endif
+
+ static int
+ vkr_context_ring_monitor_thread(void *arg)
+@@ -548,7 +617,11 @@
+          }
+          mtx_unlock(&ctx->ring_mutex);
+
++#ifdef __AROS__
++         ret = clock_gettime(CLOCK_MONOTONIC, &abs_ts);
++#else
+          ret = clock_gettime(CLOCK_REALTIME, &abs_ts);
++#endif
+          if (ret)
+             break;
+
+@@ -579,7 +652,11 @@
+
+    if (mtx_init(&ctx->ring_monitor.mutex, mtx_plain) != thrd_success)
+       goto err_mtx_init;
++#ifdef __AROS__
++   if (vkr_ring_monitor_cond_init(&ctx->ring_monitor.cond) != thrd_success)
++#else
+    if (cnd_init(&ctx->ring_monitor.cond) != thrd_success)
++#endif
+       goto err_cnd_init;
+
+    ctx->ring_monitor.report_period_us = report_period_us;
 diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_cs.h virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_cs.h
 --- virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_cs.h	2026-10-22 04:11:08
 +++ virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_cs.h	2026-11-03 19:38:38

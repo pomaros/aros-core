@@ -78,7 +78,9 @@ struct avs_client
 };
 
 static pthread_mutex_t avs_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t avs_signalled = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t avs_signalled;
+static pthread_once_t avs_signalled_once = PTHREAD_ONCE_INIT;
+static int avs_signalled_error;
 static struct avs_client *avs_clients;
 static uint32_t avs_next_ctx_id = 1;
 static const struct avs_memory_ops *avs_memory;
@@ -212,10 +214,25 @@ static const struct vkr_renderer_callbacks avs_callbacks =
     .retire_fence = avs_retire_fence,
 };
 
+static void avs_init_signalled(void)
+{
+    pthread_condattr_t attr;
+
+    avs_signalled_error = pthread_condattr_init(&attr);
+    if (avs_signalled_error)
+        return;
+    avs_signalled_error = pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+    if (!avs_signalled_error)
+        avs_signalled_error = pthread_cond_init(&avs_signalled, &attr);
+    pthread_condattr_destroy(&attr);
+}
+
 bool avs_server_init(const struct avs_memory_ops *memory, avs_get_instance_proc_addr gipa)
 {
     if (avs_running)
         return true;
+    if (pthread_once(&avs_signalled_once, avs_init_signalled) || avs_signalled_error)
+        return false;
     avs_memory = memory;
     avs_gipa = gipa;
     avs_vkr_shm.ops = (struct vkr_aros_shm_ops){
@@ -506,7 +523,8 @@ int avs_sync_wait(struct avs_client *c, bool any, uint64_t timeout_ns,
     struct timespec deadline;
     int result = 0;
 
-    clock_gettime(CLOCK_REALTIME, &deadline);
+    if (clock_gettime(CLOCK_MONOTONIC, &deadline))
+        return -1;
     if (timeout_ns > (uint64_t)365 * 24 * 3600 * 1000000000ULL)
         timeout_ns = (uint64_t)365 * 24 * 3600 * 1000000000ULL;
     deadline.tv_sec += timeout_ns / 1000000000ULL;
@@ -525,9 +543,15 @@ int avs_sync_wait(struct avs_client *c, bool any, uint64_t timeout_ns,
             result = -1;
             break;
         }
-        if (pthread_cond_timedwait(&avs_signalled, &avs_lock, &deadline) == ETIMEDOUT)
+        int error = pthread_cond_timedwait(&avs_signalled, &avs_lock, &deadline);
+        if (error == ETIMEDOUT)
         {
             result = avs_wait_done(c, any, ids, values, count) ? 0 : 1;
+            break;
+        }
+        if (error)
+        {
+            result = -1;
             break;
         }
     }
