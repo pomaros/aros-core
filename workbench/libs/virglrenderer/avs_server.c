@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "vulkan/vulkan.h"
 #include "util/macros.h"
@@ -51,6 +52,7 @@ struct avs_blob
 {
     struct avs_blob *next;
     uint32_t         res_id;
+    enum virgl_resource_fd_type type;
     int              handle;
     uint64_t         size;
     void            *addr;
@@ -263,6 +265,21 @@ struct avs_client *avs_connect(const char *name)
     return c;
 }
 
+/* SHM handles belong to the embedder. Device-memory exports are POSIX
+   descriptors, even when their number also names a valid SHM handle. */
+static void avs_release_blob(struct avs_blob *blob)
+{
+    if (blob->type == VIRGL_RESOURCE_FD_SHM)
+    {
+        if (blob->addr)
+            avs_memory->client_unmap(blob->handle, blob->addr, blob->size);
+        avs_memory->close(blob->handle);
+    }
+    else
+        close(blob->handle);
+    free(blob);
+}
+
 void avs_disconnect(struct avs_client *c)
 {
     struct avs_client **p;
@@ -293,10 +310,7 @@ void avs_disconnect(struct avs_client *c)
         struct avs_blob *blob = c->blobs;
 
         c->blobs = blob->next;
-        if (blob->addr)
-            avs_memory->client_unmap(blob->handle, blob->addr, blob->size);
-        avs_memory->close(blob->handle);
-        free(blob);
+        avs_release_blob(blob);
     }
     while (c->syncs)
     {
@@ -334,6 +348,7 @@ uint32_t avs_blob_create(struct avs_client *c, uint64_t size, uint64_t blob_id,
 {
     struct avs_blob *blob = calloc(1, sizeof(*blob));
     enum virgl_resource_fd_type type;
+    struct virgl_resource_vulkan_info vulkan_info;
     uint32_t map_info;
     int handle;
 
@@ -343,22 +358,22 @@ uint32_t avs_blob_create(struct avs_client *c, uint64_t size, uint64_t blob_id,
     blob->res_id = c->next_res_id++;
     pthread_mutex_unlock(&avs_lock);
     if (!vkr_renderer_create_resource(c->ctx_id, blob->res_id, blob_id, size, flags,
-                                      &type, &handle, &map_info, NULL) ||
-        type != VIRGL_RESOURCE_FD_SHM)
+                                      &type, &handle, &map_info, &vulkan_info))
     {
         free(blob);
         return 0;
     }
+    blob->type = type;
     blob->handle = handle;
     blob->size = size;
     if (flags & AVS_BLOB_MAPPABLE)
     {
-        blob->addr = avs_memory->client_map(handle, size);
+        if (type == VIRGL_RESOURCE_FD_SHM)
+            blob->addr = avs_memory->client_map(handle, size);
         if (!blob->addr)
         {
-            avs_memory->close(handle);
             vkr_renderer_destroy_resource(c->ctx_id, blob->res_id);
-            free(blob);
+            avs_release_blob(blob);
             return 0;
         }
     }
@@ -387,11 +402,8 @@ void avs_blob_unref(struct avs_client *c, uint32_t res_id)
     pthread_mutex_unlock(&avs_lock);
     if (!blob)
         return;
-    if (blob->addr)
-        avs_memory->client_unmap(blob->handle, blob->addr, blob->size);
-    avs_memory->close(blob->handle);
     vkr_renderer_destroy_resource(c->ctx_id, res_id);
-    free(blob);
+    avs_release_blob(blob);
 }
 
 uint32_t avs_sync_create(struct avs_client *c, uint64_t initial)
