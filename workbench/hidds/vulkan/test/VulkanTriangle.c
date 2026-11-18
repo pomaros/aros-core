@@ -379,6 +379,19 @@ static BOOL run_cycle(struct cycle *c)
         dep.pImageMemoryBarriers = &to_transfer;
         vkCmdPipelineBarrier2(cmd, &dep);
         vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, 1, &region);
+        VkMemoryBarrier2 to_host = {
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT,
+            .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
+            .dstAccessMask = VK_ACCESS_2_HOST_READ_BIT,
+        };
+        const VkDependencyInfo host_readback = {
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .memoryBarrierCount = 1,
+            .pMemoryBarriers = &to_host,
+        };
+        vkCmdPipelineBarrier2(cmd, &host_readback);
         CHECK(vkEndCommandBuffer(cmd));
     }
 
