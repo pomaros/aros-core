@@ -23,6 +23,11 @@ static void init_lock(struct SignalSemaphore *s){
  assert(!pthread_mutexattr_settype(&attr,PTHREAD_MUTEX_RECURSIVE));
  assert(!pthread_mutex_init(&s->mutex,&attr));pthread_mutexattr_destroy(&attr);
 }
+static QUAD provider_seek(APTR data, LONG fd, QUAD offset, LONG whence, LONG *error) {
+ assert(data && fd>=3 && whence==2);
+ *error=0;
+ return *(QUAD *)data + offset;
+}
 int main(void){
  init_lock(&registry.fd_Lock);init_lock(&syscall_semaphore);init_lock(&baselist_semaphore);
  registry.fd_LibNode.lib_Version=51;
@@ -32,6 +37,15 @@ int main(void){
  assert(FD_Alloc(3,4,&orphan,&orphan_fd)==0);
  assert(__fdhook(orphan_fd,__FDH_READ,0,0,0,&error)==-1&&error==EBADF);
  assert(FD_Free(orphan_fd,4,&registry)==0);
+ struct fd_hooks seek_hooks={.fdh_Version=FD_HOOKS_VERSION,.fdh_lseek=provider_seek};
+ QUAD size=INT64_C(0x200000000), offset=-8;
+ LONG seek_fd;
+ assert(!FD_SetOwnerHooks(4,&seek_hooks));
+ assert(!FD_Alloc(3,4,&size,&seek_fd));
+ assert(!__fdhook(seek_fd,__FDH_SEEK,(IPTR)&offset,2,0,&error) && !error);
+ assert(offset==size-8);
+ assert(!FD_Free(seek_fd,4,&registry));
+ assert(!FD_SetOwnerHooks(4,NULL));
  struct SocketBase base={.thisTask=FindTask(NULL)};
  struct aros_socket_request invalid={.version=99};
  assert(NativeSocket(NULL,sizeof(invalid),&base)==EINVAL);
@@ -47,6 +61,8 @@ int main(void){
  assert(fixture_ioctl(fd,(int)FIONBIO,&nonblocking)==0);
  assert(fixture_ioctl(-1,(int)FIONREAD,&available)==-1&&errno==EBADF);
 
+ QUAD position = 0;
+ assert(__fdhook(fd,__FDH_SEEK,(IPTR)&position,0,0,&error)==-1 && error==ESPIPE);
  assert(__fdhook(fd,__FDH_WRITE,(IPTR)buffer,16,0,&error)==16&&error==0);
  assert(__fdhook(fd,__FDH_FCNTL,F_SETFD,FD_CLOEXEC,0,&error)==0);
  assert(__fdhook(fd,__FDH_FCNTL,F_GETFD,0,0,&error)==FD_CLOEXEC);

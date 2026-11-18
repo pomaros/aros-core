@@ -64,6 +64,18 @@
     fcb *file = __holdfcb(filedes, &admission_error);
     if (!file)
     {
+        if (!admission_error && filedes >= 0)
+        {
+            LONG error;
+            QUAD position = offset;
+            if (__fdhook(filedes, __FDH_SEEK, (IPTR)&position, whence, 0, &error) < 0)
+                errno = error ? error : EIO;
+            else if ((QUAD)(__off64_t)position != position)
+                errno = EOVERFLOW;
+            else
+                return (__off64_t)position;
+            return (__off64_t)-1;
+        }
         errno = admission_error ? admission_error : EBADF;
         return (__off64_t)-1;
     }

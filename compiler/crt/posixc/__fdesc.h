@@ -148,6 +148,7 @@ const struct fd_hooks *__getfdhooks(int fd, APTR *datap);
 #define __FDH_IOCTL 4
 #define __FDH_FCNTL 5
 #define __FDH_DUP 6
+#define __FDH_SEEK 7 /* a: QUAD *offset/result, b: POSIX whence */
 SIPTR __fdhook(int fd, int operation, IPTR a, IPTR b, IPTR c, LONG *error);
 
 #endif /* ___FDESC_H */

@@ -1005,6 +1005,16 @@ SIPTR __fdhook(int fd, int operation, IPTR a, IPTR b, IPTR c, LONG *error)
     case __FDH_CLOSE:
         if (hooks->fdh_close) { *error=0; result=hooks->fdh_close(lease.data,fd,error); }
         break;
+    case __FDH_SEEK:
+        if (hooks->fdh_lseek) {
+            QUAD *position = (QUAD *)a;
+            *error = 0;
+            *position = hooks->fdh_lseek(lease.data, fd, *position, (LONG)b, error);
+            result = *position == -1 ? -1 : 0;
+        } else {
+            *error = ESPIPE;
+        }
+        break;
     case __FDH_IOCTL:
         if (hooks->fdh_ioctl) { *error=0; result=hooks->fdh_ioctl(lease.data,fd,a,(APTR)b,error); }
         else *error=ENOTTY;

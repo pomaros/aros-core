@@ -26,6 +26,7 @@ typedef void *APTR;
 #define __FDH_CLOSE 3
 #define __FDH_FCNTL 5
 #define __FDH_DUP 6
+#define __FDH_SEEK 7
 /* AROS_OPEN_FLAGS */
 #define F_GETFD 1
 #define FD_OWNER_POSIXC 1
@@ -34,6 +35,7 @@ typedef void *APTR;
 #define _FCB_ISDIR 1
 #define _FCB_DONTCLOSE_FH 2
 struct reclock_file;
+struct MinNode { struct MinNode *succ, *pred; };
 struct SignalSemaphore { pthread_mutex_t lock; };
 struct Library { int unused; };
 struct PosixCIntBase { int unused; };
@@ -105,9 +107,18 @@ static int __stdc_ioerr2errno(LONG e) { assert(e==777);return EIO; }
 fcb *__holdfcb(int fd,int *error);
 void __releasefcb(fcb *file);
 /* HOLD_FILE */
+static void __flock_release(fcb *file) { assert(!file->flock_file); }
 /* RELEASE_FILE */
 static atomic_int foreign_calls;
 static SIPTR __fdhook(int fd,int operation,IPTR a,IPTR b,IPTR c,LONG *error) {
+    if (operation == __FDH_SEEK) {
+        QUAD *position = (QUAD *)a;
+        if (fd != 19) { *error = EBADF; return -1; }
+        if (b != SEEK_END) { *error = ESPIPE; return -1; }
+        *position += INT64_C(0x100000000);
+        *error = 0;
+        return 0;
+    }
     (void)fd;(void)operation;(void)a;(void)b;(void)c;
     atomic_fetch_add(&foreign_calls,1);*error=0;return 217;
 }
@@ -193,6 +204,9 @@ static QUAD __dos64_seek(fcb *f,QUAD offset,LONG whence) {
     QUAD old=positions[f->handle];
     positions[f->handle]=(whence==OFFSET_CURRENT?old:whence==OFFSET_END?sizes[f->handle]:0)+offset;
     return old;
+}
+static QUAD __dos64_lseek(fcb *file, QUAD offset, LONG whence) {
+    return __dos64_seek(file, offset, whence);
 }
 static QUAD __dos64_getpos(fcb *f) {
     if(metadata_original)assert(metadata_file_depth>0 && "seek position query retains I/O serialization");
@@ -310,6 +324,9 @@ int main(void) {
     assert(ar_fstat(-1,&sb)==-1&&errno==EBADF);
     assert(ar_fstat64(-1,&wide)==-1&&errno==EBADF);
     assert(ar_fsync(-1)==-1&&errno==EBADF);
+    assert(ar_lseek64(19, 7, SEEK_END) == INT64_C(0x100000007));
+    assert(ar_lseek(19, 0, SEEK_SET) == -1 && errno == ESPIPE);
+    assert(ar_lseek64(20, 0, SEEK_SET) == -1 && errno == EBADF);
     assert(ar_lseek(-1,0,SEEK_SET)==-1&&errno==EBADF);
     assert(ar_lseek64(-1,0,SEEK_SET)==-1&&errno==EBADF);
     assert(atomic_load(&foreign_calls)==before);file->opencount=1;assert(!ar_close(5));

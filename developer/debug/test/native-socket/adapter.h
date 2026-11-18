@@ -115,6 +115,7 @@ static LONG __WaitNativePoll(ULONG count,struct timeval *timeout,struct SocketBa
 #define __FDH_IOCTL 4
 #define __FDH_FCNTL 5
 #define __FDH_DUP 6
+#define __FDH_SEEK 7
 static atomic_int fd_library_refs;
 static struct Library *OpenLibrary(const char*name,ULONG version){assert(!strcmp(name,"fd.library")&&version==51);atomic_fetch_add(&fd_library_refs,1);return FDBase;}
 static void CloseLibrary(struct Library*base){assert(base==FDBase);assert(atomic_fetch_sub(&fd_library_refs,1)>0);}
