@@ -181,6 +181,11 @@ getvalue(struct CSource *args, UBYTE **errstrp, struct CSource *res)
                 vlen = ultoa(((LONG *)variables[var].value)[index], Buffer);
                 value = Buffer;
                 break;
+            case VAR_U_LONG:
+                vlen = snprintf(Buffer, sizeof(Buffer), "%lu",
+                                ((u_long *)variables[var].value)[index]);
+                value = Buffer;
+                break;
             case VAR_STRP:
                 value = ((UBYTE **)variables[var].value)[index];
                 if(value == NULL)		/* unset string variable */
@@ -301,14 +306,25 @@ setvalue(struct CSource *args, UBYTE **errstrp, struct CSource *res)
                 }
                 break;
             case VAR_LONG:
+            case VAR_U_LONG:
                 if((vlen = StrToLong(CURRENT(args), &item)) <= 0)
                     goto reterr;
+                if(variables[var].type == VAR_U_LONG) {
+                    if(item < 0) {
+                        *errstrp = ERR_VALUE;
+                        return RETURN_WARN;
+                    }
+                    dp = (u_long *)variables[var].value + index;
+                }
                 if(variables[var].notify)
                     if(!(*variables[var].notify)(dp, item)) {
                         *errstrp = ERR_VALUE;
                         return RETURN_WARN;
                     }
-                *(LONG *)dp = item;
+                if(variables[var].type == VAR_U_LONG)
+                    *(u_long *)dp = (u_long)item;
+                else
+                    *(LONG *)dp = item;
                 args->CS_CurChr += vlen;
                 break;
             case VAR_STRP:
