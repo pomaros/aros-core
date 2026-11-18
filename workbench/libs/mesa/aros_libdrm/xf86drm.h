@@ -22,6 +22,7 @@
 #define AROS_XF86DRM_H
 
 #include <stdint.h>
+#include <fcntl.h>
 
 #ifndef DRM_COMMAND_BASE
 #define DRM_COMMAND_BASE 0x40
@@ -38,10 +39,10 @@
 #define DRM_SYNCOBJ_QUERY_FLAGS_LAST_SUBMITTED  (1 << 0)
 
 #ifndef DRM_CLOEXEC
-#define DRM_CLOEXEC 02000000
+#define DRM_CLOEXEC O_CLOEXEC
 #endif
 #ifndef DRM_RDWR
-#define DRM_RDWR 02
+#define DRM_RDWR O_RDWR
 #endif
 
 /* Request numbers the core DRM requests use (the low eight bits). */
