@@ -367,16 +367,19 @@ QUAD __dos64_transfer_at(fcb *fcb, APTR buf, QUAD len, QUAD position, BOOL write
         SIPTR ret = DoPkt(fh->fh_Type, write ? ACTION_WRITE_AT64 : ACTION_READ_AT64,
             fh->fh_Arg1, (SIPTR)((UBYTE *)buf + done), chunk, (SIPTR)&at, 0);
 
-        if (ret < 0)
+        if (ret <= 0 && done == 0)
         {
-            if (done == 0 && (IoErr() == ERROR_ACTION_NOT_KNOWN
-                || IoErr() == ERROR_NOT_IMPLEMENTED))
+            /* Some handlers return DOSFALSE (zero) for an unknown packet.
+               A successful zero-byte transfer has no packet error. */
+            LONG error = IoErr();
+            if (error == ERROR_ACTION_NOT_KNOWN || error == ERROR_NOT_IMPLEMENTED)
             {
                 fcb->privflags |= _FCB_NOAT;
                 return -2;
             }
-            return done ? done : -1;
         }
+        if (ret < 0)
+            return done ? done : -1;
         done += ret;
         if (ret < chunk)
             break;
