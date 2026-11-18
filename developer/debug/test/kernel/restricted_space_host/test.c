@@ -164,6 +164,10 @@ static void shared_copy_tests(void)
     CHECK(!AROSRestrictedSharedWrite(&b,PAGE-1,input,2) && pages[PAGE-1]==40,"shared-copy-prevalidate-all-pages");
     backing[1]=saved;
     CHECK(AROSRestrictedSharedRead(&b,2*PAGE,NULL,0),"shared-copy-empty-end");
+    b.access_ceiling=KMAP_READ;
+    CHECK(!AROSRestrictedSharedViewBegin(&b),"dma-read-only-native-view");
+    CHECK(!AROSRestrictedSharedWrite(&b,0,input,8) &&
+        AROSRestrictedSharedRead(&b,0,output,8),"dma-read-only-copy");
     b.closing=1;
     CHECK(!AROSRestrictedSharedRead(&b,0,output,8) && !AROSRestrictedSharedWrite(&b,0,input,8),"shared-copy-closing-refused");
     CHECK(AROSRestrictedSharedClose(&b) && !AROSRestrictedSharedRead(&b,0,output,8),"shared-copy-stale-refused");
@@ -380,6 +384,10 @@ static void shared_publication_tests(void)
     CHECK(!AROSRestrictedRegionCommitShared(&r[2],0,3),"shared-publish-commit-writer-refused");
     CHECK(AROSRestrictedRegionCommitShared(&r[2],0,1),"shared-publish-read-view");
     CHECK(!AROSRestrictedRegionProtect(&r[0],0,3),"shared-publish-protect-writer-refused");
+    b.access_ceiling=KMAP_READ|KMAP_WRITE;
+    CHECK(!AROSRestrictedRegionPublish(&r[2],0,KMAP_READ|KMAP_EXEC,&ops) &&
+        !r[2].publication_pending,"dma-data-only-publication");
+    b.access_ceiling=0;
     publishing=&r[2];CHECK(AROSRestrictedRegionPublish(&r[2],0,5,&ops),"shared-publish-second-executor");
     publishing=&r[1];CHECK(!AROSRestrictedRegionPublish(&r[1],0,3,&ops),"shared-publish-restore-writer-refused");
     CHECK(AROSRestrictedRegionPublish(&r[1],0,1,&ops) && native_policy==1,"shared-publish-keeps-native-readonly");
@@ -778,8 +786,14 @@ static void shared_tests(void)
     CHECK(AROSRestrictedServiceClose(&channel),"shared-channel-close");
     CHECK(AROSRestrictedRegionDetach(&regions[0]) && object.views==1 && !ledger[0][0],"shared-detach-no-ownership");
     CHECK(AROSRestrictedSpaceClose(&spaces[0]),"shared-first-space-close");
+    object.access_ceiling=KMAP_READ;
+    CHECK(!AROSRestrictedRegionProtect(&regions[1],0,KMAP_READ|KMAP_WRITE),
+        "dma-read-only-protect");
     uintptr_t released=123;
     CHECK(AROSRestrictedRegionDecommit(&regions[1],0,&released) && !released && object.views==1 && page[0]==0x31,"shared-decommit-retains-object");
+    CHECK(!AROSRestrictedRegionCommitShared(&regions[1],0,KMAP_READ|KMAP_WRITE),
+        "dma-read-only-commit");
+    object.access_ceiling=0;
     CHECK(AROSRestrictedRegionCommitShared(&regions[1],0,3) && page[0]==0x31,"shared-recommit-preserves-data");
     CHECK(!AROSRestrictedSharedClose(&object) && object.views==1 && object.pages==backing,"shared-close-retained");
     CHECK(!AROSRestrictedSharedInitialize(&duplicate,backing,1),"shared-closing-index-retained");

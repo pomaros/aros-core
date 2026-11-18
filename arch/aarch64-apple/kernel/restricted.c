@@ -109,8 +109,69 @@ struct RestrictedDomain {
     struct AROSRestrictedSpace space;
     struct RestrictedAllocation *allocations;
 };
+/* Native DMA backing remains valid while either the device or a restricted
+ * shared object owns it. The device-side reference permits new imports. */
+struct RestrictedDMA {
+    struct RestrictedDMA *next;
+    void *base, *allocation;
+    size_t length, allocation_bytes, refs;
+    int provider_live;
+};
+static struct RestrictedDMA *restricted_dma;
+static struct AROSAppleMemoryLock restricted_dma_lock;
+
+static void r_dma_drop(struct RestrictedDMA *dma)
+{
+    uint64_t lock=AROSAppleMemoryLockAcquire(&restricted_dma_lock);
+    if (--dma->refs) {
+        AROSAppleMemoryLockRelease(&restricted_dma_lock,lock);
+        return;
+    }
+    struct RestrictedDMA **link=&restricted_dma;
+    while (*link!=dma) link=&(*link)->next;
+    *link=dma->next;
+    AROSAppleMemoryLockRelease(&restricted_dma_lock,lock);
+    if (!AROSApplePageFree(dma->allocation,dma->allocation_bytes))
+        for (;;) __asm__ volatile("wfe");
+    FreeVec(dma);
+}
+
+static void *r_alloc_dma(size_t length,size_t alignment)
+{
+    if (!length || (length&(R_PAGE-1)) || alignment<R_PAGE ||
+        (alignment&(alignment-1)) || length>SIZE_MAX-(alignment-R_PAGE))
+        return NULL;
+    struct RestrictedDMA *dma=AllocVec(sizeof(*dma),MEMF_PUBLIC);
+    if (!dma) return NULL;
+    size_t bytes=length+alignment-R_PAGE;
+    void *allocation=AROSApplePageAllocate(NULL,bytes,MEMF_CLEAR);
+    if (!allocation) { FreeVec(dma);return NULL; }
+    void *base=(void *)(((uintptr_t)allocation+alignment-1)&~(uintptr_t)(alignment-1));
+    *dma=(struct RestrictedDMA){.base=base,.allocation=allocation,.length=length,
+        .allocation_bytes=bytes,.refs=1,.provider_live=1};
+    uint64_t lock=AROSAppleMemoryLockAcquire(&restricted_dma_lock);
+    dma->next=restricted_dma;restricted_dma=dma;
+    AROSAppleMemoryLockRelease(&restricted_dma_lock,lock);
+    return base;
+}
+
+static int r_free_dma(void *base)
+{
+    uint64_t lock=AROSAppleMemoryLockAcquire(&restricted_dma_lock);
+    struct RestrictedDMA *dma=restricted_dma;
+    while (dma && dma->base!=base) dma=dma->next;
+    if (!dma || !dma->provider_live) {
+        AROSAppleMemoryLockRelease(&restricted_dma_lock,lock);return 0;
+    }
+    dma->provider_live=0;
+    AROSAppleMemoryLockRelease(&restricted_dma_lock,lock);
+    r_dma_drop(dma);
+    return 1;
+}
 struct RestrictedShared {
     struct RestrictedShared *next;
+    struct RestrictedDMA *dma;
+    unsigned dma_access;
     struct AROSRestrictedSharedBacking backing;
     void *owner_context,*releaser_context;
     uint64_t handle;
@@ -1451,6 +1512,7 @@ static int r_shared_operation(struct AROSAppleRuntimeFrame *frame,void *context,
         struct RestrictedShared *b=p->record;
         if (!b || shared_generation==UINT64_MAX ||
             !AROSRestrictedSharedInitialize(&b->backing,b->pages,b->count)) return 1;
+        if (b->dma) b->backing.access_ceiling=b->dma_access;
         b->handle=++shared_generation;b->owner_context=context;
         b->next=restricted_shared;restricted_shared=b;frame->x[0]=b->handle;return 1;
     }
@@ -2404,11 +2466,13 @@ static uintptr_t r_shared_call(struct RestrictedSharedOperation *p)
 }
 static void r_release_shared(struct RestrictedShared *b)
 {
-    for (size_t i=0;i<b->count;++i)
-        if (b->pages[i] && !AROSApplePageFree((void *)b->pages[i],R_PAGE))
-            for (;;) __asm__ volatile("wfe");
+    if (!b->dma)
+        for (size_t i=0;i<b->count;++i)
+            if (b->pages[i] && !AROSApplePageFree((void *)b->pages[i],R_PAGE))
+                for (;;) __asm__ volatile("wfe");
     struct RestrictedSharedOperation op={.operation=3,.handle=b->handle};
     if (!r_shared_call(&op)) for (;;) __asm__ volatile("wfe");
+    if (b->dma) r_dma_drop(b->dma);
     if (!AROSApplePageFree(b,b->storage_bytes)) for (;;) __asm__ volatile("wfe");
 }
 /* With a view ended (pending), unmap it and let the object go on */
@@ -2844,6 +2908,38 @@ static uint64_t r_create_shared(size_t length)
     }
     Permit();return handle;
 }
+static uint64_t r_import_dma(void *base,size_t length,int writable)
+{
+    if (!base || !length || (length&(R_PAGE-1)) ||
+        length>AROS_RESTRICTED_DYNAMIC_END-AROS_RESTRICTED_DYNAMIC_BASE) return 0;
+    size_t count=length/R_PAGE;
+    size_t storage=r_record_size(sizeof(struct RestrictedShared),count,sizeof(uintptr_t));
+    if (!storage) return 0;
+
+    uint64_t lock=AROSAppleMemoryLockAcquire(&restricted_dma_lock);
+    struct RestrictedDMA *dma=restricted_dma;
+    while (dma && dma->base!=base) dma=dma->next;
+    if (!dma || !dma->provider_live || length>dma->length || dma->refs==SIZE_MAX) {
+        AROSAppleMemoryLockRelease(&restricted_dma_lock,lock);return 0;
+    }
+    ++dma->refs;
+    AROSAppleMemoryLockRelease(&restricted_dma_lock,lock);
+
+    Forbid();
+    struct RestrictedShared *b=AROSApplePageAllocate(NULL,storage,MEMF_CLEAR);
+    if (!b) { r_dma_drop(dma);Permit();return 0; }
+    b->count=count;b->storage_bytes=storage;b->pages=(void *)(b+1);
+    b->dma=dma;b->dma_access=KMAP_READ|(writable ? KMAP_WRITE : 0);
+    for (size_t i=0;i<count;++i) b->pages[i]=(uintptr_t)base+i*R_PAGE;
+    struct RestrictedSharedOperation op={.operation=0,.record=b};
+    uint64_t handle=r_shared_call(&op);
+    if (!handle) {
+        r_dma_drop(dma);
+        if (!AROSApplePageFree(b,storage)) for (;;) __asm__ volatile("wfe");
+    }
+    Permit();return handle;
+}
+
 static int r_attach_shared(uint64_t domain,uintptr_t address,uint64_t handle)
 {
     Forbid();struct RestrictedSharedOperation op={.operation=1,.handle=handle,.domain=domain,.address=address};
@@ -3003,7 +3099,7 @@ static int r_privatize_memory(uint64_t handle,uintptr_t address)
     if (!ok && !AROSApplePageFree(page,R_PAGE)) for (;;) __asm__ volatile("wfe");
     Permit();return ok;
 }
-const struct AROSRestrictedAPI AROSRestrictedAPI = {40,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread,r_read_shared,r_write_shared,r_take_domain,r_map_shared,r_unmap_shared,r_read_domain,r_write_domain,r_attach_shared_at,r_protect_range,r_privatize_memory,r_run_served,r_cut_memory,r_debug_domain,r_debug_context,r_debug_step,r_debug_breakpoints};
+const struct AROSRestrictedAPI AROSRestrictedAPI = {41,sizeof(struct AROSRestrictedAPI),r_run,r_take,r_complete,r_state,r_lifetime,r_create_domain,r_run_domain,r_close_domain,r_reserve_memory,r_commit_memory,r_decommit_memory,r_protect_memory,r_release_memory,r_create_shared,r_attach_shared,r_commit_shared,r_close_shared,r_run_domain_stacks,r_wake_thread,r_thread_state,r_suspend_thread,r_resume_thread,r_read_shared,r_write_shared,r_take_domain,r_map_shared,r_unmap_shared,r_read_domain,r_write_domain,r_attach_shared_at,r_protect_range,r_privatize_memory,r_run_served,r_cut_memory,r_debug_domain,r_debug_context,r_debug_step,r_debug_breakpoints,r_alloc_dma,r_free_dma,r_import_dma};
 /* One generic mapping implementation in the guest kernel, like the existing
  * page-protection adapter; no host or hardware-specific code is imported. */
 #include "../../aarch64-all/kernel/mapping.c"

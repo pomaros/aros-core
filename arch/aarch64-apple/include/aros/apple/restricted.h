@@ -327,5 +327,13 @@ struct AROSRestrictedAPI {
     int (*debug_step)(uint64_t handle,uint64_t channel,int on);
     int (*debug_breakpoints)(uint64_t handle,const uint64_t *addresses,unsigned count);
 
+    /* Version 41: native DMA providers allocate whole physically contiguous
+     * pages. A controller can import a page-aligned prefix by its exact
+     * native base. The import retains the pages after provider release.
+     * Imported pages admit only data views and no write upgrade if read-only. */
+    void *(*alloc_dma)(size_t length,size_t alignment);
+    int (*free_dma)(void *base);
+    uint64_t (*import_dma)(void *base,size_t length,int writable);
+
 };
 #endif

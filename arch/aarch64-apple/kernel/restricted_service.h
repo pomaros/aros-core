@@ -16,6 +16,7 @@ struct AROSRestrictedSharedBacking {
     size_t count,views;
     struct AROSRestrictedRegion *publication;
     unsigned closing;
+    unsigned access_ceiling; /* 0 for ordinary shared backing */
     /* API 35: the controller's native view, counted in views. Pending while
      * it is being mapped or unmapped; both refuse executable publication. */
     uintptr_t native_view;

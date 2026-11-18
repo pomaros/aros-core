@@ -142,7 +142,8 @@ static int shared_publication_policy(struct AROSRestrictedRegion *r,size_t page,
     if (!r->shared) return 1;
     struct AROSRestrictedSharedBacking *b=r->shared;
     size_t op=r->shared_first+page;
-    if (!shared_registered(b) || (b->closing && (access&KMAP_EXEC)) || op>=b->count ||
+    if (!shared_registered(b) || (b->access_ceiling && (access&~b->access_ceiling)) ||
+        (b->closing && (access&KMAP_EXEC)) || op>=b->count ||
         (b->publication && b->publication!=r)) return 0;
     /* A native view is a writable peer of every page */
     if ((access&KMAP_EXEC) && (b->native_view || b->native_pending)) return 0;
@@ -174,6 +175,7 @@ int AROSRestrictedSharedInitialize(struct AROSRestrictedSharedBacking *b,uintptr
         return 0;
     }
     b->pages=pages;b->count=count;b->views=0;b->closing=0;b->publication=NULL;
+    b->access_ceiling=0;
     b->regions=NULL;
     b->native_view=0;b->native_pending=0;
     b->next=shared_backings;shared_backings=b;return 1;
@@ -187,6 +189,7 @@ static int shared_copy(struct AROSRestrictedSharedBacking *b,size_t offset,
         b->count>SIZE_MAX/PAGE || offset>b->count*PAGE ||
         length>b->count*PAGE-offset || length>AROS_RESTRICTED_SHARED_COPY_MAX ||
         (length && (!buffer || (uintptr_t)buffer>UINTPTR_MAX-length))) return 0;
+    if (write && b->access_ceiling && !(b->access_ceiling&KMAP_WRITE)) return 0;
     if (!length) return 1;
     uintptr_t begin=(uintptr_t)buffer,end=begin+length;
     /* Native scratch storage must not alias any registered shared backing,
@@ -246,6 +249,7 @@ int AROSRestrictedSharedClose(struct AROSRestrictedSharedBacking *b)
 int AROSRestrictedSharedViewBegin(struct AROSRestrictedSharedBacking *b)
 {
     if (!b || b->closing || !shared_registered(b) || b->publication ||
+        (b->access_ceiling && !(b->access_ceiling&KMAP_WRITE)) ||
         b->native_view || b->native_pending || b->views==SIZE_MAX) return 0;
     /* No page may be executable through any domain view */
     for (struct AROSRestrictedRegion *r=b->regions;r;r=r->shared_next) {
