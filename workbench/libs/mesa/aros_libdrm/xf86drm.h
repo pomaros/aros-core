@@ -14,9 +14,8 @@
     passed back to drmIoctl() untouched. A sync file is what the module
     makes of SYNCOBJ_HANDLE_TO_FD with EXPORT_SYNC_FILE (asahi: a sync
     object holding a copy of the fence, behind a number the module's
-    close() releases). Sync object and PRIME (dma-buf) file descriptors
-    have no AROS counterpart; drmPrime* fail with ENOSYS, and the module
-    refuses the plain handle/fd conversions.
+    close() releases). The module handles PRIME descriptor ownership and
+    reports unsupported conversions through drmIoctl().
 */
 
 #ifndef AROS_XF86DRM_H
@@ -49,6 +48,8 @@
 #define AROS_DRM_NR_VERSION             0x00
 #define AROS_DRM_NR_GEM_CLOSE           0x09
 #define AROS_DRM_NR_GET_CAP             0x0c
+#define AROS_DRM_NR_PRIME_HANDLE_TO_FD  0x2d
+#define AROS_DRM_NR_PRIME_FD_TO_HANDLE  0x2e
 #define AROS_DRM_NR_SYNCOBJ_CREATE      0xbf
 #define AROS_DRM_NR_SYNCOBJ_DESTROY     0xc0
 #define AROS_DRM_NR_SYNCOBJ_HANDLE_TO_FD 0xc1

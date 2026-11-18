@@ -26,6 +26,12 @@ struct aros_drm_version {
     char *desc;
 };
 
+struct aros_drm_prime_handle {
+    uint32_t handle;
+    uint32_t flags;
+    int32_t fd;
+};
+
 struct aros_drm_get_cap {
     uint64_t capability;
     uint64_t value;
@@ -335,14 +341,20 @@ int drmSyncobjTransfer(int fd, uint32_t dst_handle, uint64_t dst_point,
 
 int drmPrimeHandleToFD(int fd, uint32_t handle, uint32_t flags, int *prime_fd)
 {
-    (void)fd; (void)handle; (void)flags; (void)prime_fd;
-    errno = ENOSYS;
-    return -1;
+    struct aros_drm_prime_handle args = { .handle = handle, .flags = flags, .fd = -1 };
+    int rc = drmIoctl(fd, AROS_DRM_NR_PRIME_HANDLE_TO_FD, &args);
+
+    if (rc == 0)
+        *prime_fd = args.fd;
+    return rc;
 }
 
 int drmPrimeFDToHandle(int fd, int prime_fd, uint32_t *handle)
 {
-    (void)fd; (void)prime_fd; (void)handle;
-    errno = ENOSYS;
-    return -1;
+    struct aros_drm_prime_handle args = { .fd = prime_fd };
+    int rc = drmIoctl(fd, AROS_DRM_NR_PRIME_FD_TO_HANDLE, &args);
+
+    if (rc == 0)
+        *handle = args.handle;
+    return rc;
 }
