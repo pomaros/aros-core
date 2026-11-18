@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <stdint.h>
 #include <proto/exec.h>
 #include <proto/fd.h>
 #include "fd_private.h"
@@ -17,6 +18,7 @@
 struct buffer_file {
     struct Library *base;
     struct fd_buffer buffer;
+    CONST_APTR address;
     ULONG bindings;
 };
 struct buffer_binding {
@@ -129,15 +131,14 @@ const struct fd_hooks fd_buffer_hooks = {
     .fdh_lseek = buffer_seek, .fdh_fcntl = buffer_fcntl, .fdh_dup = buffer_dup
 };
 
-AROS_LH3(LONG, FD_ExportBuffer,
-    AROS_LHA(const struct fd_buffer *, buffer, A0), AROS_LHA(LONG, flags, D0),
-    AROS_LHA(LONG *, outfd, A1), struct fd_base *, libBase, 19, FD)
+static LONG export_buffer(struct fd_base *libBase, const struct fd_buffer *buffer,
+                          CONST_APTR address, LONG flags, LONG *outfd)
 {
-    AROS_LIBFUNC_INIT
     struct buffer_file *file;
     LONG error;
     if (!buffer || !buffer->provider || !buffer->payload || !buffer->release ||
         buffer->size <= 0 || !outfd || (flags & ~FD_CLOEXEC)) return EINVAL;
+    if (address && (UQUAD)buffer->size - 1 > (uintptr_t)UINTPTR_MAX - (uintptr_t)address) return EOVERFLOW;
     file = AllocVec(sizeof(*file), MEMF_PUBLIC | MEMF_CLEAR);
     if (!file) return ENOMEM;
     file->base = OpenLibrary((CONST_STRPTR)"fd.library", 52);
@@ -147,12 +148,32 @@ AROS_LH3(LONG, FD_ExportBuffer,
         return ENOSYS;
     }
     file->buffer = *buffer;
+    file->address = address;
     error = new_binding(file, 3, flags, FALSE, outfd);
     if (error) {
         CloseLibrary(file->base);
         FreeVec(file);
     }
     return error;
+}
+
+AROS_LH3(LONG, FD_ExportBuffer,
+    AROS_LHA(const struct fd_buffer *, buffer, A0), AROS_LHA(LONG, flags, D0),
+    AROS_LHA(LONG *, outfd, A1), struct fd_base *, libBase, 19, FD)
+{
+    AROS_LIBFUNC_INIT
+    return export_buffer(libBase, buffer, NULL, flags, outfd);
+    AROS_LIBFUNC_EXIT
+}
+
+AROS_LH4(LONG, FD_ExportMappedBuffer,
+    AROS_LHA(const struct fd_buffer *, buffer, A0), AROS_LHA(CONST_APTR, address, A1),
+    AROS_LHA(LONG, flags, D0), AROS_LHA(LONG *, outfd, A2),
+    struct fd_base *, libBase, 21, FD)
+{
+    AROS_LIBFUNC_INIT
+    if (!address) return EINVAL;
+    return export_buffer(libBase, buffer, address, flags, outfd);
     AROS_LIBFUNC_EXIT
 }
 
@@ -177,5 +198,33 @@ AROS_LH4(LONG, FD_AcquireBuffer,
     }
     FD_Release(lease);
     return EINVAL;
+    AROS_LIBFUNC_EXIT
+}
+
+AROS_LH4(LONG, FD_AcquireBufferMapping,
+    AROS_LHA(LONG, fd, D0), AROS_LHA(const struct fd_buffer_range *, range, A0),
+    AROS_LHA(struct fd_lease *, lease, A1), AROS_LHA(APTR *, address, A2), struct fd_base *, libBase, 22, FD)
+{
+    AROS_LIBFUNC_INIT
+    struct Library *FDBase = &libBase->fd_LibNode;
+    LONG error;
+    if (!range || !lease || !address || range->offset < 0 || range->length <= 0) return EINVAL;
+    error = FD_Acquire(fd, lease);
+    if (error) return error;
+    error = ENODEV;
+    if (lease->owner == FD_OWNER_BUFFER && lease->hooks == &fd_buffer_hooks) {
+        struct buffer_binding *binding = lease->data;
+        struct buffer_file *file = binding->file;
+        if (range->offset > file->buffer.size || range->length > file->buffer.size - range->offset)
+            error = EINVAL;
+        else if (range->write && !file->buffer.writable)
+            error = EACCES;
+        else if (file->address) {
+            *address = (APTR)((uintptr_t)file->address + (uintptr_t)range->offset);
+            return 0;
+        }
+    }
+    FD_Release(lease);
+    return error;
     AROS_LIBFUNC_EXIT
 }

@@ -35,7 +35,7 @@ VKR_GENDIR := $(GENDIR)/$(CURDIR)/generated
     destination=$(PORTSDIR)/virglrenderer
 
 #MM- workbench-libs : workbench-libs-venus
-#MM workbench-libs-venus : includes linklibs-pthread workbench-libs-vkr
+#MM workbench-libs-venus : includes linklibs-pthread workbench-libs-vkr workbench-libs-fd-includes
 #MM workbench-libs-vkr : includes linklibs-pthread workbench-libs-vkr-generate
 #MM workbench-libs-vkr-generate : virglrenderer-fetch venus-protocol-fetch
 #MM- includes-copy : workbench-libs-vkr-includes

@@ -13,6 +13,8 @@
 #include "config.h"
 
 #include <aros/debug.h>
+#include <proto/exec.h>
+#include <proto/fd.h>
 
 #include <errno.h>
 #include <pthread.h>
@@ -53,6 +55,8 @@ struct avs_submit
 struct avs_blob
 {
     struct avs_blob *next;
+    struct Library *mapping_base;
+    struct fd_lease mapping;
     uint32_t         res_id;
     enum virgl_resource_fd_type type;
     int              handle;
@@ -272,6 +276,12 @@ struct avs_client *avs_connect(const char *name)
    descriptors, even when their number also names a valid SHM handle. */
 static void avs_release_blob(struct avs_blob *blob)
 {
+    struct Library *FDBase = blob->mapping_base;
+    if (FDBase)
+    {
+        FD_Release(&blob->mapping);
+        CloseLibrary(FDBase);
+    }
     if (blob->type == VIRGL_RESOURCE_FD_SHM)
     {
         if (blob->addr)
@@ -373,6 +383,19 @@ uint32_t avs_blob_create(struct avs_client *c, uint64_t size, uint64_t blob_id,
     {
         if (type == VIRGL_RESOURCE_FD_SHM)
             blob->addr = avs_memory->client_map(handle, size);
+        else if (type == VIRGL_RESOURCE_FD_DMABUF &&
+                 avs_memory == avs_local_memory() && size <= INT64_MAX)
+        {
+            struct Library *FDBase = OpenLibrary((CONST_STRPTR)"fd.library", 53);
+            if (FDBase)
+            {
+                const struct fd_buffer_range range = { .length = size, .write = TRUE };
+                if (!FD_AcquireBufferMapping(handle, &range, &blob->mapping, &blob->addr))
+                    blob->mapping_base = FDBase;
+                else
+                    CloseLibrary(FDBase);
+            }
+        }
         if (!blob->addr)
         {
             vkr_renderer_destroy_resource(c->ctx_id, blob->res_id);

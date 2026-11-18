@@ -115,6 +115,21 @@ LONG FD_ExportBuffer(const struct fd_buffer *buffer, LONG flags, LONG *outfd);
    Failure leaves payload untouched and does not acquire a lease. */
 LONG FD_AcquireBuffer(LONG fd, CONST_APTR provider, struct fd_lease *lease, APTR *payload);
 
+/* Version 53. Export a CPU-visible buffer with a native virtual address.
+   The provider must keep the entire interval mapped until release(payload).
+   The descriptor's access mode still limits which views can be acquired. */
+LONG FD_ExportMappedBuffer(const struct fd_buffer *buffer, CONST_APTR address,
+                           LONG flags, LONG *outfd);
+struct fd_buffer_range {
+    QUAD offset, length;
+    BOOL write;
+};
+/* Only for callers in the native address space. Returns a leased address
+   for the requested byte interval. Keep fd.library and the lease alive
+   until the last access. No address or active lease is returned on error. */
+LONG FD_AcquireBufferMapping(LONG fd, const struct fd_buffer_range *range,
+                             struct fd_lease *lease, APTR *address);
+
 LONG FD_Alloc(LONG startfd, fd_owner_t owner, APTR data, LONG *outfd);
 LONG FD_Reserve(LONG fd, fd_owner_t owner, APTR data);
 LONG FD_Free(LONG fd, fd_owner_t owner);
