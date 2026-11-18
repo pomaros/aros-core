@@ -17,6 +17,7 @@
 #include <proto/fd.h>
 
 #include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -373,16 +374,16 @@ uint32_t avs_max_timelines(struct avs_client *c)
     return AVS_MAX_TIMELINES;
 }
 
-uint32_t avs_blob_create(struct avs_client *c, uint64_t size, uint64_t blob_id,
-                         uint32_t flags, void **addr)
+static uint32_t avs_create_blob(struct avs_client *c, uint64_t size, uint64_t blob_id,
+                                uint32_t flags, void **addr, struct avs_blob_export *exported)
 {
-    struct avs_blob *blob = calloc(1, sizeof(*blob));
+    struct avs_blob *blob;
     enum virgl_resource_fd_type type;
     struct virgl_resource_vulkan_info vulkan_info;
     uint32_t map_info;
     int handle;
 
-    if (!blob)
+    if (!size || !(blob = calloc(1, sizeof(*blob))))
         return 0;
     pthread_mutex_lock(&avs_lock);
     blob->res_id = c->next_res_id++;
@@ -396,7 +397,26 @@ uint32_t avs_blob_create(struct avs_client *c, uint64_t size, uint64_t blob_id,
     blob->type = type;
     blob->handle = handle;
     blob->size = size;
-    if (flags & AVS_BLOB_MAPPABLE)
+    if (exported)
+    {
+        int duplicate = -1;
+        enum avs_blob_export_type export_type = AVS_BLOB_EXPORT_NONE;
+        if (type == VIRGL_RESOURCE_FD_SHM)
+        {
+            duplicate = avs_memory->share(handle);
+            export_type = AVS_BLOB_EXPORT_SHM;
+        }
+        else if (type == VIRGL_RESOURCE_FD_DMABUF)
+        {
+            /* AROS standard streams live in the caller's POSIX namespace. */
+            duplicate = fcntl(handle, F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
+            export_type = AVS_BLOB_EXPORT_DMABUF;
+        }
+        if (duplicate < 0)
+            goto failed;
+        *exported = (struct avs_blob_export){ export_type, duplicate };
+    }
+    else if (flags & AVS_BLOB_MAPPABLE)
     {
         if (type == VIRGL_RESOURCE_FD_SHM)
             blob->addr = avs_memory->client_map(handle, size);
@@ -414,11 +434,7 @@ uint32_t avs_blob_create(struct avs_client *c, uint64_t size, uint64_t blob_id,
             }
         }
         if (!blob->addr)
-        {
-            vkr_renderer_destroy_resource(c->ctx_id, blob->res_id);
-            avs_release_blob(blob);
-            return 0;
-        }
+            goto failed;
     }
     if (addr)
         *addr = blob->addr;
@@ -428,6 +444,26 @@ uint32_t avs_blob_create(struct avs_client *c, uint64_t size, uint64_t blob_id,
     c->blobs = blob;
     pthread_mutex_unlock(&avs_lock);
     return blob->res_id;
+
+failed:
+    vkr_renderer_destroy_resource(c->ctx_id, blob->res_id);
+    avs_release_blob(blob);
+    return 0;
+}
+
+uint32_t avs_blob_create(struct avs_client *c, uint64_t size, uint64_t blob_id,
+                         uint32_t flags, void **addr)
+{
+    return avs_create_blob(c, size, blob_id, flags, addr, NULL);
+}
+
+uint32_t avs_blob_create_export(struct avs_client *c, uint64_t size, uint64_t blob_id,
+                                uint32_t flags, struct avs_blob_export *exported)
+{
+    if (!exported)
+        return 0;
+    *exported = (struct avs_blob_export){ AVS_BLOB_EXPORT_NONE, -1 };
+    return avs_create_blob(c, size, blob_id, flags, NULL, exported);
 }
 
 void avs_blob_unref(struct avs_client *c, uint32_t res_id)

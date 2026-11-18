@@ -56,6 +56,27 @@ uint32_t avs_blob_create(struct avs_client *client, uint64_t size,
                          uint64_t blob_id, uint32_t flags, void **addr);
 void avs_blob_unref(struct avs_client *client, uint32_t res_id);
 
+enum avs_blob_export_type
+{
+    AVS_BLOB_EXPORT_NONE,
+    AVS_BLOB_EXPORT_SHM,
+    AVS_BLOB_EXPORT_DMABUF,
+};
+
+struct avs_blob_export
+{
+    enum avs_blob_export_type type;
+    int handle;
+};
+
+/* Creates a resource for a client in another address space. On success the
+   caller owns one extra handle, independently of the renderer's resource.
+   Release SHM through the supplied memory ops' close callback and DMA-BUF
+   through POSIX close. No native client mapping is created here. */
+uint32_t avs_blob_create_export(struct avs_client *client, uint64_t size,
+                                uint64_t blob_id, uint32_t flags,
+                                struct avs_blob_export *exported);
+
 uint32_t avs_sync_create(struct avs_client *client, uint64_t initial);
 void avs_sync_unref(struct avs_client *client, uint32_t sync_id);
 uint64_t avs_sync_read(struct avs_client *client, uint32_t sync_id);
