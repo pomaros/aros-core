@@ -80,7 +80,7 @@ bool avs_sync_ready(struct avs_client *client, bool any, const uint32_t *sync_id
 typedef void (*avs_dump_emit)(const char *line, void *data);
 void avs_dump_state(avs_dump_emit emit, void *data);
 /* The renderer's log lines (decoder and ring failures) go to emit instead of
-   stderr; NULL restores stderr */
+   the system debug output; NULL restores that default */
 void avs_set_logger(avs_dump_emit emit, void *data);
 
 /*

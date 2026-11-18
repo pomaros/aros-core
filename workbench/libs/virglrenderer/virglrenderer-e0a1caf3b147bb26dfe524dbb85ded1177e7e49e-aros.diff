@@ -202,25 +202,21 @@ diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_c
  #include <sys/types.h>
  #include <unistd.h>
  
-@@ -189,10 +191,17 @@
+@@ -189,8 +191,13 @@
  vkr_context_free_resource(struct hash_entry *entry)
  {
     struct vkr_resource *res = entry->data;
 +#ifdef __AROS__
-    if (res->fd_type == VIRGL_RESOURCE_FD_SHM)
-+      vkr_aros_shm->unmap(res->u.data, res->size);
-+   else if (res->u.fd >= 0)
-+      vkr_aros_shm->close(res->u.fd);
-+#else
 +   if (res->fd_type == VIRGL_RESOURCE_FD_SHM)
++      vkr_aros_shm->unmap(res->u.data, res->size);
++#else
+    if (res->fd_type == VIRGL_RESOURCE_FD_SHM)
        munmap(res->u.data, res->size);
++#endif
     else if (res->u.fd >= 0)
        close(res->u.fd);
-+#endif
     free(res);
- }
- 
-@@ -261,6 +270,20 @@
+@@ -261,6 +268,20 @@
  {
     assert(!vkr_context_get_resource(ctx, res_id));
  
@@ -241,7 +237,7 @@ diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_c
     void *mmap_ptr = mmap(NULL, blob_size, PROT_WRITE | PROT_READ, MAP_SHARED, fd, 0);
     if (mmap_ptr == MAP_FAILED)
        return false;
-@@ -273,6 +296,7 @@
+@@ -273,6 +294,7 @@
  
     close(fd);
     return true;
@@ -249,7 +245,7 @@ diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_c
  }
  
  static bool
-@@ -289,6 +313,19 @@
+@@ -289,6 +311,19 @@
     const size_t page_size = getpagesize();
     const uint64_t alloc_size = (blob_size + page_size - 1) & ~(page_size - 1);
  
@@ -269,7 +265,7 @@ diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_c
     int fd = os_create_anonymous_file(alloc_size, "vkr-shmem");
     if (fd < 0)
        return false;
-@@ -305,6 +342,7 @@
+@@ -305,6 +340,7 @@
        close(fd);
        return false;
     }
@@ -277,6 +273,30 @@ diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_c
  
     *out_blob = (struct virgl_context_blob){
        .type = VIRGL_RESOURCE_FD_SHM,
+@@ -332,6 +368,23 @@
+    struct virgl_context_blob blob;
+    if (!vkr_device_memory_export_blob(mem, blob_size, blob_flags, &blob))
+       return false;
++
++#ifdef __AROS__
++   /* An SHM handle belongs to the allocator. Keep its CPU mapping in the
++    * context and give the separately owned handle to the caller. */
++   if (blob.type == VIRGL_RESOURCE_FD_SHM) {
++      void *ptr = vkr_aros_shm->import(blob.u.fd, blob_size);
++      if (!ptr || !vkr_context_import_resource_internal(ctx, res_id, blob_size,
++                                                         blob.type, -1, ptr)) {
++         if (ptr)
++            vkr_aros_shm->unmap(ptr, blob_size);
++         vkr_aros_shm->close(blob.u.fd);
++         return false;
++      }
++      *out_blob = blob;
++      return true;
++   }
++#endif
+
+    /* If memory might get exported, store a dup'ed fd in vkr_resource for:
+     * - vkAllocateMemory for dma_buf import
 diff -ruN virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_cs.h virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_cs.h
 --- virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e/src/venus/vkr_cs.h	2026-10-22 04:11:08
 +++ virglrenderer-e0a1caf3b147bb26dfe524dbb85ded1177e7e49e.aros/src/venus/vkr_cs.h	2026-11-03 19:38:38
