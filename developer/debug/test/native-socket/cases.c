@@ -39,6 +39,10 @@ static void test_exported_buffer(void) {
  LONG fd=-1,error=0;
  registry.fd_OwnerHooks[FD_OWNER_BUFFER]=&fd_buffer_hooks;
  assert(FD_ExportBuffer(&buffer,FD_CLOEXEC,&fd,&registry)==0 && fd>=3);
+ LONG lowest=__fdhook(fd,__FDH_FCNTL,F_DUPFD_CLOEXEC,0,0,&error);
+ assert(lowest>=3 && !error && lowest!=fd);
+ assert(__fdhook(lowest,__FDH_FCNTL,F_GETFD,0,0,&error)==FD_CLOEXEC);
+ assert(__fdhook(lowest,__FDH_CLOSE,0,0,0,&error)==0 && !releases);
  assert(FD_AcquireBuffer(fd,&other,&lease,&payload,&registry)==EINVAL && !payload && !lease.private_record);
  LONG second=__fdhook(fd,__FDH_FCNTL,F_DUPFD,24,0,&error);
  assert(second>=24 && !error);

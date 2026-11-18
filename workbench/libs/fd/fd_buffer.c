@@ -35,6 +35,9 @@ static LONG new_binding(struct buffer_file *file, LONG minimum, LONG flags,
     ULONG refs;
 
     if (minimum < 0) return EINVAL;
+    /* Slots below 3 are local to each POSIX process and are invisible to
+       the global registry. A duplicate must remain addressable as a buffer. */
+    if (!exact && minimum < 3) minimum = 3;
     b = AllocVec(sizeof(*b), MEMF_PUBLIC);
     if (!b) return ENOMEM;
     b->file = file;
