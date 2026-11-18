@@ -12,6 +12,8 @@
 
 #include "config.h"
 
+#include <aros/debug.h>
+
 #include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -190,7 +192,8 @@ static void avs_log(UNUSED enum virgl_log_level_flags level, const char *message
         avs_logger(line, avs_logger_data);
     }
     else
-        fprintf(stderr, "[venus] %s", message);
+        /* Renderer threads can log during teardown without a stdio context. */
+        bug("[venus] %s", message);
 }
 
 void avs_set_logger(avs_dump_emit emit, void *data)
