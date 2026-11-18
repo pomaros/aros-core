@@ -40,7 +40,7 @@ a.output=a.output.resolve()
 if a.output==ROOT or ROOT in a.output.parents:
     p.error('output must be outside the source tree')
 a.output.mkdir(parents=True,exist_ok=False)
-inputs=[FD/'include/fd.h',FD/'fd_private.h',FD/'fd_alloc.c',FD/'fd_hooks.c',FD/'fd_lease.c',
+inputs=[FD/'include/fd.h',FD/'fd_private.h',FD/'fd_alloc.c',FD/'fd_hooks.c',FD/'fd_lease.c',FD/'fd_buffer.c',
        ROOT/'workbench/network/common/include/bsdsocket/native.h',API/'native_socket.h',
        API/'native_socket.c',ROOT/'compiler/crt/posixc/__fdesc.c',
        HERE/'host.h',HERE/'adapter.h',HERE/'cases.c', HERE/'context-cases.c',
@@ -51,6 +51,7 @@ header=re.sub(r'^(?:LONG|void|APTR|fd_owner_t|const struct fd_hooks \*)\s*FD_\w+
 unit=(HERE/'host.h').read_text()+header+stripped(FD/'fd_private.h')
 unit+='\n'.join(stripped(FD/name) for name in ['fd_alloc.c','fd_hooks.c','fd_lease.c'])
 unit+=(HERE/'adapter.h').read_text()
+unit+=stripped(FD/'fd_buffer.c')
 unit+=stripped(ROOT/'workbench/network/common/include/bsdsocket/native.h')
 unit+=stripped(API/'native_socket.h')+stripped(API/'native_socket.c')
 # The actual POSIX dispatcher is included too; its call-site wrappers merely

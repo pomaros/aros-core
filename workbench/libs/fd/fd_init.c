@@ -23,6 +23,7 @@ static int FD_Init(LIBBASETYPEPTR LIBBASE)
         LIBBASE->fd_OwnerUsers[i] = 0;
     }
 
+    LIBBASE->fd_OwnerHooks[FD_OWNER_BUFFER] = &fd_buffer_hooks;
     return TRUE;
 }
 

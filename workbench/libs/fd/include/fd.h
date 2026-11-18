@@ -18,6 +18,7 @@ typedef UBYTE fd_owner_t;
 #define FD_OWNER_POSIXC    ((fd_owner_t)1)
 #define FD_OWNER_BSDSOCKET ((fd_owner_t)2)
 #define FD_OWNER_NATIVE_SOCKET ((fd_owner_t)3) /* task-independent sockets */
+#define FD_OWNER_BUFFER    ((fd_owner_t)5) /* retained native buffer */
 #define FD_OWNER_MAX       ((fd_owner_t)16)   /* size of the owner-hooks table */
 
 /*
@@ -94,6 +95,25 @@ LONG FD_Retire(struct fd_lease *lease, fd_retire_fn retire, APTR cookie);
    separate from a completed close whose callback reported an error. */
 LONG FD_RetireOwner(LONG fd, fd_owner_t owner, APTR data,
                    fd_retire_fn retire, APTR cookie, LONG *close_error);
+
+/* Version 52. An exported descriptor owns a provider reference to a buffer.
+   provider is a stable identity shared by the provider and its importers.
+   On success ownership of payload transfers to the descriptor. release and
+   its code must stay valid through the last reference. On failure the caller
+   retains ownership and outfd is untouched. flags may contain FD_CLOEXEC.
+   Seek to offset zero from SEEK_END to query size, or SEEK_SET for zero. */
+struct fd_buffer {
+    CONST_APTR provider;
+    APTR payload;
+    QUAD size;
+    BOOL writable;
+    void (*release)(APTR payload);
+};
+LONG FD_ExportBuffer(const struct fd_buffer *buffer, LONG flags, LONG *outfd);
+/* Hold fd.library open and supply a zero-initialized lease. On success,
+   payload is borrowed until FD_Release. Provider mismatch returns EINVAL.
+   Failure leaves payload untouched and does not acquire a lease. */
+LONG FD_AcquireBuffer(LONG fd, CONST_APTR provider, struct fd_lease *lease, APTR *payload);
 
 LONG FD_Alloc(LONG startfd, fd_owner_t owner, APTR data, LONG *outfd);
 LONG FD_Reserve(LONG fd, fd_owner_t owner, APTR data);

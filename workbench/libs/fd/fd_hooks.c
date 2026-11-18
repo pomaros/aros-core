@@ -54,7 +54,7 @@
 {
     AROS_LIBFUNC_INIT
 
-    if (owner == FD_OWNER_NONE || owner >= FD_OWNER_MAX)
+    if (owner == FD_OWNER_NONE || owner >= FD_OWNER_MAX || owner == FD_OWNER_BUFFER)
         return EINVAL;
 
     ObtainSemaphore(&FDBase->fd_Lock);

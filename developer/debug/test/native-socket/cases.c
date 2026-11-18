@@ -28,9 +28,35 @@ static QUAD provider_seek(APTR data, LONG fd, QUAD offset, LONG whence, LONG *er
  *error=0;
  return *(QUAD *)data + offset;
 }
+static int releases;
+static void release_buffer(APTR payload) { assert(payload == &releases); ++releases; }
+
+static void test_exported_buffer(void) {
+ static const char provider=0, other=0;
+ struct fd_buffer buffer={&provider,&releases,INT64_C(0x200000000),FALSE,release_buffer};
+ struct fd_lease lease={0};
+ APTR payload=NULL;
+ LONG fd=-1,error=0;
+ registry.fd_OwnerHooks[FD_OWNER_BUFFER]=&fd_buffer_hooks;
+ assert(FD_ExportBuffer(&buffer,FD_CLOEXEC,&fd,&registry)==0 && fd>=3);
+ assert(FD_AcquireBuffer(fd,&other,&lease,&payload,&registry)==EINVAL && !payload && !lease.private_record);
+ LONG second=__fdhook(fd,__FDH_FCNTL,F_DUPFD,24,0,&error);
+ assert(second>=24 && !error);
+ assert(__fdhook(second,__FDH_FCNTL,F_GETFL,0,0,&error)==O_RDONLY);
+ assert(__fdhook(fd,__FDH_FCNTL,F_GETFD,0,0,&error)==FD_CLOEXEC);
+ assert(__fdhook(second,__FDH_FCNTL,F_GETFD,0,0,&error)==0);
+ assert(__fdhook(fd,__FDH_CLOSE,0,0,0,&error)==0 && !releases);
+ QUAD end=0;
+ assert(!__fdhook(second,__FDH_SEEK,(IPTR)&end,SEEK_END,0,&error) && end==buffer.size);
+ assert(FD_AcquireBuffer(second,&provider,&lease,&payload,&registry)==0 && payload==buffer.payload);
+ assert(!__fdhook(second,__FDH_CLOSE,0,0,0,&error) && !releases);
+ assert(!FD_Release(&lease) && releases==1);
+ assert(!atomic_load(&fd_library_refs));
+}
 int main(void){
  init_lock(&registry.fd_Lock);init_lock(&syscall_semaphore);init_lock(&baselist_semaphore);
  registry.fd_LibNode.lib_Version=51;
+ test_exported_buffer();
  assert(native_socket_setup());
  /* A reservation without a provider has no admitted callable hook table. */
  int orphan=1;LONG orphan_fd,error;

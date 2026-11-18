@@ -29,4 +29,6 @@ struct fd_base {
     ULONG fd_OwnerUsers[FD_OWNER_MAX];
 };
 
+extern const struct fd_hooks fd_buffer_hooks;
+
 #endif /* FD_PRIVATE_H */

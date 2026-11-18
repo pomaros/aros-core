@@ -1024,7 +1024,7 @@ SIPTR __fdhook(int fd, int operation, IPTR a, IPTR b, IPTR c, LONG *error)
             if (__getfdesc(a)) {
                 /* Native replacement needs one registry transaction across
                  * both owners; never destroy the target before it exists. */
-                if (lease.owner==FD_OWNER_NATIVE_SOCKET) {
+                if (lease.owner==FD_OWNER_NATIVE_SOCKET || lease.owner==FD_OWNER_BUFFER) {
                     *error=EOPNOTSUPP;
                     break;
                 }

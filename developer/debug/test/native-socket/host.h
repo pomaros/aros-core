@@ -13,7 +13,7 @@
 #include <stdarg.h>
 typedef int16_t WORD;typedef uint16_t UWORD;typedef int32_t LONG; typedef uint32_t ULONG; typedef uint8_t UBYTE;
 typedef uintptr_t IPTR;typedef intptr_t SIPTR;typedef int64_t QUAD;
-typedef void *APTR;typedef const void *CONST_APTR;typedef int BOOL;
+typedef const char *CONST_STRPTR;typedef void *APTR;typedef const void *CONST_APTR;typedef int BOOL;
 typedef char *caddr_t;typedef uint32_t socklen_t;
 #define TRUE 1
 #define FALSE 0
