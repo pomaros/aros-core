@@ -471,6 +471,28 @@ patch_cached()
     fi
 }
 
+# A local patch belongs to the current source revision. An applied marker
+# and its cached patch are evidence for those cached bytes only.
+check_local_patch_cache()
+{
+    local patchname="$1" origin
+
+    test -f "$BASE/.${patchname}.applied" || return 0
+    for origin in $patches_origins; do
+        case "$origin" in
+            *://*) return 0 ;;
+        esac
+        test -f "$origin/$patchname" || continue
+        if ! cmp -s "$origin/$patchname" "$BASE/$patchname"; then
+            echo "fetch: local patch '$origin/$patchname' differs from the patch applied in '$destination'."
+            echo "fetch: rebuild this port from the cached archive in a clean extraction directory."
+            return 1
+        fi
+        return 0
+    done
+    return 0
+}
+
 fetchlock()
 {
     local location="$1" archive="$2" localbuild="$3" ;
@@ -582,6 +604,10 @@ archive="$archive2"
 for patch in $patches; do
     patch=$(echo "$patch" | cut -d: -f1)
     if test "x$patch" != "x"; then
+        if ! check_local_patch_cache "$patch"; then
+            fetchunlock "$LOCATION" "$fetchlockfile"
+            exit 1
+        fi
         if ! fetch_cached "$patches_origins" "$patch" "" "$BASE"; then
             fetch_cached "$patches_origins" "$patch" "tar.bz2 tar.gz zip" "$BASE" patch2
             test -z "$patch2" && error "fetch: Error while fetching the patch \`$patch'."
