@@ -729,7 +729,9 @@ isc_result_t omapi_one_dispatch (omapi_object_t *wo,
 				    if (len)
 					omapi_value_dereference (&ov, MDL);
 				}
-				(*(io -> reaper)) (io -> inner);
+				/* Interface registrations may have no reaper. */
+				if (io -> reaper)
+				    (*(io -> reaper)) (io -> inner);
 				if (prev) {
 				    omapi_io_dereference (&prev -> next, MDL);
 				    if (io -> next)
