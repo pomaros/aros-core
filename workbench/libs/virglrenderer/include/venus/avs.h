@@ -125,7 +125,9 @@ struct avs_memory_ops
 typedef void (*avs_void_function)(void);
 typedef avs_void_function (*avs_get_instance_proc_addr)(void *instance, const char *name);
 
-/* Starts the renderer over a native Vulkan driver's root entry point */
+/* Starts the renderer with one controller's memory callbacks. The same task
+   may repeat initialization with the same configuration and owns teardown.
+   A separate controller must wait for the owning task to finish. */
 bool avs_server_init(const struct avs_memory_ops *memory,
                      avs_get_instance_proc_addr gipa);
 void avs_server_fini(void);
