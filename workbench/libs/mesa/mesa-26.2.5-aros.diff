@@ -2656,3 +2656,18 @@ diff -ruN mesa-26.2.5/src/vulkan/runtime/vk_image.h mesa-26.2.5.aros/src/vulkan/
 
        handle->handle = rsrc->bo->handle;
     } else if (handle->type == WINSYS_HANDLE_TYPE_FD) {
+--- mesa-26.2.5/src/asahi/vulkan/hk_queue.c
++++ mesa-26.2.5.aros/src/asahi/vulkan/hk_queue.c
+@@ -982,9 +982,10 @@
+                        "DRM_IOCTL_SYNCOBJ_CREATE failed: %m");
+    }
+
+-   uint64_t initial_value = 1;
++   /* The first real submission must advance past the initial signal. */
++   queue->drm.timeline_value = 1;
+    if (drmSyncobjTimelineSignal(dev->dev.fd, &queue->drm.syncobj,
+-                                &initial_value, 1)) {
++                                &queue->drm.timeline_value, 1)) {
+       hk_queue_finish(dev, queue);
+       return vk_errorf(dev, VK_ERROR_OUT_OF_HOST_MEMORY,
+                        "DRM_IOCTL_TIMELINE_SYNCOBJ_SIGNAL failed: %m");
