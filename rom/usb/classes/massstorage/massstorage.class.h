@@ -83,7 +83,7 @@ LONG nIOCmdTunnel(struct NepClassMS *ncm, struct IOStdReq *ioreq);
 LONG nScsiDirectTunnel(struct NepClassMS *ncm, struct SCSICmd *scsicmd);
 
 BPTR CreateSegment(struct NepClassMS *ncm, const ULONG *MyData);
-struct DeviceNode * FindMatchingDevice(struct NepClassMS *ncm, struct DosEnvec *envec);
+struct DeviceNode * FindMatchingDevice(struct NepClassMS *ncm, struct DosEnvec *envec, struct DeviceNode *after);
 BOOL CheckFATPartition(struct NepClassMS *ncm, ULONG startblock);
 void ProcessRDB(struct NepClassMS *ncm);
 BOOL AutoMountCD(struct NepClassMS *ncm);

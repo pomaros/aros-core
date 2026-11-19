@@ -4303,11 +4303,13 @@ BOOL nUnmountPartition(struct NepClassMS *ncm)
     struct DeviceNode *node;
     struct DosList *list;
     struct MsgPort *handler;
+    struct DeviceNode *after = NULL;
+    BOOL retired = TRUE;
 
     if(!GM_UNIQUENAME(nOpenDOS)(nh))
         return FALSE;
 
-    while((node = FindMatchingDevice(ncm, NULL)))
+    while((node = FindMatchingDevice(ncm, NULL, after)))
     {
         handler = node->dn_Task;
         if(handler)
@@ -4316,7 +4318,9 @@ BOOL nUnmountPartition(struct NepClassMS *ncm)
             if(!DoPkt(handler, ACTION_DIE, 0, 0, 0, 0, 0))
             {
                 DoPkt(handler, ACTION_INHIBIT, DOSFALSE, 0, 0, 0, 0);
-                return FALSE;
+                retired = FALSE;
+                after = node;
+                continue;
             }
         }
         list = LockDosList(LDF_DEVICES | LDF_WRITE);
@@ -4332,7 +4336,7 @@ BOOL nUnmountPartition(struct NepClassMS *ncm)
         }
         UnLockDosList(LDF_DEVICES | LDF_WRITE);
     }
-    return TRUE;
+    return retired;
 }
 /* \\\ */
 
@@ -4880,7 +4884,7 @@ BOOL CheckVolumesOrAssignsMatch(struct NepClassMS *ncm, STRPTR device)
 /* \\\ */
 
 /* /// "FindMatchingDevice()" */
-struct DeviceNode * FindMatchingDevice(struct NepClassMS *ncm, struct DosEnvec *envec)
+struct DeviceNode * FindMatchingDevice(struct NepClassMS *ncm, struct DosEnvec *envec, struct DeviceNode *after)
 {
     struct NepMSBase *nh = ncm->ncm_ClsBase;
     struct DosList *list;
@@ -4896,6 +4900,12 @@ struct DeviceNode * FindMatchingDevice(struct NepClassMS *ncm, struct DosEnvec *
     {
         while((list = NextDosEntry(list, LDF_DEVICES | LDF_READ)))
         {
+            if(after)
+            {
+                if((struct DeviceNode *)list == after)
+                    after = NULL;
+                continue;
+            }
             fssm = NULL;
 
             /*if((!(((ULONG) list->dol_misc.dol_handler.dol_Startup) >> 30)) &&
@@ -5113,7 +5123,7 @@ BOOL CheckPartition(struct NepClassMS *ncm)
     ULONG slen;
 
     envec = (struct DosEnvec *) rdsk->rdsk_PART.pb_Environment;
-    if((node = FindMatchingDevice(ncm, envec)))
+    if((node = FindMatchingDevice(ncm, envec, NULL)))
     {
         KPRINTF(10, ("found suitable device entry, no need to mount anything new\n"));
 
