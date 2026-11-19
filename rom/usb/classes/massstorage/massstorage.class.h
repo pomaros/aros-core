@@ -78,7 +78,7 @@ LONG nStartStop(struct NepClassMS *ncm, struct IOStdReq *ioreq);
 BOOL nStartRemovableTask(struct Library *ps, struct NepMSBase *nh);
 struct NepMSBase * GM_UNIQUENAME(nAllocRT)(void);
 void GM_UNIQUENAME(nFreeRT)(struct NepMSBase *nh);
-void nUnmountPartition(struct NepClassMS *ncm);
+BOOL nUnmountPartition(struct NepClassMS *ncm);
 LONG nIOCmdTunnel(struct NepClassMS *ncm, struct IOStdReq *ioreq);
 LONG nScsiDirectTunnel(struct NepClassMS *ncm, struct SCSICmd *scsicmd);
 

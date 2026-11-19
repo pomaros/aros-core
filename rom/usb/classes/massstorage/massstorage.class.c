@@ -385,7 +385,10 @@ struct NepClassMS * GM_UNIQUENAME(usbForceInterfaceBinding)(struct NepMSBase *nh
             ncm = (struct NepClassMS *) nh->nh_Units.lh_Head;
             while(ncm->ncm_Unit.unit_MsgPort.mp_Node.ln_Succ)
             {
-                if((strcmp(devidstr, ncm->ncm_DevIDString) == 0) &&
+                /* An old DOS handler may still own this unit after unplug. */
+                if(!ncm->ncm_Task &&
+                   !(ncm->ncm_HasMounted && ncm->ncm_CUC->cuc_AutoUnmount) &&
+                   (strcmp(devidstr, ncm->ncm_DevIDString) == 0) &&
                    (strcmp(ifidstr, ncm->ncm_IfIDString) == 0) &&
                    (ncm->ncm_UnitLUN == lunnum))
                 {
@@ -1415,9 +1418,9 @@ AROS_UFH0(void, GM_UNIQUENAME(nMSTask))
             sigs = Wait(sigmask);
         } while(!(sigs & SIGBREAKF_CTRL_C));
         ncm->ncm_DenyRequests = TRUE;
-        /* Device ejected */
+        /* The removable-media task still needs to retire this unit's DOS
+         * nodes after the transport has stopped accepting requests. */
         ncm->ncm_UnitReady = FALSE;
-        ncm->ncm_HasMounted = FALSE;
         ncm->ncm_ChangeCount++;
         ioreq = (struct IOStdReq *) ncm->ncm_DCInts.lh_Head;
         while(((struct Node *) ioreq)->ln_Succ)
@@ -4083,8 +4086,10 @@ AROS_UFH0(void, GM_UNIQUENAME(nRemovableTask))
                     } else {
                         if(ncm->ncm_DenyRequests && ncm->ncm_CUC->cuc_AutoUnmount && ncm->ncm_HasMounted)
                         {
-                            nUnmountPartition(ncm);
-                            ncm->ncm_HasMounted = FALSE;
+                            if(nUnmountPartition(ncm))
+                                ncm->ncm_HasMounted = FALSE;
+                            else
+                                dontquit = TRUE;
                         }
                     }
                     ncm = (struct NepClassMS *) ncm->ncm_Unit.unit_MsgPort.mp_Node.ln_Succ;
@@ -4135,8 +4140,8 @@ AROS_UFH0(void, GM_UNIQUENAME(nRemovableTask))
         {
             if(ncm->ncm_DenyRequests && ncm->ncm_CUC->cuc_AutoUnmount && ncm->ncm_HasMounted)
             {
-                nUnmountPartition(ncm);
-                ncm->ncm_HasMounted = FALSE;
+                if(nUnmountPartition(ncm))
+                    ncm->ncm_HasMounted = FALSE;
             }
             ncm = (struct NepClassMS *) ncm->ncm_Unit.unit_MsgPort.mp_Node.ln_Succ;
         }
@@ -4292,46 +4297,42 @@ BOOL GM_UNIQUENAME(nOpenDOS)(struct NepMSBase *nh)
 #define	DOSBase	nh->nh_DOSBase
 
 /* /// "nUnmountPartition()" */
-void nUnmountPartition(struct NepClassMS *ncm)
+BOOL nUnmountPartition(struct NepClassMS *ncm)
 {
     struct NepMSBase *nh = ncm->ncm_ClsBase;
-    struct DosList *list;
     struct DeviceNode *node;
-    struct DeviceNode *oldnode = NULL;
-    char partname[32];
-    UBYTE *bstr;
+    struct DosList *list;
+    struct MsgPort *handler;
 
     if(!GM_UNIQUENAME(nOpenDOS)(nh))
-    {
-        return;
-    }
+        return FALSE;
+
     while((node = FindMatchingDevice(ncm, NULL)))
     {
-        if(oldnode == node)
+        handler = node->dn_Task;
+        if(handler)
         {
-            break;
+            DoPkt(handler, ACTION_INHIBIT, DOSTRUE, 0, 0, 0, 0);
+            if(!DoPkt(handler, ACTION_DIE, 0, 0, 0, 0, 0))
+            {
+                DoPkt(handler, ACTION_INHIBIT, DOSFALSE, 0, 0, 0, 0);
+                return FALSE;
+            }
         }
-        bstr = (UBYTE *) BADDR(node->dn_Name);
-        b2cstr(bstr, partname);
-        psdAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname),
-                       "Unmounting partition %s...",
-                       partname);
-        DoPkt(node->dn_Task, ACTION_INHIBIT, TRUE, 0, 0, 0, 0);
-        DoPkt(node->dn_Task, ACTION_DIE, 0, 0, 0, 0, 0);
-        if((list = LockDosList(LDF_DEVICES | LDF_WRITE)))
+        list = LockDosList(LDF_DEVICES | LDF_WRITE);
+        if(!list)
+            return FALSE;
+        while((list = NextDosEntry(list, LDF_DEVICES)))
         {
-            list = FindDosEntry(list, partname, LDF_DEVICES);
-            if(list)
+            if(list == (struct DosList *)node)
             {
                 RemDosEntry(list);
+                break;
             }
-            UnLockDosList(LDF_DEVICES | LDF_WRITE);
         }
-        /*psdAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname),
-                       "Unmounting %s done.",
-                       partname);*/
-        oldnode = node;
+        UnLockDosList(LDF_DEVICES | LDF_WRITE);
     }
+    return TRUE;
 }
 /* \\\ */
 
