@@ -163,8 +163,8 @@ static VOID AddPartitionVolume(struct NepClassMS *ncm,
             attrs++;  /* look for name attr */
         if (attrs->attribute != PTA_DONE)
         {
-            D(bug("[Boot] RDB partition\n"));
-            /* partition has a name => RDB partition */
+            D(bug("[Boot] Named partition\n"));
+            /* Both GPT and RDB provide partition names. */
             tags[0] = PT_NAME;
             tags[1] = (IPTR)name;
             tags[2] = PT_DOSENVEC;
@@ -220,7 +220,6 @@ static VOID AddPartitionVolume(struct NepClassMS *ncm,
             pp[4 + DE_NUMBUFFERS] = 20;
             pp[4 + DE_BUFMEMTYPE] = MEMF_PUBLIC;
             pp[4 + DE_MAXTRANSFER] = 0x00200000;
-            pp[4 + DE_MASK] = 0x7ffffffe;
             /* set some fs specific fields */
             switch(ptyp.id[0])
             {
@@ -234,6 +233,13 @@ static VOID AddPartitionVolume(struct NepClassMS *ncm,
                     break;
             }
         }
+
+        /* GPT and MBR do not store DMA limits. usbscsi.device accepts
+           public buffers and the host controller maps them for transfer.
+           Retain an explicit RDB environment supplied by the medium. */
+        if (table->table->type == PHPTT_GPT || table->table->type == PHPTT_MBR ||
+            table->table->type == PHPTT_EBR)
+            pp[4 + DE_MASK] = ~(IPTR)1;
 
         pp[0] = (IPTR)name;
         pp[1] = (IPTR)AROS_BSTR_ADDR(fssm->fssm_Device);
