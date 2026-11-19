@@ -302,6 +302,7 @@ struct PCIDevice {
 
     OOP_Object                  *hd_PCIHidd;
 
+    BOOL                        hd_PCIInterfacesReady;
     BOOL                        hd_ScanDone;                        /* PCI scan done? */
     APTR                        hd_MemPool;                         /* Memory Pool */
 

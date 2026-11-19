@@ -99,6 +99,7 @@ AROS_UFP3(LONG, GM_UNIQUENAME(LUNListDisplayHook),
           AROS_UFPA(char **, strarr, A2),
           AROS_UFPA(struct NepClassMS *, ncm, A1));
 
+struct FileSysEntry *nFindResidentFileSystem(struct NepClassMS *ncm, ULONG dosType);
 BOOL CheckPartitions(struct NepClassMS *ncm);
 
 #endif /* MASSSTORAGE_CLASS_H */

@@ -120,6 +120,7 @@ struct XhciHCPrivate {
     APTR                                xhc_XHCIPorts;
     APTR                                xhc_XHCIIntR;
 
+    ULONG                               xhc_StopWorkers;
     BYTE                                xhc_ReadySignal;
     UWORD                               xhc_RootPortChanges;
     struct Task                        *xhc_ReadySigTask;

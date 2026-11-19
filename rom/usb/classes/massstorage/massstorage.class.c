@@ -4622,8 +4622,8 @@ struct LoadSegBlock * ReadLSEG(struct NepClassMS *ncm,
 }
 /* \\\ */
 
-/* /// "FindFileSystem()" */
-struct FileSysEntry * FindFileSystem(struct NepClassMS *ncm, ULONG dosType)
+/* /// "nFindResidentFileSystem()" */
+struct FileSysEntry * nFindResidentFileSystem(struct NepClassMS *ncm, ULONG dosType)
 {
     struct FileSysResource *fsr;
     struct FileSysEntry *fse;
@@ -4948,11 +4948,11 @@ BOOL MountPartition(struct NepClassMS *ncm, STRPTR dosDevice)
      * and MakeDosNode() below copies it as a struct DosEnvec too. On 64-bit
      * the DosEnvec fields are IPTR-sized, so indexing pb_Environment[] as a
      * ULONG array (DE_DOSTYPE, DE_BOOTPRI) reads the wrong slot: the DosType
-     * came back as 0, FindFileSystem() missed the resident CD filesystem and
+     * came back as 0, nFindResidentFileSystem() missed the resident CD filesystem and
      * the CD never mounted. Read it through the same DosEnvec view. */
     struct DosEnvec *envec = (struct DosEnvec *) rdsk->rdsk_PART.pb_Environment;
 
-    if((fse = FindFileSystem(ncm, envec->de_DosType)))
+    if((fse = nFindResidentFileSystem(ncm, envec->de_DosType)))
     {
         KPRINTF(10, ("fs found in filesys resource\n"));
         psdAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname), "Found FS in filesystem.resource!");
@@ -5370,7 +5370,7 @@ BOOL AutoMountCD(struct NepClassMS *ncm)
     envec->de_BlocksPerTrack = 1;
     envec->de_Interleave = 0;
     /* A saved class configuration can carry a zero CD DosType, which would
-       again make FindFileSystem() miss the resident CD filesystem. */
+       again make nFindResidentFileSystem() miss the resident CD filesystem. */
     envec->de_DosType = ncm->ncm_CDC->cdc_CDDosType ? ncm->ncm_CDC->cdc_CDDosType : 0x43444653; /* CDFS, as the class default */
     envec->de_LowCyl = 0;
     /* With one surface and one block per track, HighCyl is the last block.

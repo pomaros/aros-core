@@ -39,6 +39,62 @@
 #define LogResBase (base->hd_LogResBase)
 #endif
 
+#if defined(__OOP_NOATTRBASES__)
+/* Order follows the adjacent interface bases in struct PCIDevice. */
+static CONST_STRPTR const pciAttrIDs[] = {
+    IID_Hidd,
+    IID_Hidd_PCIDevice,
+    NULL
+};
+#else
+OOP_AttrBase __IHidd;
+OOP_AttrBase __IHidd_PCIDevice;
+#endif
+
+#if defined(__OOP_NOMETHODBASES__)
+static CONST_STRPTR const pciMethodIDs[] = {
+    IID_Hidd_PCI,
+    IID_Hidd_PCIDevice,
+    IID_Hidd_PCIDriver,
+    IID_HW,
+    NULL
+};
+#endif
+static int pciOpenInterfaces(struct PCIDevice *hd)
+{
+#if defined(__OOP_NOLIBBASE__)
+    if((hd->hd_OOPBase = OpenLibrary("oop.library", 0)) == NULL) {
+        KPRINTF(10, "devInit: Failed to open oop.library!\n");
+        return FALSE;
+    }
+#endif
+#if defined(__OOP_NOATTRBASES__)
+    if(OOP_ObtainAttrBasesArray(&hd->hd_HiddAB, pciAttrIDs)) {
+        KPRINTF(10, "devInit: Failed to obtain OOP AttrBases!\n");
+#if defined(__OOP_NOLIBBASE__)
+        CloseLibrary(hd->hd_OOPBase);
+#endif
+        return FALSE;
+    }
+#endif
+#if defined(__OOP_NOMETHODBASES__)
+    if(OOP_ObtainMethodBasesArray(&hd->hd_HiddPCIMB, pciMethodIDs)) {
+        KPRINTF(10, "devInit: Failed to obtain OOP MethodBases!\n");
+#if defined(__OOP_NOATTRBASES__)
+        OOP_ReleaseAttrBasesArray(&hd->hd_HiddAB, pciAttrIDs);
+#endif
+#if defined(__OOP_NOLIBBASE__)
+        CloseLibrary(hd->hd_OOPBase);
+#endif
+        return FALSE;
+    }
+#endif
+
+    hd->hd_PCIInterfacesReady = TRUE;
+    return TRUE;
+}
+ADD2INITLIB(pciOpenInterfaces, 10)
+
 static const char strPcixhciDevicePrefix[] = "pcixhci.device/";
 static const char strPcixhciDeviceFormat[] = "pcixhci.device/%u";
 static const char strProductPciPrefix[] = "PCI ";
@@ -453,6 +509,15 @@ void pciExpunge(struct PCIDevice *hd)
     if(hd->hd_PCIHidd) {
         OOP_DisposeObject(hd->hd_PCIHidd);
     }
+    if(hd->hd_PCIInterfacesReady) {
+#if defined(__OOP_NOATTRBASES__)
+        OOP_ReleaseAttrBasesArray(&hd->hd_HiddAB, pciAttrIDs);
+#endif
+#if defined(__OOP_NOLIBBASE__)
+        CloseLibrary(hd->hd_OOPBase);
+#endif
+        hd->hd_PCIInterfacesReady = FALSE;
+    }
 }
 /* \\\ */
 
@@ -461,8 +526,61 @@ void pciExpunge(struct PCIDevice *hd)
 #undef LogHandle
 #define LogHandle hc->hc_LogRHandle
 
-BOOL PCIXAddInterrupt(struct PCIController *hc, struct Interrupt *interrupt)
+APTR xhciMapRegisters(struct PCIController *hc)
 {
+    IPTR barbase = 0, barsize = 0;
+    struct TagItem pciMemEnableAttrs[] = {
+        { aHidd_PCIDevice_isMEM,    TRUE },
+        { aHidd_PCIDevice_isMaster, TRUE },
+        { TAG_DONE, 0UL },
+    };
+
+    OOP_GetAttr(hc->hc_PCIDeviceObject, aHidd_PCIDevice_Base0, &barbase);
+    OOP_GetAttr(hc->hc_PCIDeviceObject, aHidd_PCIDevice_Size0, &barsize);
+    APTR regs = MAPPCI(hc, hc->hc_PCIDriverObject, (APTR)barbase, (ULONG)barsize);
+    if(regs)
+        OOP_SetAttrs(hc->hc_PCIDeviceObject, pciMemEnableAttrs);
+    return regs;
+}
+
+BOOL xhciInstallInterrupt(struct PCIController *hc, struct Interrupt *interrupt)
+{
+    IPTR pciIntLine = 0;
+    OOP_GetAttr(hc->hc_PCIDeviceObject, aHidd_PCIDevice_INTLine, &pciIntLine);
+    hc->hc_PCIIntLine = pciIntLine;
+
+    {
+        struct TagItem vectreqs[] = {
+            { tHidd_PCIVector_Min, 1 },
+            { tHidd_PCIVector_Max, 1 },
+            { TAG_DONE, 0 }
+        };
+
+        if(HIDD_PCIDevice_ObtainVectors(hc->hc_PCIDeviceObject, vectreqs)) {
+            struct TagItem vecAttribs[] = {
+                { tHidd_PCIVector_Native, (IPTR)-1 },
+                { tHidd_PCIVector_Int,    (IPTR)-1 },
+                { TAG_DONE, 0 }
+            };
+            HIDD_PCIDevice_GetVectorAttribs(hc->hc_PCIDeviceObject, 0, vecAttribs);
+            if(vecAttribs[0].ti_Data != (IPTR)-1) {
+                IPTR int_vec    = vecAttribs[1].ti_Data;
+
+                /* For MSI/MSI-X install handler on the actual programmed vector. */
+                hc->hc_PCIIntLine = int_vec;
+                hc->hc_Flags |= HCF_MSI;
+            } else {
+                HIDD_PCIDevice_ReleaseVectors(hc->hc_PCIDeviceObject);
+            }
+        }
+    }
+    pciusbWarn("xHCI", DEBUGCOLOR_SET "IRQ = %u%s" DEBUGCOLOR_RESET" \n",
+               hc->hc_PCIIntLine, (hc->hc_Flags & HCF_MSI) ? " (MSI)" : "");
+
+    if(hc->hc_Flags & HCF_MSI) {
+        AddIntServer(INTB_KERNEL + hc->hc_PCIIntLine, interrupt);
+        return TRUE;
+    }
     return HIDD_PCIDevice_AddInterrupt(hc->hc_PCIDeviceObject, interrupt);
 }
 
@@ -502,9 +620,22 @@ void pciFreeAligned(struct PCIController *hc, struct MemEntry *alloc)
 }
 /* \\\ */
 
-/* /// "pciGetPhysical()" */
-APTR pciGetPhysical(struct PCIController *hc, APTR virtaddr)
+APTR xhciAllocDMAMemory(struct PCIController *hc, ULONG size)
 {
-    return(HIDD_PCIDriver_CPUtoPCI(hc->hc_PCIDriverObject, virtaddr));
+    return ALLOCPCIMEM(hc, hc->hc_PCIDriverObject, size);
 }
-/* \\\ */
+
+void xhciFreeDMAMemory(struct PCIController *hc, APTR address)
+{
+    FREEPCIMEM(hc, hc->hc_PCIDriverObject, address);
+}
+
+APTR xhciDeviceAddress(struct PCIController *hc, APTR cpu)
+{
+    return CPUTOPCI(hc, hc->hc_PCIDriverObject, cpu);
+}
+
+APTR xhciCPUAddress(struct PCIController *hc, APTR dma)
+{
+    return PCITOCPU(hc, hc->hc_PCIDriverObject, dma);
+}

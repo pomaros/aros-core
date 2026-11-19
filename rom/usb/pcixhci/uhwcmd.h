@@ -65,9 +65,6 @@ APTR pciAllocAligned(struct PCIController *, struct MemEntry *, ULONG, ULONG, UL
 void pciFreeAligned(struct PCIController *, struct MemEntry *);
 BOOL pciAllocUnit(struct PCIUnit *hu);
 void pciFreeUnit(struct PCIUnit *hu);
-APTR pciGetPhysical(struct PCIController *hc, APTR virtaddr);
-
-BOOL PCIXAddInterrupt(struct PCIController *hc, struct Interrupt *interrupt);
 
 void uhwDelayMicro(ULONG micro, struct timerequest *timerreq);
 

@@ -46,7 +46,7 @@ static const char strHardwareNameSuffix[] = " xHCI Host controller";
 #define USB_INTEL_USB3_PSSEN   0xD8
 #define USB_INTEL_USB3PRM      0xDC
 
-static BOOL XHCIController__Init(struct PCIController *hc)
+BOOL xhciPrepareController(struct PCIController *hc)
 {
     struct XhciHCPrivate *xhcic = NULL;
     volatile struct xhci_hccapr *xhciregs;
@@ -62,12 +62,6 @@ static BOOL XHCIController__Init(struct PCIController *hc)
     UBYTE usb3Minor = 0;
     struct MsgPort *timerport = NULL;
     struct timerequest *timerreq = NULL;
-
-    struct TagItem pciMemEnableAttrs[] = {
-        { aHidd_PCIDevice_isMEM,    TRUE },
-        { aHidd_PCIDevice_isMaster, TRUE },
-        { TAG_DONE, 0UL },
-    };
 
     if(!xhciOpenTaskTimer(&timerport, &timerreq, strXhciInitTaskName)) {
         return FALSE;
@@ -96,17 +90,7 @@ static BOOL XHCIController__Init(struct PCIController *hc)
     }
 #endif
 
-    /* Initialize hardware... */
-    {
-        IPTR barbase, barsize;
-
-        OOP_GetAttr(hc->hc_PCIDeviceObject, aHidd_PCIDevice_Base0, &barbase);
-        OOP_GetAttr(hc->hc_PCIDeviceObject, aHidd_PCIDevice_Size0, &barsize);
-
-        /* The BAR holds a bus address, which is not the CPU address on
-           every host bridge, so let the driver translate it. */
-        hc->hc_RegBase = MAPPCI(hc, hc->hc_PCIDriverObject, (APTR)barbase, (ULONG)barsize);
-    }
+    hc->hc_RegBase = xhciMapRegisters(hc);
     xhciregs = (volatile struct xhci_hccapr *)hc->hc_RegBase;
 
     if (!xhciregs) {
@@ -122,8 +106,6 @@ static BOOL XHCIController__Init(struct PCIController *hc)
         xhciCloseTaskTimer(&timerport, &timerreq);
         return FALSE;
     }
-
-    OOP_SetAttrs(hc->hc_PCIDeviceObject, (struct TagItem *)pciMemEnableAttrs); /* activate memory */
 
     if(hc->hc_Unit) {
         pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "Initializing hardware for unit #%d" DEBUGCOLOR_RESET" \n",
@@ -362,7 +344,7 @@ takeownership:
         pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "Allocated DCBAA @ 0x%p <0x%p, %u>" DEBUGCOLOR_RESET" \n",
                         xhcic->xhc_DCBAAp, xhcic->xhc_DCBAA.me_Un.meu_Addr, xhcic->xhc_DCBAA.me_Length);
 #if !defined(PCIUSB_NO_CPUTOPCI)
-        xhcic->xhc_DMADCBAA = CPUTOPCI(hc, hc->hc_PCIDriverObject, (APTR)xhcic->xhc_DCBAAp);
+        xhcic->xhc_DMADCBAA = xhciDeviceAddress(hc, (APTR)xhcic->xhc_DCBAAp);
 #else
         xhcic->xhc_DMADCBAA = xhcic->xhc_DCBAAp;
 #endif
@@ -382,7 +364,7 @@ takeownership:
         pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "Allocated ERST @ 0x%p <0x%p, %u>" DEBUGCOLOR_RESET" \n",
                         xhcic->xhc_ERSTp, xhcic->xhc_ERST.me_Un.meu_Addr, xhcic->xhc_ERST.me_Length);
 #if !defined(PCIUSB_NO_CPUTOPCI)
-        xhcic->xhc_DMAERST = CPUTOPCI(hc, hc->hc_PCIDriverObject, (APTR)xhcic->xhc_ERSTp);
+        xhcic->xhc_DMAERST = xhciDeviceAddress(hc, (APTR)xhcic->xhc_ERSTp);
 #else
         xhcic->xhc_DMAERST = xhcic->xhc_ERSTp;
 #endif
@@ -402,7 +384,7 @@ takeownership:
         pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "Allocated OPR @ 0x%p <0x%p, %u>" DEBUGCOLOR_RESET" \n",
                         xhcic->xhc_OPRp, xhcic->xhc_OPR.me_Un.meu_Addr, xhcic->xhc_OPR.me_Length);
 #if !defined(PCIUSB_NO_CPUTOPCI)
-        xhcic->xhc_DMAOPR = CPUTOPCI(hc, hc->hc_PCIDriverObject, (APTR)xhcic->xhc_OPRp);
+        xhcic->xhc_DMAOPR = xhciDeviceAddress(hc, (APTR)xhcic->xhc_OPRp);
 #else
         xhcic->xhc_DMAOPR = xhcic->xhc_OPRp;
 #endif
@@ -422,7 +404,7 @@ takeownership:
         pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "Allocated ERS @ 0x%p <0x%p, %u>" DEBUGCOLOR_RESET" \n",
                         xhcic->xhc_ERSp, xhcic->xhc_ERS.me_Un.meu_Addr, xhcic->xhc_ERS.me_Length);
 #if !defined(PCIUSB_NO_CPUTOPCI)
-        xhcic->xhc_DMAERS = CPUTOPCI(hc, hc->hc_PCIDriverObject, (APTR)xhcic->xhc_ERSp);
+        xhcic->xhc_DMAERS = xhciDeviceAddress(hc, (APTR)xhcic->xhc_ERSp);
 #else
         xhcic->xhc_DMAERS = xhcic->xhc_ERSp;
 #endif
@@ -457,7 +439,7 @@ takeownership:
         }
 
 #if !defined(PCIUSB_NO_CPUTOPCI)
-        xhcic->xhc_DMASPBA = CPUTOPCI(hc, hc->hc_PCIDriverObject, xhcic->xhc_SPBAp);
+        xhcic->xhc_DMASPBA = xhciDeviceAddress(hc, xhcic->xhc_SPBAp);
 #else
         xhcic->xhc_DMASPBA = xhcic->xhc_SPBAp;
 #endif
@@ -473,7 +455,7 @@ takeownership:
         }
 
 #if !defined(PCIUSB_NO_CPUTOPCI)
-        xhcic->xhc_DMASPBuffers = CPUTOPCI(hc, hc->hc_PCIDriverObject, xhcic->xhc_SPBuffersp);
+        xhcic->xhc_DMASPBuffers = xhciDeviceAddress(hc, xhcic->xhc_SPBuffersp);
 #else
         xhcic->xhc_DMASPBuffers = xhcic->xhc_SPBuffersp;
 #endif
@@ -535,7 +517,7 @@ OOP_Object *XHCIController__Root__New(OOP_Class *cl, OOP_Object *o, struct pRoot
          * Initialize the controllers structures,
          * and query supported features
          */
-        if(!XHCIController__Init(hc)) {
+        if(!xhciPrepareController(hc)) {
             return NULL;
         }
     }

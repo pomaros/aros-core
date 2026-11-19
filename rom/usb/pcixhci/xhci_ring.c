@@ -59,7 +59,7 @@ static void xhciInsertTRB(struct PCIController *hc,
 
 #if !defined(PCIUSB_NO_CPUTOPCI)
         if(!raw_dma && payload != 0) {
-            dma_payload = (UQUAD)(IPTR)CPUTOPCI(hc, hc->hc_PCIDriverObject, (APTR)(IPTR)payload);
+            dma_payload = (UQUAD)(IPTR)xhciDeviceAddress(hc, (APTR)(IPTR)payload);
         }
 #endif
         /*

@@ -21,7 +21,7 @@ struct XHCIPayload {
 static void freePayload(struct PCIController *hc, struct XHCIPayload *payload)
 {
     if(payload->cpu)
-        FREEPCIMEM(hc, hc->hc_PCIDriverObject, payload->cpu);
+        xhciFreeDMAMemory(hc, payload->cpu);
     FreeMem(payload, sizeof(*payload));
 }
 
@@ -78,7 +78,7 @@ void xhciFreeDeferredBounces(struct PCIController *hc)
 
 static APTR payloadAddress(struct PCIController *hc, APTR cpu, ULONG bytes)
 {
-    IPTR bus = (IPTR)CPUTOPCI(hc, hc->hc_PCIDriverObject, cpu);
+    IPTR bus = (IPTR)xhciDeviceAddress(hc, cpu);
     if(bus == (IPTR)-1 || bytes - 1 > (IPTR)-1 - bus)
         return NULL;
     if(!(hc->hc_Flags & HCF_ADDR64) &&
@@ -88,10 +88,10 @@ static APTR payloadAddress(struct PCIController *hc, APTR cpu, ULONG bytes)
     ULONG offset = 0;
     while(bytes - offset > 4096) {
         offset += 4096;
-        if((IPTR)CPUTOPCI(hc, hc->hc_PCIDriverObject, (UBYTE *)cpu + offset) != bus + offset)
+        if((IPTR)xhciDeviceAddress(hc, (UBYTE *)cpu + offset) != bus + offset)
             return NULL;
     }
-    if((IPTR)CPUTOPCI(hc, hc->hc_PCIDriverObject, (UBYTE *)cpu + bytes - 1) != bus + bytes - 1)
+    if((IPTR)xhciDeviceAddress(hc, (UBYTE *)cpu + bytes - 1) != bus + bytes - 1)
         return NULL;
     return (APTR)bus;
 }
@@ -112,7 +112,7 @@ APTR xhciPreparePCIPayload(struct PCIController *hc, struct IOUsbHWReq *ioreq,
     payload->bytes = *dmalen;
     payload->target = ioreq->iouh_Data;
     payload->direction = effdir;
-    payload->cpu = ALLOCPCIMEM(hc, hc->hc_PCIDriverObject, payload->bytes);
+    payload->cpu = xhciAllocDMAMemory(hc, payload->bytes);
     if(!payload->cpu)
         goto fail;
     APTR dma = payloadAddress(hc, payload->cpu, payload->bytes);

@@ -45,8 +45,8 @@ static const struct _dt {
     { 0xffffff00, AROS_MAKE_ID('C','P','M','\0'), "cpm-handler"   },
     { 0xffffff00, AROS_MAKE_ID('D','O','S','\0'), "afs-handler"   },
     { 0xffffff00, AROS_MAKE_ID('E','X','T','\0'), "ext-handler"   },
+    { 0xffffffff, ID_EXFAT_DISK,                   EXFAT_HANDLER_NAME },
     { 0xffffff00, AROS_MAKE_ID('F','A','T','\0'), "fat-handler"   },
-    { 0xffffffff, AROS_MAKE_ID('F','A','T','X' ), EXFAT_HANDLER_NAME },
     { 0xffffff00, AROS_MAKE_ID('L','V','M','\0'), "lvm-handler"   },
     { 0xffffff00, AROS_MAKE_ID('M','N','X','\0'), "minix-handler" },
     { 0xffffffff, AROS_MAKE_ID('N','T','F','S' ), "ntfs-handler"  },
@@ -251,40 +251,58 @@ static VOID AddPartitionVolume(struct NepClassMS *ncm,
         {
             D(bug("[Boot] Start block of subtable not on cylinder boundary: "
                 "%ld (Blocks per Cylinder = %ld)\n", i, blockspercyl));
+            FreeVec(pp);
             return;
         }
         i /= blockspercyl;
         pp[4 + DE_LOWCYL] += i;
         pp[4 + DE_HIGHCYL] += i;
 
-        D(bug("[Boot] Looking up handler for 0x%08lX\n", pp[4+DE_DOSTYPE]));
-        handler = MatchHandler(pp[4 + DE_DOSTYPE]);
+        ULONG dosType = pp[4 + DE_DOSTYPE];
+        struct FileSysEntry *resident = dosType ? nFindResidentFileSystem(ncm, dosType) : NULL;
+        handler = MatchHandler(dosType);
 
-        /* Skip unknown partition types */
-        if (handler != NULL)
+        /* A hotplug after DOS startup bypasses the boot-time filesystem patch.
+           Use the resident segment and the stack size its handler requested. */
+        if (resident && (resident->fse_PatchFlags & FSEF_SEGLIST) && resident->fse_SegList)
         {
-            D(bug("[Boot] found handler: %s\n", handler));
             devnode = MakeDosNode(pp);
-            if (devnode != NULL)
+            if (devnode)
+            {
+                devnode->dn_SegList = resident->fse_SegList;
+                if (resident->fse_PatchFlags & FSEF_STACKSIZE)
+                    devnode->dn_StackSize = (resident->fse_StackSize / sizeof(ULONG)) * sizeof(IPTR);
+                if (resident->fse_PatchFlags & FSEF_PRIORITY)
+                    devnode->dn_Priority = resident->fse_Priority;
+                if (resident->fse_PatchFlags & FSEF_GLOBALVEC)
+                    devnode->dn_GlobalVec = resident->fse_GlobalVec;
+            }
+        }
+        else if (handler)
+        {
+            devnode = MakeDosNode(pp);
+            if (devnode)
             {
                 devnode->dn_Handler = MKBADDR(AllocVec(AROS_BSTR_MEMSIZE4LEN(
                     strlen(handler)), MEMF_PUBLIC | MEMF_CLEAR));
                 if (devnode->dn_Handler)
                 {
-                    i = 0;
-                    while (handler[i] != '\0')
-                    {
+                    for (i = 0; handler[i]; i++)
                         AROS_BSTR_putchar(devnode->dn_Handler, i, handler[i]);
-                        i++;
-                    }
                     AROS_BSTR_setstrlen(devnode->dn_Handler, i);
-                    AddBootNode(bootable ? pp[4 + DE_BOOTPRI] : -128, ADNF_STARTPROC, devnode, NULL);
-                    D(bug("[Boot] AddBootNode(%b, 0, 0x%p, NULL)\n",
-                        devnode->dn_Name, pp[4 + DE_DOSTYPE]));
-                    return;
+                }
+                else
+                {
+                    FreeVec(devnode);
+                    devnode = NULL;
                 }
             }
         }
+        else
+            devnode = NULL;
+
+        if (devnode)
+            AddBootNode(bootable ? pp[4 + DE_BOOTPRI] : -128, ADNF_STARTPROC, devnode, NULL);
         FreeVec(pp);
     }
 }

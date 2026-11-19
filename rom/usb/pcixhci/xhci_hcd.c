@@ -938,7 +938,7 @@ xhciCreateDeviceCtx(struct PCIController *hc,
     memset(devCtx->dc_SlotCtx.dmaa_Ptr, 0, devctx_size);
 #if !defined(PCIUSB_NO_CPUTOPCI)
     devCtx->dc_SlotCtx.dmaa_DMA =
-        CPUTOPCI(hc, hc->hc_PCIDriverObject, devCtx->dc_SlotCtx.dmaa_Ptr);
+        xhciDeviceAddress(hc, devCtx->dc_SlotCtx.dmaa_Ptr);
 #else
     devCtx->dc_SlotCtx.dmaa_DMA = devCtx->dc_SlotCtx.dmaa_Ptr;
 #endif
@@ -958,7 +958,7 @@ xhciCreateDeviceCtx(struct PCIController *hc,
     memset(devCtx->dc_IN.dmaa_Ptr, 0, inctx_size);
 #if !defined(PCIUSB_NO_CPUTOPCI)
     devCtx->dc_IN.dmaa_DMA =
-        CPUTOPCI(hc, hc->hc_PCIDriverObject, devCtx->dc_IN.dmaa_Ptr);
+        xhciDeviceAddress(hc, devCtx->dc_IN.dmaa_Ptr);
 #else
     devCtx->dc_IN.dmaa_DMA = devCtx->dc_IN.dmaa_Ptr;
 #endif
@@ -1506,8 +1506,7 @@ ULONG xhciInitEP(struct PCIController *hc, struct pciusbXHCIDevice *devCtx,
                                devCtx->dc_EPAllocs[epid].dmaa_Entry.me_Length);
 #if !defined(PCIUSB_NO_CPUTOPCI)
             devCtx->dc_EPAllocs[epid].dmaa_DMA =
-                CPUTOPCI(hc, hc->hc_PCIDriverObject,
-                         (APTR)devCtx->dc_EPAllocs[epid].dmaa_Ptr);
+                xhciDeviceAddress(hc, (APTR)devCtx->dc_EPAllocs[epid].dmaa_Ptr);
 #else
             devCtx->dc_EPAllocs[epid].dmaa_DMA = devCtx->dc_EPAllocs[epid].dmaa_Ptr;
 #endif
@@ -3544,48 +3543,13 @@ BOOL xhciInit(struct PCIController *hc, struct PCIUnit *hu,
     hc->hc_ResetInt.is_Data = hc;
     AddResetCallback(&hc->hc_ResetInt);
 
-    IPTR pciIntLine = 0;
-    OOP_GetAttr(hc->hc_PCIDeviceObject, aHidd_PCIDevice_INTLine, &pciIntLine);
-    hc->hc_PCIIntLine = pciIntLine;
-
-    {
-        struct TagItem vectreqs[] = {
-            { tHidd_PCIVector_Min, 1 },
-            { tHidd_PCIVector_Max, 1 },
-            { TAG_DONE, 0 }
-        };
-
-        if(HIDD_PCIDevice_ObtainVectors(hc->hc_PCIDeviceObject, vectreqs)) {
-            struct TagItem vecAttribs[] = {
-                { tHidd_PCIVector_Native, (IPTR)-1 },
-                { tHidd_PCIVector_Int,    (IPTR)-1 },
-                { TAG_DONE, 0 }
-            };
-            HIDD_PCIDevice_GetVectorAttribs(hc->hc_PCIDeviceObject, 0, vecAttribs);
-            if(vecAttribs[0].ti_Data != (IPTR)-1) {
-                IPTR native_vec = vecAttribs[0].ti_Data;
-                IPTR int_vec    = vecAttribs[1].ti_Data;
-
-                /* For MSI/MSI-X install handler on the actual programmed vector. */
-                hc->hc_PCIIntLine = int_vec;
-                hc->hc_Flags |= HCF_MSI;
-            } else {
-                HIDD_PCIDevice_ReleaseVectors(hc->hc_PCIDeviceObject);
-            }
-        }
-    }
-    pciusbWarn("xHCI", DEBUGCOLOR_SET "IRQ = %u%s" DEBUGCOLOR_RESET" \n",
-               hc->hc_PCIIntLine, (hc->hc_Flags & HCF_MSI) ? " (MSI)" : "");
-
     /* add interrupt */
     hc->hc_PCIIntHandler.is_Node.ln_Name = hc->hc_ResetInt.is_Node.ln_Name;
     hc->hc_PCIIntHandler.is_Node.ln_Pri  = 5;
     hc->hc_PCIIntHandler.is_Node.ln_Type = NT_INTERRUPT;
     hc->hc_PCIIntHandler.is_Code         = (VOID_FUNC)xhciIntCode;
     hc->hc_PCIIntHandler.is_Data         = hc;
-    if(hc->hc_Flags & HCF_MSI) {
-        AddIntServer(INTB_KERNEL + hc->hc_PCIIntLine, &hc->hc_PCIIntHandler);
-    } else if(!PCIXAddInterrupt(hc, &hc->hc_PCIIntHandler)) {
+    if(!xhciInstallInterrupt(hc, &hc->hc_PCIIntHandler)) {
         pciusbWarn("xHCI", "Unable to install controller interrupt\n");
         hc->hc_PCIIntHandler.is_Node.ln_Name = NULL;
         RemResetCallback(&hc->hc_ResetInt);
@@ -3742,7 +3706,7 @@ BOOL xhciInit(struct PCIController *hc, struct PCIUnit *hu,
          * controller's own transactions, so what the function recorded
          * about that transaction says far more than the halt does.
          */
-        {
+        if (hc->hc_PCIDeviceObject) {
             UWORD cmd = READCONFIGWORD(hc, hc->hc_PCIDeviceObject, 0x04);
             UWORD sts = READCONFIGWORD(hc, hc->hc_PCIDeviceObject, 0x06);
 
@@ -3754,7 +3718,7 @@ BOOL xhciInit(struct PCIController *hc, struct PCIUnit *hu,
                        (sts & (1 << 14)) ? " system-error" : "",
                        (sts & (1 << 15)) ? " parity-error" : "");
         }
-        return FALSE;
+        goto init_fail;
     }
 
     /*
@@ -3776,9 +3740,11 @@ BOOL xhciInit(struct PCIController *hc, struct PCIUnit *hu,
     }
 
     pciusbXHCIDebug("xHCI", DEBUGCOLOR_SET "xhciInit returns TRUE..." DEBUGCOLOR_RESET" \n");
+    CloseLibrary(ps);
     return TRUE;
 
 init_fail:
+    CloseLibrary(ps);
     return FALSE;
 }
 
@@ -3800,6 +3766,38 @@ void xhciFreeHCMem(struct PCIController *hc, struct XhciHCPrivate *xhcic)
     xhcic->xhc_ERSTp = NULL;
     xhcic->xhc_OPRp = NULL;
     xhcic->xhc_ERSp = NULL;
+}
+
+/* Keep the event worker alive while the port worker finishes any commands.
+ * On timeout the attachment must retain the controller and all its mappings. */
+BOOL xhciQuiesce(struct PCIController *hc, struct timerequest *timerreq)
+{
+    struct XhciHCPrivate *xhci = xhciGetHCPrivate(hc);
+    if (!xhci || !xhci->xhc_XHCIOpR)
+        return TRUE;
+    struct Task **workers[] = { &xhci->xhc_PortTask.xpt_Task, &xhci->xhc_EventTask.xet_Task };
+    for (unsigned i = 0; i < 2; i++) {
+        /* A live worker only tests its stop flag after waking. */
+        Forbid();
+        struct Task *task = __atomic_load_n(workers[i], __ATOMIC_ACQUIRE);
+        __atomic_fetch_or(&xhci->xhc_StopWorkers, 1U << i, __ATOMIC_RELEASE);
+        if (task)
+            Signal(task, SIGBREAKF_CTRL_C);
+        Permit();
+        for (unsigned poll = 0; __atomic_load_n(workers[i], __ATOMIC_ACQUIRE); poll++) {
+            if (poll == 2000)
+                return FALSE;
+            uhwDelayMS(1, timerreq);
+        }
+    }
+    volatile struct xhci_hcopr *op = xhci->xhc_XHCIOpR;
+    XHCI_WR32(op->usbcmd, XHCI_RD32(op->usbcmd) & ~(XHCIF_USBCMD_INTE | XHCIF_USBCMD_RS));
+    for (unsigned poll = 0; poll < 1000; poll++) {
+        if (XHCI_RD32(op->usbsts) & XHCIF_USBSTS_HCH)
+            return TRUE;
+        uhwDelayMS(1, timerreq);
+    }
+    return FALSE;
 }
 
 void xhciFree(struct PCIController *hc, struct PCIUnit *hu)

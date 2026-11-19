@@ -17,30 +17,8 @@
 #define NewList NEWLIST
 
 const char devname[]     = MOD_NAME_STRING;
-static const char strOopLibraryName[] = "oop.library";
 static const char strUtilityLibraryName[] = "utility.library";
 
-#if defined(__OOP_NOATTRBASES__)
-/* Keep order the same as order of IDs in struct e1000Base! */
-static CONST_STRPTR const GM_UNIQUENAME(AttrBaseIDs)[] = {
-    IID_Hidd,
-    IID_Hidd_PCIDevice,
-    NULL
-};
-#else
-OOP_AttrBase __IHidd;
-OOP_AttrBase __IHidd_PCIDevice;
-#endif
-
-#if defined(__OOP_NOMETHODBASES__)
-static CONST_STRPTR const GM_UNIQUENAME(MethBaseIDs)[] = {
-    IID_Hidd_PCI,
-    IID_Hidd_PCIDevice,
-    IID_Hidd_PCIDriver,
-    IID_HW,
-    NULL
-};
-#endif
 #if defined(AROS_USE_LOGRES)
 #ifdef LogResBase
 #undef LogResBase
@@ -56,58 +34,18 @@ static int devInit(LIBBASETYPEPTR base)
     KPRINTF(10, "base @ 0x%p, SysBase = 0x%p\n",
             base, SysBase);
 
-#if defined(__OOP_NOLIBBASE__)
-    if((base->hd_OOPBase = OpenLibrary(strOopLibraryName, 0)) == NULL) {
-        KPRINTF(10, "devInit: Failed to open oop.library!\n");
-        return FALSE;
-    }
-#endif
-#if defined(__OOP_NOATTRBASES__)
-    if(OOP_ObtainAttrBasesArray(&base->hd_HiddAB, GM_UNIQUENAME(AttrBaseIDs))) {
-        KPRINTF(10, "devInit: Failed to obtain OOP AttrBases!\n");
-#if defined(__OOP_NOLIBBASE__)
-        CloseLibrary(base->hd_OOPBase);
-#endif
-        return FALSE;
-    }
-#endif
-#if defined(__OOP_NOMETHODBASES__)
-    if(OOP_ObtainMethodBasesArray(&base->hd_HiddPCIMB, GM_UNIQUENAME(MethBaseIDs))) {
-        KPRINTF(10, "devInit: Failed to obtain OOP MethodBases!\n");
-#if defined(__OOP_NOATTRBASES__)
-        OOP_ReleaseAttrBasesArray(&base->hd_HiddAB, GM_UNIQUENAME(AttrBaseIDs));
-#endif
-#if defined(__OOP_NOLIBBASE__)
-        CloseLibrary(base->hd_OOPBase);
-#endif
-        return FALSE;
-    }
-#endif
-
     base->hd_UtilityBase = (struct UtilityBase *) OpenLibrary(strUtilityLibraryName, 39);
 
 #define	UtilityBase	base->hd_UtilityBase
 
-    if(UtilityBase) {
-        base->hd_MemPool = CreatePool(MEMF_PUBLIC | MEMF_CLEAR | MEMF_SEM_PROTECTED,
-                                      16384, 4096);
-        if(base->hd_MemPool) {
-            NewList(&base->hd_Units);
-
-            KPRINTF(10, "Ok\n");
-        } else {
-            KPRINTF(10, "CreatePool() failed!\n");
-            CloseLibrary((struct Library *) UtilityBase);
-            base = NULL;
-        }
-    } else {
-        KPRINTF(10, "OpenLibrary(\"utility.library\", 39) failed!\n");
-        base = NULL;
-    }
-
-    KPRINTF(10, "openCnt = %ld\n", base->hd_Device.dd_Library.lib_OpenCnt);
-
-    return base ? TRUE : FALSE;
+    if(!UtilityBase)
+        return FALSE;
+    base->hd_MemPool = CreatePool(MEMF_PUBLIC | MEMF_CLEAR | MEMF_SEM_PROTECTED,
+                                  16384, 4096);
+    if(!base->hd_MemPool)
+        return FALSE;
+    NewList(&base->hd_Units);
+    return TRUE;
 }
 
 /*
@@ -172,13 +110,15 @@ static int devClose(LIBBASETYPEPTR base, struct IOUsbHWReq *ioreq)
 
 static int devExpunge(LIBBASETYPEPTR base)
 {
-    pciExpunge(base);
-
-    DeletePool(base->hd_MemPool);
+    if(base->hd_MemPool) {
+        pciExpunge(base);
+        DeletePool(base->hd_MemPool);
+    }
 
     KPRINTF(5, "closelibrary utilitybase 0x%p\n",
             UtilityBase);
-    CloseLibrary((struct Library *) UtilityBase);
+    if(UtilityBase)
+        CloseLibrary((struct Library *) UtilityBase);
     return TRUE;
 }
 

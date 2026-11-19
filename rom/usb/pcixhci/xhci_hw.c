@@ -429,7 +429,7 @@ LONG xhciCmdSetTRDequeuePtr(struct PCIController *hc, ULONG slot, ULONG epid, AP
      */
     if(dequeue_ptr) {
 #if !defined(PCIUSB_NO_CPUTOPCI)
-        dma = (UQUAD)(IPTR)CPUTOPCI(hc, hc->hc_PCIDriverObject, dequeue_ptr);
+        dma = (UQUAD)(IPTR)xhciDeviceAddress(hc, dequeue_ptr);
 #else
         dma = (UQUAD)(IPTR)dequeue_ptr;
 #endif
@@ -496,7 +496,7 @@ AROS_UFH0(void, xhciEventRingTask)
         thistask = FindTask(NULL);
         hc = thistask->tc_UserData;
         xhcic = xhciGetHCPrivate(hc);
-        xhcic->xhc_EventTask.xet_Task = thistask;
+        __atomic_store_n(&xhcic->xhc_EventTask.xet_Task, thistask, __ATOMIC_RELEASE);
         SetTaskPri(thistask, 100);
 
         timer_ok = xhciOpenTaskTimer(&xhcic->xhc_EventTask.xet_TimerPort,
@@ -522,7 +522,9 @@ AROS_UFH0(void, xhciEventRingTask)
         goto task_cleanup;
 
     for(;;) {
-        ULONG xhcictsigs = Wait(1 << xhcic->xhc_EventTask.xet_ProcessEventsSignal);
+        ULONG xhcictsigs = Wait((1UL << xhcic->xhc_EventTask.xet_ProcessEventsSignal) | SIGBREAKF_CTRL_C);
+        if (__atomic_load_n(&xhcic->xhc_StopWorkers, __ATOMIC_ACQUIRE) & 2U)
+            break;
 #if defined(DEBUG) && (DEBUG > 1)
         pciusbXHCIDebugV("xHCI",
                          DEBUGCOLOR_SET "IDnest %d TDNest %d"
@@ -558,5 +560,6 @@ task_cleanup:
     }
     xhciCloseTaskTimer(&xhcic->xhc_EventTask.xet_TimerPort,
                        &xhcic->xhc_EventTask.xet_TimerReq);
+    __atomic_store_n(&xhcic->xhc_EventTask.xet_Task, NULL, __ATOMIC_RELEASE);
     AROS_USERFUNC_EXIT
 }

@@ -3,6 +3,18 @@
 
 #include "xhci_hcd.h"
 
+BOOL xhciQuiesce(struct PCIController *hc, struct timerequest *timerreq);
+BOOL xhciPrepareController(struct PCIController *hc);
+APTR xhciMapRegisters(struct PCIController *hc);
+BOOL xhciInstallInterrupt(struct PCIController *hc, struct Interrupt *interrupt);
+
+/* The attachment owns these DMA mappings. Both translations must accept
+ * interior addresses: an event points to a TRB, not to its ring base. */
+APTR xhciAllocDMAMemory(struct PCIController *hc, ULONG size);
+void xhciFreeDMAMemory(struct PCIController *hc, APTR address);
+APTR xhciDeviceAddress(struct PCIController *hc, APTR cpu);
+APTR xhciCPUAddress(struct PCIController *hc, APTR dma);
+
 static const char xhciTimerDeviceName[] = "timer.device";
 
 #if !defined(AROS_USE_LOGRES)
@@ -267,7 +279,7 @@ static inline LONG xhciCmdSetTRDequeuePtr(struct PCIController *hc, ULONG slot, 
 
     if(dequeue_ptr) {
 #if !defined(PCIUSB_NO_CPUTOPCI)
-        dma = (UQUAD)(IPTR)CPUTOPCI(hc, hc->hc_PCIDriverObject, dequeue_ptr);
+        dma = (UQUAD)(IPTR)xhciDeviceAddress(hc, dequeue_ptr);
 #else
         dma = (UQUAD)(IPTR)dequeue_ptr;
 #endif
@@ -417,7 +429,7 @@ xhciTRBPointer(struct PCIController *hc, volatile struct xhci_trb *trb)
     dma |= ((UQUAD)AROS_LE2LONG(trb->dbp.addr_hi)) << 32;
 
 #if !defined(PCIUSB_NO_CPUTOPCI)
-    return (struct xhci_trb *)PCITOCPU(hc, hc->hc_PCIDriverObject, (APTR)(IPTR)dma);
+    return (struct xhci_trb *)xhciCPUAddress(hc, (APTR)(IPTR)dma);
 #else
     return (struct xhci_trb *)(IPTR)dma;
 #endif

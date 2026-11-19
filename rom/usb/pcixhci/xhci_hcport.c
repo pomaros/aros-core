@@ -693,7 +693,7 @@ AROS_UFH0(void, xhciPortTask)
         thistask = FindTask(NULL);
         hc = thistask->tc_UserData;
         xhcic = xhciGetHCPrivate(hc);
-        xhcic->xhc_PortTask.xpt_Task = thistask;
+        __atomic_store_n(&xhcic->xhc_PortTask.xpt_Task, thistask, __ATOMIC_RELEASE);
         SetTaskPri(thistask, 99);
 
         timer_ok = xhciOpenTaskTimer(&xhcic->xhc_PortTask.xpt_TimerPort,
@@ -721,7 +721,9 @@ AROS_UFH0(void, xhciPortTask)
     xhciports = (volatile struct xhci_pr *)((IPTR)xhcic->xhc_XHCIPorts);
 
     for(;;) {
-        ULONG xhcictsigs = Wait(1 << xhcic->xhc_PortTask.xpt_PortChangeSignal);
+        ULONG xhcictsigs = Wait((1UL << xhcic->xhc_PortTask.xpt_PortChangeSignal) | SIGBREAKF_CTRL_C);
+        if (__atomic_load_n(&xhcic->xhc_StopWorkers, __ATOMIC_ACQUIRE) & 1U)
+            break;
         if(xhcictsigs & (1 << xhcic->xhc_PortTask.xpt_PortChangeSignal)) {
             UWORD hciport;
             pciusbXHCIDebug("xHCI",
@@ -798,5 +800,6 @@ task_cleanup:
         xhcic->xhc_PortTask.xpt_PortChangeSignal = -1;
     }
     xhciCloseTaskTimer(&xhcic->xhc_PortTask.xpt_TimerPort, &xhcic->xhc_PortTask.xpt_TimerReq);
+    __atomic_store_n(&xhcic->xhc_PortTask.xpt_Task, NULL, __ATOMIC_RELEASE);
     AROS_USERFUNC_EXIT
 }
