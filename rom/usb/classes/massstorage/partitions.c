@@ -142,10 +142,10 @@ static VOID AddPartitionVolume(struct NepClassMS *ncm,
                                struct PartitionHandle *table,
                                struct PartitionHandle *pn)
 {
-    UBYTE name[32];
+    UBYTE name[32] = {0};
     ULONG i, blockspercyl;
     const struct PartitionAttribute *attrs;
-    IPTR tags[7];
+    IPTR tags[9];
     IPTR *pp;
     struct DeviceNode *devnode;
     struct PartitionType ptyp;
@@ -171,7 +171,9 @@ static VOID AddPartitionVolume(struct NepClassMS *ncm,
             tags[3] = (IPTR)&pp[4];
             tags[4] = PT_BOOTABLE;
             tags[5] = (IPTR)&bootable;
-            tags[6] = TAG_DONE;
+            tags[6] = PT_POSITION;
+            tags[7] = (IPTR)&ppos;
+            tags[8] = TAG_DONE;
             GetPartitionAttrs(pn, (struct TagItem *)tags);
             D(bug("[Boot] Partition name: %s bootable: %d\n", name, bootable));
             /* BHFormat complains if this bit is not set, and it's really wrong to have it unset. So we explicitly set it here.
@@ -193,26 +195,6 @@ static VOID AddPartitionVolume(struct NepClassMS *ncm,
             GetPartitionAttrs(pn, (struct TagItem *)tags);
             bootable = TRUE;
 
-            /* make the name */
-            devname = AROS_BSTR_ADDR(fssm->fssm_Device);
-            for (i = 0; i < 26; i++)
-            {
-                if (*devname == '.' || *devname == '\0')
-                    break;
-                name[i] = (UBYTE)uppercase(*devname);
-                devname++;
-            }
-            if ((fssm->fssm_Unit / 10))
-                name[i++] = '0' + (UBYTE)(fssm->fssm_Unit / 10);
-            name[i++] = '0' + (UBYTE)(fssm->fssm_Unit % 10);
-            name[i++] = 'P';
-            if (table->table->type == PHPTT_EBR)
-                ppos += 4;
-            if ((ppos / 10))
-                name[i++] = '0' + (UBYTE)(ppos / 10);
-            name[i++] = '0' + (UBYTE)(ppos % 10);
-            name[i] = '\0';
-            D(bug("[Boot] Partition name: %s type: %lu bootable: %d\n", name, ptyp.id[0], bootable));
             pp[4 + DE_DOSTYPE] = ExfatSelectPartitionDosType(
                 pp[4 + DE_DOSTYPE], MatchPartType(ptyp.id[0]));
             /* set some common DOSENV fields */
@@ -232,6 +214,19 @@ static VOID AddPartitionVolume(struct NepClassMS *ncm,
                     pp[4 + DE_BOOTBLOCKS] = 2;
                     break;
             }
+        }
+
+        /* A GPT partition can have an empty label. Give each unnamed
+           partition its own DOS device name, just as for an MBR. */
+        if (!name[0])
+        {
+            devname = AROS_BSTR_ADDR(fssm->fssm_Device);
+            for (i = 0; i < sizeof(name) - 1 && devname[i] && devname[i] != '.'; ++i)
+                name[i] = (UBYTE)uppercase(devname[i]);
+            if (table->table->type == PHPTT_EBR)
+                ppos += 4;
+            snprintf((char *)name + i, sizeof(name) - i, "%luP%lu",
+                (unsigned long)fssm->fssm_Unit, (unsigned long)ppos);
         }
 
         /* GPT and MBR do not store DMA limits. usbscsi.device accepts
