@@ -17,7 +17,8 @@ extern const STRPTR GM_UNIQUENAME(libname);
 static void nUasFillLun(UBYTE *lun, UWORD lunnum)
 {
     memset(lun, 0, 8);
-    lun[0] = (UBYTE) (lunnum & 0x3f);
+    lun[0] = lunnum > 255 ? 0x40 | (lunnum >> 8) : 0;
+    lun[1] = (UBYTE)lunnum;
 }
 
 static LONG nUasDoDataTransfer(struct NepClassMS *ncm, UBYTE *data, ULONG data_len,
@@ -40,7 +41,7 @@ static LONG nUasDoDataTransfer(struct NepClassMS *ncm, UBYTE *data, ULONG data_l
             {
                 *actual = (ULONG) actual_len;
             }
-            if((ioerr == UHIOERR_OVERFLOW) || (ioerr == UHIOERR_RUNTPACKET))
+            if(read && ioerr == UHIOERR_RUNTPACKET)
             {
                 ioerr = 0;
             }
@@ -54,7 +55,7 @@ static LONG nUasDoDataTransfer(struct NepClassMS *ncm, UBYTE *data, ULONG data_l
     {
         *actual = psdGetPipeActual(pp);
     }
-    if((ioerr == UHIOERR_OVERFLOW) || (ioerr == UHIOERR_RUNTPACKET))
+    if(read && ioerr == UHIOERR_RUNTPACKET)
     {
         ioerr = 0;
     }
@@ -68,12 +69,14 @@ static LONG nUasDoCommand(struct NepClassMS *ncm, const UBYTE *cdb, UWORD cdb_le
 {
     struct UasCommandIU cmdiu;
     UBYTE statusbuf[64];
-    struct PsdPipe *pp;
-    ULONG cmdlen;
+    struct UasStatusIU *completion = (struct UasStatusIU *)statusbuf;
     ULONG actual_len;
+    UWORD tag;
     LONG ioerr;
-    ULONG tag;
+    BOOL data_pending = data_len != 0;
 
+    if(!cdb || !cdb_len || cdb_len > sizeof(cmdiu.iu_Cdb) || (data_pending && !data))
+        return UHIOERR_BADPARAMS;
     if(actual)
     {
         *actual = 0;
@@ -98,15 +101,13 @@ static LONG nUasDoCommand(struct NepClassMS *ncm, const UBYTE *cdb, UWORD cdb_le
     {
         tag = ncm->ncm_UasStreamId;
     } else {
-        tag = ++ncm->ncm_TagCount;
+        tag = (UWORD)++ncm->ncm_TagCount;
+        if(!tag)
+            tag = (UWORD)++ncm->ncm_TagCount;
     }
-    cmdiu.iu_Tag = AROS_LONG2LE(tag);
+    cmdiu.iu_Tag = AROS_WORD2BE(tag);
     nUasFillLun(cmdiu.iu_Lun, ncm->ncm_UnitLUN);
-    cmdlen = (cdb_len > 16) ? 16 : cdb_len;
-    if(cmdlen)
-    {
-        CopyMem(cdb, cmdiu.iu_Cdb, cmdlen);
-    }
+    CopyMem(cdb, cmdiu.iu_Cdb, cdb_len);
 
     ioerr = psdDoPipe(ncm->ncm_EPCmdPipe, &cmdiu, sizeof(cmdiu));
     if(ioerr)
@@ -114,60 +115,49 @@ static LONG nUasDoCommand(struct NepClassMS *ncm, const UBYTE *cdb, UWORD cdb_le
         return ioerr;
     }
 
-    if(data_len)
+    /* USB 2 UAS signals data readiness on the status pipe. A command may
+     * also finish with CHECK CONDITION without ever entering its data phase. */
+    if(data_pending && ncm->ncm_UasStreamId)
     {
         ioerr = nUasDoDataTransfer(ncm, data, data_len, read, actual);
         if(ioerr)
-        {
             return ioerr;
-        }
+        data_pending = FALSE;
     }
-
-    ioerr = psdDoPipe(ncm->ncm_EPStatusPipe, statusbuf, sizeof(statusbuf));
-    if(ioerr && (ioerr != UHIOERR_RUNTPACKET) && (ioerr != UHIOERR_OVERFLOW))
+    for(;;)
     {
-        return ioerr;
+        ioerr = psdDoPipe(ncm->ncm_EPStatusPipe, statusbuf, sizeof(statusbuf));
+        if(ioerr && ioerr != UHIOERR_RUNTPACKET)
+            return ioerr;
+        actual_len = psdGetPipeActual(ncm->ncm_EPStatusPipe);
+        if(actual_len < 4 || completion->iu_Tag != cmdiu.iu_Tag)
+            return UHIOERR_HOSTERROR;
+        if(completion->iu_Id == UAS_IU_ID_STATUS)
+            break;
+        if(!data_pending || completion->iu_Id !=
+           (read ? UAS_IU_ID_READ_READY : UAS_IU_ID_WRITE_READY))
+            return UHIOERR_HOSTERROR;
+        ioerr = nUasDoDataTransfer(ncm, data, data_len, read, actual);
+        if(ioerr)
+            return ioerr;
+        data_pending = FALSE;
     }
-    actual_len = psdGetPipeActual(ncm->ncm_EPStatusPipe);
+    if(actual_len < sizeof(*completion))
+        return UHIOERR_HOSTERROR;
     if(iu_id)
-    {
-        *iu_id = statusbuf[0];
-    }
+        *iu_id = completion->iu_Id;
     if(status)
+        *status = completion->iu_Status;
+    if(sense_data && sense_actual)
     {
-        if(actual_len >= sizeof(struct UasStatusIU))
-        {
-            *status = ((struct UasStatusIU *) statusbuf)->iu_Status;
-        } else if(actual_len >= 3) {
-            *status = statusbuf[2];
-        }
-    }
-    if(iu_id && (*iu_id == UAS_IU_ID_SENSE) && sense_data && sense_actual)
-    {
-        ULONG header = offsetof(struct UasSenseIU, iu_Sense);
-        ULONG copy_len = 0;
-
-        if(actual_len > header)
-        {
-            struct UasSenseIU *senseiu = (struct UasSenseIU *) statusbuf;
-            ULONG sense_avail = actual_len - header;
-            ULONG sense_reported = AROS_LE2WORD(senseiu->iu_SenseLength);
-
-            copy_len = sense_reported;
-            if(copy_len > sense_avail)
-            {
-                copy_len = sense_avail;
-            }
-            if(copy_len > sense_len)
-            {
-                copy_len = sense_len;
-            }
-            if(copy_len)
-            {
-                CopyMem(&statusbuf[header], sense_data, copy_len);
-                *sense_actual = (UWORD) copy_len;
-            }
-        }
+        ULONG available = actual_len - sizeof(*completion);
+        ULONG length = AROS_BE2WORD(completion->iu_SenseLength);
+        if(length > available)
+            length = available;
+        if(length > sense_len)
+            length = sense_len;
+        CopyMem(statusbuf + sizeof(*completion), sense_data, length);
+        *sense_actual = length;
     }
     return 0;
 }
@@ -184,7 +174,7 @@ LONG nScsiDirectUAS(struct NepClassMS *ncm, struct SCSICmd *scsicmd)
     datalen = scsicmd->scsi_Length;
     scsicmd->scsi_Status = SCSI_GOOD;
     scsicmd->scsi_Actual = 0;
-    scsicmd->scsi_CmdActual = (scsicmd->scsi_CmdLength > 16) ? 16 : scsicmd->scsi_CmdLength;
+    scsicmd->scsi_CmdActual = 0;
     scsicmd->scsi_SenseActual = 0;
 
     nLockXFer(ncm);
@@ -212,6 +202,7 @@ LONG nScsiDirectUAS(struct NepClassMS *ncm, struct SCSICmd *scsicmd)
             break;
         }
 
+        scsicmd->scsi_CmdActual = scsicmd->scsi_CmdLength;
         scsicmd->scsi_Status = status;
         if(status)
         {

@@ -88,9 +88,9 @@ struct UsbMSCBIStatusWrapper
 #define UAS_IU_ID_COMMAND     0x01
 #define UAS_IU_ID_STATUS      0x03
 #define UAS_IU_ID_RESPONSE    0x04
-#define UAS_IU_ID_READ_READY  0x05
-#define UAS_IU_ID_WRITE_READY 0x06
-#define UAS_IU_ID_SENSE       0x07
+#define UAS_IU_ID_READ_READY  0x06
+#define UAS_IU_ID_WRITE_READY 0x07
+#define UAS_IU_ID_SENSE       UAS_IU_ID_STATUS
 
 #if defined(__GNUC__)
 # pragma pack(1)
@@ -100,9 +100,11 @@ struct UasCommandIU
 {
     UBYTE  iu_Id;
     UBYTE  iu_Reserved1;
-    UBYTE  iu_Reserved2;
+    UWORD  iu_Tag;            /* big endian */
     UBYTE  iu_TaskAttr;
-    ULONG  iu_Tag;
+    UBYTE  iu_Reserved2;
+    UBYTE  iu_AdditionalCdbLength;
+    UBYTE  iu_Reserved3;
     UBYTE  iu_Lun[8];
     UBYTE  iu_Cdb[16];
 };
@@ -111,22 +113,22 @@ struct UasStatusIU
 {
     UBYTE  iu_Id;
     UBYTE  iu_Reserved1;
+    UWORD  iu_Tag;
+    UWORD  iu_StatusQualifier;
     UBYTE  iu_Status;
-    UBYTE  iu_Reserved2;
-    ULONG  iu_Tag;
-    ULONG  iu_Residue;
-    UBYTE  iu_Reserved3[4];
+    UBYTE  iu_Reserved2[7];
+    UWORD  iu_SenseLength;
 };
 
 struct UasSenseIU
 {
     UBYTE  iu_Id;
     UBYTE  iu_Reserved1;
+    UWORD  iu_Tag;
+    UWORD  iu_StatusQualifier;
     UBYTE  iu_Status;
-    UBYTE  iu_Reserved2;
-    ULONG  iu_Tag;
+    UBYTE  iu_Reserved2[7];
     UWORD  iu_SenseLength;
-    UBYTE  iu_Reserved3[2];
     UBYTE  iu_Sense[18];
 };
 

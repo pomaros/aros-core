@@ -1444,8 +1444,8 @@ static BOOL nUasCollectEndpoints(struct NepClassMS *ncm)
     struct PsdDescriptor *pdd = NULL;
     struct PsdEndpoint *pep;
     UBYTE *data;
-    UWORD dtype;
-    UWORD len;
+    IPTR  dtype;
+    IPTR  len;
     IPTR  eptype;
     IPTR  is_in;
     UBYTE pipe_id;
