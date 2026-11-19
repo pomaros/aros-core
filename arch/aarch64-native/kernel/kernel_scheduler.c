@@ -194,67 +194,9 @@ static BOOL core_HigherPriorityReady(struct Task *task)
 }
 #endif
 
-/*
- * Backlog. The ready list is shared, but a halted CPU looks at it only when
- * something interrupts it. A program made of many threads that call the
- * system all the time kept the CPU that serves those calls busy and queued
- * behind it, while the other CPUs slept: on eight cores one ran at 92 % and
- * seven stayed under 5 %.
- *
- * When this CPU finds, for CORE_SCHEDULER_BACKLOG_US at a stretch, at least
- * two tasks waiting and one of them allowed on an idle CPU, it tells that CPU
- * (CORE_SCHEDULER_KICK). Two, because one waiting task is the ordinary case
- * of a caller and the handler that answers it handing the CPU to each other:
- * sending one of the pair elsewhere makes every round trip cross CPUs. The
- * same interval limits how often a CPU is told.
- *
- * A port provides CORE_SCHEDULER_IDLE_CPU(task), the number of an idle CPU
- * that may run the task or -1, and CORE_SCHEDULER_KICK(cpu).
- */
-#define CORE_SCHEDULER_BACKLOG_US 200
-#if defined(__AROSEXEC_SMP__) && defined(CORE_SCHEDULER_TIME_US) && defined(CORE_SCHEDULER_IDLE_CPU)
-static UQUAD core_backlog_since;
-/* With the ready list locked. Returns the CPU to tell, or -1. */
-static inline int core_Backlog(void)
-{
-    struct Task *t;
-    unsigned waiting = 0;
-    int cpu = -1;
-
-    if (!CORE_SCHEDULER_TIME_AVAILABLE())
-        return -1;
-    for (t = (struct Task *)GetHead(&SysBase->TaskReady); t != NULL && waiting < 8; t = (struct Task *)GetSucc(t))
-    {
-        ++waiting;
-        if (cpu < 0)
-            cpu = CORE_SCHEDULER_IDLE_CPU(t);
-    }
-    if (waiting < 2 || cpu < 0)
-    {
-        __atomic_store_n(&core_backlog_since, 0, __ATOMIC_RELAXED);
-        return -1;
-    }
-    UQUAD now = CORE_SCHEDULER_TIME_US(), since = __atomic_load_n(&core_backlog_since, __ATOMIC_RELAXED);
-    if (since == 0)
-    {
-        __atomic_store_n(&core_backlog_since, now ? now : 1, __ATOMIC_RELAXED);
-        return -1;
-    }
-    if (now - since < CORE_SCHEDULER_BACKLOG_US)
-        return -1;
-    __atomic_store_n(&core_backlog_since, now ? now : 1, __ATOMIC_RELAXED);
-    return cpu;
-}
-#else
-#define core_Backlog() (-1)
-#define CORE_SCHEDULER_KICK(cpu) do { (void)(cpu); } while (0)
-#endif
-
 /* Check if the currently running task on this cpu should be rescheduled */
 BOOL core_Schedule(void)
 {
-    int backlog_cpu = -1;
-
 #if defined(DEBUG)
     int cpunum = GetCPUNumber();
     (void)cpunum;
@@ -289,7 +231,6 @@ BOOL core_Schedule(void)
             corereschedule = FALSE;
         else
         {
-            backlog_cpu = core_Backlog();
             struct Task *nexttask;
 #if defined(__AROSEXEC_SMP__)
             int cpunum = GetCPUNumber();
@@ -323,8 +264,6 @@ BOOL core_Schedule(void)
         EXEC_IRQFIQ_RESTORE(__if);
 #endif
     }
-    if (backlog_cpu >= 0)
-        CORE_SCHEDULER_KICK(backlog_cpu);
 
     DSCHED
         (
