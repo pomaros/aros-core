@@ -218,10 +218,9 @@ static const struct wire_defaults {
  *     10 Mbps  ->   ~1    (16 is plenty)
  *    100 Mbps  ->   ~8    (32 comfortable)
  *      1 Gbps  ->  ~81    (128 with burst headroom)
- *     10 Gbps  -> ~812    (256 minimum, 512 with headroom)
  *
- * SANA-II BPS is ULONG and overflows above ~4.3 Gbps.  A BPS of 0 is
- * treated as "unknown / very fast" and gets the maximum allocation.
+ * Some devices report zero while the link rate is unknown at attachment.
+ * Use the medium's request defaults in that case.
  *
  * Memory cost per request: ~2.2 KB (IOIPReq + mbuf cluster).
  */
@@ -230,10 +229,10 @@ sana_speed_reqno(ULONG bps, WORD minimum)
 {
     WORD reqno;
 
-    if(bps == 0) {
-        /* Unknown or wrapped (>4.3 Gbps) -- assume 10+ GbE */
-        reqno = 512;
-    } else if(bps > 1000000000UL) {
+    if(bps == 0)
+        return minimum;
+
+    if(bps > 1000000000UL) {
         /* 1-4.3 Gbps (ULONG representable range) */
         reqno = 256;
     } else if(bps > 100000000UL) {

@@ -79,6 +79,7 @@ struct avs_client
 };
 
 static pthread_mutex_t avs_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t avs_lifecycle_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t avs_signalled;
 static pthread_once_t avs_signalled_once = PTHREAD_ONCE_INIT;
 static int avs_signalled_error;
@@ -87,6 +88,7 @@ static uint32_t avs_next_ctx_id = 1;
 static const struct avs_memory_ops *avs_memory;
 static avs_get_instance_proc_addr avs_gipa;
 static bool avs_running;
+static struct Task *avs_owner;
 
 /* vkr reaches the native driver through this symbol */
 PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance instance, const char *name)
@@ -230,10 +232,21 @@ static void avs_init_signalled(void)
 
 bool avs_server_init(const struct avs_memory_ops *memory, avs_get_instance_proc_addr gipa)
 {
+    struct Task *task = FindTask(NULL);
+    bool started;
+
+    pthread_mutex_lock(&avs_lifecycle_lock);
     if (avs_running)
-        return true;
+    {
+        started = avs_owner == task && avs_memory == memory && avs_gipa == gipa;
+        pthread_mutex_unlock(&avs_lifecycle_lock);
+        return started;
+    }
     if (pthread_once(&avs_signalled_once, avs_init_signalled) || avs_signalled_error)
+    {
+        pthread_mutex_unlock(&avs_lifecycle_lock);
         return false;
+    }
     avs_memory = memory;
     avs_gipa = gipa;
     avs_vkr_shm.ops = (struct vkr_aros_shm_ops){
@@ -244,19 +257,27 @@ bool avs_server_init(const struct avs_memory_ops *memory, avs_get_instance_proc_
         .unmap  = memory->unmap,
     };
     vkr_aros_set_shm_ops(&avs_vkr_shm.ops);
-    avs_running = vkr_renderer_init(VKR_RENDERER_THREAD_SYNC | VKR_RENDERER_ASYNC_FENCE_CB,
-                                    &avs_callbacks);
-    return avs_running;
+    started = vkr_renderer_init(VKR_RENDERER_THREAD_SYNC | VKR_RENDERER_ASYNC_FENCE_CB,
+                                &avs_callbacks);
+    if (started)
+        avs_owner = task;
+    avs_running = started;
+    pthread_mutex_unlock(&avs_lifecycle_lock);
+    return started;
 }
 
 void avs_server_fini(void)
 {
-    if (!avs_running)
-        return;
-    while (avs_clients)
-        avs_disconnect(avs_clients);
-    vkr_renderer_fini();
-    avs_running = false;
+    pthread_mutex_lock(&avs_lifecycle_lock);
+    if (avs_running && avs_owner == FindTask(NULL))
+    {
+        while (avs_clients)
+            avs_disconnect(avs_clients);
+        vkr_renderer_fini();
+        avs_running = false;
+        avs_owner = NULL;
+    }
+    pthread_mutex_unlock(&avs_lifecycle_lock);
 }
 
 struct avs_client *avs_connect(const char *name)

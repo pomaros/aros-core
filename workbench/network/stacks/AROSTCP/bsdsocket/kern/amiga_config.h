@@ -61,8 +61,8 @@ enum var_type
  VAR_STRP,		/* value is pointer to string */
  VAR_FLAG,		/* LONG value is set once */
  VAR_INET,		/* struct sockaddr_in */
- VAR_ENUM		/* value is pointer to long, whose value is set
-                           according to a enumeration string in notify */
+ VAR_ENUM,		/* value selects a keyword from notify */
+ VAR_U_LONG		/* value is pointer to BSD u_long */
 };
 
 typedef LONG 
